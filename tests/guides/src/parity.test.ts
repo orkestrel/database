@@ -1,6 +1,6 @@
 // The consumer-side guides-parity drop-in (PROPOSAL §6): runs `@orkestrel/guide`'s
-// checks against this repo's own `guides/README.md` manifest — one row (Router)
-// spanning the core/browser/server faces as a multi-dir `GuideModule` (AGENTS §22 —
+// checks against this repo's own `guides/README.md` manifest — one row (Database)
+// spanning the core/server faces as a multi-dir `GuideModule` (AGENTS §22 —
 // one guide per package).
 
 import { describe, expect, it } from 'vitest'
@@ -22,7 +22,7 @@ import {
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const WALK_DIRS = ['src', 'guides', 'tests']
-const SELF_SPECIFIERS = ['@orkestrel/router', '@src/core', '@src/browser', '@src/server']
+const SELF_SPECIFIERS = ['@orkestrel/database', '@src/core', '@src/server']
 
 function walk(dir: string, acc: Record<string, string>): void {
 	for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
@@ -48,14 +48,13 @@ function readText(relative: string): string {
 
 const manifest = parseManifest(readText('guides/README.md'), 'guides')
 
-// Cross-face imports are real in this multi-face package (a listener.md fence imports
-// `createDispatcher` from `@src/core`, a navigator.md fence imports core registry types) —
-// so the fence-import check resolves each specifier to ITS OWN face's exports rather than
-// only the current manifest entry's, per the specifier → module map below.
+// Cross-face imports are real in this multi-face package (database.md fences import
+// `createJSONDriver` from `@src/server` alongside core exports) — so the fence-import
+// check resolves each specifier to ITS OWN face's exports rather than only the current
+// manifest entry's, per the specifier → module map below.
 const SPECIFIER_MODULES: Readonly<Record<string, string>> = {
-	'@orkestrel/router': 'src/core',
+	'@orkestrel/database': 'src/core',
 	'@src/core': 'src/core',
-	'@src/browser': 'src/browser',
 	'@src/server': 'src/server',
 }
 const specifierSources = new Map<string, ReturnType<typeof createSource>>()
