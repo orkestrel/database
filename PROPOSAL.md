@@ -451,13 +451,12 @@ interface TableSchema {
   primitive delegates to an inner memory driver, so query, key-order `scan`/`keys`, and
   capture-replay `snapshot` are inherited unchanged. It adds only load-on-`open` and
   flush-on-mutation. Scan-only; the engine answers every query.
-- **Two production hardenings over today (Delta §11):**
-  - **Atomic durability.** Today `flush` does a bare `writeFile` — a crash mid-write corrupts the
-    file. The rebuild writes to a temp file and `rename`s (atomic on POSIX), so a torn write
-    never yields a corrupt store.
-  - **Coalesced flushes.** Today every write flushes the _whole_ store, so a 1000-row batch does
-    1000 full-file rewrites. The rebuild flushes once per transaction commit (and coalesces
-    outside a transaction), turning O(writes) file rewrites into O(commits).
+- **Two production hardenings over the original design (Delta §11):**
+  - **Atomic durability — done.** `flush` now writes to a temp file and `rename`s (atomic on
+    POSIX), so a torn write never yields a corrupt store.
+  - **Coalesced flushes — open.** Every write still flushes the _whole_ store individually, so a
+    1000-row batch does 1000 full-file rewrites. The rebuild flushes once per transaction commit
+    (and coalesces outside a transaction), turning O(writes) file rewrites into O(commits).
 - **Boundary safety:** the parsed file crosses as `unknown`, narrowed with `isRecord` /
   `extractKey`; a missing/corrupt/wrong-shaped file starts empty, a malformed row is skipped
   (AGENTS §14).
@@ -720,9 +719,8 @@ write or a transaction does. For enterprise tracing we thread an optional trace 
 
 ### 8.2 Cancellation (`@orkestrel/abort`) — ADOPT
 
-The current implementation has **no cancellation at all** — a long `scan`, a large `records`, or
-a slow transaction cannot be aborted. For a production database this is a real gap. The rebuild
-adopts `@orkestrel/abort` and threads an `AbortSignal` through the long-running seams:
+Cancellation is now adopted: `@orkestrel/abort` threads an `AbortSignal` through the long-running
+seams — a gap the original implementation had none of.
 
 ```ts
 // ILLUSTRATIVE — a light options bag, since a signal is not serializable and must NOT enter Criteria
@@ -897,34 +895,52 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
 - **The legacy multi-backend seams.** The (currently archived) SQLite compiler and IndexedDB
   `selectPlan` designs are the correct exploit implementations; they return in phase-next over
   their new backing packages.
+- **Native transaction exploitation.** The optional `transaction?()` hook (`{ commit; rollback }`)
+  now exists on `DriverInterface`, and `Database.transaction` dispatches to it when a driver
+  implements it, falling back to the `snapshot` floor with the same events otherwise. Memory and
+  JSON keep the snapshot floor, per §6.2 — neither implements the hook.
+- **Cancellation.** `@orkestrel/abort` is adopted: `ReadOptions.signal` threads through
+  `records`/`count`/`aggregate`/`scan`/`Query.stream`/`Database.transaction`, the `ABORTED` error
+  code exists, and a `checkAbort` helper checks at read boundaries and between streamed rows.
+- **Migrations (core model + memory/JSON realization).** `Migration`/`MigrationStep` types and the
+  pure `planMigration` + `migrateRows` live in core; `MemoryDriver` and `JSONDriver` both
+  implement the `migrate?` hook (an unknown table surfaces `MIGRATION`). `Database.migrate()`
+  orchestration (version tracking across `open`) is still deferred — see gap 1 below.
+- **Streaming public API.** `Table.scan` and `Query.stream` are shipped: lazy, order-ignoring,
+  fresh-per-call, early-exit-safe async iterables. The optional `stream?` driver hook is typed on
+  `DriverInterface`; no shipped driver implements it yet (memory/JSON fall back to `scan`).
+- **JSON durability (write half).** `JSONDriver.flush` now writes to a temp file and renames
+  (atomic on POSIX) — the crash-mid-write corruption window is closed. Flush coalescing (one flush
+  per commit instead of one per write) remains open — see gap 4 below.
+- **Shared conformance battery (in-repo).** A `conformDriver` test helper in `tests/setup.ts` runs
+  the same behavioral battery against both `MemoryDriver` and `JSONDriver`. The shipped,
+  importable `@orkestrel/database/conformance` package export described in §4.5 does not exist yet
+  — see gap 5 below.
+- **`generateKey` moved out of strict core.** Key generation is no longer reached from
+  `src/core/helpers.ts`; it is a `DatabaseOptions.key` (`KeyFunction`) factory supplied by the
+  caller, with `@src/server` exporting the `node:crypto`-backed `generateKey`. A keyless write with
+  no `key` factory configured throws `VALIDATION` rather than silently minting an id.
 
 ### Prioritized gaps (the migration path)
 
-1. **Transactions leave native power on the table (highest impact).** `snapshot()` gives only a
-   rollback thunk with no commit signal, forcing even SQLite into whole-store capture-replay.
-   **Fix:** add the optional `transaction?()` hook (`{ commit; rollback }`) and prefer it in
-   `Database.transaction`, so SQLite gets real `BEGIN/COMMIT` atomicity+isolation+durability, while
-   memory/JSON/IndexedDB keep the (now optionally table-scoped) snapshot floor.
-2. **No cancellation.** Nothing threads an `AbortSignal`; a long scan/query/transaction cannot be
-   aborted. **Fix:** adopt `@orkestrel/abort`, thread an optional `signal` through reads, the new
-   streaming terminal, and `transaction`; add the `ABORTED` error code. (And with this in place,
-   `@orkestrel/timeout` is unnecessary — `AbortSignal.timeout(ms)` covers it natively.)
-3. **No migrations / schema evolution.** The design explicitly ships no migration runner, yet the
-   three engines evolve schema incompatibly. **Fix:** add the pure `Migration` schema-diff model
-   in core plus the optional `migrate?` driver hook (SQLite DDL / IndexedDB version bump / JSON
-   rewrite / memory no-op) and the `MIGRATION` error code.
+1. **`Database.migrate()` orchestration is not wired up.** The pure diff model and both drivers'
+   `migrate?` hooks exist, but nothing in `Database` yet tracks a deployed schema version and
+   calls `planMigration` / invokes the hook on `open`. **Fix:** add version tracking (a stored
+   schema version per driver) and a `Database.migrate()` entry point that diffs deployed vs.
+   declared schema and drives the hook, per §5.5's model.
+2. **No driver implements the `stream?` hook yet.** `Table.scan` / `Query.stream` fall back to the
+   engine filtering the required `scan` for every current driver — correct, but no driver
+   exploits the native streaming path described in §4.2/§5.4 (SQLite `iterate()`, IndexedDB
+   cursors), since neither backend is built yet.
+3. **Batch-write cancellation is unthreaded.** `signal` reaches every read path and `transaction`,
+   but batch write verbs (`set`/`add`/`update`/`remove` with array overloads) do not yet accept or
+   check a `ReadOptions.signal` between items.
 
 Secondary gaps, worth doing but lower-risk:
 
-4. **Streaming public API.** `records` fully materializes; `scan` is driver-internal. **Fix:** a
-   public `scan(criteria?)` / `Query.stream()` async-iterable terminal + optional `stream?` hook,
-   so large reads don't hold every row in memory.
-5. **JSON durability & write amplification.** `writeFile` is non-atomic (torn write → corruption)
-   and every write rewrites the whole file (O(writes) rewrites). **Fix:** atomic temp-file rename
-   and flush-once-per-commit coalescing.
-6. **Conformance is per-driver, not a shared kit.** Parity lives in bespoke per-driver tests.
-   **Fix:** ship one reusable, importable `conform(...)` suite so in-repo and third-party drivers
-   prove the contract identically.
-7. **`generateKey` smuggles a host global into strict core.** UUID minting reaches
-   `globalThis.crypto` from `src/core/helpers.ts`. **Fix:** move default-key generation to the
-   driver seam that legitimately has a host `crypto`, keeping core host-global-free per AGENTS §17.7.
+4. **JSON write amplification.** The atomic-rename hardening is done, but every write still
+   flushes the whole file individually rather than coalescing to one flush per transaction commit
+   (still O(writes) full-file rewrites, not O(commits)).
+5. **Conformance is not yet a shipped, importable kit.** The `conformDriver` battery proves parity
+   in-repo (§4.5's intent), but there is no `@orkestrel/database/conformance` package export a
+   third-party driver author could import and run against their own factory.
