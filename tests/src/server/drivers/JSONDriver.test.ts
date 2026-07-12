@@ -1,9 +1,10 @@
+import type { Criteria } from '@src/core'
 import { isDatabaseError, planMigration } from '@src/core'
 import { createJSONDriver } from '@src/server'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { conformDriver } from '../../../setup.js'
+import { buildCondition, conformDriver } from '../../../setup.js'
 import { driverSchema, tempDatabasePath } from '../../../setupServer.js'
 
 conformDriver('JSONDriver', () => createJSONDriver(tempDatabasePath().path))
@@ -305,6 +306,115 @@ describe('JSONDriver — migrate', () => {
 		const plan = planMigration([{ name: 'missing', primary: 'id', columns: [], indexes: [] }], [])
 		const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+	})
+})
+
+describe('JSONDriver — stream', () => {
+	it('yields condition-matched rows honoring a limit, from the file-backed store', async () => {
+		await driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
+		await driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
+		await driver.write('users', 'c', { id: 'c', name: 'Ada', age: 40, active: true })
+		const criteria: Criteria = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
+		const rows = []
+		for await (const row of driver.stream('users', criteria)) rows.push(row)
+		expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
+
+		const limited = []
+		for await (const row of driver.stream('users', { limit: 1 })) limited.push(row)
+		expect(limited).toHaveLength(1)
+	})
+})
+
+describe('JSONDriver — transaction', () => {
+	it('defers flushing until commit: the file is unchanged mid-transaction, then reflects every write', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Original', age: 30, active: true })
+		const before = await readFile(path, 'utf-8')
+
+		const handle = await driver.transaction()
+		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 31, active: true })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
+
+		// Mid-transaction: the file has not moved, though memory has.
+		expect(await readFile(path, 'utf-8')).toBe(before)
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Changed',
+			age: 31,
+			active: true,
+		})
+
+		await handle.commit()
+
+		// One flush, and the file reflects the full net state.
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			tables: {
+				users: [
+					{ id: 'u1', name: 'Changed', age: 31, active: true },
+					{ id: 'u2', name: 'Bo', age: 22, active: false },
+				],
+				posts: [],
+			},
+		})
+	})
+
+	it('rollback restores memory AND the file to the pre-transaction state', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Original', age: 30, active: true })
+		const before = await readFile(path, 'utf-8')
+
+		const handle = await driver.transaction()
+		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Ghost', age: 1, active: false })
+		await handle.rollback()
+
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Original',
+			age: 30,
+			active: true,
+		})
+		expect(await driver.read('users', 'u2')).toBeUndefined()
+		expect(await readFile(path, 'utf-8')).toBe(before)
+	})
+
+	it('throws CONFLICT when a transaction is already active', async () => {
+		await driver.transaction()
+		const error = await driver.transaction().catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
+	})
+
+	it('throws CONFLICT on a double commit', async () => {
+		const handle = await driver.transaction()
+		await handle.commit()
+		const error = await handle.commit().catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
+	})
+
+	it('throws CONFLICT rolling back after a commit', async () => {
+		const handle = await driver.transaction()
+		await handle.commit()
+		const error = await handle.rollback().catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
+	})
+
+	it('resumes normal per-mutation flushing after a transaction settles', async () => {
+		const handle = await driver.transaction()
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await handle.commit()
+
+		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			tables: {
+				users: [
+					{ id: 'u1', name: 'Ada', age: 36, active: true },
+					{ id: 'u2', name: 'Bo', age: 22, active: false },
+				],
+				posts: [],
+			},
+		})
 	})
 })
 

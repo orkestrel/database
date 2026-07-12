@@ -1,5 +1,13 @@
-import type { DriverInterface, Key, Migration, Row, TableSchema } from '@src/core'
-import { MemoryDriver, extractKey } from '@src/core'
+import type {
+	Criteria,
+	DriverInterface,
+	Key,
+	Migration,
+	Row,
+	TableSchema,
+	TransactionInterface,
+} from '@src/core'
+import { DatabaseError, MemoryDriver, extractKey } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -33,6 +41,11 @@ export class JSONDriver implements DriverInterface {
 	// serializing state, so the persisted snapshot always reflects the latest
 	// memory state (see #flush @remarks).
 	#chain: Promise<void> = Promise.resolve()
+	// Set while a transaction() handle is active — suppresses #flush from
+	// write/delete/clear so N mutations under the handle cost one file write
+	// (on commit) instead of N (see transaction @remarks). Cleared by
+	// commit/rollback, which is also how double-settle is detected.
+	#deferring = false
 
 	constructor(path: string) {
 		this.#path = path
@@ -54,12 +67,12 @@ export class JSONDriver implements DriverInterface {
 
 	async write(table: string, key: Key, row: Row): Promise<void> {
 		await this.#memory.write(table, key, row)
-		await this.#flush()
+		if (!this.#deferring) await this.#flush()
 	}
 
 	async delete(table: string, key: Key): Promise<boolean> {
 		const removed = await this.#memory.delete(table, key)
-		await this.#flush()
+		if (!this.#deferring) await this.#flush()
 		return removed
 	}
 
@@ -71,9 +84,70 @@ export class JSONDriver implements DriverInterface {
 		return this.#memory.scan(table)
 	}
 
+	/**
+	 * Natively filtered lazy iteration — delegates to the inner {@link MemoryDriver}.
+	 *
+	 * @remarks
+	 * Semantics are the memory driver's own: `criteria.conditions` filters, `offset`
+	 * / `limit` page lazily, and `criteria.order` is ignored (streaming yields key
+	 * order; sorted output is `records()`'s job).
+	 *
+	 * @param table - The table to stream
+	 * @param criteria - The filter / offset / limit to apply lazily
+	 */
+	stream(table: string, criteria: Criteria): AsyncIterable<Row> {
+		return this.#memory.stream(table, criteria)
+	}
+
 	async clear(table: string): Promise<void> {
 		await this.#memory.clear(table)
-		await this.#flush()
+		if (!this.#deferring) await this.#flush()
+	}
+
+	/**
+	 * Begin a native transaction — flush-coalescing over the inner {@link MemoryDriver}.
+	 *
+	 * @remarks
+	 * Single-writer: throws `DatabaseError` `CONFLICT` if a transaction is already
+	 * active — this driver does not support nesting. On begin, captures the inner
+	 * memory rollback thunk via `#memory.snapshot()` and suppresses per-mutation
+	 * `#flush` — `write` / `delete` / `clear` still mutate memory but no longer
+	 * touch the file, so N mutations under the handle cost ONE file write instead
+	 * of N. `commit()` releases the suppression and performs that one atomic
+	 * `#flush()`, persisting the transaction's net state. `rollback()` restores
+	 * memory via the captured snapshot thunk, then `#flush()`s so the file reflects
+	 * the restored state. Outside a transaction, behavior is unchanged — every
+	 * mutation flushes on its own. Calling `commit` / `rollback` a second time (on
+	 * either method, in either order) throws `DatabaseError` `CONFLICT`.
+	 *
+	 * @returns A {@link TransactionInterface} handle to `commit` or `rollback`
+	 */
+	async transaction(): Promise<TransactionInterface> {
+		if (this.#deferring) {
+			throw new DatabaseError('CONFLICT', 'A transaction is already active on this driver', {})
+		}
+		const rollback = await this.#memory.snapshot()
+		this.#deferring = true
+		let settled = false
+		return {
+			commit: async () => {
+				if (settled) {
+					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+				}
+				settled = true
+				this.#deferring = false
+				await this.#flush()
+			},
+			rollback: async () => {
+				if (settled) {
+					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+				}
+				settled = true
+				await rollback()
+				this.#deferring = false
+				await this.#flush()
+			},
+		}
 	}
 
 	async snapshot(): Promise<() => Promise<void>> {
