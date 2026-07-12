@@ -1,7 +1,6 @@
 import type { DriverInterface, Key, Migration, Row, TableSchema } from '../types.js'
 import { DatabaseError } from '../errors.js'
-import { compareValues } from '../helpers.js'
-import { migrateRows } from '../migrations.js'
+import { compareValues, migrateRows } from '../helpers.js'
 
 /**
  * The reference {@link DriverInterface} — nested maps, no I/O.
