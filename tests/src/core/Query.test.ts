@@ -122,6 +122,54 @@ describe('Query — aggregates', () => {
 	})
 })
 
+describe('Query — stream (lazy streaming)', () => {
+	let users: Users
+	beforeAll(async () => {
+		users = await seeded()
+	})
+
+	async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+		const rows: T[] = []
+		for await (const row of iterable) rows.push(row)
+		return rows
+	}
+
+	it('yields lazily honoring conditions plus limit/offset', async () => {
+		const rows = await collect(users.query().where('age').from(18).stream())
+		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u3', 'u4'])
+
+		const paged = await collect(users.query().ascending('age').offset(1).limit(2).stream())
+		// order is ignored by stream — paging counts over unsorted (insertion) order.
+		expect(paged).toHaveLength(2)
+	})
+
+	it('applies a post-fetch filter per row', async () => {
+		const rows = await collect(
+			users
+				.query()
+				.filter((user) => user.name.length === 2)
+				.stream(),
+		)
+		expect(rows.map((row) => row.id).sort()).toEqual(['u2', 'u3', 'u4'])
+	})
+
+	it('aborts mid-stream once the signal fires', async () => {
+		const controller = new AbortController()
+		const seen: string[] = []
+		let error: unknown
+		try {
+			for await (const row of users.query().stream({ signal: controller.signal })) {
+				seen.push(row.id)
+				controller.abort('cancelled')
+			}
+		} catch (caught) {
+			error = caught
+		}
+		expect(seen).toEqual(['u1'])
+		expect(error).toMatchObject({ code: 'ABORTED' })
+	})
+})
+
 describe('Query — nested fields (FieldPath)', () => {
 	async function nested() {
 		const db = createDatabase({

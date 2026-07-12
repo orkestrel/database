@@ -1,5 +1,5 @@
-import type { Key } from '@src/core'
-import { createDatabase, createMemoryDriver } from '@src/core'
+import type { Criteria, DriverInterface, Key, Row } from '@src/core'
+import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import {
@@ -286,6 +286,139 @@ describe('Table — records / count / aggregate (engine path)', () => {
 				conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
 			}),
 		).toBeUndefined()
+	})
+})
+
+describe('Table — scan (lazy streaming)', () => {
+	async function seeded() {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+		})
+		const users = db.table('users')
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+			{ id: 'u3', name: 'Cy', age: 22 },
+		])
+		return users
+	}
+
+	async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+		const rows: T[] = []
+		for await (const row of iterable) rows.push(row)
+		return rows
+	}
+
+	it('yields all rows in driver key-order (order is ignored)', async () => {
+		const users = await seeded()
+		const rows = await collect(users.scan())
+		expect(rows.map((row) => row.id)).toEqual(['u1', 'u2', 'u3'])
+	})
+
+	it('applies criteria conditions lazily', async () => {
+		const users = await seeded()
+		const rows = await collect(
+			users.scan({ conditions: [{ column: 'age', operator: 'above', values: [30], connector: 'and' }] }),
+		)
+		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u2'])
+	})
+
+	it('applies offset and limit via lazy counting', async () => {
+		const users = await seeded()
+		const rows = await collect(users.scan({ offset: 1, limit: 1 }))
+		expect(rows.map((row) => row.id)).toEqual(['u2'])
+	})
+
+	it('a fresh call yields from the start even after an earlier consumer broke early', async () => {
+		const users = await seeded()
+		const first: string[] = []
+		for await (const row of users.scan()) {
+			first.push(row.id)
+			break
+		}
+		expect(first).toEqual(['u1'])
+		const second: string[] = []
+		for await (const row of users.scan()) second.push(row.id)
+		expect(second).toEqual(['u1', 'u2', 'u3'])
+	})
+
+	it('aborts mid-iteration once the signal fires', async () => {
+		const users = await seeded()
+		const controller = new AbortController()
+		const seen: string[] = []
+		let error: unknown
+		try {
+			for await (const row of users.scan(undefined, { signal: controller.signal })) {
+				seen.push(row.id)
+				controller.abort('cancelled')
+			}
+		} catch (caught) {
+			error = caught
+		}
+		expect(seen).toEqual(['u1'])
+		expect(isDatabaseError(error)).toBe(true)
+		if (isDatabaseError(error)) expect(error.code).toBe('ABORTED')
+	})
+
+	it('records / count / aggregate throw ABORTED when the signal is already fired', async () => {
+		const users = await seeded()
+		const controller = new AbortController()
+		controller.abort('too slow')
+		await expect(users.records(undefined, { signal: controller.signal })).rejects.toMatchObject({
+			code: 'ABORTED',
+		})
+		await expect(users.count(undefined, { signal: controller.signal })).rejects.toMatchObject({
+			code: 'ABORTED',
+		})
+		await expect(
+			users.aggregate('sum', 'age', undefined, { signal: controller.signal }),
+		).rejects.toMatchObject({ code: 'ABORTED' })
+	})
+
+	it('delegates to the driver stream hook without re-filtering (native dispatch)', async () => {
+		const streamCalls: Criteria[] = []
+		const store = new Map<string, Row>([
+			['stored', { id: 'stored', name: 'Stored', age: 30 }],
+		])
+		const driver: DriverInterface = {
+			async open() {},
+			async close() {},
+			async read(_table, key) {
+				return store.get(String(key))
+			},
+			async write(_table, key, row) {
+				store.set(String(key), row)
+			},
+			async delete(_table, key) {
+				return store.delete(String(key))
+			},
+			async keys() {
+				return [...store.keys()]
+			},
+			async *scan() {
+				for (const row of store.values()) yield row
+			},
+			async clear() {
+				store.clear()
+			},
+			async snapshot() {
+				return async () => {}
+			},
+			async *stream(_table, criteria) {
+				streamCalls.push(criteria)
+				// A driver stream is trusted to have already applied the criteria natively —
+				// yield a sentinel row unrelated to the store to prove Table does not re-filter.
+				yield { id: 'native', name: 'Native', age: 7 }
+			},
+		}
+		const users = createDatabase({ driver, tables: HOOK_TABLES }).table('users')
+		const criteria: Criteria = {
+			conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
+		}
+		const rows = await collect(users.scan(criteria))
+		expect(rows).toEqual([{ id: 'native', name: 'Native', age: 7 }])
+		expect(streamCalls).toEqual([criteria])
 	})
 })
 

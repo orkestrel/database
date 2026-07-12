@@ -8,6 +8,7 @@ import type {
 	Key,
 	KeyFunction,
 	QueryInterface,
+	ReadOptions,
 	Row,
 	TableEventMap,
 	TableInterface,
@@ -15,7 +16,7 @@ import type {
 import { isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
-import { applyCriteria, computeAggregate, extractKey, matchesCriteria } from './helpers.js'
+import { applyCriteria, checkAbort, computeAggregate, extractKey, matchesCriteria } from './helpers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 
@@ -118,7 +119,8 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#driver.keys(this.#name)
 	}
 
-	async records(criteria?: Criteria): Promise<readonly T[]> {
+	async records(criteria?: Criteria, options?: ReadOptions): Promise<readonly T[]> {
+		checkAbort(options?.signal)
 		await this.#ready()
 		// Native filtered read when the backend offers one; else the engine over scan.
 		const native = await this.#driver.records?.(this.#name, criteria ?? {})
@@ -130,7 +132,8 @@ export class Table<T = Row> implements TableInterface<T> {
 		return rows
 	}
 
-	async count(criteria?: Criteria): Promise<number> {
+	async count(criteria?: Criteria, options?: ReadOptions): Promise<number> {
+		checkAbort(options?.signal)
 		await this.#ready()
 		// Counts ignore paging — pass conditions only, so native and scan agree.
 		const conditions = criteria?.conditions
@@ -143,7 +146,9 @@ export class Table<T = Row> implements TableInterface<T> {
 		operation: AggregateFunction,
 		column: FieldPath,
 		criteria?: Criteria,
+		options?: ReadOptions,
 	): Promise<number | undefined> {
+		checkAbort(options?.signal)
 		await this.#ready()
 		// Aggregate over filtered (not paged) rows — native hook, native records, or scan.
 		const conditions = criteria?.conditions
@@ -155,6 +160,41 @@ export class Table<T = Row> implements TableInterface<T> {
 		const rows = await this.#driver.records?.(this.#name, filter)
 		const matched = rows ?? this.#match(await this.#collect(), criteria)
 		return computeAggregate(matched, operation, column)
+	}
+
+	async *scan(criteria?: Criteria, options?: ReadOptions): AsyncGenerator<T> {
+		checkAbort(options?.signal)
+		await this.#ready()
+		if (this.#driver.stream !== undefined) {
+			for await (const row of this.#driver.stream(this.#name, criteria ?? {})) {
+				checkAbort(options?.signal)
+				const narrowed = this.#cast(row)
+				if (narrowed !== undefined) yield narrowed
+			}
+			return
+		}
+		const conditions = criteria?.conditions
+		const offset = criteria?.offset ?? 0
+		const limit = criteria?.limit
+		let matched = 0
+		let yielded = 0
+		for await (const row of this.#driver.scan(this.#name)) {
+			checkAbort(options?.signal)
+			if (limit !== undefined && yielded >= limit) break
+			if (conditions !== undefined && conditions.length > 0 && !matchesCriteria(row, conditions)) {
+				continue
+			}
+			if (matched < offset) {
+				matched += 1
+				continue
+			}
+			matched += 1
+			const narrowed = this.#cast(row)
+			if (narrowed !== undefined) {
+				yielded += 1
+				yield narrowed
+			}
+		}
 	}
 
 	set(row: T): Promise<Key>

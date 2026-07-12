@@ -6,6 +6,7 @@ import type {
 	Connector,
 	Order,
 	QueryInterface,
+	ReadOptions,
 	TableInterface,
 } from './types.js'
 import { computeAggregate } from './helpers.js'
@@ -97,6 +98,55 @@ export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
 		}
 		const fetched = await this.#table.records({ conditions: this.#conditions })
 		return this.#filtered(fetched).length
+	}
+
+	/**
+	 * Lazy per-row evaluation of this query's conditions / filters / offset /
+	 * limit.
+	 *
+	 * @remarks
+	 * `order` and its comparators are IGNORED (streaming yields unsorted, as rows
+	 * are evaluated one at a time). Same abort semantics as
+	 * `TableInterface.scan`: the signal (if any) is checked before each yield,
+	 * and breaking out early closes the underlying source.
+	 *
+	 * @param options - `signal` to cancel the iteration; checked before each yield
+	 * @returns An async iterable of matching rows
+	 */
+	async *stream(options?: ReadOptions): AsyncGenerator<T> {
+		// No JS filters → the table's own offset/limit apply directly against the
+		// condition-matched rows (matching `all()`'s no-filter fast path).
+		if (this.#filters.length === 0) {
+			yield* this.#table.scan(
+				{ conditions: this.#conditions, limit: this.#limit, offset: this.#offset },
+				options,
+			)
+			return
+		}
+		// With filters → offset/limit must apply AFTER filtering, so the table is
+		// asked for conditions only and paging is counted here (matching `all()`'s
+		// filtered path: fetch, filter in memory, then page).
+		const offset = this.#offset ?? 0
+		let matched = 0
+		let yielded = 0
+		for await (const row of this.#table.scan({ conditions: this.#conditions }, options)) {
+			if (this.#limit !== undefined && yielded >= this.#limit) break
+			let matches = true
+			for (const predicate of this.#filters) {
+				if (!predicate(row)) {
+					matches = false
+					break
+				}
+			}
+			if (!matches) continue
+			if (matched < offset) {
+				matched += 1
+				continue
+			}
+			matched += 1
+			yielded += 1
+			yield row
+		}
 	}
 
 	aggregate(operation: AggregateFunction, column: FieldPath): Promise<number | undefined> {

@@ -1,5 +1,6 @@
 import {
 	applyCriteria,
+	checkAbort,
 	columnType,
 	compareValues,
 	computeAggregate,
@@ -335,5 +336,24 @@ describe('columnType', () => {
 		expect(columnType(literalShape([1, 2]))).toBe('integer')
 		expect(columnType(literalShape([1.5, 2]))).toBe('real')
 		expect(columnType(literalShape([true, false]))).toBe('boolean')
+	})
+})
+
+describe('checkAbort', () => {
+	it('is a no-op for undefined and a live signal', () => {
+		expect(captureError(() => checkAbort(undefined))).toBeUndefined()
+		const controller = new AbortController()
+		expect(captureError(() => checkAbort(controller.signal))).toBeUndefined()
+	})
+
+	it('throws an ABORTED DatabaseError carrying the reason once the signal has fired', () => {
+		const controller = new AbortController()
+		controller.abort('too slow')
+		const error = captureError(() => checkAbort(controller.signal))
+		expect(isDatabaseError(error)).toBe(true)
+		if (isDatabaseError(error)) {
+			expect(error.code).toBe('ABORTED')
+			expect(error.context).toEqual({ reason: 'too slow' })
+		}
 	})
 })
