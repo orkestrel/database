@@ -54,9 +54,11 @@ export const guides = (config?: UserConfig): UserConfig =>
 // Extends srcCore: server-only library (`src/server`, e.g. the JSON file driver
 // and, later, the SQLite driver over node:sqlite). Builds a CJS lib for Node and
 // runs its tests in the node environment. Externalizes `node:*` (so node:sqlite
-// is never bundled) AND `@src/core` → the sibling `dist/src/core` (CJS) build
-// (core and server ship as two subpaths of one package). Build-only — the
-// test project resolves `@src/core` from source through the shared `resolve` alias.
+// is never bundled) AND `@src/core` → the sibling `dist/src/core` ESM build
+// (core and server ship as two subpaths of one package; `require()` of the ESM
+// core works because engines pins Node >= 24, which supports require(esm)).
+// Build-only — the test project resolves `@src/core` from source through the
+// shared `resolve` alias.
 export const srcServer = (config?: UserConfig): UserConfig =>
 	srcCore(
 		mergeConfig(
@@ -71,7 +73,7 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 					target: 'node22',
 					rolldownOptions: {
 						external: (id: string) => id === '@src/core' || id.startsWith('node:'),
-						output: { paths: { '@src/core': '../core/index.cjs' } },
+						output: { paths: { '@src/core': '../core/index.js' } },
 					},
 				},
 				test: {
