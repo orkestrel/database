@@ -213,9 +213,13 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		await this.#connect()
 		const plan = planMigration(deployed, this.#schema())
 		if (this.#driver.migrate === undefined) {
-			throw new DatabaseError('MIGRATION', `Database '${this.#name}' driver does not support migration`, {
-				name: this.#name,
-			})
+			throw new DatabaseError(
+				'MIGRATION',
+				`Database '${this.#name}' driver does not support migration`,
+				{
+					name: this.#name,
+				},
+			)
 		}
 		await this.#driver.migrate(plan)
 		// Observe the successful apply — AFTER the driver applied the plan, mirroring the

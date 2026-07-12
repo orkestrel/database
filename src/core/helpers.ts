@@ -98,7 +98,9 @@ export function deepEqual(left: unknown, right: unknown): boolean {
 	}
 	if (left === right) return true
 	if (Array.isArray(left) && Array.isArray(right)) {
-		return left.length === right.length && left.every((item, index) => deepEqual(item, right[index]))
+		return (
+			left.length === right.length && left.every((item, index) => deepEqual(item, right[index]))
+		)
 	}
 	if (isRecord(left) && isRecord(right)) {
 		const leftKeys = Object.keys(left)
@@ -697,11 +699,18 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 		],
 		indexes: [],
 	}
-	const CONFORMANCE_SCHEMA: readonly TableSchema[] = [CONFORMANCE_USERS_SCHEMA, CONFORMANCE_POSTS_SCHEMA]
+	const CONFORMANCE_SCHEMA: readonly TableSchema[] = [
+		CONFORMANCE_USERS_SCHEMA,
+		CONFORMANCE_POSTS_SCHEMA,
+	]
 	// Throw a CONFORMANCE DatabaseError naming which check failed plus the
 	// expected/actual summary — the single failure-reporting path every phase
 	// below funnels through.
-	const failConformance = (check: string, message: string, context: Readonly<Record<string, unknown>>): never => {
+	const failConformance = (
+		check: string,
+		message: string,
+		context: Readonly<Record<string, unknown>>,
+	): never => {
 		throw new DatabaseError('CONFORMANCE', message, { check, ...context })
 	}
 
@@ -737,20 +746,28 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 		const stored = await driver.read('users', 'u1')
 		const original = { id: 'u1', name: 'Ada', age: 30 }
 		if (stored === undefined || !deepEqual(stored, original)) {
-			failConformance('copy-in', 'write must copy the input row rather than store it by reference', {
-				table: 'users',
-				expected: original,
-				actual: stored,
-			})
+			failConformance(
+				'copy-in',
+				'write must copy the input row rather than store it by reference',
+				{
+					table: 'users',
+					expected: original,
+					actual: stored,
+				},
+			)
 		} else {
 			stored.name = 'Mutated after read'
 			const reread = await driver.read('users', 'u1')
 			if (reread === undefined || !deepEqual(reread, original)) {
-				failConformance('copy-out', 'read must copy the stored row rather than return it by reference', {
-					table: 'users',
-					expected: original,
-					actual: reread,
-				})
+				failConformance(
+					'copy-out',
+					'read must copy the stored row rather than return it by reference',
+					{
+						table: 'users',
+						expected: original,
+						actual: reread,
+					},
+				)
 			}
 		}
 		const overwrite = { id: 'u1', name: 'Ada Overwritten', age: 31 }
@@ -860,19 +877,27 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 		await rollback()
 		const keys = [...(await driver.keys('users'))]
 		if (!deepEqual(keys, ['u1'])) {
-			failConformance('snapshot-rollback', 'snapshot rollback must restore the pre-snapshot key set', {
-				table: 'users',
-				expected: ['u1'],
-				actual: keys,
-			})
+			failConformance(
+				'snapshot-rollback',
+				'snapshot rollback must restore the pre-snapshot key set',
+				{
+					table: 'users',
+					expected: ['u1'],
+					actual: keys,
+				},
+			)
 		}
 		const restored = await driver.read('users', 'u1')
 		if (restored === undefined || !deepEqual(restored, original)) {
-			failConformance('snapshot-rollback-value', 'snapshot rollback must restore pre-snapshot row values', {
-				table: 'users',
-				expected: original,
-				actual: restored,
-			})
+			failConformance(
+				'snapshot-rollback-value',
+				'snapshot rollback must restore pre-snapshot row values',
+				{
+					table: 'users',
+					expected: original,
+					actual: restored,
+				},
+			)
 		}
 		await driver.close()
 	}
@@ -885,11 +910,15 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 		const post = await driver.read('posts', 'hello-world')
 		const key = post === undefined ? undefined : extractKey(post, 'slug')
 		if (key !== 'hello-world') {
-			failConformance('non-id-primary', 'a non-id primary key column must round-trip through the store', {
-				table: 'posts',
-				expected: 'hello-world',
-				actual: key,
-			})
+			failConformance(
+				'non-id-primary',
+				'a non-id primary key column must round-trip through the store',
+				{
+					table: 'posts',
+					expected: 'hello-world',
+					actual: key,
+				},
+			)
 		}
 		await driver.close()
 	}
@@ -925,17 +954,24 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
 			const deployedUsers: TableSchema = {
 				...CONFORMANCE_USERS_SCHEMA,
-				columns: [...CONFORMANCE_USERS_SCHEMA.columns, { name: 'legacy', type: 'boolean', nullable: false }],
+				columns: [
+					...CONFORMANCE_USERS_SCHEMA.columns,
+					{ name: 'legacy', type: 'boolean', nullable: false },
+				],
 			}
 			const removePlan = planMigration([deployedUsers], [CONFORMANCE_USERS_SCHEMA])
 			await driver.migrate(removePlan)
 			const migrated = await driver.read('users', 'u1')
 			if (migrated === undefined || 'legacy' in migrated) {
-				failConformance('migrate-column-remove', 'a column.remove migration must strip the column from stored rows', {
-					table: 'users',
-					expected: undefined,
-					actual: migrated === undefined ? undefined : migrated.legacy,
-				})
+				failConformance(
+					'migrate-column-remove',
+					'a column.remove migration must strip the column from stored rows',
+					{
+						table: 'users',
+						expected: undefined,
+						actual: migrated === undefined ? undefined : migrated.legacy,
+					},
+				)
 			}
 			let caught: unknown
 			try {
@@ -1010,22 +1046,30 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 			await committing.commit()
 			const afterCommit = [...(await driver.keys('users'))].sort()
 			if (!deepEqual(afterCommit, ['u1', 'u2'])) {
-				failConformance('transaction-commit', 'transaction commit must persist writes made during the scope', {
-					table: 'users',
-					expected: ['u1', 'u2'],
-					actual: afterCommit,
-				})
+				failConformance(
+					'transaction-commit',
+					'transaction commit must persist writes made during the scope',
+					{
+						table: 'users',
+						expected: ['u1', 'u2'],
+						actual: afterCommit,
+					},
+				)
 			}
 			const rollingBack = await driver.transaction()
 			await driver.write('users', 'u3', { id: 'u3', name: 'Marie', age: 50 })
 			await rollingBack.rollback()
 			const afterRollback = [...(await driver.keys('users'))].sort()
 			if (!deepEqual(afterRollback, ['u1', 'u2'])) {
-				failConformance('transaction-rollback', 'transaction rollback must restore pre-transaction state', {
-					table: 'users',
-					expected: ['u1', 'u2'],
-					actual: afterRollback,
-				})
+				failConformance(
+					'transaction-rollback',
+					'transaction rollback must restore pre-transaction state',
+					{
+						table: 'users',
+						expected: ['u1', 'u2'],
+						actual: afterRollback,
+					},
+				)
 			}
 			await driver.close()
 		}

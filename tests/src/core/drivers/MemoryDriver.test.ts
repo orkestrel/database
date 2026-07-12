@@ -89,7 +89,9 @@ describe('MemoryDriver', () => {
 			const conditions = [
 				{ column: 'n', operator: 'above' as const, values: [1], connector: 'and' as const },
 			]
-			const rows = await collectRows(driver.stream?.('t', { conditions }) ?? (async function* () {})())
+			const rows = await collectRows(
+				driver.stream?.('t', { conditions }) ?? (async function* () {})(),
+			)
 			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
 		})
 

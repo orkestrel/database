@@ -221,10 +221,7 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	set(row: T, options?: ReadOptions): Promise<Key>
 	set(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
-	async set(
-		rows: T | readonly T[],
-		options?: ReadOptions,
-	): Promise<Key | readonly Key[]> {
+	async set(rows: T | readonly T[], options?: ReadOptions): Promise<Key | readonly Key[]> {
 		checkAbort(options?.signal)
 		await this.#ready()
 		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, false), options?.signal)
@@ -233,10 +230,7 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	add(row: T, options?: ReadOptions): Promise<Key>
 	add(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
-	async add(
-		rows: T | readonly T[],
-		options?: ReadOptions,
-	): Promise<Key | readonly Key[]> {
+	async add(rows: T | readonly T[], options?: ReadOptions): Promise<Key | readonly Key[]> {
 		checkAbort(options?.signal)
 		await this.#ready()
 		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, true), options?.signal)

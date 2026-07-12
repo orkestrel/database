@@ -207,9 +207,9 @@ describe('Table — batch write abort signal (AGENTS §9.2)', () => {
 		const users = userTable()
 		const controller = new AbortController()
 		controller.abort('too slow')
-		await expect(
-			users.set(createUserRow(), { signal: controller.signal }),
-		).rejects.toMatchObject({ code: 'ABORTED' })
+		await expect(users.set(createUserRow(), { signal: controller.signal })).rejects.toMatchObject({
+			code: 'ABORTED',
+		})
 		expect(await users.keys()).toEqual([])
 	})
 

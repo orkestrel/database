@@ -83,28 +83,28 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Errors
 
-| API               | Kind     | Summary                                                                                                       |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| API               | Kind     | Summary                                                                                                                       |
+| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION` / `ABORTED` / `MIGRATION` / `CONFORMANCE`). |
-| `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                                          |
+| `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                                                          |
 
 ### Query engine
 
 The portable semantics every backend shares — pure, total functions the
 driver never re-implements.
 
-| Helper             | Kind     | Behavior                                                                                               |
-| ------------------ | -------- | ------------------------------------------------------------------------------------------------------ |
-| `compareValues`    | function | Total ordering over arbitrary values (`undefined` < `null` < boolean < number < string) — never `NaN`. |
-| `matchesCondition` | function | Evaluate one `Condition` against a row (the per-operator predicate); a type mismatch is a non-match.   |
-| `matchesCriteria`  | function | Fold a row through conditions, joining each by its `Connector` left-to-right.                          |
-| `sortRows`         | function | Sort rows by an `Order` list, leaving the input untouched.                                             |
-| `applyCriteria`    | function | The portable read pipeline — filter, then sort, then page.                                             |
-| `computeAggregate` | function | `count` / `sum` / `average` / `minimum` / `maximum` over a column (coerces via `parseNumber`).         |
-| `extractKey`       | function | Read a row's primary key from a column when it is a usable `Key`.                                      |
+| Helper              | Kind     | Behavior                                                                                               |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `compareValues`     | function | Total ordering over arbitrary values (`undefined` < `null` < boolean < number < string) — never `NaN`. |
+| `matchesCondition`  | function | Evaluate one `Condition` against a row (the per-operator predicate); a type mismatch is a non-match.   |
+| `matchesCriteria`   | function | Fold a row through conditions, joining each by its `Connector` left-to-right.                          |
+| `sortRows`          | function | Sort rows by an `Order` list, leaving the input untouched.                                             |
+| `applyCriteria`     | function | The portable read pipeline — filter, then sort, then page.                                             |
+| `computeAggregate`  | function | `count` / `sum` / `average` / `minimum` / `maximum` over a column (coerces via `parseNumber`).         |
+| `extractKey`        | function | Read a row's primary key from a column when it is a usable `Key`.                                      |
 | `shapeToColumnType` | function | Map a column's `ContractShape` to its portable `ColumnType` — the schema `open` hands a driver.        |
-| `filterRows`       | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.         |
-| `deepEqual`        | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.         |
+| `filterRows`        | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.         |
+| `deepEqual`         | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.         |
 
 ### Cancellation
 
@@ -124,8 +124,8 @@ transform; version tracking is deferred to future persistent backends.
 
 ### Conformance
 
-| API            | Kind     | Behavior                                                                                                                    |
-| -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| API             | Kind     | Behavior                                                                                                                                                                    |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `conformDriver` | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
 
 ### Helpers & guards
@@ -147,42 +147,42 @@ Pure helpers behind the query engine's pattern matching.
 
 ### Types
 
-| Type                   | Kind      | Shape                                                                                                                                                                                                                                           |
-| ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Key`                  | type      | `string \| number` — a primary key.                                                                                                                                                                                                             |
-| `KeyFunction`          | type      | `() => Key` — a caller-supplied key minting function, supplied via `DatabaseOptions.key`.                                                                                                                                                       |
-| `Row`                  | type      | `Record<string, unknown>` — a table row.                                                                                                                                                                                                        |
-| `ConditionOperator`    | type      | The 15 WHERE operators (`equals`, `above`, `between`, `like`, `any`, `absent`, …).                                                                                                                                                              |
-| `Connector`            | type      | `'and' \| 'or'` — how a condition joins the running result.                                                                                                                                                                                     |
-| `Condition`            | interface | `{ column, operator, values, connector }` — one compiled WHERE condition.                                                                                                                                                                       |
-| `Direction`            | type      | `'ascending' \| 'descending'`.                                                                                                                                                                                                                  |
-| `Order`                | interface | `{ column, direction }` — one ordering term.                                                                                                                                                                                                    |
-| `Criteria`             | interface | `{ conditions?, order?, limit?, offset? }` — a serializable read spec for a driver.                                                                                                                                                             |
-| `AggregateFunction`    | type      | `'count' \| 'sum' \| 'average' \| 'minimum' \| 'maximum'`.                                                                                                                                                                                      |
-| `ReadOptions`          | interface | `{ signal? }` — options for a cancellable read / iteration; an aborted signal throws `ABORTED` (checked before each yield in `scan` / `stream`, at entry elsewhere).                                                                            |
-| `DatabaseStatus`       | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                 |
-| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE'`.                                                                                                                                                            |
-| `DatabaseEventMap`     | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                                                |
-| `TableEventMap`        | type      | A table's push observation surface (§13) — `write(key)` · `remove(key)` · `clear` (key only, no value).                                                                                                                                         |
-| `Columns`              | type      | `Readonly<Record<string, ContractShape>>` — one table's `column → shape` map (an `objectShape`'s properties).                                                                                                                                   |
-| `TablesShape`          | type      | `Readonly<Record<string, Columns>>` — a database's table → columns map.                                                                                                                                                                         |
-| `RowOf`                | type      | `RowOf<C>` — the row type a `Columns` map describes (`Infer` of its `objectShape`).                                                                                                                                                             |
-| `TableKeys`            | type      | `Readonly<Record<string, string>>` — per-table primary-key column overrides.                                                                                                                                                                    |
-| `TableIndexes`         | type      | `Readonly<Record<string, readonly (readonly string[])[]>>` — per-table secondary indexes (column-name groups).                                                                                                                                  |
-| `ColumnType`           | type      | `'text' \| 'integer' \| 'real' \| 'boolean' \| 'json' \| 'blob'` — a column's portable storage type.                                                                                                                                            |
-| `ColumnSchema`         | interface | `{ name, type, nullable }` — one column of a `TableSchema`.                                                                                                                                                                                     |
-| `TableSchema`          | interface | `{ name, primary, columns, indexes }` — a backend-agnostic table description `open` hands a driver.                                                                                                                                             |
-| `MigrationStep`        | type      | A discriminated union of one schema change: `table.add` / `table.remove` / `column.add` / `column.remove` / `index.add` / `index.remove`, each naming its `table`.                                                                              |
-| `Migration`            | interface | `{ from, to, steps }` — an ordered schema migration plan moving a database from one version to another.                                                                                                                                         |
-| `TransactionInterface` | interface | `{ commit, rollback }` — the handle a driver's native `transaction` hook returns; used by `Database.transaction` in place of the snapshot floor when present.                                                                                   |
-| `DriverInterface`      | interface | The minimal storage contract: `open` (takes a `TableSchema[]`) / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear` / `snapshot`, plus optional native `records` / `count` / `aggregate` / `transaction` / `stream` / `migrate`. |
-| `DatabaseOptions`      | interface | `{ on?, error?, driver, tables, keys?, indexes?, name?, key? }` — input to `createDatabase` (`on?` wires initial `DatabaseEventMap` listeners, §8; `key?` is the key factory a table uses for a keyless write).                                 |
-| `TableExport`          | interface | `{ key, columns, schema }` — one table's portable definition, produced by `export`.                                                                                                                                                             |
-| `DatabaseInterface`    | interface | `emitter` / `name` / `status` / `table` / `import` / `export` / `open` / `close` / `transaction` (takes an optional `ReadOptions`) / `migrate` (diffs a deployed schema against the declared one and applies it, taking an optional `ReadOptions`).                                                                                                             |
-| `TableInterface`       | interface | `emitter` / `name` / `primary` / `contract` + keyed CRUD (`set` / `add` / `update` / `remove` each take an optional `ReadOptions`) + `records` / `count` / `aggregate` (each taking an optional `ReadOptions`) + `scan` + `query` / `cursor`.                                                                             |
-| `QueryInterface`       | interface | The fluent builder — `where` / `filter` / `ascending` / `limit` + `stream` + terminals.                                                                                                                                                         |
-| `ClauseInterface`      | interface | The 15 operator methods, each returning the query.                                                                                                                                                                                              |
-| `CursorInterface`      | interface | `value` / `index` / `done` + `next` / `update` / `remove` / `close`.                                                                                                                                                                            |
+| Type                   | Kind      | Shape                                                                                                                                                                                                                                               |
+| ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Key`                  | type      | `string \| number` — a primary key.                                                                                                                                                                                                                 |
+| `KeyFunction`          | type      | `() => Key` — a caller-supplied key minting function, supplied via `DatabaseOptions.key`.                                                                                                                                                           |
+| `Row`                  | type      | `Record<string, unknown>` — a table row.                                                                                                                                                                                                            |
+| `ConditionOperator`    | type      | The 15 WHERE operators (`equals`, `above`, `between`, `like`, `any`, `absent`, …).                                                                                                                                                                  |
+| `Connector`            | type      | `'and' \| 'or'` — how a condition joins the running result.                                                                                                                                                                                         |
+| `Condition`            | interface | `{ column, operator, values, connector }` — one compiled WHERE condition.                                                                                                                                                                           |
+| `Direction`            | type      | `'ascending' \| 'descending'`.                                                                                                                                                                                                                      |
+| `Order`                | interface | `{ column, direction }` — one ordering term.                                                                                                                                                                                                        |
+| `Criteria`             | interface | `{ conditions?, order?, limit?, offset? }` — a serializable read spec for a driver.                                                                                                                                                                 |
+| `AggregateFunction`    | type      | `'count' \| 'sum' \| 'average' \| 'minimum' \| 'maximum'`.                                                                                                                                                                                          |
+| `ReadOptions`          | interface | `{ signal? }` — options for a cancellable read / iteration; an aborted signal throws `ABORTED` (checked before each yield in `scan` / `stream`, at entry elsewhere).                                                                                |
+| `DatabaseStatus`       | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                     |
+| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE'`.                                                                                                                                               |
+| `DatabaseEventMap`     | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                             |
+| `TableEventMap`        | type      | A table's push observation surface (§13) — `write(key)` · `remove(key)` · `clear` (key only, no value).                                                                                                                                             |
+| `Columns`              | type      | `Readonly<Record<string, ContractShape>>` — one table's `column → shape` map (an `objectShape`'s properties).                                                                                                                                       |
+| `TablesShape`          | type      | `Readonly<Record<string, Columns>>` — a database's table → columns map.                                                                                                                                                                             |
+| `RowOf`                | type      | `RowOf<C>` — the row type a `Columns` map describes (`Infer` of its `objectShape`).                                                                                                                                                                 |
+| `TableKeys`            | type      | `Readonly<Record<string, string>>` — per-table primary-key column overrides.                                                                                                                                                                        |
+| `TableIndexes`         | type      | `Readonly<Record<string, readonly (readonly string[])[]>>` — per-table secondary indexes (column-name groups).                                                                                                                                      |
+| `ColumnType`           | type      | `'text' \| 'integer' \| 'real' \| 'boolean' \| 'json' \| 'blob'` — a column's portable storage type.                                                                                                                                                |
+| `ColumnSchema`         | interface | `{ name, type, nullable }` — one column of a `TableSchema`.                                                                                                                                                                                         |
+| `TableSchema`          | interface | `{ name, primary, columns, indexes }` — a backend-agnostic table description `open` hands a driver.                                                                                                                                                 |
+| `MigrationStep`        | type      | A discriminated union of one schema change: `table.add` / `table.remove` / `column.add` / `column.remove` / `index.add` / `index.remove`, each naming its `table`.                                                                                  |
+| `Migration`            | interface | `{ from, to, steps }` — an ordered schema migration plan moving a database from one version to another.                                                                                                                                             |
+| `TransactionInterface` | interface | `{ commit, rollback }` — the handle a driver's native `transaction` hook returns; used by `Database.transaction` in place of the snapshot floor when present.                                                                                       |
+| `DriverInterface`      | interface | The minimal storage contract: `open` (takes a `TableSchema[]`) / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear` / `snapshot`, plus optional native `records` / `count` / `aggregate` / `transaction` / `stream` / `migrate`.     |
+| `DatabaseOptions`      | interface | `{ on?, error?, driver, tables, keys?, indexes?, name?, key? }` — input to `createDatabase` (`on?` wires initial `DatabaseEventMap` listeners, §8; `key?` is the key factory a table uses for a keyless write).                                     |
+| `TableExport`          | interface | `{ key, columns, schema }` — one table's portable definition, produced by `export`.                                                                                                                                                                 |
+| `DatabaseInterface`    | interface | `emitter` / `name` / `status` / `table` / `import` / `export` / `open` / `close` / `transaction` (takes an optional `ReadOptions`) / `migrate` (diffs a deployed schema against the declared one and applies it, taking an optional `ReadOptions`). |
+| `TableInterface`       | interface | `emitter` / `name` / `primary` / `contract` + keyed CRUD (`set` / `add` / `update` / `remove` each take an optional `ReadOptions`) + `records` / `count` / `aggregate` (each taking an optional `ReadOptions`) + `scan` + `query` / `cursor`.       |
+| `QueryInterface`       | interface | The fluent builder — `where` / `filter` / `ascending` / `limit` + `stream` + terminals.                                                                                                                                                             |
+| `ClauseInterface`      | interface | The 15 operator methods, each returning the query.                                                                                                                                                                                                  |
+| `CursorInterface`      | interface | `value` / `index` / `done` + `next` / `update` / `remove` / `close`.                                                                                                                                                                                |
 
 ## Methods
 
@@ -224,14 +224,14 @@ any or all of them.
 
 #### `DatabaseInterface`
 
-| Method        | Returns                                 | Behavior                                                                                                            |
-| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `table`       | `TableInterface<RowOf<T[K]>>`           | The typed handle for a declared table.                                                                              |
-| `import`      | `DatabaseInterface<U>`                  | Define a shape map of tables; a typed view over the same driver.                                                    |
-| `export`      | `Readonly<Record<string, TableExport>>` | A portable `TableExport` per table.                                                                                 |
-| `open`        | `Promise<void>`                         | Connect the driver eagerly (otherwise lazy on first use).                                                           |
-| `close`       | `Promise<void>`                         | Close the database and its driver.                                                                                  |
-| `transaction` | `Promise<R>`                            | Run a scope; roll every table back if it throws; takes an optional `ReadOptions` (`signal` checked once, at entry). |
+| Method        | Returns                                 | Behavior                                                                                                                                                                                                                              |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `table`       | `TableInterface<RowOf<T[K]>>`           | The typed handle for a declared table.                                                                                                                                                                                                |
+| `import`      | `DatabaseInterface<U>`                  | Define a shape map of tables; a typed view over the same driver.                                                                                                                                                                      |
+| `export`      | `Readonly<Record<string, TableExport>>` | A portable `TableExport` per table.                                                                                                                                                                                                   |
+| `open`        | `Promise<void>`                         | Connect the driver eagerly (otherwise lazy on first use).                                                                                                                                                                             |
+| `close`       | `Promise<void>`                         | Close the database and its driver.                                                                                                                                                                                                    |
+| `transaction` | `Promise<R>`                            | Run a scope; roll every table back if it throws; takes an optional `ReadOptions` (`signal` checked once, at entry).                                                                                                                   |
 | `migrate`     | `Promise<Migration>`                    | Diff a deployed `TableSchema[]` against the declared schema via `planMigration`, apply the plan through the driver's optional `migrate` hook, and return the plan; takes an optional `ReadOptions` (`signal` checked once, at entry). |
 
 #### `TableInterface`
@@ -239,23 +239,23 @@ any or all of them.
 The keyed methods batch by overload (one in → one out; array in → array
 out) — a single verb, never `getMany` / `setAll`.
 
-| Method      | Returns                              | Behavior                                                                                                                                                           |
-| ----------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `get`       | `Promise<T \| undefined>` (or array) | Read by key(s); `undefined` per miss.                                                                                                                              |
-| `resolve`   | `Promise<T>` (or array)              | Read by key(s); throws `NOT_FOUND` on a miss.                                                                                                                      |
-| `has`       | `Promise<boolean>` (or array)        | Whether key(s) exist.                                                                                                                                              |
-| `keys`      | `Promise<readonly Key[]>`            | All primary keys in order.                                                                                                                                         |
-| `records`   | `Promise<readonly T[]>`              | Rows matching an optional `Criteria`; takes an optional `ReadOptions`.                                                                                             |
-| `count`     | `Promise<number>`                    | Count matching an optional `Criteria`; takes an optional `ReadOptions`.                                                                                            |
-| `aggregate` | `Promise<number \| undefined>`       | `count` / `sum` / `average` / `minimum` / `maximum` over a column; takes an optional `ReadOptions`.                                                                |
-| `scan`      | `AsyncIterable<T>`                   | Lazy filtered iteration; `conditions` / `offset` / `limit` honored lazily, `order` IGNORED (sorted output is `records()`'s job); signal checked before each yield. |
-| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s); takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                                            |
-| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                      |
-| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                |
-| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                                              |
-| `clear`     | `Promise<void>`                      | Empty the table.                                                                                                                                                   |
-| `query`     | `QueryInterface<T>`                  | Open a fluent query builder.                                                                                                                                       |
-| `cursor`    | `Promise<CursorInterface<T>>`        | Open a forward row cursor for bulk mutation.                                                                                                                       |
+| Method      | Returns                              | Behavior                                                                                                                                                                                           |
+| ----------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get`       | `Promise<T \| undefined>` (or array) | Read by key(s); `undefined` per miss.                                                                                                                                                              |
+| `resolve`   | `Promise<T>` (or array)              | Read by key(s); throws `NOT_FOUND` on a miss.                                                                                                                                                      |
+| `has`       | `Promise<boolean>` (or array)        | Whether key(s) exist.                                                                                                                                                                              |
+| `keys`      | `Promise<readonly Key[]>`            | All primary keys in order.                                                                                                                                                                         |
+| `records`   | `Promise<readonly T[]>`              | Rows matching an optional `Criteria`; takes an optional `ReadOptions`.                                                                                                                             |
+| `count`     | `Promise<number>`                    | Count matching an optional `Criteria`; takes an optional `ReadOptions`.                                                                                                                            |
+| `aggregate` | `Promise<number \| undefined>`       | `count` / `sum` / `average` / `minimum` / `maximum` over a column; takes an optional `ReadOptions`.                                                                                                |
+| `scan`      | `AsyncIterable<T>`                   | Lazy filtered iteration; `conditions` / `offset` / `limit` honored lazily, `order` IGNORED (sorted output is `records()`'s job); signal checked before each yield.                                 |
+| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s); takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                             |
+| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).       |
+| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback). |
+| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                               |
+| `clear`     | `Promise<void>`                      | Empty the table.                                                                                                                                                                                   |
+| `query`     | `QueryInterface<T>`                  | Open a fluent query builder.                                                                                                                                                                       |
+| `cursor`    | `Promise<CursorInterface<T>>`        | Open a forward row cursor for bulk mutation.                                                                                                                                                       |
 
 #### `QueryInterface`
 

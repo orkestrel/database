@@ -217,7 +217,7 @@ export type TableEventMap<TKey extends Key = Key> = {
 /**
  * A portable storage type for a column — the backend maps it to its native type
  * (SQLite affinity, an IndexedDB value). Derived from a column's `ContractShape`
- * by `columnType`; `json` covers object/array/union/raw values a backend stores
+ * by `shapeToColumnType`; `json` covers object/array/union/raw values a backend stores
  * as JSON text and can `json_extract` for nested-field queries.
  */
 export type ColumnType = 'text' | 'integer' | 'real' | 'boolean' | 'json' | 'blob'
@@ -238,7 +238,7 @@ export interface ColumnSchema {
  *
  * @remarks
  * Derived by the database from its `tables` contract shapes ({@link ColumnSchema}
- * per column, via `columnType`), its `keys` (`primary`), and its `indexes` option
+ * per column, via `shapeToColumnType`), its `keys` (`primary`), and its `indexes` option
  * (`indexes`, each entry one possibly-compound index of column names). A scan-only
  * backend (the reference `MemoryDriver`) ignores everything but `name`.
  */
