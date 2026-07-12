@@ -1,5 +1,7 @@
-import type { DriverInterface, Key, Row, TableSchema } from '../types.js'
+import type { DriverInterface, Key, Migration, Row, TableSchema } from '../types.js'
+import { DatabaseError } from '../errors.js'
 import { compareValues } from '../helpers.js'
+import { migrateRows } from '../migrations.js'
 
 /**
  * The reference {@link DriverInterface} — nested maps, no I/O.
@@ -69,11 +71,50 @@ export class MemoryDriver implements DriverInterface {
 		}
 	}
 
+	async migrate(plan: Migration): Promise<void> {
+		for (const step of plan.steps) {
+			switch (step.operation) {
+				case 'table.add':
+					if (!this.#tables.has(step.table.name)) this.#tables.set(step.table.name, new Map())
+					break
+				case 'table.remove':
+					this.#require(step.table)
+					this.#tables.delete(step.table)
+					break
+				case 'column.add':
+				case 'column.remove': {
+					const store = this.#require(step.table)
+					const rows = [...store.entries()]
+					const migrated = migrateRows(
+						rows.map(([, row]) => row),
+						[step],
+					)
+					rows.forEach(([key], index) => store.set(key, migrated[index]))
+					break
+				}
+				case 'index.add':
+				case 'index.remove':
+					this.#require(step.table)
+					break
+			}
+		}
+	}
+
 	// A table's keys in key order — the contract `scan` and `keys` yield in.
 	// `compareValues` is the core total order (number < string, natural within),
 	// matching the SQLite `ORDER BY` and IndexedDB key-range orderings.
 	#ordered(table: string): readonly Key[] {
 		return [...this.#store(table).keys()].sort(compareValues)
+	}
+
+	// A migration step's table must already exist — unlike `#store`, a missing
+	// table here is a MIGRATION error rather than an as-yet-untouched table.
+	#require(table: string): Map<Key, Row> {
+		const store = this.#tables.get(table)
+		if (store === undefined) {
+			throw new DatabaseError('MIGRATION', `migrate: unknown table '${table}'`, { table })
+		}
+		return store
 	}
 
 	// Lazily create a table's backing map — a write to an as-yet-untouched (but

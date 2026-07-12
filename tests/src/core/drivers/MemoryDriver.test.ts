@@ -1,4 +1,4 @@
-import { createMemoryDriver } from '@src/core'
+import { createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { collectRows, tableSchemas } from '../../../setup.js'
 
@@ -76,5 +76,44 @@ describe('MemoryDriver', () => {
 		await rollback()
 		expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
 		expect(await driver.read('t', 'b')).toBeUndefined()
+	})
+
+	describe('migrate', () => {
+		it('applies a table.add step by creating the table', async () => {
+			const driver = createMemoryDriver()
+			const plan = planMigration([], tableSchemas('users'))
+			await driver.migrate?.(plan)
+			expect(await driver.keys('users')).toEqual([])
+		})
+
+		it('applies a table.remove step by dropping the table and its rows', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write('users', 'a', { id: 'a' })
+			const plan = planMigration(tableSchemas('users'), [])
+			await driver.migrate?.(plan)
+			await driver.open(tableSchemas('users'))
+			expect(await driver.keys('users')).toEqual([])
+		})
+
+		it('applies a column.remove step by stripping the field from every stored row', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write('users', 'a', { id: 'a', name: 'Ada', legacy: true })
+			await driver.write('users', 'b', { id: 'b', name: 'Grace', legacy: false })
+			const before = { name: 'users', primary: 'id', columns: [{ name: 'legacy', type: 'text' as const, nullable: false }], indexes: [] }
+			const after = { name: 'users', primary: 'id', columns: [], indexes: [] }
+			const plan = planMigration([before], [after])
+			await driver.migrate?.(plan)
+			expect(await driver.read('users', 'a')).toEqual({ id: 'a', name: 'Ada' })
+			expect(await driver.read('users', 'b')).toEqual({ id: 'b', name: 'Grace' })
+		})
+
+		it('throws a MIGRATION DatabaseError when a step references an unknown table', async () => {
+			const driver = createMemoryDriver()
+			const plan = planMigration(tableSchemas('missing'), [])
+			const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
+			expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+		})
 	})
 })
