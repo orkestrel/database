@@ -1,30 +1,32 @@
 import {
 	applyCriteria,
-	arrayShape,
-	booleanShape,
 	columnType,
 	compareValues,
 	computeAggregate,
 	extractKey,
 	generateKey,
 	globMatch,
-	integerShape,
 	isDatabaseError,
 	likeMatch,
-	literalShape,
 	matchesCondition,
 	matchesCriteria,
 	MAX_PATTERN_LENGTH,
+	sortRows,
+	wildcardMatch,
+} from '@src/core'
+import {
+	arrayShape,
+	booleanShape,
+	integerShape,
+	literalShape,
 	nullableShape,
 	numberShape,
 	objectShape,
 	optionalShape,
 	rawShape,
-	sortRows,
 	stringShape,
 	unionShape,
-	wildcardMatch,
-} from '@src/core'
+} from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import { buildCondition, captureError } from '../../setup.js'
 
@@ -336,9 +338,9 @@ describe('columnType', () => {
 	})
 
 	it('takes a literal shape from its values', () => {
-		expect(columnType(literalShape('a', 'b'))).toBe('text')
-		expect(columnType(literalShape(1, 2))).toBe('integer')
-		expect(columnType(literalShape(1.5, 2))).toBe('real')
-		expect(columnType(literalShape(true, false))).toBe('boolean')
+		expect(columnType(literalShape(['a', 'b']))).toBe('text')
+		expect(columnType(literalShape([1, 2]))).toBe('integer')
+		expect(columnType(literalShape([1.5, 2]))).toBe('real')
+		expect(columnType(literalShape([true, false]))).toBe('boolean')
 	})
 })

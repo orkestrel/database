@@ -1,11 +1,5 @@
-import {
-	createDatabase,
-	createMemoryDriver,
-	integerShape,
-	literalShape,
-	objectShape,
-	stringShape,
-} from '@src/core'
+import { createDatabase, createMemoryDriver } from '@src/core'
+import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { seedUsersTable } from '../../setup.js'
 
@@ -22,7 +16,7 @@ const columns = {
 	id: stringShape(),
 	name: stringShape(),
 	age: integerShape(),
-	role: literalShape('admin', 'member', 'guest'),
+	role: literalShape(['admin', 'member', 'guest']),
 }
 
 // The table's row type is inferred from its columns — no hand-written alias.

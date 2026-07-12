@@ -18,7 +18,6 @@
 		"noEmit": true,
 		"paths": {
 			"@src/core": ["./src/core/index.ts"],
-			"@src/browser": ["./src/browser/index.ts"],
 			"@src/server": ["./src/server/index.ts"]
 		}
 	},

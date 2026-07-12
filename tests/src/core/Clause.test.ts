@@ -1,4 +1,4 @@
-import { integerShape, optionalShape, stringShape } from '@src/core'
+import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { seedUsersTable } from '../../setup.js'
 

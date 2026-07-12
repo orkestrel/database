@@ -19,8 +19,8 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  *
  * @example
  * ```ts
- * import { createDatabase, createMemoryDriver } from '@src/core'
- * import { integerShape, stringShape } from '@src/core'
+ * import { createDatabase, createMemoryDriver } from '@orkestrel/database'
+ * import { integerShape, stringShape } from '@orkestrel/contract'
  *
  * const db = createDatabase({
  * 	driver: createMemoryDriver(),

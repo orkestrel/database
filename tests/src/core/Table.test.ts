@@ -1,12 +1,6 @@
 import type { Key } from '@src/core'
-import {
-	createDatabase,
-	createMemoryDriver,
-	integerShape,
-	literalShape,
-	optionalShape,
-	stringShape,
-} from '@src/core'
+import { createDatabase, createMemoryDriver } from '@src/core'
+import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase,
@@ -289,7 +283,7 @@ describe('Table — query / cursor accessors', () => {
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: {
-				users: { id: stringShape(), name: stringShape(), role: literalShape('admin', 'member') },
+				users: { id: stringShape(), name: stringShape(), role: literalShape(['admin', 'member']) },
 			},
 		})
 		const users = db.table('users')

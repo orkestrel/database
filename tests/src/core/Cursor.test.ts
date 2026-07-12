@@ -1,4 +1,4 @@
-import { integerShape, literalShape, stringShape } from '@src/core'
+import { integerShape, literalShape, stringShape } from '@orkestrel/contract'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { seedUsersTable } from '../../setup.js'
 
@@ -17,7 +17,7 @@ const columns = {
 	id: stringShape(),
 	name: stringShape(),
 	age: integerShape(),
-	role: literalShape('admin', 'member', 'guest'),
+	role: literalShape(['admin', 'member', 'guest']),
 }
 
 async function seeded() {

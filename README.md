@@ -1,21 +1,21 @@
-# @orkestrel/router
+# @orkestrel/database
 
-A typed request router for the `@orkestrel` line — the first `@orkestrel`
-package to ship both server and browser environments alongside its shared
-core. Built to sit beside `@orkestrel/contract` (validation) and
-`@orkestrel/emitter` (observable lifecycle), reusing both as it takes shape.
+A typed database abstraction for the `@orkestrel` line — a single
+environment-agnostic core engine (`Database`, `Table`, `Query`, `Cursor`,
+`Clause`) over pluggable storage drivers at the seams. Built to sit beside
+`@orkestrel/contract` (validation) and `@orkestrel/emitter` (observable
+lifecycle), reusing both as it takes shape.
 
 ## Install
 
 ```sh
-npm install @orkestrel/router
+npm install @orkestrel/database
 ```
 
 ## Requirements
 
 - Node.js >= 24
 - ESM-only (no CommonJS build)
-- Server and browser environments both supported
 
 ## Status
 
@@ -25,8 +25,10 @@ usage examples, and a guide link once the design lands.
 
 ## Package
 
-Published as three environment-scoped entry points per the `exports` field in
-`package.json`: a shared core, `./browser`, and `./server`.
+Published as two environment-scoped entry points per the `exports` field in
+`package.json`: a shared core (with the in-memory driver) and `./server` (the
+JSON file driver). IndexedDB and SQLite drivers are planned once their
+backing packages exist.
 
 ## License
 

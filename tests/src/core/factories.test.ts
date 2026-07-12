@@ -1,4 +1,5 @@
-import { createDatabase, createMemoryDriver, integerShape, stringShape } from '@src/core'
+import { createDatabase, createMemoryDriver } from '@src/core'
+import { integerShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import { collectRows, tableSchemas } from '../../setup.js'
 

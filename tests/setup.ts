@@ -17,6 +17,9 @@ import type {
 	TableInterface,
 	TableSchema,
 } from '@src/core'
+import type { EmitterErrorHandler, EmitterInterface, EventMap } from '@orkestrel/emitter'
+import type { FieldPath } from '@orkestrel/contract'
+import { integerShape, stringShape } from '@orkestrel/contract'
 import {
 	createDatabase,
 	createMemoryDriver,
@@ -112,16 +115,6 @@ export function buildCondition(
 export const INTEGRATION_TABLES = {
 	users: { id: stringShape(), name: stringShape(), age: integerShape() },
 	posts: { id: stringShape(), author: stringShape(), title: stringShape() },
-} as const
-
-/**
- * The relation map for {@link INTEGRATION_TABLES} — users have many posts, a post
- * belongs to its author — fed to `createRelationManager` in every cross-driver
- * integration test (the manager's `database` stays env-specific).
- */
-export const INTEGRATION_RELATIONS = {
-	users: { posts: hasMany('author') },
-	posts: { author: belongsTo('author', 'users') },
 } as const
 
 /** A row of the canonical `users` table ({@link INTEGRATION_TABLES}` users`). */
@@ -326,4 +319,99 @@ export function createRecordingDriver(aggregatesUndefined = false): {
 		},
 	}
 	return { driver, recordsCalls, countCalls, aggregateCalls }
+}
+
+/**
+ * Create a recorder for an {@link EmitterErrorHandler} — the emitter's
+ * own listener-error channel (AGENTS §13): a `TestRecorderInterface<[error, event]>` whose
+ * `handler` is wired as the `error` option, so an emit-safety test asserts a buggy listener's
+ * throw was routed here (with the offending event name) instead of corrupting the entity.
+ * Argument order is `(error, event)`, matching `EmitterErrorHandler`. A thin alias over
+ * {@link createRecorder} (AGENTS §16.1 — extract-once over the per-entity emit-safety blocks).
+ *
+ * @returns A recorder of `[error: unknown, event: string]` calls
+ */
+export function createErrorRecorder(): TestRecorderInterface<
+	readonly [error: unknown, event: string]
+> {
+	return createRecorder<readonly [error: unknown, event: string]>()
+}
+
+/**
+ * Run `thunk` and return the value it threw, or `undefined` if it returned normally — the
+ * one shared form of the `try { …; return undefined } catch (error) { return error }` IIFE
+ * the error-path tests repeat (AGENTS §16.1). Lets a caller assert on the captured fault
+ * unconditionally, never inside a conditional `expect` — e.g. `errorCode(captureError(() =>
+ * …))` (where `errorCode` lives in the env-specific setup). For a synchronous throw site; an
+ * async rejection is asserted with `await expect(…).rejects` instead.
+ *
+ * @param thunk - The (synchronous) operation to run and capture the throw of
+ * @returns The thrown value, or `undefined` when `thunk` did not throw
+ */
+export function captureError(thunk: () => unknown): unknown {
+	try {
+		thunk()
+		return undefined
+	} catch (error) {
+		return error
+	}
+}
+
+/** A {@link createRecorder} per listed event of an `EmitterInterface`, keyed by event name. */
+export type EmitterRecorders<TMap extends EventMap, TName extends keyof TMap> = {
+	readonly [K in TName]: TestRecorderInterface<TMap[K]>
+}
+
+/**
+ * Wire one {@link createRecorder} onto `emitter` for each of the named events — the
+ * one generic form of the per-entity `recordXEvents` bundles (AGENTS §16.1). Each
+ * recorder subscribes via `emitter.on(name, recorder.handler)` and is returned keyed
+ * by its event name, typed with that event's argument tuple — so a test asserts what
+ * fired (`events.write.calls`) and with which payload, exactly as the local bundles did.
+ *
+ * @typeParam TMap - The emitter's {@link EventMap}
+ * @typeParam TName - The subset of event names to record (inferred from `events`)
+ * @param emitter - The emitter to subscribe the recorders to
+ * @param events - The event names to record (each becomes a key of the result)
+ * @returns A recorder per name, each subscribed and keyed by event name
+ */
+export function recordEmitterEvents<TMap extends EventMap, TName extends keyof TMap>(
+	emitter: EmitterInterface<TMap>,
+	events: readonly TName[],
+): EmitterRecorders<TMap, TName> {
+	// Accumulate into a `Partial` of the exact mapped shape — every value keeps its
+	// precise per-event tuple type (a recorder is invariant in its argument tuple, so a
+	// widened record won't hold it), all keys optional until assigned. Each recorder is
+	// created against its event's tuple, so `on(name, handler)` is precisely typed as it
+	// is wired. The dynamic key list is the untyped edge: once every listed name is
+	// present we narrow `Partial` → total through a guard, never an assertion (§14).
+	const recorders: Partial<EmitterRecorders<TMap, TName>> = {}
+	for (const name of events) {
+		const recorder = createRecorder<TMap[typeof name]>()
+		emitter.on(name, recorder.handler)
+		recorders[name] = recorder
+	}
+	if (!isTotal(recorders, events)) {
+		throw new Error('recordEmitterEvents: a recorder was not wired for every event')
+	}
+	return recorders
+}
+
+/**
+ * Narrow an accumulated `Partial<EmitterRecorders>` to its total mapped form once every
+ * listed event has a recorder present — the §14 guard standing in for an assertion in
+ * {@link recordEmitterEvents} (whose loop assigns one recorder per name, so this holds;
+ * the explicit per-name presence check keeps the narrowing a sound guard, not a cast).
+ *
+ * @typeParam TMap - The emitter's {@link EventMap}
+ * @typeParam TName - The subset of event names that must each have a recorder
+ * @param recorders - The partially-accumulated recorder map to narrow
+ * @param events - The event names that must all be present for the map to be total
+ * @returns Whether every listed event has a recorder (narrowing `recorders` to total)
+ */
+export function isTotal<TMap extends EventMap, TName extends keyof TMap>(
+	recorders: Partial<EmitterRecorders<TMap, TName>>,
+	events: readonly TName[],
+): recorders is EmitterRecorders<TMap, TName> {
+	return events.every((name) => recorders[name] !== undefined)
 }
