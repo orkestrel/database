@@ -5,16 +5,17 @@ directory (AGENTS §22).
 
 ## By concept
 
-| Concept  | Spec                                 | Source                                                   | Tests                                                                            |
-| -------- | ------------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Database | [`src/database.md`](src/database.md) | [`src/core`](../src/core), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server) |
+| Concept  | Spec                                 | Source                                                                                    | Tests                                                                                                                         |
+| -------- | ------------------------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Database | [`src/database.md`](src/database.md) | [`src/core`](../src/core), [`src/browser`](../src/browser), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/browser`](../tests/src/browser), [`tests/src/server`](../tests/src/server) |
 
 ## By directory
 
-| Directory    | Guide                                |
-| ------------ | ------------------------------------ |
-| `src/core`   | [`src/database.md`](src/database.md) |
-| `src/server` | [`src/database.md`](src/database.md) |
+| Directory     | Guide                                |
+| ------------- | ------------------------------------ |
+| `src/core`    | [`src/database.md`](src/database.md) |
+| `src/browser` | [`src/database.md`](src/database.md) |
+| `src/server`  | [`src/database.md`](src/database.md) |
 
 ## Dependency reference
 

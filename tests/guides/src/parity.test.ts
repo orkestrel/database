@@ -22,7 +22,7 @@ import {
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const WALK_DIRS = ['src', 'guides', 'tests']
-const SELF_SPECIFIERS = ['@orkestrel/database', '@src/core', '@src/server']
+const SELF_SPECIFIERS = ['@orkestrel/database', '@src/core', '@src/server', '@src/browser']
 
 function walk(dir: string, acc: Record<string, string>): void {
 	for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
@@ -56,6 +56,7 @@ const SPECIFIER_MODULES: Readonly<Record<string, string>> = {
 	'@orkestrel/database': 'src/core',
 	'@src/core': 'src/core',
 	'@src/server': 'src/server',
+	'@src/browser': 'src/browser',
 }
 const specifierSources = new Map<string, ReturnType<typeof createSource>>()
 function exportsFor(specifier: string): readonly string[] {
