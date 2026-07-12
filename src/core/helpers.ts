@@ -704,6 +704,10 @@ export async function* driverFindings(
 			{ name: 'id', type: 'text', nullable: false },
 			{ name: 'name', type: 'text', nullable: false },
 			{ name: 'age', type: 'integer', nullable: true },
+			// Declared so the nested-roundtrip phase is fair to typed-column
+			// backends (a SQL driver persists only declared columns; schemaless
+			// backends ignore declarations entirely).
+			{ name: 'meta', type: 'json', nullable: true },
 		],
 		indexes: [],
 	}
@@ -993,15 +997,18 @@ export async function* driverFindings(
 			run: async () => {
 				const driver = factory()
 				if (driver.migrate === undefined) return undefined
-				await driver.open(CONFORMANCE_SCHEMA)
-				await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
+				// Open with the DEPLOYED schema so `legacy` is a declared column —
+				// a typed-column backend persists only declared columns and can only
+				// drop a column that really exists; schemaless backends are unaffected.
 				const deployedUsers: TableSchema = {
 					...CONFORMANCE_USERS_SCHEMA,
 					columns: [
 						...CONFORMANCE_USERS_SCHEMA.columns,
-						{ name: 'legacy', type: 'boolean', nullable: false },
+						{ name: 'legacy', type: 'boolean', nullable: true },
 					],
 				}
+				await driver.open([deployedUsers, CONFORMANCE_POSTS_SCHEMA])
+				await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
 				const removePlan = planMigration([deployedUsers], [CONFORMANCE_USERS_SCHEMA])
 				await driver.migrate(removePlan)
 				const migrated = await driver.read('users', 'u1')

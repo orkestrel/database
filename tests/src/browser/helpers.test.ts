@@ -1,0 +1,325 @@
+import type { TableSchema } from '@src/core'
+import { conditionRange, isKey, selectPlan } from '@src/browser'
+import { describe, expect, it } from 'vitest'
+import { buildCondition } from '../../setup.js'
+
+// selectPlan — the IndexedDB pushdown planner (mirrors src/browser/helpers.ts).
+// Runs in real Chromium for `IDBKeyRange`. Asserts the chosen index AND the
+// returned range's bounds; the contract is that a plan only ever NARROWS to a
+// superset, so here we pin which operators / columns push to which range, and
+// which fall back to a full scan.
+
+// A schema with a string primary key, a couple of typed (orderable) columns, and
+// the non-orderable types pushdown must refuse (boolean / json).
+const SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', type: 'text', nullable: false },
+		{ name: 'age', type: 'integer', nullable: false },
+		{ name: 'score', type: 'real', nullable: false },
+		{ name: 'name', type: 'text', nullable: false },
+		{ name: 'active', type: 'boolean', nullable: false },
+		{ name: 'payload', type: 'json', nullable: true },
+	],
+	indexes: [['age']],
+}
+
+// The single-column secondary indexes that physically exist (named by column).
+const INDEXES: readonly string[] = ['age']
+
+describe('selectPlan — pushable operators on the primary key', () => {
+	it('equals → primary store, IDBKeyRange.only', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('id', 'equals', ['u3'])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('u3')
+		expect(plan.range?.upper).toBe('u3')
+		expect(plan.range?.lowerOpen).toBe(false)
+		expect(plan.range?.upperOpen).toBe(false)
+	})
+
+	it('above → lowerBound exclusive', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'above', ['m'])] }, SCHEMA, INDEXES)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('m')
+		expect(plan.range?.lowerOpen).toBe(true)
+		expect(plan.range?.upper).toBeUndefined()
+	})
+
+	it('below → upperBound exclusive', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'below', ['m'])] }, SCHEMA, INDEXES)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.upper).toBe('m')
+		expect(plan.range?.upperOpen).toBe(true)
+		expect(plan.range?.lower).toBeUndefined()
+	})
+
+	it('from → lowerBound inclusive', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'from', ['m'])] }, SCHEMA, INDEXES)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('m')
+		expect(plan.range?.lowerOpen).toBe(false)
+	})
+
+	it('to → upperBound inclusive', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'to', ['m'])] }, SCHEMA, INDEXES)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.upper).toBe('m')
+		expect(plan.range?.upperOpen).toBe(false)
+	})
+
+	it('between → bound, both ends inclusive', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('id', 'between', ['a', 'z'])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('a')
+		expect(plan.range?.upper).toBe('z')
+		expect(plan.range?.lowerOpen).toBe(false)
+		expect(plan.range?.upperOpen).toBe(false)
+	})
+})
+
+describe('selectPlan — pushable operators on a single-column secondary index', () => {
+	it('a numeric secondary-index column reads that index by name', () => {
+		const plan = selectPlan({ conditions: [buildCondition('age', 'from', [18])] }, SCHEMA, INDEXES)
+		expect(plan.index).toBe('age')
+		expect(plan.range?.lower).toBe(18)
+		expect(plan.range?.lowerOpen).toBe(false)
+	})
+
+	it('equals on the indexed column → IDBKeyRange.only on that index', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('age', 'equals', [41])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBe('age')
+		expect(plan.range?.lower).toBe(41)
+		expect(plan.range?.upper).toBe(41)
+	})
+
+	it('a range-exact column with NO index falls back to a full scan', () => {
+		// `name` is text (orderable) but has no secondary index → cannot push.
+		const plan = selectPlan(
+			{ conditions: [buildCondition('name', 'equals', ['Ada'])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+})
+
+describe('selectPlan — conditions that cannot push (full scan)', () => {
+	it('a non-orderable boolean column → full scan', () => {
+		const plan = selectPlan({ conditions: [buildCondition('active', 'equals', [true])] }, SCHEMA, [
+			'active',
+		])
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('a json column → full scan', () => {
+		const plan = selectPlan({ conditions: [buildCondition('payload', 'equals', ['x'])] }, SCHEMA, [
+			'payload',
+		])
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('a nested-array FieldPath (descends a json value) → full scan', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition(['payload', 'tag'], 'equals', ['green'])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('a column absent from the schema → full scan', () => {
+		const plan = selectPlan({ conditions: [buildCondition('missing', 'equals', ['x'])] }, SCHEMA, [
+			'missing',
+		])
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('starts → full scan (prefix range can miss strings past U+FFFF)', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('id', 'starts', ['u'])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('not → full scan (no single exact range)', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'not', ['u1'])] }, SCHEMA, INDEXES)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('any → full scan (membership, not a single range)', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('id', 'any', [['u1', 'u2']])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('absent → full scan (existence, not a range)', () => {
+		const plan = selectPlan({ conditions: [buildCondition('id', 'absent', [])] }, SCHEMA, INDEXES)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('a non-string/number operand → full scan (not a usable key)', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('id', 'equals', [{ nested: true }])] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('no conditions → full scan', () => {
+		expect(selectPlan({}, SCHEMA, INDEXES)).toEqual({ index: null, range: null })
+		expect(selectPlan(undefined, SCHEMA, INDEXES)).toEqual({ index: null, range: null })
+	})
+})
+
+describe('selectPlan — selection among several conditions', () => {
+	it('the FIRST qualifying condition wins', () => {
+		// First condition (name) cannot push (no index); second (age) is indexed and
+		// pushable → the plan picks the age index, not the unindexed name.
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('name', 'equals', ['Ada']),
+					buildCondition('age', 'from', [18], 'and'),
+				],
+			},
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBe('age')
+		expect(plan.range?.lower).toBe(18)
+	})
+
+	it('the primary key wins over a later indexed column when it comes first', () => {
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('id', 'equals', ['u1']),
+					buildCondition('age', 'from', [18], 'and'),
+				],
+			},
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('u1')
+		expect(plan.range?.upper).toBe('u1')
+	})
+
+	it('all-AND conditions push down (the result is a subset of each)', () => {
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('age', 'from', [18]),
+					buildCondition('name', 'equals', ['Ada'], 'and'),
+				],
+			},
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBe('age')
+		expect(plan.range?.lower).toBe(18)
+	})
+
+	it('ANY or-joined condition forces a full scan (a range would miss rows)', () => {
+		// `age >= 18 OR name = 'Ada'` — narrowing on the age range would drop a row
+		// matching only `name = 'Ada'` (age < 18), so no single range is a superset.
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('age', 'from', [18]),
+					buildCondition('name', 'equals', ['Ada'], 'or'),
+				],
+			},
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('a later or-joined condition forces a scan even if an earlier pair is AND', () => {
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('id', 'equals', ['u1']),
+					buildCondition('age', 'from', [18], 'and'),
+					buildCondition('name', 'starts', ['B'], 'or'),
+				],
+			},
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it("the first condition's connector is ignored (only c2.. matter)", () => {
+		// A lone condition whose connector is 'or' still pushes — the first connector
+		// only seeds the fold, so a single-condition criteria is always all-AND.
+		const plan = selectPlan(
+			{ conditions: [buildCondition('age', 'from', [18], 'or')] },
+			SCHEMA,
+			INDEXES,
+		)
+		expect(plan.index).toBe('age')
+		expect(plan.range?.lower).toBe(18)
+	})
+})
+
+describe('conditionRange', () => {
+	it('maps each exact-comparison operator over a scalar operand to its IDBKeyRange', () => {
+		expect(conditionRange(buildCondition('id', 'equals', ['u1']))?.lower).toBe('u1')
+		expect(conditionRange(buildCondition('id', 'above', ['m']))?.lowerOpen).toBe(true)
+		expect(conditionRange(buildCondition('id', 'below', ['m']))?.upperOpen).toBe(true)
+		expect(conditionRange(buildCondition('id', 'from', ['m']))?.lowerOpen).toBe(false)
+		expect(conditionRange(buildCondition('id', 'to', ['m']))?.upperOpen).toBe(false)
+		const between = conditionRange(buildCondition('id', 'between', ['a', 'z']))
+		expect(between?.lower).toBe('a')
+		expect(between?.upper).toBe('z')
+	})
+
+	it('returns null for a non-comparison operator', () => {
+		expect(conditionRange(buildCondition('id', 'not', ['u1']))).toBeNull()
+		expect(conditionRange(buildCondition('id', 'starts', ['u']))).toBeNull()
+		expect(conditionRange(buildCondition('id', 'absent', []))).toBeNull()
+	})
+
+	it('returns null when the operand is not a scalar key', () => {
+		expect(conditionRange(buildCondition('id', 'equals', [{ nested: true }]))).toBeNull()
+		// `between` needs BOTH ends to be keys.
+		expect(conditionRange(buildCondition('id', 'between', ['a', { nested: true }]))).toBeNull()
+	})
+})
+
+describe('isKey', () => {
+	it('is true for a string or a number', () => {
+		expect(isKey('u1')).toBe(true)
+		expect(isKey(42)).toBe(true)
+		expect(isKey(0)).toBe(true)
+	})
+
+	it('is false for any non-scalar value', () => {
+		expect(isKey(true)).toBe(false)
+		expect(isKey(null)).toBe(false)
+		expect(isKey(undefined)).toBe(false)
+		expect(isKey({ nested: true })).toBe(false)
+		expect(isKey(['u1'])).toBe(false)
+	})
+})

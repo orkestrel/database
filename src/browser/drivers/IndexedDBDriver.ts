@@ -1,0 +1,235 @@
+import type { Criteria, DriverInterface, Key, Row, TableSchema } from '@src/core'
+import { applyCriteria, compareValues, DatabaseError, extractKey, matchesCriteria } from '@src/core'
+import type {
+	IndexedDBDatabaseInterface,
+	IndexedDBStoreInterface,
+	StoreDefinition,
+} from '@orkestrel/indexeddb'
+import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
+import type { QueryPlan } from '../types.js'
+import { selectPlan } from '../helpers.js'
+
+/**
+ * The IndexedDB {@link DriverInterface} — the persistent browser backend, built on
+ * the published `@orkestrel/indexeddb` wrapper.
+ *
+ * @remarks
+ * A thin adapter: it implements the storage primitives the core database layer
+ * needs (`open` / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear`
+ * / `snapshot`) by delegating to the wrapper's typed store operations — it never
+ * touches raw IndexedDB. Rows are stored with **out-of-line keys** (the database
+ * passes the key explicitly, `store.set(row, key)`), so each table is declared as a
+ * key-path-less store. The wrapper opens in **auto-managed** mode (no fixed
+ * version), creating any missing store on demand, so a table added to the schema is
+ * created on the next open with no manual version bump. The driver's bulk reads
+ * (`scan` / `keys`) use the wrapper's native `getAll` / `getAllKeys`, and `snapshot`
+ * rolls back through one atomic wrapper transaction.
+ *
+ * It also implements the optional native `records` / `count` / `stream` hooks
+ * (AGENTS §21): `selectPlan` ({@link selectPlan}) turns the {@link Criteria} into a
+ * key-range pushdown over the primary key or a single-column secondary index,
+ * fetching a candidate **superset** that the core engine (`applyCriteria` /
+ * `matchesCriteria`) then refines — so a native read is byte-identical to a full
+ * scan, just cheaper. Pushdown is conservative: only the exact-comparison
+ * operators over orderable columns narrow to a range; everything else falls back
+ * to a full scan + the engine.
+ *
+ * @remarks
+ * This unit deliberately OMITS `aggregate` / `transaction` / `migrate` / `meta` /
+ * `stamp` (a follow-up unit adds `migrate` / `meta` / `stamp`). There is no native
+ * `aggregate` (IndexedDB has no native SUM/AVG); the engine over the narrowed
+ * `records` covers it. `transaction` is impossible here: the wrapper auto-commits
+ * an `IDBTransaction` the moment control yields to a non-IDB `await`, so a
+ * BEGIN-now / commit-or-rollback-later handle spanning arbitrary caller code
+ * cannot be built on top of it — every atomic multi-op sequence in this driver
+ * (`snapshot`'s rollback) instead runs entirely inside ONE `db.write(...)` scope.
+ */
+export class IndexedDBDriver implements DriverInterface {
+	readonly #name: string
+	readonly #schema = new Map<string, TableSchema>()
+	#database: IndexedDBDatabaseInterface | undefined
+
+	constructor(name: string) {
+		this.#name = name
+	}
+
+	async open(schema: readonly TableSchema[]): Promise<void> {
+		// Reconnect cleanly so an auto-managed version bump (to create new stores) is
+		// never blocked by this driver's own open handle.
+		this.#database?.close()
+		const stores: Record<string, StoreDefinition> = {}
+		for (const table of schema) {
+			// Out-of-line stores (no `path`): keys are passed explicitly. The declared
+			// secondary indexes become the store's `createIndex` definitions.
+			stores[table.name] = {
+				indexes: table.indexes.map((columns) => ({
+					name: columns.join('_'),
+					path: columns.length === 1 ? columns[0] : [...columns],
+				})),
+			}
+			// Remember the schema so the native `records` / `count` / `stream` hooks
+			// can plan a key-range pushdown (the primary key, column types, secondary
+			// indexes).
+			this.#schema.set(table.name, table)
+		}
+		const database = createIndexedDBDatabase({ name: this.#name, stores })
+		await database.connect()
+		this.#database = database
+	}
+
+	async close(): Promise<void> {
+		this.#database?.close()
+		this.#database = undefined
+	}
+
+	async read(table: string, key: Key): Promise<Row | undefined> {
+		return this.#store(table).get(key)
+	}
+
+	async write(table: string, key: Key, row: Row): Promise<void> {
+		await this.#store(table).set(row, key)
+	}
+
+	async delete(table: string, key: Key): Promise<boolean> {
+		const store = this.#store(table)
+		const present = await store.has(key)
+		await store.remove(key)
+		return present
+	}
+
+	async keys(table: string): Promise<readonly Key[]> {
+		const keys = await this.#store(table).keys()
+		return keys.filter((key): key is Key => typeof key === 'string' || typeof key === 'number')
+	}
+
+	async *scan(table: string): AsyncIterable<Row> {
+		for (const row of await this.#store(table).records()) yield row
+	}
+
+	async clear(table: string): Promise<void> {
+		await this.#store(table).clear()
+	}
+
+	async records(table: string, criteria: Criteria): Promise<readonly Row[]> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const plan = selectPlan(criteria, schema, store.indexes)
+		return applyCriteria(await this.#candidates(store, schema, plan), criteria)
+	}
+
+	async count(table: string, criteria: Criteria): Promise<number> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const conditions = criteria.conditions ?? []
+		if (conditions.length === 0) return store.count()
+		const plan = selectPlan(criteria, schema, store.indexes)
+		// A single pushable condition is fully expressed by its range → native count.
+		if (conditions.length === 1 && plan.range !== null) {
+			return plan.index === null
+				? store.count(plan.range)
+				: store.index(plan.index).count(plan.range)
+		}
+		// Otherwise the range is a superset (or a full scan) → engine filters exactly.
+		// Order is irrelevant to a count, so the candidates need no re-sort.
+		const candidates =
+			plan.index === null
+				? await store.records(plan.range)
+				: await store.index(plan.index).records(plan.range)
+		return candidates.reduce(
+			(total, row) => (matchesCriteria(row, conditions) ? total + 1 : total),
+			0,
+		)
+	}
+
+	async *stream(table: string, criteria: Criteria): AsyncIterable<Row> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const plan = selectPlan(criteria, schema, store.indexes)
+		const conditions = criteria.conditions ?? []
+		const offset = criteria.offset ?? 0
+		const limit = criteria.limit
+		let skipped = 0
+		let yielded = 0
+		for (const row of await this.#candidates(store, schema, plan)) {
+			if (limit !== undefined && yielded >= limit) break
+			if (!matchesCriteria(row, conditions)) continue
+			if (skipped < offset) {
+				skipped += 1
+				continue
+			}
+			yielded += 1
+			yield row
+		}
+	}
+
+	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
+		const database = this.#require()
+		const names = tables ?? database.stores
+		const captured = new Map<
+			string,
+			{ readonly keys: readonly IDBValidKey[]; readonly rows: readonly Row[] }
+		>()
+		for (const name of names) {
+			const store = database.store(name)
+			captured.set(name, { keys: await store.keys(), rows: await store.records() })
+		}
+		return async () => {
+			const current = this.#require()
+			const restorable = names.filter((name) => current.stores.includes(name))
+			if (restorable.length === 0) return
+			// Restore every captured store in one transaction, so a rollback is atomic.
+			await current.write(restorable, async (transaction) => {
+				for (const name of restorable) {
+					const snapshot = captured.get(name)
+					if (snapshot === undefined) continue
+					const store = transaction.store(name)
+					await store.clear()
+					for (let index = 0; index < snapshot.keys.length; index += 1) {
+						await store.set(snapshot.rows[index], snapshot.keys[index])
+					}
+				}
+			})
+		}
+	}
+
+	// === Private
+
+	#require(): IndexedDBDatabaseInterface {
+		if (this.#database === undefined) {
+			throw new DatabaseError('CLOSED', `IndexedDB database '${this.#name}' is not open`, {
+				name: this.#name,
+			})
+		}
+		return this.#database
+	}
+
+	#store(table: string) {
+		return this.#require().store(table)
+	}
+
+	// The candidate-superset read for a plan. The primary store already returns rows
+	// in primary-key order — the same order `scan` yields, which `applyCriteria`
+	// preserves for an unordered query. A secondary index returns them in INDEX-key
+	// order, so re-sort by the primary key to reproduce scan order; the engine then
+	// filters / orders / pages exactly, so a native read equals the scan path.
+	async #candidates(
+		store: IndexedDBStoreInterface,
+		schema: TableSchema,
+		plan: QueryPlan,
+	): Promise<readonly Row[]> {
+		if (plan.index === null) return store.records(plan.range)
+		const rows = [...(await store.index(plan.index).records(plan.range))]
+		rows.sort((left, right) =>
+			compareValues(extractKey(left, schema.primary), extractKey(right, schema.primary)),
+		)
+		return rows
+	}
+
+	#table(name: string): TableSchema {
+		const schema = this.#schema.get(name)
+		if (schema === undefined) {
+			throw new DatabaseError('NOT_FOUND', `table '${name}' is not declared`, { table: name })
+		}
+		return schema
+	}
+}

@@ -1,7 +1,14 @@
-import type { AggregateFunction, ColumnType, Row, TableSchema } from '@src/core'
+import type {
+	AggregateFunction,
+	ColumnSchema,
+	ColumnType,
+	MigrationStep,
+	Row,
+	TableSchema,
+} from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from './types.js'
-import { isString } from '@orkestrel/contract'
+import { isArray, isBoolean, isRecord, isString } from '@orkestrel/contract'
 import { randomUUID } from 'node:crypto'
 
 // The server's key-minting `KeyFunction` implementation — `core` mints no keys
@@ -347,5 +354,153 @@ export function schemaToIndexes(schema: TableSchema): readonly string[] {
 			' (' +
 			group.map(quote).join(', ') +
 			')',
+	)
+}
+
+/**
+ * Project one {@link MigrationStep} to the DDL statement(s) a SQLite driver's
+ * `migrate` executes for it.
+ *
+ * @remarks
+ * `table.add` emits the `CREATE TABLE` plus one `CREATE INDEX` per declared
+ * index (via {@link schemaToTable} / {@link schemaToIndexes}); `table.remove`
+ * emits `DROP TABLE IF EXISTS`; `column.add` / `column.remove` emit `ALTER
+ * TABLE … ADD COLUMN` / `… DROP COLUMN`; `index.add` / `index.remove` emit
+ * `CREATE INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS`, naming the index the
+ * same way `schemaToIndexes` does (`idx_<table>_<columns joined by _>`) so a
+ * plan-built index matches one `open` would have created. Whether the named
+ * table actually exists is the caller's concern (a driver's `migrate` checks
+ * its own declared schema before running these statements) — this projection
+ * is pure and never inspects live state.
+ *
+ * @param step - The migration step to project
+ * @returns The DDL statement(s) that apply the step
+ *
+ * @example
+ * ```ts
+ * stepToSQL({ operation: 'column.remove', table: 'users', column: 'legacy' })
+ * // ['ALTER TABLE "users" DROP COLUMN "legacy"']
+ * ```
+ */
+export function stepToSQL(step: MigrationStep): readonly string[] {
+	switch (step.operation) {
+		case 'table.add':
+			return [schemaToTable(step.table), ...schemaToIndexes(step.table)]
+		case 'table.remove':
+			return ['DROP TABLE IF EXISTS ' + quote(step.table)]
+		case 'column.add':
+			return [
+				'ALTER TABLE ' +
+					quote(step.table) +
+					' ADD COLUMN ' +
+					quote(step.column.name) +
+					' ' +
+					columnSQL(step.column.type),
+			]
+		case 'column.remove':
+			return ['ALTER TABLE ' + quote(step.table) + ' DROP COLUMN ' + quote(step.column)]
+		case 'index.add':
+			return [
+				'CREATE INDEX IF NOT EXISTS ' +
+					quote('idx_' + step.table + '_' + step.index.join('_')) +
+					' ON ' +
+					quote(step.table) +
+					' (' +
+					step.index.map(quote).join(', ') +
+					')',
+			]
+		case 'index.remove':
+			return ['DROP INDEX IF EXISTS ' + quote('idx_' + step.table + '_' + step.index.join('_'))]
+	}
+}
+
+/**
+ * Project one {@link MigrationStep} onto its table's declared {@link TableSchema}
+ * — the bookkeeping counterpart to {@link stepToSQL} (which projects the DDL a
+ * driver's `migrate` runs against the live database).
+ *
+ * @remarks
+ * `column.add` / `column.remove` add / filter the named column;
+ * `index.add` / `index.remove` add / filter the matching index group (an exact
+ * ordered match on `index`). `table.add` / `table.remove` act on a WHOLE
+ * schema map rather than one table's shape, so they are the caller's concern
+ * (a driver's `migrate` applies them directly against its table map) — passed
+ * here, they return `schema` unchanged.
+ *
+ * @param schema - The table's current declared schema
+ * @param step - The migration step to project onto it
+ * @returns The table's schema after the step
+ *
+ * @example
+ * ```ts
+ * stepToSchema(schema, { operation: 'column.remove', table: 'users', column: 'legacy' })
+ * // schema with the 'legacy' column dropped from `columns`
+ * ```
+ */
+export function stepToSchema(schema: TableSchema, step: MigrationStep): TableSchema {
+	switch (step.operation) {
+		case 'column.add':
+			return { ...schema, columns: [...schema.columns, step.column] }
+		case 'column.remove':
+			return { ...schema, columns: schema.columns.filter((column) => column.name !== step.column) }
+		case 'index.add':
+			return { ...schema, indexes: [...schema.indexes, step.index] }
+		case 'index.remove':
+			return {
+				...schema,
+				indexes: schema.indexes.filter(
+					(group) =>
+						!(
+							group.length === step.index.length &&
+							group.every((name, position) => name === step.index[position])
+						),
+				),
+			}
+		case 'table.add':
+		case 'table.remove':
+			return schema
+	}
+}
+
+/**
+ * Whether a value is a well-formed {@link TableSchema} — the boundary guard a
+ * SQLite driver's `meta()` narrows a stored, `JSON.parse`d schema through
+ * before trusting it (AGENTS §14: never `as`).
+ *
+ * @remarks
+ * Total and total-recursive over the shape: `name` / `primary` strings, each
+ * `columns` entry a well-formed {@link ColumnSchema} (a `name` string, a
+ * {@link ColumnType} literal, a `nullable` boolean), and each `indexes` entry
+ * an array of strings. Anything off-shape (including a non-record) returns
+ * `false` rather than throwing.
+ *
+ * @param value - The value to test
+ * @returns `true` when `value` is a well-formed `TableSchema`
+ *
+ * @example
+ * ```ts
+ * isTableSchema({ name: 'users', primary: 'id', columns: [], indexes: [] }) // true
+ * isTableSchema({ name: 'users' }) // false
+ * ```
+ */
+export function isTableSchema(value: unknown): value is TableSchema {
+	const COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean', 'json', 'blob']
+	const isColumnType = (candidate: unknown): candidate is ColumnType =>
+		isString(candidate) && COLUMN_TYPES.some((type) => type === candidate)
+	const isColumnSchema = (candidate: unknown): candidate is ColumnSchema =>
+		isRecord(candidate) &&
+		isString(candidate.name) &&
+		isColumnType(candidate.type) &&
+		isBoolean(candidate.nullable)
+	const isIndexGroup = (candidate: unknown): candidate is readonly string[] =>
+		isArray(candidate) && candidate.every(isString)
+	return (
+		isRecord(value) &&
+		isString(value.name) &&
+		isString(value.primary) &&
+		isArray(value.columns) &&
+		value.columns.every(isColumnSchema) &&
+		isArray(value.indexes) &&
+		value.indexes.every(isIndexGroup)
 	)
 }
