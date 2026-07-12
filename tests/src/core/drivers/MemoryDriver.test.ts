@@ -1,6 +1,8 @@
 import { createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { collectRows, tableSchemas } from '../../../setup.js'
+import { collectRows, conformDriver, tableSchemas } from '../../../setup.js'
+
+conformDriver('MemoryDriver', () => createMemoryDriver())
 
 describe('MemoryDriver', () => {
 	it('readies the named tables on open (a scan returns nothing, not an error)', async () => {

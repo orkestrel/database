@@ -3,7 +3,10 @@ import { createJSONDriver } from '@src/server'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { conformDriver } from '../../../setup.js'
 import { driverSchema, tempDatabasePath } from '../../../setupServer.js'
+
+conformDriver('JSONDriver', () => createJSONDriver(tempDatabasePath().path))
 
 // The JSON driver's nine DriverInterface primitives over a real temp file (no
 // mocks, AGENTS §16): open + keyed read/write/delete/keys/scan(KEY order)/clear,

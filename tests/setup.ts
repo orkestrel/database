@@ -20,8 +20,8 @@ import type {
 import type { EmitterErrorHandler, EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
 import { integerShape, stringShape } from '@orkestrel/contract'
-import { createDatabase, createMemoryDriver } from '@src/core'
-import { afterEach, vi } from 'vitest'
+import { createDatabase, createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
 	vi.restoreAllMocks()
@@ -411,4 +411,208 @@ export function isTotal<TMap extends EventMap, TName extends keyof TMap>(
 	events: readonly TName[],
 ): recorders is EmitterRecorders<TMap, TName> {
 	return events.every((name) => recorders[name] !== undefined)
+}
+
+// ── Driver conformance battery ──────────────────────────────────────────────
+// Every current and future DriverInterface backend proves the same contract
+// with one call (AGENTS §16.1) — the schema-agnostic required primitives plus
+// the optional-hook battery (migrate / stream / transaction), gated on their
+// presence on a fresh probe instance.
+
+/** The two-table schema {@link conformDriver}'s battery runs against — an `id`-primary `users` table and a non-`id`-primary `posts` table. */
+const CONFORM_SCHEMA: readonly TableSchema[] = [
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'name', type: 'text', nullable: false },
+		],
+		indexes: [],
+	},
+	{
+		name: 'posts',
+		primary: 'slug',
+		columns: [
+			{ name: 'slug', type: 'text', nullable: false },
+			{ name: 'title', type: 'text', nullable: false },
+		],
+		indexes: [],
+	},
+]
+
+/**
+ * Register the shared {@link DriverInterface} conformance battery for one backend
+ * — every required primitive plus the optional-hook contract (`migrate` / `stream`
+ * / `transaction`), gated on presence. Call once per backend (AGENTS §16.1) so a
+ * new driver proves the same invariants the reference `MemoryDriver` does, with
+ * one line instead of a hand-rolled copy of its test file.
+ *
+ * @remarks
+ * `factory` is called fresh for every test (each backend supplies its own,
+ * e.g. `createJSONDriver(tempDatabasePath().path)`) so no test leaks state into
+ * the next. Optional hooks are detected on a throwaway probe instance built once
+ * per `describe` registration; their sub-batteries are skipped entirely (no
+ * `describe` block registered) when the hook is absent, rather than passing
+ * vacuously inside a conditional `it`.
+ *
+ * @param name - The backend's name, used in the registered `describe` title
+ * @param factory - Builds one fresh, unopened driver instance
+ */
+export function conformDriver(name: string, factory: () => DriverInterface): void {
+	describe(`driver conformance — ${name}`, () => {
+		it('opens with a schema and closes cleanly', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.close()
+		})
+
+		it('reads a missing key as undefined', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			expect(await driver.read('users', 'missing')).toBeUndefined()
+		})
+
+		it('writes and reads back a row, isolating the stored copy from caller mutation', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			const input = { id: 'u1', name: 'Ada' }
+			await driver.write('users', 'u1', input)
+			input.name = 'Mutated after write'
+			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+		})
+
+		it('upserts an existing key', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada Lovelace' })
+			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada Lovelace' })
+		})
+
+		it('delete returns true when present and false when absent', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+			expect(await driver.delete('users', 'u1')).toBe(true)
+			expect(await driver.delete('users', 'u1')).toBe(false)
+		})
+
+		it('keys and scan yield in ascending key order', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('users', 'c', { id: 'c', name: 'C' })
+			await driver.write('users', 'a', { id: 'a', name: 'A' })
+			await driver.write('users', 'b', { id: 'b', name: 'B' })
+			expect(await driver.keys('users')).toEqual(['a', 'b', 'c'])
+			expect((await collectRows(driver.scan('users'))).map((row) => row.id)).toEqual(['a', 'b', 'c'])
+		})
+
+		it('clear empties only the targeted table', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+			await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+			await driver.clear('users')
+			expect(await driver.keys('users')).toEqual([])
+			expect(await driver.keys('posts')).toEqual(['intro'])
+		})
+
+		it('snapshot returns a rollback thunk that restores the pre-snapshot state', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+			const rollback = await driver.snapshot()
+			await driver.write('users', 'u1', { id: 'u1', name: 'Changed' })
+			await driver.write('users', 'u2', { id: 'u2', name: 'Ghost' })
+			await rollback()
+			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+			expect(await driver.read('users', 'u2')).toBeUndefined()
+		})
+
+		it('extracts the key from a non-id primary column', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+			expect(await driver.keys('posts')).toEqual(['intro'])
+			expect(await driver.read('posts', 'intro')).toEqual({ slug: 'intro', title: 'Intro' })
+		})
+
+		it('round-trips a nested-object row', async () => {
+			const driver = factory()
+			await driver.open(CONFORM_SCHEMA)
+			const nested = { tags: ['a', 'b'], info: { score: 9, ok: true } }
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', nested })
+			expect((await driver.read('users', 'u1'))?.nested).toEqual(nested)
+		})
+
+		const probe = factory()
+
+		if (probe.migrate !== undefined) {
+			describe('migrate (optional)', () => {
+				it('applies a plan whose column.remove step strips the field from stored rows', async () => {
+					const driver = factory()
+					await driver.open(CONFORM_SCHEMA)
+					await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+					const before = CONFORM_SCHEMA.map((table) =>
+						table.name === 'users'
+							? { ...table, columns: [...table.columns, { name: 'legacy', type: 'boolean' as const, nullable: false }] }
+							: table,
+					)
+					const plan = planMigration(before, CONFORM_SCHEMA)
+					await driver.migrate?.(plan)
+					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+				})
+
+				it('throws a MIGRATION DatabaseError for an unknown-table plan', async () => {
+					const driver = factory()
+					await driver.open(CONFORM_SCHEMA)
+					const plan = planMigration([{ name: 'missing', primary: 'id', columns: [], indexes: [] }], [])
+					const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
+					expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+				})
+			})
+		}
+
+		if (probe.stream !== undefined) {
+			describe('stream (optional)', () => {
+				it('yields only the rows matching the criteria', async () => {
+					const driver = factory()
+					await driver.open(CONFORM_SCHEMA)
+					await driver.write('users', 'a', { id: 'a', name: 'Ada' })
+					await driver.write('users', 'b', { id: 'b', name: 'Bo' })
+					await driver.write('users', 'c', { id: 'c', name: 'Ada' })
+					const criteria: Criteria = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
+					const rows: Row[] = []
+					if (driver.stream !== undefined) {
+						for await (const row of driver.stream('users', criteria)) rows.push(row)
+					}
+					expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
+				})
+			})
+		}
+
+		if (probe.transaction !== undefined) {
+			describe('transaction (optional)', () => {
+				it('commit persists the writes made under the handle', async () => {
+					const driver = factory()
+					await driver.open(CONFORM_SCHEMA)
+					const handle = await driver.transaction?.()
+					await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+					await handle?.commit()
+					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+				})
+
+				it('rollback restores the pre-transaction state', async () => {
+					const driver = factory()
+					await driver.open(CONFORM_SCHEMA)
+					await driver.write('users', 'u1', { id: 'u1', name: 'Original' })
+					const handle = await driver.transaction?.()
+					await driver.write('users', 'u1', { id: 'u1', name: 'Changed' })
+					await handle?.rollback()
+					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Original' })
+				})
+			})
+		}
+	})
 }
