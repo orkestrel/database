@@ -122,12 +122,13 @@ src/core/                     @src/core  (CJS, node target — but host-global-f
   types.ts                    source of truth: Driver/Database/Table/Query/… contracts
   constants.ts                DEFAULT_PRIMARY, MAX_PATTERN_LENGTH, …
   errors.ts                   DatabaseError + isDatabaseError
-  helpers.ts                  THE QUERY ENGINE (pure, total) + schema derivation
-  migrations.ts               schema-diff → Migration plan (pure)
+  helpers.ts                  THE QUERY ENGINE (pure, total) + schema derivation,
+                              the migration diff (planMigration/migrateRows), and the
+                              driver conformance battery (conformDriver, see §4.5) —
+                              pure functions live here, never in feature modules
   factories.ts                createDatabase, createMemoryDriver
   Database.ts  Table.ts  Query.ts  Clause.ts  Cursor.ts
   drivers/MemoryDriver.ts     the reference driver (in-between, no I/O)
-  conformance.ts              the shared driver conformance suite (see §4.5)
   index.ts                    the sole public barrel
 
 src/server/                   @src/server  (CJS, node)
@@ -395,18 +396,19 @@ enforces:
 
 ### 4.5 The shared conformance suite
 
-Today, parity is proven by hand-written per-driver tests. The enterprise upgrade is to ship a
-**single reusable conformance suite** that every driver — in-repo _and_ third-party — runs
-against its own factory:
+Parity is proven by a **single reusable conformance battery** that every driver — in-repo
+_and_ third-party — runs against its own factory. It ships as a framework-agnostic core
+helper (`conformDriver` in `helpers.ts`, on the `.` export): package export subpaths
+separate runtime environments only, never features, so there is no `./conformance`
+subpath — a conformance utility is core surface.
 
 ```ts
-// ILLUSTRATIVE — a shipped, importable spec-as-code
-import { conform } from '@orkestrel/database/conformance'
+import { conformDriver } from '@orkestrel/database'
 import { createSQLiteDriver } from '@orkestrel/database/server'
 
-// One call exercises the entire DriverInterface contract + every native hook the driver
-// implements, and asserts native == engine across the full operator/order/page/aggregate matrix.
-conform('SQLiteDriver', () => createSQLiteDriver(':memory:'))
+// One call exercises the entire DriverInterface contract plus every native hook the
+// driver implements, throwing a CONFORMANCE DatabaseError on the first violation.
+await conformDriver(() => createSQLiteDriver(':memory:'))
 ```
 
 The suite is production code (an executable specification), not a private test file: it is the
@@ -897,25 +899,34 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
   their new backing packages.
 - **Native transaction exploitation.** The optional `transaction?()` hook (`{ commit; rollback }`)
   now exists on `DriverInterface`, and `Database.transaction` dispatches to it when a driver
-  implements it, falling back to the `snapshot` floor with the same events otherwise. Memory and
-  JSON keep the snapshot floor, per §6.2 — neither implements the hook.
+  implements it, falling back to the `snapshot` floor with the same events otherwise. `JSONDriver`
+  implements the hook as a flush-coalescing wrapper (one atomic file write per commit); a failed
+  commit propagates as-is with no rollback attempt. `MemoryDriver` keeps the snapshot floor, per
+  §6.2 — native transactions buy it nothing.
 - **Cancellation.** `@orkestrel/abort` is adopted: `ReadOptions.signal` threads through
   `records`/`count`/`aggregate`/`scan`/`Query.stream`/`Database.transaction`, the `ABORTED` error
   code exists, and a `checkAbort` helper checks at read boundaries and between streamed rows.
-- **Migrations (core model + memory/JSON realization).** `Migration`/`MigrationStep` types and the
-  pure `planMigration` + `migrateRows` live in core; `MemoryDriver` and `JSONDriver` both
-  implement the `migrate?` hook (an unknown table surfaces `MIGRATION`). `Database.migrate()`
-  orchestration (version tracking across `open`) is still deferred — see gap 1 below.
-- **Streaming public API.** `Table.scan` and `Query.stream` are shipped: lazy, order-ignoring,
-  fresh-per-call, early-exit-safe async iterables. The optional `stream?` driver hook is typed on
-  `DriverInterface`; no shipped driver implements it yet (memory/JSON fall back to `scan`).
-- **JSON durability (write half).** `JSONDriver.flush` now writes to a temp file and renames
-  (atomic on POSIX) — the crash-mid-write corruption window is closed. Flush coalescing (one flush
-  per commit instead of one per write) remains open — see gap 4 below.
-- **Shared conformance battery (in-repo).** A `conformDriver` test helper in `tests/setup.ts` runs
-  the same behavioral battery against both `MemoryDriver` and `JSONDriver`. The shipped,
-  importable `@orkestrel/database/conformance` package export described in §4.5 does not exist yet
-  — see gap 5 below.
+- **Migrations (core model + memory/JSON realization + orchestration).** `Migration`/
+  `MigrationStep` types and the pure `planMigration` + `migrateRows` live in core `helpers.ts`;
+  `MemoryDriver` and `JSONDriver` both implement the `migrate?` hook (an unknown table surfaces
+  `MIGRATION`). `Database.migrate(deployed)` orchestrates: it diffs the caller-supplied deployed
+  schema against the declared one, applies via the driver hook, emits the `migrate` event, and
+  returns the plan. Only persisted version tracking (auto-migrate on `open`) remains deferred —
+  see gap 1 below.
+- **Streaming public API + native path.** `Table.scan` and `Query.stream` are shipped: lazy,
+  order-ignoring, fresh-per-call, early-exit-safe async iterables. `MemoryDriver` implements the
+  `stream?` hook natively (lazy key-order iteration with condition/offset/limit) and `JSONDriver`
+  delegates to it, so the native dispatch path is exercised by shipped drivers.
+- **JSON durability.** `JSONDriver.flush` writes to a temp file and renames (atomic on POSIX) —
+  the crash-mid-write corruption window is closed — flushes are serialized against overlap, and
+  the `transaction?` hook coalesces a transaction's writes into one flush per commit.
+- **Shared conformance battery (shipped).** `conformDriver` is a framework-agnostic core helper
+  on the `.` surface (§4.5): it exercises the full `DriverInterface` contract plus presence-gated
+  optional hooks and throws `CONFORMANCE` on the first violation. Both shipped drivers run it in
+  the suite, and a third-party author imports the same function.
+- **Batch-write cancellation.** `set`/`add`/`update`/`remove` accept `ReadOptions`; the signal is
+  checked at entry and between batch items (applied items stay applied — wrap in `transaction()`
+  for atomicity).
 - **`generateKey` moved out of strict core.** Key generation is no longer reached from
   `src/core/helpers.ts`; it is a `DatabaseOptions.key` (`KeyFunction`) factory supplied by the
   caller, with `@src/server` exporting the `node:crypto`-backed `generateKey`. A keyless write with
@@ -923,24 +934,14 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
 
 ### Prioritized gaps (the migration path)
 
-1. **`Database.migrate()` orchestration is not wired up.** The pure diff model and both drivers'
-   `migrate?` hooks exist, but nothing in `Database` yet tracks a deployed schema version and
-   calls `planMigration` / invokes the hook on `open`. **Fix:** add version tracking (a stored
-   schema version per driver) and a `Database.migrate()` entry point that diffs deployed vs.
-   declared schema and drives the hook, per §5.5's model.
-2. **No driver implements the `stream?` hook yet.** `Table.scan` / `Query.stream` fall back to the
-   engine filtering the required `scan` for every current driver — correct, but no driver
-   exploits the native streaming path described in §4.2/§5.4 (SQLite `iterate()`, IndexedDB
-   cursors), since neither backend is built yet.
-3. **Batch-write cancellation is unthreaded.** `signal` reaches every read path and `transaction`,
-   but batch write verbs (`set`/`add`/`update`/`remove` with array overloads) do not yet accept or
-   check a `ReadOptions.signal` between items.
-
-Secondary gaps, worth doing but lower-risk:
-
-4. **JSON write amplification.** The atomic-rename hardening is done, but every write still
-   flushes the whole file individually rather than coalescing to one flush per transaction commit
-   (still O(writes) full-file rewrites, not O(commits)).
-5. **Conformance is not yet a shipped, importable kit.** The `conformDriver` battery proves parity
-   in-repo (§4.5's intent), but there is no `@orkestrel/database/conformance` package export a
-   third-party driver author could import and run against their own factory.
+1. **Persisted schema-version tracking.** `Database.migrate(deployed)` orchestrates a diff-and-
+   apply today, but the caller still owns knowing what was deployed. Auto-migration on `open` —
+   a stored schema version per backend (`user_version` in SQLite, the version bump in IndexedDB)
+   driving `planMigration` without caller input — lands with the persistent backends, per §5.5.
+2. **Native paths for the real backends.** Memory and JSON exercise every optional hook the core
+   dispatches on (`stream?`/`migrate?`/`transaction?`), but the high-value exploit
+   implementations described in §4.2/§5.3–5.4 — SQLite `iterate()`, compiled SQL, IndexedDB
+   key-range cursors and version upgrades — wait on the `sqlite` and `indexeddb` packages.
+3. **Deferred by design, revisit with a consumer:** per-table `snapshot(tables?)` scoping, a
+   `DRIVER` error code for seam-fault mapping, and richer conformance reporting (all findings
+   rather than first-failure) — each waits for a real consumer to justify the surface.
