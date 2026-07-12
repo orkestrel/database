@@ -144,6 +144,7 @@ export type DatabaseErrorCode =
 	| 'VALIDATION'
 	| 'ABORTED'
 	| 'MIGRATION'
+	| 'CONFORMANCE'
 
 /**
  * The push observation surface of a {@link DatabaseInterface} (AGENTS §13) — the
@@ -177,6 +178,8 @@ export type DatabaseEventMap = {
 	readonly commit: readonly []
 	/** A transaction scope threw and every table was rolled back — the propagated error. */
 	readonly rollback: readonly [error: unknown]
+	/** A {@link Migration} plan was applied via `migrate` — the applied plan. */
+	readonly migrate: readonly [migration: Migration]
 }
 
 /**
@@ -497,6 +500,25 @@ export interface DatabaseInterface<T extends TablesShape = TablesShape> {
 	open(): Promise<void>
 	close(): Promise<void>
 	transaction<R>(scope: () => Promise<R>, options?: ReadOptions): Promise<R>
+	/**
+	 * Diff a caller-supplied deployed schema against this database's declared
+	 * schema (its `tables`, as configured) via `planMigration`, apply the
+	 * resulting plan through the driver's optional `migrate` hook, and return
+	 * the applied plan.
+	 *
+	 * @param deployed - The schema currently deployed, as {@link TableSchema}s
+	 * @param options - Optional abort signal, checked at entry
+	 * @returns The applied {@link Migration} plan
+	 *
+	 * @remarks
+	 * Throws `DatabaseError` `MIGRATION` when the driver does not implement
+	 * `migrate`, or when a step references an unknown table (propagated from
+	 * the driver). Throws `ABORTED` when `options.signal` has already fired at
+	 * entry. Emits the `migrate` event after a successful apply. Version
+	 * TRACKING (persisting `from` / `to`) remains deferred to persistent
+	 * backends — the caller owns knowing what was deployed.
+	 */
+	migrate(deployed: readonly TableSchema[], options?: ReadOptions): Promise<Migration>
 }
 
 // === Table
@@ -548,14 +570,96 @@ export interface TableInterface<T = Row> {
 	 * checked before each yield.
 	 */
 	scan(criteria?: Criteria, options?: ReadOptions): AsyncIterable<T>
-	set(row: T): Promise<Key>
-	set(rows: readonly T[]): Promise<readonly Key[]>
-	add(row: T): Promise<Key>
-	add(rows: readonly T[]): Promise<readonly Key[]>
-	update(key: Key, changes: Partial<T>): Promise<boolean>
-	update(keys: readonly Key[], changes: Partial<T>): Promise<readonly boolean[]>
-	remove(key: Key): Promise<boolean>
-	remove(keys: readonly Key[]): Promise<readonly boolean[]>
+	/**
+	 * Upsert one or more rows.
+	 *
+	 * @param row - The row to upsert
+	 * @param options - Optional abort signal
+	 * @returns The row's key
+	 */
+	set(row: T, options?: ReadOptions): Promise<Key>
+	/**
+	 * Upsert one or more rows.
+	 *
+	 * @param rows - The rows to upsert
+	 * @param options - Optional abort signal, checked at entry and between items
+	 * @returns Each row's key, in order
+	 *
+	 * @remarks
+	 * The signal (if any) is checked at entry and between items; an abort
+	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
+	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 */
+	set(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	/**
+	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
+	 *
+	 * @param row - The row to insert
+	 * @param options - Optional abort signal
+	 * @returns The row's key
+	 */
+	add(row: T, options?: ReadOptions): Promise<Key>
+	/**
+	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
+	 *
+	 * @param rows - The rows to insert
+	 * @param options - Optional abort signal, checked at entry and between items
+	 * @returns Each row's key, in order
+	 *
+	 * @remarks
+	 * The signal (if any) is checked at entry and between items; an abort
+	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
+	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 */
+	add(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	/**
+	 * Apply a partial change to one or more rows.
+	 *
+	 * @param key - The key of the row to update
+	 * @param changes - The partial changes to apply
+	 * @param options - Optional abort signal
+	 * @returns `true` when the row existed and was updated
+	 */
+	update(key: Key, changes: Partial<T>, options?: ReadOptions): Promise<boolean>
+	/**
+	 * Apply a partial change to one or more rows.
+	 *
+	 * @param keys - The keys of the rows to update
+	 * @param changes - The partial changes to apply to each row
+	 * @param options - Optional abort signal, checked at entry and between items
+	 * @returns Each row's update result, in order
+	 *
+	 * @remarks
+	 * The signal (if any) is checked at entry and between items; an abort
+	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
+	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 */
+	update(
+		keys: readonly Key[],
+		changes: Partial<T>,
+		options?: ReadOptions,
+	): Promise<readonly boolean[]>
+	/**
+	 * Delete one or more rows.
+	 *
+	 * @param key - The key of the row to remove
+	 * @param options - Optional abort signal
+	 * @returns `true` when the row existed and was removed
+	 */
+	remove(key: Key, options?: ReadOptions): Promise<boolean>
+	/**
+	 * Delete one or more rows.
+	 *
+	 * @param keys - The keys of the rows to remove
+	 * @param options - Optional abort signal, checked at entry and between items
+	 * @returns Each row's removal result, in order
+	 *
+	 * @remarks
+	 * The signal (if any) is checked at entry and between items; an abort
+	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
+	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 */
+	remove(keys: readonly Key[], options?: ReadOptions): Promise<readonly boolean[]>
 	clear(): Promise<void>
 	query(): QueryInterface<T>
 	cursor(): Promise<CursorInterface<T>>

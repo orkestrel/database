@@ -14,7 +14,9 @@ import type { DatabaseErrorCode } from './types.js'
  * `resolve` miss (`NOT_FOUND`), an `add` onto an existing key (`CONFLICT`), a
  * row that fails its table's contract (`VALIDATION`), a cancelled operation whose
  * {@link ReadOptions.signal} aborted (`ABORTED`, carrying `signal.reason` in
- * `context`), and an inapplicable {@link Migration} plan (`MIGRATION`).
+ * `context`), an inapplicable {@link Migration} plan (`MIGRATION`), and a
+ * driver that violates a {@link DriverInterface} invariant, thrown by the
+ * `conformDriver` helper (`CONFORMANCE`).
  */
 export class DatabaseError extends Error {
 	readonly code: DatabaseErrorCode
