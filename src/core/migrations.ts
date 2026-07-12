@@ -6,13 +6,6 @@ import type { Migration, MigrationStep, Row, TableSchema } from './types.js'
 // touches storage — a driver's `migrate` hook (MemoryDriver) is what applies
 // a plan natively.
 
-// Deep-equal two column-name index groups (order-sensitive: an index over
-// `[a, b]` is not the same index as `[b, a]`).
-function sameIndex(left: readonly string[], right: readonly string[]): boolean {
-	if (left.length !== right.length) return false
-	return left.every((column, position) => column === right[position])
-}
-
 /**
  * Structurally diff a deployed and a declared table set into a {@link Migration}
  * plan.
@@ -80,6 +73,10 @@ export function planMigration(
 			}
 		}
 
+		// Deep-equal two column-name index groups (order-sensitive: an index over
+		// `[a, b]` is not the same index as `[b, a]`).
+		const sameIndex = (left: readonly string[], right: readonly string[]): boolean =>
+			left.length === right.length && left.every((column, position) => column === right[position])
 		for (const index of before.indexes) {
 			if (!table.indexes.some((candidate) => sameIndex(candidate, index))) {
 				steps.push({ operation: 'index.remove', table: table.name, index })
