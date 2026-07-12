@@ -911,8 +911,12 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
   `MemoryDriver` and `JSONDriver` both implement the `migrate?` hook (an unknown table surfaces
   `MIGRATION`). `Database.migrate(deployed)` orchestrates: it diffs the caller-supplied deployed
   schema against the declared one, applies via the driver hook, emits the `migrate` event, and
-  returns the plan. Only persisted version tracking (auto-migrate on `open`) remains deferred —
-  see gap 1 below.
+  returns the plan. Persisted version tracking is shipped too: the paired `meta`/`stamp` driver
+  hooks store `DriverMeta` verbatim (JSON persists it in the file as `{ meta?, tables }`), and
+  `DatabaseOptions.version` opts `open()` into automatic reconciliation — fresh stores are
+  stamped, older stored versions migrate and re-stamp (atomically inside the driver's native
+  transaction when it has one, so a failed stamp can never brick the store), newer stored
+  versions reject with `MIGRATION`.
 - **Streaming public API + native path.** `Table.scan` and `Query.stream` are shipped: lazy,
   order-ignoring, fresh-per-call, early-exit-safe async iterables. `MemoryDriver` implements the
   `stream?` hook natively (lazy key-order iteration with condition/offset/limit) and `JSONDriver`
@@ -931,17 +935,28 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
   `src/core/helpers.ts`; it is a `DatabaseOptions.key` (`KeyFunction`) factory supplied by the
   caller, with `@src/server` exporting the `node:crypto`-backed `generateKey`. A keyless write with
   no `key` factory configured throws `VALIDATION` rather than silently minting an id.
+- **The SQLite compilation layer (engine-free).** `compileCriteria` and its fragment/where/
+  order/page compilers, the value/row codecs, identifier quoting, and the
+  `schemaToTable`/`schemaToIndexes` DDL projections ship on `./server`, golden-tested and
+  injection-audited — the future `SQLiteDriver` binds their output to a real engine and inherits
+  parity with the core engine by construction.
+- **Consumer-gated trio (shipped).** `snapshot(tables?)` scopes capture/rollback to named
+  tables on both drivers; JSON write-path faults surface as typed `DRIVER` errors (read
+  tolerance unchanged); and the conformance battery splits into the lazy `driverFindings`
+  generator, the fail-fast `conformDriver`, and the drain-all `auditDriver`.
 
 ### Prioritized gaps (the migration path)
 
-1. **Persisted schema-version tracking.** `Database.migrate(deployed)` orchestrates a diff-and-
-   apply today, but the caller still owns knowing what was deployed. Auto-migration on `open` —
-   a stored schema version per backend (`user_version` in SQLite, the version bump in IndexedDB)
-   driving `planMigration` without caller input — lands with the persistent backends, per §5.5.
-2. **Native paths for the real backends.** Memory and JSON exercise every optional hook the core
-   dispatches on (`stream?`/`migrate?`/`transaction?`), but the high-value exploit
-   implementations described in §4.2/§5.3–5.4 — SQLite `iterate()`, compiled SQL, IndexedDB
-   key-range cursors and version upgrades — wait on the `sqlite` and `indexeddb` packages.
-3. **Deferred by design, revisit with a consumer:** per-table `snapshot(tables?)` scoping, a
-   `DRIVER` error code for seam-fault mapping, and richer conformance reporting (all findings
-   rather than first-failure) — each waits for a real consumer to justify the surface.
+1. **The real backends themselves.** Everything the `sqlite` and `indexeddb` drivers need from
+   this package now exists and is conformance-tested: the `meta`/`stamp` versioning seam with
+   atomic reconcile-on-open, the full optional-hook set, the shared `conformDriver` battery,
+   and (for SQLite) the complete engine-free compilation layer — `compileCriteria`, the
+   value/row codecs, and the `schemaToTable`/`schemaToIndexes` DDL projections, golden-tested
+   against the exact strings the driver will execute. What remains is the drivers proper:
+   `SQLiteDriver` binding the compiled SQL to a real engine (`src/server/drivers/`), and the
+   IndexedDB driver plus its key-range planner (`selectPlan`), which lands WITH the resurrected
+   `src/browser` surface — the planner's output is DOM-typed, so it ships with its consumer.
+2. **Consumer-gated leftovers, revisit with a real consumer:** a table-scoped
+   `Database.transaction(scope, { tables })` public option threading the now-supported
+   `snapshot(tables)` (driver surface is ready; the public API waits for a use case), and
+   auto-closing conformance phases for drivers that leak handles on crash.
