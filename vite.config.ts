@@ -63,6 +63,14 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
+				// Dependency TSDoc (e.g. `@example` blocks referencing `@src/...` from
+				// bundled @orkestrel packages) survives unminified bundling as literal
+				// comments. Consumers read docs from the emitted `.d.ts` files, not
+				// bundle comments, so strip all non-legal comments from every JS/CJS
+				// output — legal (`@license`/`@preserve`) comments still pass through.
+				rolldownOptions: {
+					output: { comments: { legal: true, annotation: false, jsdoc: false } },
+				},
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
