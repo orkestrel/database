@@ -49,7 +49,8 @@ export function planMigration(
 	const steps: MigrationStep[] = []
 
 	for (const table of deployed) {
-		if (!declaredByName.has(table.name)) steps.push({ operation: 'table.remove', table: table.name })
+		if (!declaredByName.has(table.name))
+			steps.push({ operation: 'table.remove', table: table.name })
 	}
 	for (const table of declared) {
 		if (!deployedByName.has(table.name)) steps.push({ operation: 'table.add', table })
@@ -116,7 +117,10 @@ export function planMigration(
  */
 export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[]): readonly Row[] {
 	const removed = steps
-		.filter((step): step is Extract<MigrationStep, { operation: 'column.remove' }> => step.operation === 'column.remove')
+		.filter(
+			(step): step is Extract<MigrationStep, { operation: 'column.remove' }> =>
+				step.operation === 'column.remove',
+		)
 		.map((step) => step.column)
 
 	if (removed.length === 0) return rows.map((row) => ({ ...row }))

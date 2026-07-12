@@ -319,7 +319,9 @@ describe('Table — scan (lazy streaming)', () => {
 	it('applies criteria conditions lazily', async () => {
 		const users = await seeded()
 		const rows = await collect(
-			users.scan({ conditions: [{ column: 'age', operator: 'above', values: [30], connector: 'and' }] }),
+			users.scan({
+				conditions: [{ column: 'age', operator: 'above', values: [30], connector: 'and' }],
+			}),
 		)
 		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u2'])
 	})
@@ -358,7 +360,7 @@ describe('Table — scan (lazy streaming)', () => {
 		}
 		expect(seen).toEqual(['u1'])
 		expect(isDatabaseError(error)).toBe(true)
-		if (isDatabaseError(error)) expect(error.code).toBe('ABORTED')
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
 	})
 
 	it('records / count / aggregate throw ABORTED when the signal is already fired', async () => {
@@ -378,9 +380,7 @@ describe('Table — scan (lazy streaming)', () => {
 
 	it('delegates to the driver stream hook without re-filtering (native dispatch)', async () => {
 		const streamCalls: Criteria[] = []
-		const store = new Map<string, Row>([
-			['stored', { id: 'stored', name: 'Stored', age: 30 }],
-		])
+		const store = new Map<string, Row>([['stored', { id: 'stored', name: 'Stored', age: 30 }]])
 		const driver: DriverInterface = {
 			async open() {},
 			async close() {},

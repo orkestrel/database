@@ -250,9 +250,12 @@ describe('transaction() native hook', () => {
 		const controller = new AbortController()
 		controller.abort('too slow')
 		await expect(
-			db.transaction(async () => {
-				throw new Error('should not run')
-			}, { signal: controller.signal }),
+			db.transaction(
+				async () => {
+					throw new Error('should not run')
+				},
+				{ signal: controller.signal },
+			),
 		).rejects.toMatchObject({ code: 'ABORTED' })
 		expect(commits).toEqual([])
 		expect(rollbacks).toEqual([])

@@ -103,7 +103,12 @@ describe('MemoryDriver', () => {
 			await driver.open(tableSchemas('users'))
 			await driver.write('users', 'a', { id: 'a', name: 'Ada', legacy: true })
 			await driver.write('users', 'b', { id: 'b', name: 'Grace', legacy: false })
-			const before = { name: 'users', primary: 'id', columns: [{ name: 'legacy', type: 'text' as const, nullable: false }], indexes: [] }
+			const before = {
+				name: 'users',
+				primary: 'id',
+				columns: [{ name: 'legacy', type: 'text' as const, nullable: false }],
+				indexes: [],
+			}
 			const after = { name: 'users', primary: 'id', columns: [], indexes: [] }
 			const plan = planMigration([before], [after])
 			await driver.migrate?.(plan)

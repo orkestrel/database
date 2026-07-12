@@ -261,7 +261,9 @@ describe('JSONDriver — migrate', () => {
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
 		const before = SCHEMA
 		const after = SCHEMA.map((table) =>
-			table.name === 'users' ? { ...table, columns: table.columns.filter((column) => column.name !== 'age') } : table,
+			table.name === 'users'
+				? { ...table, columns: table.columns.filter((column) => column.name !== 'age') }
+				: table,
 		)
 		const plan = planMigration(before, after)
 		await driver.migrate?.(plan)
@@ -275,7 +277,12 @@ describe('JSONDriver — migrate', () => {
 	})
 
 	it('reflects a table.add step in the file shape', async () => {
-		const extra = { name: 'tags', primary: 'id', columns: [{ name: 'id', type: 'text' as const, nullable: false }], indexes: [] }
+		const extra = {
+			name: 'tags',
+			primary: 'id',
+			columns: [{ name: 'id', type: 'text' as const, nullable: false }],
+			indexes: [],
+		}
 		const plan = planMigration(SCHEMA, [...SCHEMA, extra])
 		await driver.migrate?.(plan)
 		const raw = await readFile(path, 'utf-8')
@@ -284,7 +291,10 @@ describe('JSONDriver — migrate', () => {
 	})
 
 	it('reflects a table.remove step in the file shape', async () => {
-		const plan = planMigration(SCHEMA, SCHEMA.filter((table) => table.name !== 'posts'))
+		const plan = planMigration(
+			SCHEMA,
+			SCHEMA.filter((table) => table.name !== 'posts'),
+		)
 		await driver.migrate?.(plan)
 		const raw = await readFile(path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)

@@ -103,7 +103,9 @@ export class JSONDriver implements DriverInterface {
 		let schema = this.#schema
 		for (const step of plan.steps) {
 			if (step.operation === 'table.add') {
-				schema = schema.some((table) => table.name === step.table.name) ? schema : [...schema, step.table]
+				schema = schema.some((table) => table.name === step.table.name)
+					? schema
+					: [...schema, step.table]
 			} else if (step.operation === 'table.remove') {
 				schema = schema.filter((table) => table.name !== step.table)
 			}

@@ -16,7 +16,13 @@ import type {
 import { isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
-import { applyCriteria, checkAbort, computeAggregate, extractKey, matchesCriteria } from './helpers.js'
+import {
+	applyCriteria,
+	checkAbort,
+	computeAggregate,
+	extractKey,
+	matchesCriteria,
+} from './helpers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 

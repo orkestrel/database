@@ -351,9 +351,7 @@ describe('checkAbort', () => {
 		controller.abort('too slow')
 		const error = captureError(() => checkAbort(controller.signal))
 		expect(isDatabaseError(error)).toBe(true)
-		if (isDatabaseError(error)) {
-			expect(error.code).toBe('ABORTED')
-			expect(error.context).toEqual({ reason: 'too slow' })
-		}
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
+		expect(isDatabaseError(error) ? error.context : undefined).toEqual({ reason: 'too slow' })
 	})
 })

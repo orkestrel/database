@@ -463,8 +463,8 @@ export function conformDriver(name: string, factory: () => DriverInterface): voi
 	describe(`driver conformance — ${name}`, () => {
 		it('opens with a schema and closes cleanly', async () => {
 			const driver = factory()
-			await driver.open(CONFORM_SCHEMA)
-			await driver.close()
+			await expect(driver.open(CONFORM_SCHEMA)).resolves.toBeUndefined()
+			await expect(driver.close()).resolves.toBeUndefined()
 		})
 
 		it('reads a missing key as undefined', async () => {
@@ -505,7 +505,11 @@ export function conformDriver(name: string, factory: () => DriverInterface): voi
 			await driver.write('users', 'a', { id: 'a', name: 'A' })
 			await driver.write('users', 'b', { id: 'b', name: 'B' })
 			expect(await driver.keys('users')).toEqual(['a', 'b', 'c'])
-			expect((await collectRows(driver.scan('users'))).map((row) => row.id)).toEqual(['a', 'b', 'c'])
+			expect((await collectRows(driver.scan('users'))).map((row) => row.id)).toEqual([
+				'a',
+				'b',
+				'c',
+			])
 		})
 
 		it('clear empties only the targeted table', async () => {
@@ -547,72 +551,78 @@ export function conformDriver(name: string, factory: () => DriverInterface): voi
 		})
 
 		const probe = factory()
+		const hasMigrate = probe.migrate !== undefined
+		const hasStream = probe.stream !== undefined
+		const hasTransaction = probe.transaction !== undefined
 
-		if (probe.migrate !== undefined) {
-			describe('migrate (optional)', () => {
-				it('applies a plan whose column.remove step strips the field from stored rows', async () => {
-					const driver = factory()
-					await driver.open(CONFORM_SCHEMA)
-					await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
-					const before = CONFORM_SCHEMA.map((table) =>
-						table.name === 'users'
-							? { ...table, columns: [...table.columns, { name: 'legacy', type: 'boolean' as const, nullable: false }] }
-							: table,
-					)
-					const plan = planMigration(before, CONFORM_SCHEMA)
-					await driver.migrate?.(plan)
-					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
-				})
-
-				it('throws a MIGRATION DatabaseError for an unknown-table plan', async () => {
-					const driver = factory()
-					await driver.open(CONFORM_SCHEMA)
-					const plan = planMigration([{ name: 'missing', primary: 'id', columns: [], indexes: [] }], [])
-					const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
-					expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
-				})
+		describe.runIf(hasMigrate)('migrate (optional)', () => {
+			it('applies a plan whose column.remove step strips the field from stored rows', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+				const before = CONFORM_SCHEMA.map((table) =>
+					table.name === 'users'
+						? {
+								...table,
+								columns: [
+									...table.columns,
+									{ name: 'legacy', type: 'boolean' as const, nullable: false },
+								],
+							}
+						: table,
+				)
+				const plan = planMigration(before, CONFORM_SCHEMA)
+				await driver.migrate?.(plan)
+				expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
 			})
-		}
 
-		if (probe.stream !== undefined) {
-			describe('stream (optional)', () => {
-				it('yields only the rows matching the criteria', async () => {
-					const driver = factory()
-					await driver.open(CONFORM_SCHEMA)
-					await driver.write('users', 'a', { id: 'a', name: 'Ada' })
-					await driver.write('users', 'b', { id: 'b', name: 'Bo' })
-					await driver.write('users', 'c', { id: 'c', name: 'Ada' })
-					const criteria: Criteria = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
-					const rows: Row[] = []
-					if (driver.stream !== undefined) {
-						for await (const row of driver.stream('users', criteria)) rows.push(row)
-					}
-					expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
-				})
+			it('throws a MIGRATION DatabaseError for an unknown-table plan', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				const plan = planMigration(
+					[{ name: 'missing', primary: 'id', columns: [], indexes: [] }],
+					[],
+				)
+				const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
+				expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 			})
-		}
+		})
 
-		if (probe.transaction !== undefined) {
-			describe('transaction (optional)', () => {
-				it('commit persists the writes made under the handle', async () => {
-					const driver = factory()
-					await driver.open(CONFORM_SCHEMA)
-					const handle = await driver.transaction?.()
-					await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
-					await handle?.commit()
-					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
-				})
-
-				it('rollback restores the pre-transaction state', async () => {
-					const driver = factory()
-					await driver.open(CONFORM_SCHEMA)
-					await driver.write('users', 'u1', { id: 'u1', name: 'Original' })
-					const handle = await driver.transaction?.()
-					await driver.write('users', 'u1', { id: 'u1', name: 'Changed' })
-					await handle?.rollback()
-					expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Original' })
-				})
+		describe.runIf(hasStream)('stream (optional)', () => {
+			it('yields only the rows matching the criteria', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				await driver.write('users', 'a', { id: 'a', name: 'Ada' })
+				await driver.write('users', 'b', { id: 'b', name: 'Bo' })
+				await driver.write('users', 'c', { id: 'c', name: 'Ada' })
+				const criteria: Criteria = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
+				const rows: Row[] = []
+				if (driver.stream !== undefined) {
+					for await (const row of driver.stream('users', criteria)) rows.push(row)
+				}
+				expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
 			})
-		}
+		})
+
+		describe.runIf(hasTransaction)('transaction (optional)', () => {
+			it('commit persists the writes made under the handle', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				const handle = await driver.transaction?.()
+				await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+				await handle?.commit()
+				expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+			})
+
+			it('rollback restores the pre-transaction state', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				await driver.write('users', 'u1', { id: 'u1', name: 'Original' })
+				const handle = await driver.transaction?.()
+				await driver.write('users', 'u1', { id: 'u1', name: 'Changed' })
+				await handle?.rollback()
+				expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Original' })
+			})
+		})
 	})
 }
