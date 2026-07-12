@@ -58,7 +58,7 @@ produces the JSON Schema, and seeds fixtures.
 ### Factories
 
 | API                  | Kind     | Summary                                                                 |
-| -------------------- | -------- | ------------------------------------------------------------------------- |
+| -------------------- | -------- | ----------------------------------------------------------------------- |
 | `createDatabase`     | function | Create a `DatabaseInterface` over a driver and a `tables` shape map.    |
 | `createMemoryDriver` | function | Create the in-memory reference `DriverInterface` (nested maps, no I/O). |
 | `createJSONDriver`   | function | Create a persistent JSON-file `DriverInterface` for a given path.       |
@@ -66,19 +66,19 @@ produces the JSON Schema, and seeds fixtures.
 ### Entities
 
 | Class          | Kind  | Role                                                                                             |
-| -------------- | ----- | ---------------------------------------------------------------------------------------------------- |
+| -------------- | ----- | ------------------------------------------------------------------------------------------------ |
 | `Database`     | class | Owns the driver and a `tables` map, lazily connects, `import`s / `export`s, runs `transaction`s. |
 | `MemoryDriver` | class | The reference driver — nested maps; runs the same in a browser or on a server.                   |
 | `JSONDriver`   | class | A persistent driver — the reference `MemoryDriver` plus JSON-file load / flush.                  |
 | `Table`        | class | Typed keyed CRUD plus `query` / `cursor`; validates writes and narrows reads via its contract.   |
 | `Query`        | class | The fluent query builder bound to one table.                                                     |
 | `Clause`       | class | A pending condition opened by `where` / `and` / `or`; its operator closes it back to the query.  |
-| `Cursor`       | class | A forward row cursor over a key snapshot for bulk in-place mutation.                              |
+| `Cursor`       | class | A forward row cursor over a key snapshot for bulk in-place mutation.                             |
 
 ### Errors
 
 | API               | Kind     | Summary                                                                             |
-| ----------------- | -------- | ------------------------------------------------------------------------------------- |
+| ----------------- | -------- | ----------------------------------------------------------------------------------- |
 | `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION`). |
 | `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                |
 
@@ -88,7 +88,7 @@ The portable semantics every backend shares — pure, total functions the
 driver never re-implements.
 
 | Helper             | Kind     | Behavior                                                                                               |
-| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------- |
+| ------------------ | -------- | ------------------------------------------------------------------------------------------------------ |
 | `compareValues`    | function | Total ordering over arbitrary values (`undefined` < `null` < boolean < number < string) — never `NaN`. |
 | `matchesCondition` | function | Evaluate one `Condition` against a row (the per-operator predicate); a type mismatch is a non-match.   |
 | `matchesCriteria`  | function | Fold a row through conditions, joining each by its `Connector` left-to-right.                          |
@@ -103,23 +103,23 @@ driver never re-implements.
 
 Pure helpers behind the query engine's pattern matching.
 
-| API              | Kind     | Behavior                                                                                                                                                                                                                     |
-| ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wildcardMatch`  | function | Match a value against a wildcard pattern in LINEAR time (greedy two-pointer, no backtracking) — the ReDoS-safe engine; injected `any` run + `single` char + case-fold flag; throws `VALIDATION` over `MAX_PATTERN_LENGTH`. |
-| `likeMatch`      | function | Match a value against a SQL `LIKE` pattern via `wildcardMatch` (case-INSENSITIVE; `%` → any run, `_` → any char).                                                                                                          |
-| `globMatch`      | function | Match a value against a `GLOB` pattern via `wildcardMatch` (case-SENSITIVE; `*` → any run, `?` → any char).                                                                                                                 |
+| API             | Kind     | Behavior                                                                                                                                                                                                                   |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wildcardMatch` | function | Match a value against a wildcard pattern in LINEAR time (greedy two-pointer, no backtracking) — the ReDoS-safe engine; injected `any` run + `single` char + case-fold flag; throws `VALIDATION` over `MAX_PATTERN_LENGTH`. |
+| `likeMatch`     | function | Match a value against a SQL `LIKE` pattern via `wildcardMatch` (case-INSENSITIVE; `%` → any run, `_` → any char).                                                                                                          |
+| `globMatch`     | function | Match a value against a `GLOB` pattern via `wildcardMatch` (case-SENSITIVE; `*` → any run, `?` → any char).                                                                                                                |
 
 ### Constants
 
-| Constant             | Kind  | Value                                                                                                                                                |
-| --------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Constant             | Kind  | Value                                                                                                                                               |
+| -------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_PRIMARY`    | const | The primary-key column assumed when a table has no `keys` override (`id`).                                                                          |
 | `MAX_PATTERN_LENGTH` | const | The longest `LIKE` / `GLOB` pattern `wildcardMatch` accepts before a `VALIDATION` throw — the ReDoS length bound (§6.5) on model-supplied criteria. |
 
 ### Types
 
 | Type                | Kind      | Shape                                                                                                                                                                                                    |
-| ------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Key`               | type      | `string \| number` — a primary key.                                                                                                                                                                      |
 | `Row`               | type      | `Record<string, unknown>` — a table row.                                                                                                                                                                 |
 | `ConditionOperator` | type      | The 15 WHERE operators (`equals`, `above`, `between`, `like`, `any`, `absent`, …).                                                                                                                       |
@@ -169,7 +169,7 @@ can push a query down implements them and `Table` prefers them, falling back
 to the engine over `scan` otherwise; a backend may omit them.
 
 | Method      | Returns                        | Behavior                                                                                                                     |
-| ----------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| ----------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `open`      | `Promise<void>`                | Ready the tables from a derived `TableSchema[]` (a native backend builds tables/indexes; a scan-only one reads only `name`). |
 | `close`     | `Promise<void>`                | Release the backend.                                                                                                         |
 | `read`      | `Promise<Row \| undefined>`    | Read one row by key, or `undefined`.                                                                                         |
@@ -185,36 +185,36 @@ to the engine over `scan` otherwise; a backend may omit them.
 
 #### `DatabaseInterface`
 
-| Method        | Returns                                 | Behavior                                                          |
-| ------------- | ---------------------------------------- | ------------------------------------------------------------------- |
-| `table`       | `TableInterface<RowOf<T[K]>>`           | The typed handle for a declared table.                            |
+| Method        | Returns                                 | Behavior                                                         |
+| ------------- | --------------------------------------- | ---------------------------------------------------------------- |
+| `table`       | `TableInterface<RowOf<T[K]>>`           | The typed handle for a declared table.                           |
 | `import`      | `DatabaseInterface<U>`                  | Define a shape map of tables; a typed view over the same driver. |
-| `export`      | `Readonly<Record<string, TableExport>>` | A portable `TableExport` per table.                               |
-| `open`        | `Promise<void>`                         | Connect the driver eagerly (otherwise lazy on first use).         |
-| `close`       | `Promise<void>`                         | Close the database and its driver.                                |
-| `transaction` | `Promise<R>`                            | Run a scope; roll every table back if it throws.                  |
+| `export`      | `Readonly<Record<string, TableExport>>` | A portable `TableExport` per table.                              |
+| `open`        | `Promise<void>`                         | Connect the driver eagerly (otherwise lazy on first use).        |
+| `close`       | `Promise<void>`                         | Close the database and its driver.                               |
+| `transaction` | `Promise<R>`                            | Run a scope; roll every table back if it throws.                 |
 
 #### `TableInterface`
 
 The keyed methods batch by overload (one in → one out; array in → array
 out) — a single verb, never `getMany` / `setAll`.
 
-| Method      | Returns                              | Behavior                                                            |
-| ----------- | -------------------------------------- | ---------------------------------------------------------------------- |
-| `get`       | `Promise<T \| undefined>` (or array) | Read by key(s); `undefined` per miss.                               |
-| `resolve`   | `Promise<T>` (or array)              | Read by key(s); throws `NOT_FOUND` on a miss.                       |
-| `has`       | `Promise<boolean>` (or array)        | Whether key(s) exist.                                               |
-| `keys`      | `Promise<readonly Key[]>`            | All primary keys in order.                                          |
-| `records`   | `Promise<readonly T[]>`              | Rows matching an optional `Criteria`.                                |
-| `count`     | `Promise<number>`                    | Count matching an optional `Criteria`.                               |
-| `aggregate` | `Promise<number \| undefined>`       | `count` / `sum` / `average` / `minimum` / `maximum` over a column.  |
-| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s).                                              |
-| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key.                       |
-| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate.                 |
-| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key.                                                |
-| `clear`     | `Promise<void>`                      | Empty the table.                                                     |
-| `query`     | `QueryInterface<T>`                  | Open a fluent query builder.                                         |
-| `cursor`    | `Promise<CursorInterface<T>>`        | Open a forward row cursor for bulk mutation.                         |
+| Method      | Returns                              | Behavior                                                           |
+| ----------- | ------------------------------------ | ------------------------------------------------------------------ |
+| `get`       | `Promise<T \| undefined>` (or array) | Read by key(s); `undefined` per miss.                              |
+| `resolve`   | `Promise<T>` (or array)              | Read by key(s); throws `NOT_FOUND` on a miss.                      |
+| `has`       | `Promise<boolean>` (or array)        | Whether key(s) exist.                                              |
+| `keys`      | `Promise<readonly Key[]>`            | All primary keys in order.                                         |
+| `records`   | `Promise<readonly T[]>`              | Rows matching an optional `Criteria`.                              |
+| `count`     | `Promise<number>`                    | Count matching an optional `Criteria`.                             |
+| `aggregate` | `Promise<number \| undefined>`       | `count` / `sum` / `average` / `minimum` / `maximum` over a column. |
+| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s).                                            |
+| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key.                      |
+| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate.                |
+| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key.                                              |
+| `clear`     | `Promise<void>`                      | Empty the table.                                                   |
+| `query`     | `QueryInterface<T>`                  | Open a fluent query builder.                                       |
+| `cursor`    | `Promise<CursorInterface<T>>`        | Open a forward row cursor for bulk mutation.                       |
 
 #### `QueryInterface`
 
@@ -223,23 +223,23 @@ the same builder; `all` / `first` / `count` / the aggregates are the
 terminals.
 
 | Method       | Returns                        | Behavior                                   |
-| ------------ | -------------------------------- | ------------------------------------------- |
+| ------------ | ------------------------------ | ------------------------------------------ |
 | `where`      | `ClauseInterface<T>`           | Open the first condition on a column.      |
 | `and`        | `ClauseInterface<T>`           | Open a condition joined with `and`.        |
 | `or`         | `ClauseInterface<T>`           | Open a condition joined with `or`.         |
-| `filter`     | `QueryInterface<T>`            | Add a post-fetch JS predicate.              |
-| `ascending`  | `QueryInterface<T>`            | Order ascending by a column.                |
-| `descending` | `QueryInterface<T>`            | Order descending by a column.               |
-| `limit`      | `QueryInterface<T>`            | Cap the result count.                       |
-| `offset`     | `QueryInterface<T>`            | Skip leading rows.                          |
-| `all`        | `Promise<readonly T[]>`        | Execute → every matching row.               |
+| `filter`     | `QueryInterface<T>`            | Add a post-fetch JS predicate.             |
+| `ascending`  | `QueryInterface<T>`            | Order ascending by a column.               |
+| `descending` | `QueryInterface<T>`            | Order descending by a column.              |
+| `limit`      | `QueryInterface<T>`            | Cap the result count.                      |
+| `offset`     | `QueryInterface<T>`            | Skip leading rows.                         |
+| `all`        | `Promise<readonly T[]>`        | Execute → every matching row.              |
 | `first`      | `Promise<T \| undefined>`      | Execute → the first match or `undefined`.  |
-| `count`      | `Promise<number>`              | Execute → the match count.                  |
-| `sum`        | `Promise<number \| undefined>` | Execute → sum of a column.                  |
-| `average`    | `Promise<number \| undefined>` | Execute → average of a column.              |
-| `minimum`    | `Promise<number \| undefined>` | Execute → minimum of a column.              |
-| `maximum`    | `Promise<number \| undefined>` | Execute → maximum of a column.              |
-| `aggregate`  | `Promise<number \| undefined>` | Execute → a named aggregate over a column.  |
+| `count`      | `Promise<number>`              | Execute → the match count.                 |
+| `sum`        | `Promise<number \| undefined>` | Execute → sum of a column.                 |
+| `average`    | `Promise<number \| undefined>` | Execute → average of a column.             |
+| `minimum`    | `Promise<number \| undefined>` | Execute → minimum of a column.             |
+| `maximum`    | `Promise<number \| undefined>` | Execute → maximum of a column.             |
+| `aggregate`  | `Promise<number \| undefined>` | Execute → a named aggregate over a column. |
 
 #### `ClauseInterface`
 
@@ -248,7 +248,7 @@ The 15 WHERE operators; each records its condition and returns the query
 mapping).
 
 | Method    | Returns             | Operator      |
-| --------- | --------------------- | ------------- |
+| --------- | ------------------- | ------------- |
 | `equals`  | `QueryInterface<T>` | `=`           |
 | `not`     | `QueryInterface<T>` | `!=`          |
 | `above`   | `QueryInterface<T>` | `>`           |
@@ -267,12 +267,12 @@ mapping).
 
 #### `CursorInterface`
 
-| Method   | Returns          | Behavior                                            |
-| -------- | ------------------ | ---------------------------------------------------- |
-| `next`   | `Promise<void>`   | Advance to the next present row.                     |
-| `update` | `Promise<void>`   | Merge changes into the row at the current position.  |
-| `remove` | `Promise<void>`   | Delete the row at the current position.              |
-| `close`  | `void`            | Stop iteration (`done` becomes `true`).              |
+| Method   | Returns         | Behavior                                            |
+| -------- | --------------- | --------------------------------------------------- |
+| `next`   | `Promise<void>` | Advance to the next present row.                    |
+| `update` | `Promise<void>` | Merge changes into the row at the current position. |
+| `remove` | `Promise<void>` | Delete the row at the current position.             |
+| `close`  | `void`          | Stop iteration (`done` becomes `true`).             |
 
 ## Contract
 
@@ -414,7 +414,8 @@ and in production. Pick the driver per environment and pass it to
 import { createDatabase, createMemoryDriver } from '@src/core' // tests / ephemeral — no I/O
 import { createJSONDriver } from '@src/server' // node — persisted to a file
 
-const driver = process.env.NODE_ENV === 'test' ? createMemoryDriver() : createJSONDriver('data/app.json')
+const driver =
+	process.env.NODE_ENV === 'test' ? createMemoryDriver() : createJSONDriver('data/app.json')
 const db = createDatabase({ driver, tables, keys, indexes })
 ```
 
@@ -448,7 +449,9 @@ const key = await posts.set({ title: 'Hello' } as never)
 call these directly:
 
 ```ts
-const adults = await users.records({ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] })
+const adults = await users.records({
+	conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }],
+})
 const total = await users.count() // every row, unfiltered
 const average = await users.aggregate('average', 'age') // number | undefined
 ```
@@ -625,9 +628,9 @@ db.emitter.on('rollback', (error) => log.warn('txn rolled back', error))
 
 The event vocabulary:
 
-| Entity     | Event map          | Events                                                                                            |
-| ---------- | -------------------- | ------------------------------------------------------------------------------------------------- |
-| `Database` | `DatabaseEventMap` | `open()` · `close()` · `transaction()` · `commit()` · `rollback(error)`                          |
+| Entity     | Event map          | Events                                                                                          |
+| ---------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| `Database` | `DatabaseEventMap` | `open()` · `close()` · `transaction()` · `commit()` · `rollback(error)`                         |
 | `Table`    | `TableEventMap`    | `write(key)` · `remove(key)` · `clear()` (key only — `set` / `add` / `update` all emit `write`) |
 
 `open` fires when the driver connects (an explicit `open()`, or the lazy

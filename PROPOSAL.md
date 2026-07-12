@@ -22,10 +22,10 @@ lack and allows to make the most of their features."_
 That sentence contains the whole design. Embedded storage engines are wildly
 heterogeneous:
 
-| Engine        | Sync/async | Query power                    | Schema model                         | Transactions                    |
-| ------------- | ---------- | ------------------------------ | ------------------------------------ | ------------------------------- |
-| In-memory map | sync       | none (you write the loop)      | none                                 | none                            |
-| JSON file     | async I/O  | none (dumb persistence)        | none                                 | none                            |
+| Engine        | Sync/async | Query power                    | Schema model                         | Transactions                     |
+| ------------- | ---------- | ------------------------------ | ------------------------------------ | -------------------------------- |
+| In-memory map | sync       | none (you write the loop)      | none                                 | none                             |
+| JSON file     | async I/O  | none (dumb persistence)        | none                                 | none                             |
 | IndexedDB     | async      | index ranges only, no SQL      | versioned `onupgradeneeded` upgrades | microtask-bound, auto-committing |
 | SQLite        | sync-ish   | full SQL — WHERE/ORDER/agg/JON | `CREATE TABLE` / `ALTER` DDL         | `BEGIN` / `SAVEPOINT` / `COMMIT` |
 
@@ -187,25 +187,25 @@ import { createDatabase, createMemoryDriver } from '@orkestrel/database'
 import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
 
 const db = createDatabase({
-  driver: createMemoryDriver(),
-  name: 'app',
-  tables: {
-    users: {
-      id: stringShape(),
-      name: stringShape({ min: 1 }),
-      age: integerShape({ min: 0 }),
-      role: literalShape(['admin', 'member', 'guest']),
-      bio: optionalShape(stringShape()),
-    },
-    posts: { slug: stringShape(), title: stringShape() },
-  },
-  keys: { posts: 'slug' },        // non-`id` primary-key columns, per table
-  indexes: { posts: [['title']] },// secondary indexes — contracts can't express them
+	driver: createMemoryDriver(),
+	name: 'app',
+	tables: {
+		users: {
+			id: stringShape(),
+			name: stringShape({ min: 1 }),
+			age: integerShape({ min: 0 }),
+			role: literalShape(['admin', 'member', 'guest']),
+			bio: optionalShape(stringShape()),
+		},
+		posts: { slug: stringShape(), title: stringShape() },
+	},
+	keys: { posts: 'slug' }, // non-`id` primary-key columns, per table
+	indexes: { posts: [['title']] }, // secondary indexes — contracts can't express them
 })
 
-const users = db.table('users')   // TableInterface<{ id; name; age; role; bio? }> — inferred
+const users = db.table('users') // TableInterface<{ id; name; age; role; bio? }> — inferred
 await users.set({ id: 'u1', name: 'Ada', age: 36, role: 'admin' }) // coerced + validated
-const ada = await users.get('u1')  // typed row | undefined — narrowed via the guard, never `as`
+const ada = await users.get('u1') // typed row | undefined — narrowed via the guard, never `as`
 const adults = await users.query().where('age').from(18).descending('age').all() // typed rows
 ```
 
@@ -225,15 +225,15 @@ information.
 
 ### 3.2 Key entities and responsibilities
 
-| Entity            | Kind      | Responsibility                                                                                       |
-| ----------------- | --------- | --------------------------------------------------------------------------------------------------- |
-| `Database`        | class     | Owns the driver + `tables` map; lazily connects; `table` / `import` / `export` / `transaction`; DB-level events. |
+| Entity            | Kind      | Responsibility                                                                                                                                      |
+| ----------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Database`        | class     | Owns the driver + `tables` map; lazily connects; `table` / `import` / `export` / `transaction`; DB-level events.                                    |
 | `Table`           | class     | Typed keyed CRUD (+ batch overloads) over one table; validates writes and narrows reads via its contract; per-row events; opens `Query` / `Cursor`. |
-| `Query`           | class     | Fluent builder → compiles a portable `Criteria`; `filter` is the in-memory JS escape hatch; terminals execute. |
-| `Clause`          | class     | A pending condition opened by `where` / `and` / `or`; each operator closes it back to the query.    |
-| `Cursor`          | class     | Forward row cursor over a key snapshot, for streaming bulk in-place `update` / `remove`.             |
-| `DriverInterface` | interface | The bridge: the minimal storage primitive set + optional native hooks (§4).                          |
-| `MemoryDriver`    | class     | The reference driver — nested maps, no I/O; the "in-between" made concrete, identical in browser or server. |
+| `Query`           | class     | Fluent builder → compiles a portable `Criteria`; `filter` is the in-memory JS escape hatch; terminals execute.                                      |
+| `Clause`          | class     | A pending condition opened by `where` / `and` / `or`; each operator closes it back to the query.                                                    |
+| `Cursor`          | class     | Forward row cursor over a key snapshot, for streaming bulk in-place `update` / `remove`.                                                            |
+| `DriverInterface` | interface | The bridge: the minimal storage primitive set + optional native hooks (§4).                                                                         |
+| `MemoryDriver`    | class     | The reference driver — nested maps, no I/O; the "in-between" made concrete, identical in browser or server.                                         |
 
 These names and roles are **kept from the current implementation** — they are already
 correct, single-word (AGENTS §4.1), and idiomatic. The rebuild changes the driver _contract_
@@ -269,15 +269,15 @@ a handful of tiny methods and inherit the entire query/transaction/schema surfac
 ```ts
 // ILLUSTRATIVE — the required surface
 interface DriverInterface {
-  open(schema: readonly TableSchema[]): Promise<void>   // ready tables from the derived schema
-  close(): Promise<void>                                 // release the backend
-  read(table: string, key: Key): Promise<Row | undefined>
-  write(table: string, key: Key, row: Row): Promise<void>        // upsert one row at a key
-  delete(table: string, key: Key): Promise<boolean>              // false if absent (never throws)
-  keys(table: string): Promise<readonly Key[]>                   // ordered key projection
-  scan(table: string): AsyncIterable<Row>                        // ordered full-row stream
-  clear(table: string): Promise<void>                            // empty a table
-  snapshot(): Promise<() => Promise<void>>                       // universal transaction floor
+	open(schema: readonly TableSchema[]): Promise<void> // ready tables from the derived schema
+	close(): Promise<void> // release the backend
+	read(table: string, key: Key): Promise<Row | undefined>
+	write(table: string, key: Key, row: Row): Promise<void> // upsert one row at a key
+	delete(table: string, key: Key): Promise<boolean> // false if absent (never throws)
+	keys(table: string): Promise<readonly Key[]> // ordered key projection
+	scan(table: string): AsyncIterable<Row> // ordered full-row stream
+	clear(table: string): Promise<void> // empty a table
+	snapshot(): Promise<() => Promise<void>> // universal transaction floor
 }
 ```
 
@@ -426,10 +426,10 @@ The `TableSchema` handed to `open` is the contract-derived description each engi
 ```ts
 // ILLUSTRATIVE
 interface TableSchema {
-  readonly name: string
-  readonly primary: string
-  readonly columns: readonly ColumnSchema[]  // { name, type: ColumnType, nullable }
-  readonly indexes: readonly (readonly string[])[]
+	readonly name: string
+	readonly primary: string
+	readonly columns: readonly ColumnSchema[] // { name, type: ColumnType, nullable }
+	readonly indexes: readonly (readonly string[])[]
 }
 // ColumnType = 'text' | 'integer' | 'real' | 'boolean' | 'json' | 'blob'
 // derived per column from its ContractShape by `columnType` (json covers object/array/union/raw).
@@ -519,17 +519,21 @@ the declared one), computed in core:
 ```ts
 // ILLUSTRATIVE — pure, in src/core/migrations.ts
 type MigrationStep =
-  | { readonly operation: 'table.add';    readonly table: TableSchema }
-  | { readonly operation: 'table.remove'; readonly table: string }
-  | { readonly operation: 'column.add';   readonly table: string; readonly column: ColumnSchema }
-  | { readonly operation: 'column.remove';readonly table: string; readonly column: string }
-  | { readonly operation: 'index.add';    readonly table: string; readonly index: readonly string[] }
-  | { readonly operation: 'index.remove'; readonly table: string; readonly index: readonly string[] }
+	| { readonly operation: 'table.add'; readonly table: TableSchema }
+	| { readonly operation: 'table.remove'; readonly table: string }
+	| { readonly operation: 'column.add'; readonly table: string; readonly column: ColumnSchema }
+	| { readonly operation: 'column.remove'; readonly table: string; readonly column: string }
+	| { readonly operation: 'index.add'; readonly table: string; readonly index: readonly string[] }
+	| {
+			readonly operation: 'index.remove'
+			readonly table: string
+			readonly index: readonly string[]
+	  }
 
 interface Migration {
-  readonly from: number             // deployed schema version
-  readonly to: number               // declared schema version
-  readonly steps: readonly MigrationStep[]
+	readonly from: number // deployed schema version
+	readonly to: number // declared schema version
+	readonly steps: readonly MigrationStep[]
 }
 // migrate(deployed, declared): Migration — a pure schema-diff (discriminant named for its axis, §4.4)
 ```
@@ -537,12 +541,12 @@ interface Migration {
 Each driver realizes a `Migration` in its native idiom via the optional `migrate?` hook, and the
 core supplies a portable fallback for engines without one:
 
-| Engine    | `migrate?` realization                                                                              |
-| --------- | --------------------------------------------------------------------------------------------------- |
-| SQLite    | `ALTER TABLE ADD COLUMN`, `CREATE/DROP TABLE`, `CREATE/DROP INDEX`; version tracked in `user_version` PRAGMA. |
+| Engine    | `migrate?` realization                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQLite    | `ALTER TABLE ADD COLUMN`, `CREATE/DROP TABLE`, `CREATE/DROP INDEX`; version tracked in `user_version` PRAGMA.                               |
 | IndexedDB | a `version` bump in `onupgradeneeded`: `createObjectStore` / `createIndex` / `deleteObjectStore`; column adds are no-ops (schemaless rows). |
-| JSON      | portable fallback: scan → transform each row (drop removed columns, default added ones) → atomic rewrite. |
-| Memory    | no-op beyond adopting the new schema (nothing persistent to migrate).                               |
+| JSON      | portable fallback: scan → transform each row (drop removed columns, default added ones) → atomic rewrite.                                   |
+| Memory    | no-op beyond adopting the new schema (nothing persistent to migrate).                                                                       |
 
 Because column defaults and data backfills are _policy_, a `column.add` carries only the column
 schema; a migration that needs a computed backfill supplies a per-step transform at the
@@ -614,12 +618,12 @@ of §4, applied to transactions instead of reads. (Delta §11.)
 
 ### 6.3 Guarantees & limits per engine
 
-| Engine    | Mechanism                    | Atomic | Isolation                 | Durable on commit                     |
-| --------- | ---------------------------- | ------ | ------------------------- | ------------------------------------- |
-| Memory    | whole-store snapshot         | yes    | none (single process)     | n/a (ephemeral)                       |
-| JSON      | snapshot + coalesced flush   | yes    | none (single process)     | on commit (atomic temp-file rename)   |
-| IndexedDB | whole-store snapshot buffer  | yes    | none (single connection)  | yes (IndexedDB persists)              |
-| SQLite    | native `BEGIN`/`COMMIT`      | yes    | serializable (single conn)| yes (WAL/fsync per PRAGMA)            |
+| Engine    | Mechanism                   | Atomic | Isolation                  | Durable on commit                   |
+| --------- | --------------------------- | ------ | -------------------------- | ----------------------------------- |
+| Memory    | whole-store snapshot        | yes    | none (single process)      | n/a (ephemeral)                     |
+| JSON      | snapshot + coalesced flush  | yes    | none (single process)      | on commit (atomic temp-file rename) |
+| IndexedDB | whole-store snapshot buffer | yes    | none (single connection)   | yes (IndexedDB persists)            |
+| SQLite    | native `BEGIN`/`COMMIT`     | yes    | serializable (single conn) | yes (WAL/fsync per PRAGMA)          |
 
 Every driver declares its row in this matrix; the conformance suite asserts the atomicity and
 commit/rollback behavior, and the docs state durability/isolation explicitly so no one mistakes
@@ -678,15 +682,15 @@ Programmer/validation errors `throw` a typed `DatabaseError` carrying a machine-
 and an optional `context` bag; absence returns `undefined`/`false`; guards never throw
 (AGENTS §12/§14). The current four codes are extended for the new surface:
 
-| `DatabaseErrorCode` | Thrown when                                            | Status         |
-| ------------------- | ------------------------------------------------------ | -------------- |
-| `CLOSED`            | operating on a closed database                         | kept           |
-| `NOT_FOUND`         | `resolve` on an absent key                             | kept           |
-| `CONFLICT`          | `add` onto an existing key                             | kept           |
-| `VALIDATION`        | a row fails its contract; a pattern exceeds the cap    | kept           |
-| `ABORTED`           | an operation is cancelled via its `signal`             | **new** (§8.2) |
-| `MIGRATION`         | a schema migration cannot be applied                   | **new** (§5.5) |
-| `DRIVER`            | an unexpected backend I/O fault, wrapped at the seam   | **new**        |
+| `DatabaseErrorCode` | Thrown when                                          | Status         |
+| ------------------- | ---------------------------------------------------- | -------------- |
+| `CLOSED`            | operating on a closed database                       | kept           |
+| `NOT_FOUND`         | `resolve` on an absent key                           | kept           |
+| `CONFLICT`          | `add` onto an existing key                           | kept           |
+| `VALIDATION`        | a row fails its contract; a pattern exceeds the cap  | kept           |
+| `ABORTED`           | an operation is cancelled via its `signal`           | **new** (§8.2) |
+| `MIGRATION`         | a schema migration cannot be applied                 | **new** (§5.5) |
+| `DRIVER`            | an unexpected backend I/O fault, wrapped at the seam | **new**        |
 
 `catch` branches on `error.code` via `isDatabaseError`, never by parsing a message. Driver-native
 faults (a SQLite `CONSTRAINT`, an IndexedDB `QuotaExceededError`) are mapped at the seam to a
@@ -878,8 +882,8 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
 - **Entity vocabulary & roles.** `Database` / `Table` / `Query` / `Clause` / `Cursor` /
   `DriverInterface` / `MemoryDriver` are already correct, single-word, and idiomatic. No renames.
 - **A table is a contract.** The `tables`-as-columns declaration, `RowOf` inference, parse-on-write
-  + guard-on-read, and `export`/`import` are exactly the type-strictness backbone this proposal
-  wants — already zero `any`/`as`/`!`.
+  - guard-on-read, and `export`/`import` are exactly the type-strictness backbone this proposal
+    wants — already zero `any`/`as`/`!`.
 - **The compensate engine.** The pure, total query engine (`compareValues`, `matchesCriteria`,
   `applyCriteria`, `computeAggregate`, and the linear ReDoS-safe `wildcardMatch`) over a single
   `scan` is the design's heart and is already excellent.

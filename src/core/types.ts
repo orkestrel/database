@@ -1,4 +1,10 @@
-import type { ContractInterface, ContractShape, FieldPath, Infer, JSONSchema } from '@orkestrel/contract'
+import type {
+	ContractInterface,
+	ContractShape,
+	FieldPath,
+	Infer,
+	JSONSchema,
+} from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 
 // The cross-environment database surface — one ergonomic, typed API over a

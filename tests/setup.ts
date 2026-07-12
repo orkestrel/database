@@ -1,6 +1,6 @@
 // Base test setup — environment-agnostic helpers loaded first by every
 // Vitest project (`setupFiles[0]`). Keep this file free of `node:*` and of
-// `document` / `window` / Vue: DOM/Vue helpers live in `setupBrowser.ts`.
+// `document` / `window`: node-only helpers live in `setupServer.ts`.
 
 import type {
 	AggregateFunction,
@@ -20,10 +20,7 @@ import type {
 import type { EmitterErrorHandler, EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
 import { integerShape, stringShape } from '@orkestrel/contract'
-import {
-	createDatabase,
-	createMemoryDriver,
-} from '@src/core'
+import { createDatabase, createMemoryDriver } from '@src/core'
 import { afterEach, vi } from 'vitest'
 
 afterEach(() => {
