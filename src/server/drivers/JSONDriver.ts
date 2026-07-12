@@ -29,6 +29,10 @@ export class JSONDriver implements DriverInterface {
 	readonly #memory = new MemoryDriver()
 	#schema: readonly TableSchema[] = []
 	#flushCount = 0
+	// Serializes #flush calls — each queued flush awaits the prior one before
+	// serializing state, so the persisted snapshot always reflects the latest
+	// memory state (see #flush @remarks).
+	#chain: Promise<void> = Promise.resolve()
 
 	constructor(path: string) {
 		this.#path = path
@@ -94,7 +98,9 @@ export class JSONDriver implements DriverInterface {
 	 * this driver's own declared `#schema`, mirroring the bookkeeping `open` does,
 	 * so a subsequent `#flush` / `#load` round-trip includes (or drops) the table.
 	 * A successful migration ends with one atomic `#flush()` so the new state
-	 * survives a close and reopen.
+	 * survives a close and reopen. A multi-step plan applies its steps
+	 * sequentially and is NOT atomic — a failure partway through a plan leaves
+	 * the earlier steps already applied.
 	 *
 	 * @param plan - The migration plan to apply
 	 */
@@ -146,6 +152,16 @@ export class JSONDriver implements DriverInterface {
 		}
 	}
 
+	// Queue a flush behind #chain — see #flush @remarks for why.
+	async #flush(): Promise<void> {
+		const next = this.#chain.then(() => this.#serialize())
+		// Swallow so a failed flush doesn't leave #chain permanently rejected and
+		// block every later flush; the caller of THIS #flush still observes the
+		// rejection via `next` below.
+		this.#chain = next.catch(() => {})
+		await next
+	}
+
 	// Drain every declared table's rows from memory (in key order) and write the
 	// whole store back as one pretty-printed JSON object, creating the directory.
 	//
@@ -155,7 +171,12 @@ export class JSONDriver implements DriverInterface {
 	// mid-flush can no longer truncate or corrupt the previous good file — POSIX
 	// `rename` replaces the destination in one indivisible step, so a reader always
 	// sees either the old file or the fully-written new one, never a partial write.
-	async #flush(): Promise<void> {
+	// `#flush` serializes calls to this method through `#chain` — each flush AWAITS
+	// its predecessor before draining `#memory` and writing, so the payload always
+	// reflects the latest memory state. Without this, overlapping flushes triggered
+	// by non-awaited concurrent mutations could serialize out of order and persist a
+	// stale snapshot as the "latest" file.
+	async #serialize(): Promise<void> {
 		const tables: Record<string, readonly Row[]> = {}
 		for (const table of this.#schema) {
 			const rows: Row[] = []

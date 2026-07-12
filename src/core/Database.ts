@@ -133,6 +133,9 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 	 * transactional work — an already-aborted signal throws `ABORTED` and neither the
 	 * native hook nor the snapshot floor is invoked. Nesting is unguarded and
 	 * unsupported exactly as before: this is a single-writer model, not reentrant.
+	 * On the native path, a `scope` throw rolls back via the native handle; a
+	 * native `commit` failure propagates as-is with no rollback attempt — the
+	 * engine owns transaction state after a failed COMMIT.
 	 *
 	 * @param scope - The transactional work to run
 	 * @param options - `{ signal }` to abort before the transaction starts
@@ -147,13 +150,9 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 			// Observe the scope beginning — AFTER the native BEGIN, mirroring the snapshot
 			// path's `transaction` emit placement (after the floor is laid, before the scope runs).
 			this.#emitter.emit('transaction')
+			let value: R
 			try {
-				const value = await scope()
-				await native.commit()
-				// Observe the successful commit — AFTER the native commit resolved, mirroring
-				// the snapshot path's emit-after-transition contract.
-				this.#emitter.emit('commit')
-				return value
+				value = await scope()
 			} catch (error) {
 				// The scope threw: roll back via the native handle FIRST, then observe —
 				// mirrors the snapshot path exactly. A rollback throw is NOT caught here (the
@@ -163,6 +162,15 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 				this.#emitter.emit('rollback', error)
 				throw error
 			}
+			// The scope succeeded: commit OUTSIDE the try — a failed commit propagates
+			// as-is, with no rollback attempt. The engine owns transaction state after a
+			// failed COMMIT; invoking rollback here could mask the commit error with a
+			// rollback error, or roll back a commit the engine actually applied.
+			await native.commit()
+			// Observe the successful commit — AFTER the native commit resolved, mirroring
+			// the snapshot path's emit-after-transition contract.
+			this.#emitter.emit('commit')
+			return value
 		}
 		const rollback = await this.#driver.snapshot()
 		// Observe the scope beginning — AFTER the store was snapshotted and BEFORE the scope

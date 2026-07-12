@@ -168,6 +168,21 @@ export class Table<T = Row> implements TableInterface<T> {
 		return computeAggregate(matched, operation, column)
 	}
 
+	/**
+	 * Stream the table's rows matching `criteria`, applying offset/limit paging.
+	 *
+	 * @remarks
+	 * `criteria.limit` counts rows that pass BOTH the criteria conditions AND the
+	 * table's contract guard (a stored row that fails the guard is skipped and
+	 * does not count toward `limit`) — this can differ from {@link records}'s
+	 * `limit`, which a driver's optional native `records` hook applies BEFORE
+	 * the contract guard runs, when storage holds rows that no longer conform
+	 * to the table's contract.
+	 *
+	 * @param criteria - Optional conditions plus offset/limit paging
+	 * @param options - `{ signal }` to abort mid-stream
+	 * @returns An async generator of matching, guard-conforming rows
+	 */
 	async *scan(criteria?: Criteria, options?: ReadOptions): AsyncGenerator<T> {
 		checkAbort(options?.signal)
 		await this.#ready()

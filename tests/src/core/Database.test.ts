@@ -195,6 +195,43 @@ function createNativeTransactionDriver(): {
 	return { driver, commits, rollbacks }
 }
 
+/**
+ * Same as `createNativeTransactionDriver`, but the native handle's `commit()`
+ * rejects with `error` — used to verify a commit failure propagates as-is with
+ * no rollback attempt.
+ */
+function createCommitFailingTransactionDriver(error: Error): {
+	readonly driver: DriverInterface
+	readonly rollbacks: number[]
+} {
+	const memory = createMemoryDriver()
+	const rollbacks: number[] = []
+	const driver: DriverInterface = {
+		open: (schema) => memory.open(schema),
+		close: () => memory.close(),
+		read: (table, key) => memory.read(table, key),
+		write: (table, key, row) => memory.write(table, key, row),
+		delete: (table, key) => memory.delete(table, key),
+		keys: (table) => memory.keys(table),
+		scan: (table) => memory.scan(table),
+		clear: (table) => memory.clear(table),
+		snapshot: () => memory.snapshot(),
+		async transaction() {
+			const rollback = await memory.snapshot()
+			return {
+				async commit() {
+					throw error
+				},
+				async rollback() {
+					rollbacks.push(rollbacks.length + 1)
+					await rollback()
+				},
+			}
+		},
+	}
+	return { driver, rollbacks }
+}
+
 describe('transaction() native hook', () => {
 	it('commits via the native handle on a successful scope; rollback never runs', async () => {
 		const { driver, commits, rollbacks } = createNativeTransactionDriver()
@@ -239,6 +276,27 @@ describe('transaction() native hook', () => {
 		expect(events.rollback.count).toBe(1)
 		expect(events.rollback.calls[0]?.[0]).toBe(error)
 		expect(await users.has('u1')).toBe(false)
+	})
+
+	it('propagates a native commit failure as-is; rollback never runs', async () => {
+		const error = new Error('commit failed')
+		const { driver, rollbacks } = createCommitFailingTransactionDriver(error)
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+		})
+		const users = db.table('users')
+		const events = recordEmitterEvents(db.emitter, ['transaction', 'commit', 'rollback'] as const)
+		await expect(
+			db.transaction(async () => {
+				await users.set({ id: 'u1', name: 'Ada', age: 36 })
+				return 'done'
+			}),
+		).rejects.toBe(error)
+		expect(rollbacks).toEqual([])
+		expect(events.transaction.count).toBe(1)
+		expect(events.commit.count).toBe(0)
+		expect(events.rollback.count).toBe(0)
 	})
 
 	it('checks the abort signal at entry before invoking the native hook', async () => {

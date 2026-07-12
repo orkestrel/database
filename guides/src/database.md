@@ -354,7 +354,9 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
    signal throws `ABORTED` before anything else runs), then, when the driver
    implements the optional native `transaction?()`, drives the scope through
    that handle's `commit` / `rollback` instead of the snapshot floor —
-   commit on success, rollback + rethrow on a throw. Absent a native hook, it
+   commit on success, rollback + rethrow on a throw; a native commit failure
+   propagates as-is with no rollback attempt, since the engine owns
+   transaction state after a failed COMMIT. Absent a native hook, it
    falls back to the universal model: `snapshot()` the store, run the scope,
    and on a throw call the rollback thunk to restore every table, then
    rethrow. Either path emits the identical `transaction` / `commit` /
@@ -752,6 +754,11 @@ const driver: Pick<DriverInterface, 'transaction'> = {
 	transaction: async () => nativeHandle,
 }
 ```
+
+A `scope` throw rolls back via the native handle; a native `commit` failure
+propagates as-is with no rollback attempt — the engine owns transaction
+state after a failed COMMIT, so `transaction()` never masks that failure
+behind a rollback error.
 
 ### Migrations
 

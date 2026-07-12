@@ -602,6 +602,19 @@ export function conformDriver(name: string, factory: () => DriverInterface): voi
 				}
 				expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
 			})
+
+			it('honors offset and limit paging', async () => {
+				const driver = factory()
+				await driver.open(CONFORM_SCHEMA)
+				await driver.write('users', 'a', { id: 'a', name: 'Ada' })
+				await driver.write('users', 'b', { id: 'b', name: 'Bo' })
+				await driver.write('users', 'c', { id: 'c', name: 'Cy' })
+				const rows: Row[] = []
+				if (driver.stream !== undefined) {
+					for await (const row of driver.stream('users', { offset: 1, limit: 1 })) rows.push(row)
+				}
+				expect(rows).toHaveLength(1)
+			})
 		})
 
 		describe.runIf(hasTransaction)('transaction (optional)', () => {

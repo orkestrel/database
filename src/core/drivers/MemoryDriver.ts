@@ -71,6 +71,15 @@ export class MemoryDriver implements DriverInterface {
 		}
 	}
 
+	/**
+	 * Apply a {@link Migration} plan's steps against the in-memory store.
+	 *
+	 * @remarks
+	 * A multi-step plan applies its steps sequentially and is NOT atomic — a
+	 * failure partway through a plan leaves the earlier steps already applied.
+	 *
+	 * @param plan - The migration plan to apply
+	 */
 	async migrate(plan: Migration): Promise<void> {
 		for (const step of plan.steps) {
 			switch (step.operation) {
