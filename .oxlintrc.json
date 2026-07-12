@@ -1,0 +1,58 @@
+{
+	"$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+	"plugins": ["import", "vitest"],
+	"rules": {
+		"@typescript-eslint/no-explicit-any": "error",
+		"@typescript-eslint/no-non-null-assertion": "error",
+		"@typescript-eslint/no-unused-vars": [
+			"error",
+			{
+				"argsIgnorePattern": "^_",
+				"varsIgnorePattern": "^_",
+				"caughtErrorsIgnorePattern": "^_",
+				"ignoreRestSiblings": true
+			}
+		],
+		"@typescript-eslint/consistent-type-imports": [
+			"error",
+			{
+				"prefer": "type-imports",
+				"fixStyle": "separate-type-imports"
+			}
+		],
+
+		"import/no-default-export": "error",
+		"import/extensions": "off",
+		"import/no-unassigned-import": ["error", { "allow": ["**/*.css", "**/*.scss"] }],
+
+		"no-var": "error",
+		"prefer-const": "error",
+		"no-debugger": "error",
+		"no-underscore-dangle": "warn",
+
+		"vitest/warn-todo": "off"
+	},
+	"categories": {
+		"correctness": "error",
+		"suspicious": "warn",
+		"pedantic": "off",
+		"perf": "off",
+		"style": "off",
+		"restriction": "off"
+	},
+	"overrides": [
+		{
+			"files": ["*.config.ts", "*.config.js"],
+			"rules": {
+				"import/no-default-export": "off"
+			}
+		},
+		{
+			"files": ["*.vue"],
+			"rules": {
+				"import/no-default-export": "off",
+				"no-unused-expressions": "off"
+			}
+		}
+	]
+}

@@ -1,0 +1,5 @@
+# oxfmt (and prettier) read this file by default. Keep generated / minified
+# artifacts out of the formatter so a tree-wide `npm run format` never rewrites them.
+
+# Build output (also gitignored, listed for explicitness).
+dist/

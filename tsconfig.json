@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"types": ["node", "vite/client", "vitest/globals"],
+
+		"moduleDetection": "force",
+		"resolveJsonModule": true,
+
+		"strict": true,
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+
+		"noEmit": true,
+		"paths": {
+			"@src/core": ["./src/core/index.ts"],
+			"@src/browser": ["./src/browser/index.ts"],
+			"@src/server": ["./src/server/index.ts"]
+		}
+	},
+	"exclude": ["node_modules", "dist", "tmp"]
+}

@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"lib": ["ESNext"],
+		"noEmit": false,
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"rootDir": "../../src/core",
+		"outDir": "../../dist/src/core"
+	},
+	"include": ["../../src/core/**/*.ts"]
+}

@@ -1,0 +1,32 @@
+import { createDatabase, createMemoryDriver, integerShape, stringShape } from '@src/core'
+import { describe, expect, it } from 'vitest'
+import { collectRows, tableSchemas } from '../../setup.js'
+
+// The databases factories — that each returns a working instance of its interface.
+// The full behavior of what they build is covered in Database.test.ts / Table.test.ts
+// (for `createDatabase`) and MemoryDriver.test.ts (for `createMemoryDriver`); here we
+// only assert the factory wires up a usable object end to end.
+
+describe('createDatabase', () => {
+	it('returns a working DatabaseInterface (a basic round-trip)', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+		})
+		expect(db.status).toBe('idle')
+		const users = db.table('users')
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
+		expect(db.status).toBe('open') // connected lazily by the first operation
+	})
+})
+
+describe('createMemoryDriver', () => {
+	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('items'))
+		await driver.write('items', 'a', { id: 'a', n: 1 })
+		expect(await driver.read('items', 'a')).toEqual({ id: 'a', n: 1 })
+		expect((await collectRows(driver.scan('items'))).map((row) => row.id)).toEqual(['a'])
+	})
+})
