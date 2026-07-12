@@ -1,5 +1,6 @@
+import { isDatabaseError, planMigration } from '@src/core'
 import { createJSONDriver } from '@src/server'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { driverSchema, tempDatabasePath } from '../../../setupServer.js'
@@ -246,6 +247,72 @@ describe('JSONDriver — graceful degradation', () => {
 		expect(parsed).toEqual({
 			tables: {
 				users: [{ id: 'u1', name: 'Ada', age: 36, active: true }],
+				posts: [],
+			},
+		})
+	})
+})
+
+describe('JSONDriver — migrate', () => {
+	it('persists a column.remove step to the file across close and reopen', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const before = SCHEMA
+		const after = SCHEMA.map((table) =>
+			table.name === 'users' ? { ...table, columns: table.columns.filter((column) => column.name !== 'age') } : table,
+		)
+		const plan = planMigration(before, after)
+		await driver.migrate?.(plan)
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', active: true })
+		await driver.close()
+
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', active: true })
+		await reopened.close()
+	})
+
+	it('reflects a table.add step in the file shape', async () => {
+		const extra = { name: 'tags', primary: 'id', columns: [{ name: 'id', type: 'text' as const, nullable: false }], indexes: [] }
+		const plan = planMigration(SCHEMA, [...SCHEMA, extra])
+		await driver.migrate?.(plan)
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({ tables: { users: [], posts: [], tags: [] } })
+	})
+
+	it('reflects a table.remove step in the file shape', async () => {
+		const plan = planMigration(SCHEMA, SCHEMA.filter((table) => table.name !== 'posts'))
+		await driver.migrate?.(plan)
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({ tables: { users: [] } })
+	})
+
+	it('throws a MIGRATION DatabaseError when a step references an unknown table', async () => {
+		const plan = planMigration([{ name: 'missing', primary: 'id', columns: [], indexes: [] }], [])
+		const error = await driver.migrate?.(plan).catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+	})
+})
+
+describe('JSONDriver — atomic flush', () => {
+	it('leaves no leftover temp files after a burst of writes, and the file always parses', async () => {
+		const ids = Array.from({ length: 20 }, (_, index) => `u${String(index).padStart(2, '0')}`)
+		for (const [index, id] of ids.entries()) {
+			await driver.write('users', id, { id, name: `User ${index}`, age: 20 + index, active: true })
+		}
+		const entries = await readdir(dirname(path))
+		expect(entries.some((entry) => entry.endsWith('.tmp'))).toBe(false)
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			tables: {
+				users: ids.map((id, index) => ({
+					id,
+					name: `User ${index}`,
+					age: 20 + index,
+					active: true,
+				})),
 				posts: [],
 			},
 		})

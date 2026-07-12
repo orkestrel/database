@@ -1,7 +1,7 @@
-import type { DriverInterface, Key, Row, TableSchema } from '@src/core'
+import type { DriverInterface, Key, Migration, Row, TableSchema } from '@src/core'
 import { MemoryDriver, extractKey } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 /**
@@ -28,6 +28,7 @@ export class JSONDriver implements DriverInterface {
 	readonly #path: string
 	readonly #memory = new MemoryDriver()
 	#schema: readonly TableSchema[] = []
+	#flushCount = 0
 
 	constructor(path: string) {
 		this.#path = path
@@ -81,6 +82,36 @@ export class JSONDriver implements DriverInterface {
 		}
 	}
 
+	/**
+	 * Apply a {@link Migration} plan by delegating to the inner {@link MemoryDriver},
+	 * then persist the migrated state.
+	 *
+	 * @remarks
+	 * The inner `MemoryDriver.migrate` applies each step (adding/removing tables,
+	 * adding/removing columns from stored rows, no-op index steps) and throws
+	 * `DatabaseError` `MIGRATION` for a step referencing an unknown table — that
+	 * error propagates untouched. `table.add` / `table.remove` steps also update
+	 * this driver's own declared `#schema`, mirroring the bookkeeping `open` does,
+	 * so a subsequent `#flush` / `#load` round-trip includes (or drops) the table.
+	 * A successful migration ends with one atomic `#flush()` so the new state
+	 * survives a close and reopen.
+	 *
+	 * @param plan - The migration plan to apply
+	 */
+	async migrate(plan: Migration): Promise<void> {
+		await this.#memory.migrate?.(plan)
+		let schema = this.#schema
+		for (const step of plan.steps) {
+			if (step.operation === 'table.add') {
+				schema = schema.some((table) => table.name === step.table.name) ? schema : [...schema, step.table]
+			} else if (step.operation === 'table.remove') {
+				schema = schema.filter((table) => table.name !== step.table)
+			}
+		}
+		this.#schema = schema
+		await this.#flush()
+	}
+
 	// === Private
 
 	// Load the file into memory; a missing / corrupt / wrong-shaped file starts
@@ -115,6 +146,13 @@ export class JSONDriver implements DriverInterface {
 
 	// Drain every declared table's rows from memory (in key order) and write the
 	// whole store back as one pretty-printed JSON object, creating the directory.
+	//
+	// @remarks
+	// Written atomically: the payload lands in a sibling temp file (same directory,
+	// so the platform rename is atomic) and is then renamed onto `#path`. A crash
+	// mid-flush can no longer truncate or corrupt the previous good file — POSIX
+	// `rename` replaces the destination in one indivisible step, so a reader always
+	// sees either the old file or the fully-written new one, never a partial write.
 	async #flush(): Promise<void> {
 		const tables: Record<string, readonly Row[]> = {}
 		for (const table of this.#schema) {
@@ -123,6 +161,14 @@ export class JSONDriver implements DriverInterface {
 			tables[table.name] = rows
 		}
 		await mkdir(dirname(this.#path), { recursive: true })
-		await writeFile(this.#path, JSON.stringify({ tables }, null, 2), 'utf-8')
+		this.#flushCount += 1
+		const temp = `${this.#path}.${process.pid}.${this.#flushCount}.tmp`
+		try {
+			await writeFile(temp, JSON.stringify({ tables }, null, 2), 'utf-8')
+			await rename(temp, this.#path)
+		} catch (error) {
+			await rm(temp, { force: true }).catch(() => {})
+			throw error
+		}
 	}
 }
