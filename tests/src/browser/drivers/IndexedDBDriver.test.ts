@@ -404,7 +404,14 @@ describe('IndexedDBDriver — migrate / meta / stamp', () => {
 		await driver.close()
 		const wrapper = createIndexedDBDatabase({
 			name,
-			stores: { users: { indexes: [{ name: 'age', path: 'age' }, { name: 'id', path: 'id' }] } },
+			stores: {
+				users: {
+					indexes: [
+						{ name: 'age', path: 'age' },
+						{ name: 'id', path: 'id' },
+					],
+				},
+			},
 		})
 		await wrapper.connect()
 		expect((await wrapper.store('users').index('age').get(40))?.id).toBe('u2')

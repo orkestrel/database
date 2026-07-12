@@ -212,7 +212,7 @@ describe('compileCriteria — operators', () => {
 		})
 	})
 
-	it('compiles a nested equals(null) to json_type = \'null\' (present-null only)', () => {
+	it("compiles a nested equals(null) to json_type = 'null' (present-null only)", () => {
 		// json_extract collapses BOTH a present JSON `null` AND an absent path to SQL
 		// `NULL` — indistinguishable. json_type disambiguates: `'null'` only for a
 		// present JSON null, matching the engine's `compareValues(null, null) === 0`
@@ -223,7 +223,7 @@ describe('compileCriteria — operators', () => {
 		})
 	})
 
-	it('compiles a nested not(null) to (json_type IS NULL OR json_type != \'null\')', () => {
+	it("compiles a nested not(null) to (json_type IS NULL OR json_type != 'null')", () => {
 		// Matches absent (json_type IS NULL) or present-scalar (json_type != 'null');
 		// excludes only a present JSON null — matching the engine's
 		// `compareValues(value, null) !== 0`.
@@ -455,12 +455,12 @@ describe('fragment', () => {
 		expect(fragment(cond('id', 'none', []), SCHEMA)).toEqual({ sql: '1', params: [] })
 	})
 
-	it('compiles a nested null equals to json_type = \'null\' with no bound param', () => {
+	it("compiles a nested null equals to json_type = 'null' with no bound param", () => {
 		// A nested (json_extract) field with a null operand under equals compiles
 		// through json_type — 'null' means present-JSON-null, distinguishing it
 		// from an absent path (which json_extract alone cannot tell apart).
 		expect(fragment(cond(['meta', 'note'], 'equals', [null]), SCHEMA)).toEqual({
-			sql: 'json_type("meta", \'$.note\') = \'null\'',
+			sql: "json_type(\"meta\", '$.note') = 'null'",
 			params: [],
 		})
 	})

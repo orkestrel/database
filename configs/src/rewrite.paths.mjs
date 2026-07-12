@@ -38,7 +38,10 @@ function rewriteFile(file, coreDir) {
 		return false
 	}
 	const specifier = relativeSpecifierToCore(file, coreDir)
-	const rewritten = original.replace(ALIAS_PATTERN, (_match, quote) => `${quote}${specifier}${quote}`)
+	const rewritten = original.replace(
+		ALIAS_PATTERN,
+		(_match, quote) => `${quote}${specifier}${quote}`,
+	)
 	if (rewritten !== original) {
 		writeFileSync(file, rewritten, 'utf8')
 		return true

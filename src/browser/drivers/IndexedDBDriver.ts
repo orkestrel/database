@@ -348,7 +348,10 @@ export class IndexedDBDriver implements DriverInterface {
 	// mode, mirroring `open`) — used to restore a working connection after a
 	// failed `migrate` left the prior connection closed.
 	async #reopen(): Promise<void> {
-		const database = createIndexedDBDatabase({ name: this.#name, stores: this.#stores(this.#schema) })
+		const database = createIndexedDBDatabase({
+			name: this.#name,
+			stores: this.#stores(this.#schema),
+		})
 		await database.connect()
 		this.#database = database
 	}

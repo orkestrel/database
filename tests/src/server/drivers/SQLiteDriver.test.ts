@@ -648,7 +648,9 @@ describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic 
 		const criteria: Criteria = { conditions: [buildCondition('rank', 'below', [15])] }
 		const expected = (await engineRows(criteria)).length
 		const native =
-			sqlite.aggregate === undefined ? undefined : await sqlite.aggregate('users', 'count', 'rank', criteria)
+			sqlite.aggregate === undefined
+				? undefined
+				: await sqlite.aggregate('users', 'count', 'rank', criteria)
 		expect(native).toBe(expected)
 	})
 
@@ -657,7 +659,9 @@ describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic 
 		const expectedRows = await engineRows(criteria)
 		const expected = computeAggregate(expectedRows, 'sum', 'rank')
 		const native =
-			sqlite.aggregate === undefined ? undefined : await sqlite.aggregate('users', 'sum', 'rank', criteria)
+			sqlite.aggregate === undefined
+				? undefined
+				: await sqlite.aggregate('users', 'sum', 'rank', criteria)
 		expect(native).toBe(expected)
 	})
 })

@@ -98,29 +98,29 @@ Pure, server-only functions that turn a core `Criteria` / `TableSchema` into
 parameterized SQL text — the native-query payoff for a SQLite-backed driver.
 None of these import a SQLite package; they speak strings and values only.
 
-| API               | Kind     | Summary                                                                                                           |
-| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `escapeLike`      | function | Escape `\` / `%` / `_` so a `starts` / `ends` operand matches literally under `LIKE … ESCAPE '\'`.                |
-| `declaredType`    | function | The declared `ColumnType` of a flat column, read from the schema.                                                 |
-| `valueType`       | function | The `ColumnType` a nested (`json_extract`) operand encodes as, derived from its runtime value.                    |
+| API               | Kind     | Summary                                                                                                                                  |
+| ----------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `escapeLike`      | function | Escape `\` / `%` / `_` so a `starts` / `ends` operand matches literally under `LIKE … ESCAPE '\'`.                                       |
+| `declaredType`    | function | The declared `ColumnType` of a flat column, read from the schema.                                                                        |
+| `valueType`       | function | The `ColumnType` a nested (`json_extract`) operand encodes as, derived from its runtime value.                                           |
 | `jsonTypeColumn`  | function | Compile a nested `FieldPath` to its `json_type(<col>, <path>)` SQL expression — disambiguates a present JSON `null` from an absent path. |
-| `fragment`        | function | Compile one `Condition` to its `<column> <operator>` SQL fragment plus bound params.                              |
-| `compileWhere`    | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold.                |
-| `compileOrder`    | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                               |
-| `compilePage`     | function | Compile the `LIMIT` / `OFFSET` clause.                                                                            |
-| `compileCriteria` | function | Compile a `Criteria` into the full SQL clause (`WHERE` + `ORDER BY` + `LIMIT`) plus bound params.                 |
-| `quote`           | function | Quote a SQL identifier (table / column name), doubling an embedded quote.                                         |
-| `fieldColumn`     | function | Compile a `FieldPath` to the SQL expression that reads it (a column, or a `json_extract` path).                   |
-| `columnSQL`       | function | Map a portable `ColumnType` to its SQLite column type keyword.                                                    |
-| `aggregateSQL`    | function | Compile an `AggregateFunction` over a `FieldPath` to its SQL aggregate expression.                                |
-| `encodeValue`     | function | Encode a JS value to its stored `SQLiteValue` for a column's type — total, never throws.                          |
-| `decodeValue`     | function | Decode a stored `SQLiteValue` back to its JS value — the exact inverse of `encodeValue`.                          |
-| `encodeRow`       | function | Encode a whole `Row` to a `SQLiteRow` by its table's schema.                                                      |
-| `decodeRow`       | function | Decode a stored `SQLiteRow` back to a `Row` by its table's schema (absent columns omitted).                       |
-| `schemaToTable`   | function | Project a `TableSchema` to its `CREATE TABLE IF NOT EXISTS` statement.                                            |
-| `schemaToIndexes` | function | Project a `TableSchema` to its `CREATE INDEX IF NOT EXISTS` statements.                                           |
-| `stepToSQL`       | function | Project one `MigrationStep` to the DDL statement(s) `SQLiteDriver.migrate` executes for it.                       |
-| `stepToSchema`    | function | Project one `MigrationStep` onto its table's declared `TableSchema` — the bookkeeping counterpart to `stepToSQL`. |
+| `fragment`        | function | Compile one `Condition` to its `<column> <operator>` SQL fragment plus bound params.                                                     |
+| `compileWhere`    | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold.                                       |
+| `compileOrder`    | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                                                      |
+| `compilePage`     | function | Compile the `LIMIT` / `OFFSET` clause.                                                                                                   |
+| `compileCriteria` | function | Compile a `Criteria` into the full SQL clause (`WHERE` + `ORDER BY` + `LIMIT`) plus bound params.                                        |
+| `quote`           | function | Quote a SQL identifier (table / column name), doubling an embedded quote.                                                                |
+| `fieldColumn`     | function | Compile a `FieldPath` to the SQL expression that reads it (a column, or a `json_extract` path).                                          |
+| `columnSQL`       | function | Map a portable `ColumnType` to its SQLite column type keyword.                                                                           |
+| `aggregateSQL`    | function | Compile an `AggregateFunction` over a `FieldPath` to its SQL aggregate expression.                                                       |
+| `encodeValue`     | function | Encode a JS value to its stored `SQLiteValue` for a column's type — total, never throws.                                                 |
+| `decodeValue`     | function | Decode a stored `SQLiteValue` back to its JS value — the exact inverse of `encodeValue`.                                                 |
+| `encodeRow`       | function | Encode a whole `Row` to a `SQLiteRow` by its table's schema.                                                                             |
+| `decodeRow`       | function | Decode a stored `SQLiteRow` back to a `Row` by its table's schema (absent columns omitted).                                              |
+| `schemaToTable`   | function | Project a `TableSchema` to its `CREATE TABLE IF NOT EXISTS` statement.                                                                   |
+| `schemaToIndexes` | function | Project a `TableSchema` to its `CREATE INDEX IF NOT EXISTS` statements.                                                                  |
+| `stepToSQL`       | function | Project one `MigrationStep` to the DDL statement(s) `SQLiteDriver.migrate` executes for it.                                              |
+| `stepToSchema`    | function | Project one `MigrationStep` onto its table's declared `TableSchema` — the bookkeeping counterpart to `stepToSQL`.                        |
 
 ### Browser
 
