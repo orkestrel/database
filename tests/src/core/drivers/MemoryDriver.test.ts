@@ -33,7 +33,7 @@ describe('MemoryDriver', () => {
 
 	it('yields keys and scans rows in KEY order, not insertion order', async () => {
 		// The DriverInterface contract: scan iterates in key order and keys lists in
-		// order (guides/databases.md). Writing OUT of key order must NOT leak Map
+		// order (guides/src/database.md). Writing OUT of key order must NOT leak Map
 		// insertion order — the reference driver sorts by the core total order, so it
 		// agrees with the SQLite (ORDER BY) and IndexedDB (key-ranged) backends.
 		const driver = createMemoryDriver()

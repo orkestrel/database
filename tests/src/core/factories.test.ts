@@ -2,7 +2,7 @@ import { createDatabase, createMemoryDriver, integerShape, stringShape } from '@
 import { describe, expect, it } from 'vitest'
 import { collectRows, tableSchemas } from '../../setup.js'
 
-// The databases factories — that each returns a working instance of its interface.
+// The database factories — that each returns a working instance of its interface.
 // The full behavior of what they build is covered in Database.test.ts / Table.test.ts
 // (for `createDatabase`) and MemoryDriver.test.ts (for `createMemoryDriver`); here we
 // only assert the factory wires up a usable object end to end.

@@ -1,5 +1,5 @@
-import type { ContractInterface } from '../contracts/index.js'
-import type { EmitterInterface } from '../emitters/types.js'
+import type { ContractInterface } from '@orkestrel/contract'
+import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
 	DatabaseEventMap,
 	DatabaseInterface,
@@ -14,8 +14,8 @@ import type {
 	TableSchema,
 	TablesShape,
 } from './types.js'
-import { compileSchema, createContract, objectShape } from '../contracts/index.js'
-import { Emitter } from '../emitters/Emitter.js'
+import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
 import { columnType } from './helpers.js'

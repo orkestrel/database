@@ -1,5 +1,4 @@
-import type { ContractShape } from '../contracts/index.js'
-import type { FieldPath } from '../types.js'
+import type { ContractShape, FieldPath } from '@orkestrel/contract'
 import type {
 	AggregateFunction,
 	ColumnType,
@@ -9,8 +8,7 @@ import type {
 	Order,
 	Row,
 } from './types.js'
-import { isFiniteNumber, isRecord, isString, parseNumber } from '../contracts/index.js'
-import { resolveField } from '../helpers.js'
+import { isFiniteNumber, isRecord, isString, parseNumber, resolveField } from '@orkestrel/contract'
 import { MAX_PATTERN_LENGTH } from './constants.js'
 import { DatabaseError } from './errors.js'
 
@@ -379,9 +377,9 @@ export function generateKey(): string {
  * `real`; `boolean` → `boolean`. A `literal` takes the type of its values
  * (all-boolean → `boolean`, all-integer → `integer`, mixed/fractional numbers →
  * `real`, anything else → `text`). `optional` / `nullable` unwrap to their inner
- * type (nullability is tracked separately). `object` / `array` / `union` / `raw`
- * → `json`: a backend stores them as JSON text and can `json_extract` for nested
- * `FieldPath` queries. A scan-only backend ignores the result.
+ * type (nullability is tracked separately). `null` / `object` / `array` / `union` /
+ * `json` / `raw` → `json`: a backend stores them as JSON text and can `json_extract`
+ * for nested `FieldPath` queries. A scan-only backend ignores the result.
  *
  * @param shape - The column's contract shape
  * @returns The portable column type
@@ -412,9 +410,11 @@ export function columnType(shape: ContractShape): ColumnType {
 		case 'optional':
 		case 'nullable':
 			return columnType(shape.inner)
+		case 'null':
 		case 'object':
 		case 'array':
 		case 'union':
+		case 'json':
 		case 'raw':
 			return 'json'
 	}

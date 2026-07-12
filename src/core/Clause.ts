@@ -1,4 +1,4 @@
-import type { FieldPath } from '../types.js'
+import type { FieldPath } from '@orkestrel/contract'
 import type {
 	Condition,
 	ConditionOperator,

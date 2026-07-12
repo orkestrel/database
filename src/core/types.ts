@@ -1,6 +1,5 @@
-import type { ContractInterface, ContractShape, Infer, JSONSchema } from '../contracts/index.js'
-import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '../emitters/types.js'
-import type { FieldPath } from '../types.js'
+import type { ContractInterface, ContractShape, FieldPath, Infer, JSONSchema } from '@orkestrel/contract'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 
 // The cross-environment database surface — one ergonomic, typed API over a
 // minimal storage `Driver` that an in-memory map, IndexedDB, or SQLite can each

@@ -56,8 +56,8 @@ export function createRecorder<
 	}
 }
 
-// ── Databases test fixtures ───────────────────────────────────────────────────
-// Shared, environment-agnostic scenario builders for the `databases` / `relations` tests — a
+// ── Database test fixtures ────────────────────────────────────────────────────
+// Shared, environment-agnostic scenario builders for the `database` module's tests — a
 // seeded table over the real in-memory reference driver, condition/schema
 // literal factories, and a recording driver for the native-hook dispatch pins
 // (AGENTS §16.1: real implementations and recorders, never mocks).
@@ -163,7 +163,7 @@ export function userRows(): readonly UserRow[] {
 }
 
 /**
- * Stand up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `databases`
+ * Stand up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `database`
  * entity tests — `createDatabase({ driver: createMemoryDriver(), tables: { users: columns } })`,
  * seed the rows, and return `db.table('users')` (AGENTS §16.1). The shared form of the per-file
  * `seeded()` the `Cursor` / `Query` / `Clause` tests each hand-rolled (each over the SAME base
@@ -171,7 +171,7 @@ export function userRows(): readonly UserRow[] {
  * The caller passes its FULL `columns` map and `rows`; because `columns` is captured as a `const`
  * generic, the returned table's row type is `RowOf<C>` — inferred PRECISELY (the literal-union
  * `role`, the optional `nickname`), so each file keeps `type Users = Awaited<ReturnType<typeof
- * seeded>>` with NO `as` and NO widening to a bare `Row`. A real `databases` table over the in-memory
+ * seeded>>` with NO `as` and NO widening to a bare `Row`. A real `database` table over the in-memory
  * reference driver (NOT a mock); each call builds a FRESH database so a mutating test never leaks.
  *
  * @typeParam C - The `users` column map (captured `const` so its row type infers precisely)

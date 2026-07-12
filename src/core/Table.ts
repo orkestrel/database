@@ -1,6 +1,5 @@
-import type { ContractInterface, Guard } from '../contracts/index.js'
-import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '../emitters/types.js'
-import type { FieldPath } from '../types.js'
+import type { ContractInterface, FieldPath, Guard } from '@orkestrel/contract'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type {
 	AggregateFunction,
 	Criteria,
@@ -12,8 +11,8 @@ import type {
 	TableEventMap,
 	TableInterface,
 } from './types.js'
-import { isArray, isRecord } from '../contracts/index.js'
-import { Emitter } from '../emitters/Emitter.js'
+import { isArray, isRecord } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import {
 	applyCriteria,
