@@ -729,7 +729,10 @@ export async function* driverFindings(
 		context: Readonly<Record<string, unknown>>,
 	): ConformanceFinding => ({ check, message, context })
 
-	type Phase = { readonly check: string; readonly run: () => Promise<ConformanceFinding | undefined> }
+	type Phase = {
+		readonly check: string
+		readonly run: () => Promise<ConformanceFinding | undefined>
+	}
 
 	const phases: readonly Phase[] = [
 		// a. open with the inline two-table schema, then close cleanly.
@@ -825,11 +828,11 @@ export async function* driverFindings(
 				const second = await driver.delete('users', 'u1')
 				await driver.close()
 				if (second !== false) {
-					return findingOf(
-						'delete-false',
-						'delete of an already-removed key must return false',
-						{ table: 'users', expected: false, actual: second },
-					)
+					return findingOf('delete-false', 'delete of an already-removed key must return false', {
+						table: 'users',
+						expected: false,
+						actual: second,
+					})
 				}
 				return undefined
 			},
@@ -973,11 +976,11 @@ export async function* driverFindings(
 				const readBack = await driver.read('users', 'u3')
 				await driver.close()
 				if (readBack === undefined || !deepEqual(readBack, nested)) {
-					return findingOf(
-						'nested-roundtrip',
-						'a nested-object row must round-trip structurally',
-						{ table: 'users', expected: nested, actual: readBack },
-					)
+					return findingOf('nested-roundtrip', 'a nested-object row must round-trip structurally', {
+						table: 'users',
+						expected: nested,
+						actual: readBack,
+					})
 				}
 				return undefined
 			},
@@ -1176,7 +1179,7 @@ export async function* driverFindings(
 				if (!deepEqual(postsKeys, ['p1', 'p2'])) {
 					return findingOf(
 						'snapshot-scoped-posts',
-						'a scoped snapshot must leave an unnamed table\'s mutations intact',
+						"a scoped snapshot must leave an unnamed table's mutations intact",
 						{ table: 'posts', expected: ['p1', 'p2'], actual: postsKeys },
 					)
 				}
@@ -1190,11 +1193,9 @@ export async function* driverFindings(
 			const finding = await phase.run()
 			if (finding !== undefined) yield finding
 		} catch (error) {
-			yield findingOf(
-				phase.check,
-				error instanceof Error ? error.message : String(error),
-				{ error },
-			)
+			yield findingOf(phase.check, error instanceof Error ? error.message : String(error), {
+				error,
+			})
 		}
 	}
 }

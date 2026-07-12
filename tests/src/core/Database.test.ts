@@ -1,5 +1,11 @@
-import type { DriverInterface, DriverMeta, Migration, TableSchema, TransactionInterface } from '@src/core'
-import { createDatabase, createMemoryDriver } from '@src/core'
+import type {
+	DriverInterface,
+	DriverMeta,
+	Migration,
+	TableSchema,
+	TransactionInterface,
+} from '@src/core'
+import { createDatabase, createMemoryDriver, MemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import {
@@ -633,7 +639,7 @@ function createCountingDriver(): {
 	readonly metaCalls: number[]
 	readonly stampCalls: DriverMeta[]
 } {
-	const memory = createMemoryDriver()
+	const memory = new MemoryDriver()
 	const metaCalls: number[] = []
 	const stampCalls: DriverMeta[] = []
 	const driver: DriverInterface = {

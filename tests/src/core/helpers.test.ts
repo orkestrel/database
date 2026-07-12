@@ -711,7 +711,8 @@ describe('driverFindings', () => {
 
 		// And the reference MemoryDriver — which now implements meta/stamp — passes cleanly.
 		const clean: string[] = []
-		for await (const finding of driverFindings(() => createMemoryDriver())) clean.push(finding.check)
+		for await (const finding of driverFindings(() => createMemoryDriver()))
+			clean.push(finding.check)
 		expect(clean.some((check) => check.startsWith('meta'))).toBe(false)
 	})
 
@@ -738,7 +739,8 @@ describe('driverFindings', () => {
 
 		// And the reference MemoryDriver honors the scope and passes cleanly.
 		const clean: string[] = []
-		for await (const finding of driverFindings(() => createMemoryDriver())) clean.push(finding.check)
+		for await (const finding of driverFindings(() => createMemoryDriver()))
+			clean.push(finding.check)
 		expect(clean.some((check) => check.startsWith('snapshot-scoped'))).toBe(false)
 	})
 })

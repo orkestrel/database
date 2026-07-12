@@ -156,7 +156,10 @@ describe('encodeRow / decodeRow — over a schema', () => {
 	})
 
 	it('decodes a stored row back through the schema', () => {
-		const decoded = decodeRow({ id: 'u1', name: 'Ada', age: 36, active: 1, meta: '{"k":1}' }, SCHEMA)
+		const decoded = decodeRow(
+			{ id: 'u1', name: 'Ada', age: 36, active: 1, meta: '{"k":1}' },
+			SCHEMA,
+		)
 		expect(decoded).toEqual({ id: 'u1', name: 'Ada', age: 36, active: true, meta: { k: 1 } })
 	})
 

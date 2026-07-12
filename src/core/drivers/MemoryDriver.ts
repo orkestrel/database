@@ -1,4 +1,12 @@
-import type { Criteria, DriverInterface, DriverMeta, Key, Migration, Row, TableSchema } from '../types.js'
+import type {
+	Criteria,
+	DriverInterface,
+	DriverMeta,
+	Key,
+	Migration,
+	Row,
+	TableSchema,
+} from '../types.js'
 import { DatabaseError } from '../errors.js'
 import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
 

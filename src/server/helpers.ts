@@ -308,9 +308,7 @@ export function decodeRow(row: SQLiteRow, schema: TableSchema): Row {
  * ```
  */
 export function schemaToTable(schema: TableSchema): string {
-	const columns = schema.columns.map(
-		(column) => quote(column.name) + ' ' + columnSQL(column.type),
-	)
+	const columns = schema.columns.map((column) => quote(column.name) + ' ' + columnSQL(column.type))
 	return (
 		'CREATE TABLE IF NOT EXISTS ' +
 		quote(schema.name) +
