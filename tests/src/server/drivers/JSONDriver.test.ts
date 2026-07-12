@@ -1,6 +1,6 @@
 import type { Criteria } from '@src/core'
 import { isDatabaseError, planMigration } from '@src/core'
-import { createJSONDriver } from '@src/server'
+import { createJSONDriver, JSONDriver } from '@src/server'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -24,7 +24,7 @@ const SCHEMA = driverSchema()
 
 let path = ''
 let cleanup = (): void => {}
-let driver = createJSONDriver('placeholder')
+let driver = new JSONDriver('placeholder')
 
 // A fresh temp path per test; the driver is opened on it. The path is reused across
 // reopen cases (a new driver on the same file) to prove persistence.
@@ -32,7 +32,7 @@ beforeEach(async () => {
 	const temp = tempDatabasePath()
 	path = temp.path
 	cleanup = temp.cleanup
-	driver = createJSONDriver(path)
+	driver = new JSONDriver(path)
 	await driver.open(SCHEMA)
 })
 

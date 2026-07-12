@@ -85,7 +85,7 @@ produces the JSON Schema, and seeds fixtures.
 
 | API               | Kind     | Summary                                                                                                       |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION` / `ABORTED` / `MIGRATION`). |
+| `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION` / `ABORTED` / `MIGRATION` / `CONFORMANCE`). |
 | `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                                          |
 
 ### Query engine
@@ -102,7 +102,9 @@ driver never re-implements.
 | `applyCriteria`    | function | The portable read pipeline — filter, then sort, then page.                                             |
 | `computeAggregate` | function | `count` / `sum` / `average` / `minimum` / `maximum` over a column (coerces via `parseNumber`).         |
 | `extractKey`       | function | Read a row's primary key from a column when it is a usable `Key`.                                      |
-| `columnType`       | function | Map a column's `ContractShape` to its portable `ColumnType` — the schema `open` hands a driver.        |
+| `shapeToColumnType` | function | Map a column's `ContractShape` to its portable `ColumnType` — the schema `open` hands a driver.        |
+| `filterRows`       | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.         |
+| `deepEqual`        | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.         |
 
 ### Cancellation
 
@@ -119,6 +121,12 @@ transform; version tracking is deferred to future persistent backends.
 | --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `planMigration` | function | Structurally diff a deployed and a declared `TableSchema[]` into a `Migration` plan of ordered steps.                                                |
 | `migrateRows`   | function | Apply one table's `MigrationStep`s to its rows — a pure transform (`column.remove` drops the field; other operations are storage-shape no-ops here). |
+
+### Conformance
+
+| API            | Kind     | Behavior                                                                                                                    |
+| -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `conformDriver` | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
 
 ### Helpers & guards
 
@@ -153,8 +161,8 @@ Pure helpers behind the query engine's pattern matching.
 | `AggregateFunction`    | type      | `'count' \| 'sum' \| 'average' \| 'minimum' \| 'maximum'`.                                                                                                                                                                                      |
 | `ReadOptions`          | interface | `{ signal? }` — options for a cancellable read / iteration; an aborted signal throws `ABORTED` (checked before each yield in `scan` / `stream`, at entry elsewhere).                                                                            |
 | `DatabaseStatus`       | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                 |
-| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION'`.                                                                                                                                                            |
-| `DatabaseEventMap`     | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)`.                                                                                                                                |
+| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE'`.                                                                                                                                                            |
+| `DatabaseEventMap`     | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                                                |
 | `TableEventMap`        | type      | A table's push observation surface (§13) — `write(key)` · `remove(key)` · `clear` (key only, no value).                                                                                                                                         |
 | `Columns`              | type      | `Readonly<Record<string, ContractShape>>` — one table's `column → shape` map (an `objectShape`'s properties).                                                                                                                                   |
 | `TablesShape`          | type      | `Readonly<Record<string, Columns>>` — a database's table → columns map.                                                                                                                                                                         |
@@ -170,8 +178,8 @@ Pure helpers behind the query engine's pattern matching.
 | `DriverInterface`      | interface | The minimal storage contract: `open` (takes a `TableSchema[]`) / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear` / `snapshot`, plus optional native `records` / `count` / `aggregate` / `transaction` / `stream` / `migrate`. |
 | `DatabaseOptions`      | interface | `{ on?, error?, driver, tables, keys?, indexes?, name?, key? }` — input to `createDatabase` (`on?` wires initial `DatabaseEventMap` listeners, §8; `key?` is the key factory a table uses for a keyless write).                                 |
 | `TableExport`          | interface | `{ key, columns, schema }` — one table's portable definition, produced by `export`.                                                                                                                                                             |
-| `DatabaseInterface`    | interface | `emitter` / `name` / `status` / `table` / `import` / `export` / `open` / `close` / `transaction` (takes an optional `ReadOptions`).                                                                                                             |
-| `TableInterface`       | interface | `emitter` / `name` / `primary` / `contract` + keyed CRUD + `records` / `count` / `aggregate` (each taking an optional `ReadOptions`) + `scan` + `query` / `cursor`.                                                                             |
+| `DatabaseInterface`    | interface | `emitter` / `name` / `status` / `table` / `import` / `export` / `open` / `close` / `transaction` (takes an optional `ReadOptions`) / `migrate` (diffs a deployed schema against the declared one and applies it, taking an optional `ReadOptions`).                                                                                                             |
+| `TableInterface`       | interface | `emitter` / `name` / `primary` / `contract` + keyed CRUD (`set` / `add` / `update` / `remove` each take an optional `ReadOptions`) + `records` / `count` / `aggregate` (each taking an optional `ReadOptions`) + `scan` + `query` / `cursor`.                                                                             |
 | `QueryInterface`       | interface | The fluent builder — `where` / `filter` / `ascending` / `limit` + `stream` + terminals.                                                                                                                                                         |
 | `ClauseInterface`      | interface | The 15 operator methods, each returning the query.                                                                                                                                                                                              |
 | `CursorInterface`      | interface | `value` / `index` / `done` + `next` / `update` / `remove` / `close`.                                                                                                                                                                            |
@@ -224,6 +232,7 @@ any or all of them.
 | `open`        | `Promise<void>`                         | Connect the driver eagerly (otherwise lazy on first use).                                                           |
 | `close`       | `Promise<void>`                         | Close the database and its driver.                                                                                  |
 | `transaction` | `Promise<R>`                            | Run a scope; roll every table back if it throws; takes an optional `ReadOptions` (`signal` checked once, at entry). |
+| `migrate`     | `Promise<Migration>`                    | Diff a deployed `TableSchema[]` against the declared schema via `planMigration`, apply the plan through the driver's optional `migrate` hook, and return the plan; takes an optional `ReadOptions` (`signal` checked once, at entry). |
 
 #### `TableInterface`
 
@@ -240,10 +249,10 @@ out) — a single verb, never `getMany` / `setAll`.
 | `count`     | `Promise<number>`                    | Count matching an optional `Criteria`; takes an optional `ReadOptions`.                                                                                            |
 | `aggregate` | `Promise<number \| undefined>`       | `count` / `sum` / `average` / `minimum` / `maximum` over a column; takes an optional `ReadOptions`.                                                                |
 | `scan`      | `AsyncIterable<T>`                   | Lazy filtered iteration; `conditions` / `offset` / `limit` honored lazily, `order` IGNORED (sorted output is `records()`'s job); signal checked before each yield. |
-| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s).                                                                                                                                            |
-| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key.                                                                                                                      |
-| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate.                                                                                                                |
-| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key.                                                                                                                                              |
+| `set`       | `Promise<Key>` (or array)            | Upsert row(s) → key(s); takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                                            |
+| `add`       | `Promise<Key>` (or array)            | Insert row(s); `CONFLICT` on a duplicate key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                      |
+| `update`    | `Promise<boolean>` (or array)        | Merge changes into existing row(s) and re-validate; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                |
+| `remove`    | `Promise<boolean>` (or array)        | Delete row(s) by key; takes an optional `ReadOptions` (`signal` checked at entry and, for a batch, between items — already-applied items stay applied, no rollback).                                                                                                                                              |
 | `clear`     | `Promise<void>`                      | Empty the table.                                                                                                                                                   |
 | `query`     | `QueryInterface<T>`                  | Open a fluent query builder.                                                                                                                                       |
 | `cursor`    | `Promise<CursorInterface<T>>`        | Open a forward row cursor for bulk mutation.                                                                                                                       |
@@ -327,7 +336,7 @@ These invariants hold across the core database source tree ↔ this guide:
    `DriverInterface` surface is the irreducible storage primitive — keyed
    read/write/delete, an ordered `scan`, key listing, and `snapshot`. `open`
    hands the driver a derived `TableSchema[]` (each table's `columns`, their
-   portable `ColumnType` via `columnType`, the `primary` key, and declared
+   portable `ColumnType` via `shapeToColumnType`, the `primary` key, and declared
    `indexes`) so a native backend can build real tables and indexes; a
    scan-only backend reads only `name`. The pure, total query engine
    (`applyCriteria` / `matchesCriteria` / `computeAggregate` / …) over `scan`
@@ -339,12 +348,19 @@ These invariants hold across the core database source tree ↔ this guide:
    `undefined` (a sum over zero rows), `Table.aggregate` decides the hook ran
    by its **presence** (a present method returns a Promise; `?.()` is
    `undefined` only when the method is absent), never by the resolved value.
-   Neither reference driver implements `records?` / `count?` / `aggregate?` /
-   `transaction?` / `stream?`, so every query runs the engine over
-   key-ordered `scan` and every `transaction` uses the snapshot floor; both
-   DO implement `migrate?` (`JSONDriver` delegates to its inner
-   `MemoryDriver` then persists). A new backend implements a handful of
-   small methods and inherits the entire query surface unchanged.
+   Neither reference driver implements `records?` / `count?` / `aggregate?`,
+   so every query runs the engine over key-ordered `scan`; both DO implement
+   `stream?` and `migrate?` (`MemoryDriver.stream` lazily filters `scan` via
+   the engine; `JSONDriver.stream` delegates to its inner `MemoryDriver`).
+   `MemoryDriver` still lacks a native `transaction?`, so its transactions
+   always use the snapshot floor; `JSONDriver` now DOES implement
+   `transaction?` — a flush-coalescing wrapper over the inner memory driver
+   (writes during the scope skip their per-mutation flush; `commit` issues
+   one atomic flush of the net state, `rollback` restores the pre-transaction
+   snapshot then flushes it; re-entering or double-settling a transaction
+   throws `CONFLICT`) — so `Database.transaction` over a `JSONDriver` prefers
+   this native path over the snapshot floor. A new backend implements a
+   handful of small methods and inherits the entire query surface unchanged.
 4. **Total query helpers.** `compareValues`, `matchesCondition`, and
    `matchesCriteria` never throw — a type mismatch is a non-match and the
    comparator is a total order (it never returns `NaN`), mirroring the
@@ -393,11 +409,13 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
    (`Database` / `MemoryDriver` / `JSONDriver` / `Table` / `Query` /
    `Clause` / `Cursor`) implements every REQUIRED method and adds none
    beyond the interface (optional members like `records?` / `count?` /
-   `aggregate?` / `transaction?` / `stream?` / `migrate?` may be omitted,
-   e.g. `MemoryDriver` and `JSONDriver` both omit `records?` / `count?` /
-   `aggregate?` / `transaction?` / `stream?` but implement `migrate?`)
-   (AGENTS §22). A renamed / added / removed method breaks the gate until
-   the table is reconciled.
+   `aggregate?` / `transaction?` / `stream?` / `migrate?` may be omitted).
+   `MemoryDriver` and `JSONDriver` both omit `records?` / `count?` /
+   `aggregate?`, and both now implement `stream?` / `migrate?`;
+   `MemoryDriver` still omits `transaction?` (snapshot floor only) while
+   `JSONDriver` now implements `transaction?` too (flush-coalescing over the
+   inner memory driver) (AGENTS §22). A renamed / added / removed method
+   breaks the gate until the table is reconciled.
 9. **Cancellation is a shared gate, not per-method reinvention.**
    `checkAbort(signal)` is the one place `ABORTED` is thrown — a no-op for
    `undefined` or a live signal. `records` / `count` / `aggregate` check it
@@ -422,15 +440,33 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     (`table.add` / `table.remove`, then each shared table's `column.add` /
     `column.remove` / `index.add` / `index.remove`), which the caller hands
     to `driver.migrate?.(plan)` — a step referencing an unknown table throws
-    `DatabaseError('MIGRATION')`. `migrateRows` is the pure per-table row
+    `DatabaseError('MIGRATION')`. `Database.migrate(deployed, options?)`
+    orchestrates this for the caller: it diffs `deployed` against the
+    database's own declared `tables`, applies the resulting plan through the
+    driver's `migrate?` hook (throwing `MIGRATION` when the driver lacks
+    one), emits the `migrate` event on success, and returns the applied
+    plan — `options?.signal` is checked once, at entry, throwing `ABORTED`
+    on an already-fired signal. `migrateRows` is the pure per-table row
     transform (`column.remove` drops the field from a fresh copy of each
     row; the other operations act on storage shape, not row shape, so they
     are no-ops here) — a driver's own `migrate` decides how to apply it to
     stored rows. Version tracking itself (recording which plan applied) is
-    deferred to future persistent backends.
+    still deferred to future persistent backends — `Database.migrate` takes
+    the deployed schema as an argument rather than tracking it itself.
+12. **Driver conformance.** `conformDriver(factory)` is a framework-agnostic
+    battery (no test-runner import) any new `DriverInterface` backend can run
+    against itself — a smoke script, a unit test, or a new driver's own
+    README all call it the same way. It opens a fixed two-table schema per
+    phase (calling `factory()` fresh each time so failures stay isolated) and
+    verifies the REQUIRED surface's invariants (copy-in/copy-out isolation,
+    upsert-overwrite, key-ordered `keys`/`scan`, `snapshot` rollback, a
+    non-`id` primary key, structural round-tripping via `deepEqual`), then
+    presence-gates the optional `migrate?` / `stream?` / `transaction?`
+    hooks when the driver implements them. The first violated invariant
+    throws a `CONFORMANCE` `DatabaseError` naming the failed check.
 
 What ships is the **core in-between** (schema-aware: `open` receives a
-derived `TableSchema[]`, with `columnType` mapping each column's shape), its
+derived `TableSchema[]`, with `shapeToColumnType` mapping each column's shape), its
 reference `MemoryDriver`, and the persistent **JSON-file** driver in
 `src/server` (a decorator over `MemoryDriver` that loads/flushes a single
 JSON file — every primitive delegates to the inner memory driver, so
@@ -438,7 +474,13 @@ querying, key-order `scan` / `keys`, and capture-replay `snapshot` are
 inherited unchanged; `JSONDriver.migrate` additionally persists the migrated
 state, and every flush is now atomic — written to a sibling temp file and
 `rename`d onto the target path, so a crash mid-flush can never truncate or
-corrupt the previous good file). The core `Database` / `Table` are also
+corrupt the previous good file). Outside a `transaction`, `JSONDriver` still
+flushes once per mutation (`write` / `delete` / `clear`); its now-native
+`transaction?()` coalesces every write made during the scope into ONE atomic
+flush on `commit` (instead of one per write) and, on `rollback`, restores
+the pre-transaction snapshot in memory then flushes that restored state —
+re-entering a transaction while one is active, or settling the same handle
+twice, throws `CONFLICT`. The core `Database` / `Table` are also
 **observable** — each owns a typed `emitter` (`DatabaseEventMap` /
 `TableEventMap`, §13) carrying the transaction + per-row lifecycle (see
 [Observing](#observing)); a driver stays a storage primitive (the
@@ -765,7 +807,9 @@ behind a rollback error.
 Migrations are caller-driven — `planMigration` structurally diffs a
 deployed and a declared `TableSchema[]` into an ordered `Migration`, which
 the caller hands to a driver's optional native `migrate?`. `migrateRows` is
-the pure per-table row transform a driver's `migrate` can lean on:
+the pure per-table row transform a driver's `migrate` can lean on. Calling
+`planMigration` + `driver.migrate?` directly is still the low-level path
+(useful outside a `Database`, e.g. against a bare driver):
 
 ```ts
 import { createMemoryDriver, migrateRows, planMigration } from '@src/core'
@@ -788,6 +832,40 @@ await driver.migrate?.(plan) // applies the plan natively (throws MIGRATION on a
 const rows = [{ id: 'a', name: 'Ada', legacy: true }]
 migrateRows(rows, [{ operation: 'column.remove', table: 'users', column: 'legacy' }])
 // => [{ id: 'a', name: 'Ada' }]
+```
+
+`Database.migrate(deployed, options?)` wraps that same diff-then-apply
+orchestration against the database's OWN declared `tables`, so the caller
+only has to track what is currently deployed:
+
+```ts
+import { createDatabase, createMemoryDriver } from '@src/core'
+import { integerShape, stringShape } from '@orkestrel/contract'
+
+const db = createDatabase({
+	driver: createMemoryDriver(),
+	tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+})
+await db.open() // a driver must be opened before migrate's driver.migrate? hook runs
+
+const deployed = [{ name: 'users', primary: 'id', columns: [], indexes: [] }]
+const plan = await db.migrate(deployed) // diffs deployed vs. declared, applies it, emits 'migrate'
+plan.steps // the applied Migration steps
+
+db.emitter.on('migrate', (applied) => console.log('migrated to', applied.to))
+```
+
+### Driver conformance
+
+`conformDriver(factory)` runs the same invariant battery every backend must
+uphold — call it from a new driver's own test suite (or a smoke script) to
+prove it is a drop-in `DriverInterface`:
+
+```ts
+import { conformDriver, createMemoryDriver } from '@src/core'
+
+await conformDriver(() => createMemoryDriver()) // resolves once every phase passes
+// A driver that violates an invariant rejects with DatabaseError('CONFORMANCE', ...)
 ```
 
 ### Key factories
@@ -943,15 +1021,19 @@ The pure functions behind `Table` and `Query` — useful directly when
 building a new driver's native `records` / `count` / `aggregate` hook:
 
 ```ts
+import { integerShape } from '@orkestrel/contract'
 import {
 	applyCriteria,
 	compareValues,
 	computeAggregate,
+	deepEqual,
 	extractKey,
+	filterRows,
 	globMatch,
 	likeMatch,
 	matchesCondition,
 	matchesCriteria,
+	shapeToColumnType,
 	sortRows,
 	wildcardMatch,
 } from '@src/core'
@@ -964,12 +1046,15 @@ globMatch('hello', 'h*o') // true — case-sensitive
 const condition = { column: 'age', operator: 'above', values: [18], connector: 'and' } as const
 matchesCondition({ age: 36 }, condition) // true
 matchesCriteria({ age: 36 }, [condition]) // true — folds every condition
+filterRows([{ age: 36 }, { age: 12 }], [condition]) // [{ age: 36 }] — the count/aggregate basis
 
 sortRows([{ age: 36 }, { age: 18 }], [{ column: 'age', direction: 'ascending' }])
 applyCriteria([{ age: 36 }, { age: 18 }], { conditions: [condition], limit: 1 })
 computeAggregate([{ age: 36 }, { age: 18 }], 'average', 'age') // 27
 
 extractKey({ id: 'u1' }, 'id') // 'u1'
+shapeToColumnType(integerShape()) // 'integer' — the type `open` hands a driver
+deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }) // true — structural, not reference, equality
 ```
 
 ### Persistence with the JSON driver
@@ -1020,15 +1105,15 @@ identical to `MemoryDriver` except that writes survive a restart.
 ## Tests
 
 - [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the `## Surface` ↔ source bijection across `src/core` and `src/server` (value + type exports), plus each interface ↔ implementing-class method bijection.
-- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator, `matchesCriteria` folding, `sortRows`, `applyCriteria`, `computeAggregate`, `extractKey`, and `columnType`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values).
+- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator, `matchesCriteria` folding, `filterRows`, `sortRows`, `applyCriteria`, `computeAggregate`, `extractKey`, `shapeToColumnType`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), `deepEqual`'s structural equality, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`).
 - [`tests/src/core/drivers/MemoryDriver.test.ts`](../../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/delete/keys/scan/clear + `snapshot` rollback.
-- [`tests/src/core/Database.test.ts`](../../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, coercion + `VALIDATION` / `CONFLICT` / `NOT_FOUND`, custom keys, the `indexes` option, `import` / `export`, `transaction` commit/rollback, and the `emitter` (`DatabaseEventMap`): `open` on connect / reconnect, `transaction` → `commit` on success and → `rollback(error)` on a throw (never both), `on?` wiring, and the emit-safety guarantee (a throwing `commit` observer can't corrupt the committed state, a throwing `rollback` observer can't suppress the propagated error, the throw routes to the emitter's `error` handler, no recursion).
+- [`tests/src/core/Database.test.ts`](../../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, coercion + `VALIDATION` / `CONFLICT` / `NOT_FOUND`, custom keys, the `indexes` option, `import` / `export`, `transaction` commit/rollback, `migrate` (applies a diffed plan through the driver's `migrate` hook and emits `migrate` once, rejects `MIGRATION` when the driver lacks the hook), and the `emitter` (`DatabaseEventMap`): `open` on connect / reconnect, `transaction` → `commit` on success and → `rollback(error)` on a throw (never both), `on?` wiring, and the emit-safety guarantee (a throwing `commit` observer can't corrupt the committed state, a throwing `rollback` observer can't suppress the propagated error, the throw routes to the emitter's `error` handler, no recursion).
 - [`tests/src/core/Table.test.ts`](../../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, coercion + the `VALIDATION` / `CONFLICT` / `NOT_FOUND` paths, the records / count / aggregate engine path, the query / cursor accessors, the native ↔ engine dispatch: a real recording driver with `records` / `count` / `aggregate` hooks proves `Table` prefers them (including a present `aggregate` that resolves to `undefined`), a plain `MemoryDriver` the engine fallback — and the `emitter` (`TableEventMap`): `set` / `add` / `update` each fire one `write(key)`, `remove(key)` only on a real delete (a miss / no-op emits nothing), `clear`, a `VALIDATION` failure emits no `write`, and the emit-safety guarantee (a throwing `write` observer can't corrupt the row — the emitter isolates it; a `Table` reached via the `Database` has no `error` handler, so the throw is swallowed silently).
 - [`tests/src/core/Query.test.ts`](../../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, paging, `filter`, and aggregates.
 - [`tests/src/core/Clause.test.ts`](../../tests/src/core/Clause.test.ts) — `Clause`'s operator methods, each closing the pending condition with the right operator + operands and returning the owning query, asserted through real execution.
 - [`tests/src/core/Cursor.test.ts`](../../tests/src/core/Cursor.test.ts) — `Cursor`'s forward walk over a key snapshot: `value` / `index` / `done`, `next`, in-place `update` / `remove`, and `close`.
 - [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).
-- [`tests/src/server/drivers/JSONDriver.test.ts`](../../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver`'s persistence: `open` loads an existing file (and starts empty on a missing/corrupt/wrong-shaped one), every mutation flushes the whole store, `snapshot` rollback re-persists the restored state, and querying runs through the inherited `MemoryDriver` engine unchanged.
+- [`tests/src/server/drivers/JSONDriver.test.ts`](../../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver`'s persistence: `open` loads an existing file (and starts empty on a missing/corrupt/wrong-shaped one), every mutation flushes the whole store, `snapshot` rollback re-persists the restored state, querying runs through the inherited `MemoryDriver` engine unchanged, `stream` delegates to the inner memory driver, and `transaction` (flush-coalescing: the file stays unchanged mid-transaction then reflects every write on `commit`, `rollback` restores memory and the file, re-entering an active transaction throws `CONFLICT`, and normal per-mutation flushing resumes once the handle settles).
 
 ## See also
 

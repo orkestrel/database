@@ -636,39 +636,6 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 
 // === Conformance
 
-// Fixed two-table schema every conformDriver phase opens: `users` keyed by
-// `id` (the default primary), `posts` keyed by a non-id `slug` — exercising
-// both primary-key shapes in one battery.
-const CONFORMANCE_USERS_SCHEMA: TableSchema = {
-	name: 'users',
-	primary: 'id',
-	columns: [
-		{ name: 'id', type: 'text', nullable: false },
-		{ name: 'name', type: 'text', nullable: false },
-		{ name: 'age', type: 'integer', nullable: true },
-	],
-	indexes: [],
-}
-
-const CONFORMANCE_POSTS_SCHEMA: TableSchema = {
-	name: 'posts',
-	primary: 'slug',
-	columns: [
-		{ name: 'slug', type: 'text', nullable: false },
-		{ name: 'title', type: 'text', nullable: false },
-	],
-	indexes: [],
-}
-
-const CONFORMANCE_SCHEMA: readonly TableSchema[] = [CONFORMANCE_USERS_SCHEMA, CONFORMANCE_POSTS_SCHEMA]
-
-// Throw a CONFORMANCE DatabaseError naming which check failed plus the
-// expected/actual summary — the single failure-reporting path every phase
-// below funnels through.
-function failConformance(check: string, message: string, context: Readonly<Record<string, unknown>>): never {
-	throw new DatabaseError('CONFORMANCE', message, { check, ...context })
-}
-
 /**
  * Run the driver-conformance battery against a fresh {@link DriverInterface}
  * per phase — the shared invariant suite every backend (in-memory, SQLite,
@@ -708,6 +675,36 @@ function failConformance(check: string, message: string, context: Readonly<Recor
  * ```
  */
 export async function conformDriver(factory: () => DriverInterface): Promise<void> {
+	// Fixed two-table schema every phase opens: `users` keyed by `id` (the
+	// default primary), `posts` keyed by a non-id `slug` — exercising both
+	// primary-key shapes in one battery.
+	const CONFORMANCE_USERS_SCHEMA: TableSchema = {
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'name', type: 'text', nullable: false },
+			{ name: 'age', type: 'integer', nullable: true },
+		],
+		indexes: [],
+	}
+	const CONFORMANCE_POSTS_SCHEMA: TableSchema = {
+		name: 'posts',
+		primary: 'slug',
+		columns: [
+			{ name: 'slug', type: 'text', nullable: false },
+			{ name: 'title', type: 'text', nullable: false },
+		],
+		indexes: [],
+	}
+	const CONFORMANCE_SCHEMA: readonly TableSchema[] = [CONFORMANCE_USERS_SCHEMA, CONFORMANCE_POSTS_SCHEMA]
+	// Throw a CONFORMANCE DatabaseError naming which check failed plus the
+	// expected/actual summary — the single failure-reporting path every phase
+	// below funnels through.
+	const failConformance = (check: string, message: string, context: Readonly<Record<string, unknown>>): never => {
+		throw new DatabaseError('CONFORMANCE', message, { check, ...context })
+	}
+
 	// a. open with the inline two-table schema, then close cleanly.
 	{
 		const driver = factory()
