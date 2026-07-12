@@ -398,3 +398,36 @@ export function columnType(shape: ContractShape): ColumnType {
 			return 'json'
 	}
 }
+
+// === Cancellation
+
+/**
+ * Throw when an {@link ReadOptions.signal | AbortSignal} has fired — the shared
+ * cancellation gate checked at operation boundaries and between streamed rows.
+ *
+ * @remarks
+ * A no-op for `undefined` or a live signal, so callers thread `options?.signal`
+ * straight through. When the signal has aborted, throws an `ABORTED`
+ * {@link DatabaseError} carrying the signal's `reason` in its context — callers
+ * mint signals with whatever tool they like (`AbortSignal.timeout(ms)`,
+ * `new AbortController()`, `@orkestrel/abort`).
+ *
+ * @param signal - The signal to check, if any
+ * @returns Nothing — returns normally while the signal is live
+ * @throws An `ABORTED` {@link DatabaseError} when the signal has aborted
+ *
+ * @example
+ * ```ts
+ * import { checkAbort } from '@orkestrel/database'
+ *
+ * const controller = new AbortController()
+ * checkAbort(controller.signal) // returns
+ * controller.abort('too slow')
+ * checkAbort(controller.signal) // throws DatabaseError('ABORTED', …)
+ * ```
+ */
+export function checkAbort(signal: AbortSignal | undefined): void {
+	if (signal?.aborted) {
+		throw new DatabaseError('ABORTED', 'Operation aborted', { reason: signal.reason })
+	}
+}
