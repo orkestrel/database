@@ -6,6 +6,7 @@ import type {
 	CursorInterface,
 	DriverInterface,
 	Key,
+	KeyFunction,
 	QueryInterface,
 	Row,
 	TableEventMap,
@@ -14,13 +15,7 @@ import type {
 import { isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
-import {
-	applyCriteria,
-	computeAggregate,
-	extractKey,
-	generateKey,
-	matchesCriteria,
-} from './helpers.js'
+import { applyCriteria, computeAggregate, extractKey, matchesCriteria } from './helpers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 
@@ -52,6 +47,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	readonly #key: string
 	readonly #contract: ContractInterface<T>
 	readonly #guard: Guard<T>
+	readonly #generate: KeyFunction | undefined
 	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into a write
 	// or a transaction.
@@ -63,6 +59,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		name: string,
 		key: string,
 		contract: ContractInterface<T>,
+		generate?: KeyFunction,
 		on?: EmitterHooks<TableEventMap>,
 		error?: EmitterErrorHandler,
 	) {
@@ -72,6 +69,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		this.#key = key
 		this.#contract = contract
 		this.#guard = contract.is
+		this.#generate = generate
 		this.#emitter = new Emitter<TableEventMap>({ on, error })
 	}
 
@@ -302,7 +300,16 @@ export class Table<T = Row> implements TableInterface<T> {
 			})
 		}
 		const prepared: Row = { ...row }
-		if (prepared[this.#key] === undefined) prepared[this.#key] = generateKey()
+		if (prepared[this.#key] === undefined) {
+			if (this.#generate === undefined) {
+				throw new DatabaseError(
+					'VALIDATION',
+					`Row for table '${this.#name}' is missing its key column '${this.#key}' and no key factory was provided`,
+					{ table: this.#name, column: this.#key },
+				)
+			}
+			prepared[this.#key] = this.#generate()
+		}
 		return prepared
 	}
 

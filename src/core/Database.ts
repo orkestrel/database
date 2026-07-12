@@ -6,6 +6,7 @@ import type {
 	DatabaseOptions,
 	DatabaseStatus,
 	DriverInterface,
+	KeyFunction,
 	RowOf,
 	TableExport,
 	TableIndexes,
@@ -51,6 +52,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 	readonly #keys: TableKeys
 	readonly #indexes: TableIndexes
 	readonly #name: string
+	readonly #generate: KeyFunction | undefined
 	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into the
 	// transaction flow.
@@ -64,6 +66,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		this.#keys = options.keys ?? {}
 		this.#indexes = options.indexes ?? {}
 		this.#name = options.name ?? 'database'
+		this.#generate = options.key
 		this.#emitter = new Emitter<DatabaseEventMap>({ on: options.on, error: options.error })
 	}
 
@@ -144,14 +147,20 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 	// `table` is never expanded structurally here (it would trip TS's
 	// instantiation-depth guard — the reason `createContract` keeps its impl untyped).
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
-		return new Table(() => this.#connect(), this.#driver, name, key, contract)
+		return new Table(() => this.#connect(), this.#driver, name, key, contract, this.#generate)
 	}
 
 	// Construct a sibling view over an opaque table map `X` (sharing the driver),
 	// so the deep `Infer<X[K]>` of the result's `table` is not expanded
 	// structurally here — the same instantiation-depth guard `#build` sidesteps.
 	#spawn<X extends TablesShape>(tables: X, keys: TableKeys): DatabaseInterface<X> {
-		return new Database({ driver: this.#driver, tables, keys, name: this.#name })
+		return new Database({
+			driver: this.#driver,
+			tables,
+			keys,
+			name: this.#name,
+			...(this.#generate === undefined ? {} : { key: this.#generate }),
+		})
 	}
 
 	#key(name: string): string {

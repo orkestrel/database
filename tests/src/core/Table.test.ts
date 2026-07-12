@@ -113,15 +113,26 @@ describe('Table — keyed CRUD (single)', () => {
 		expect(await users.keys()).toEqual([])
 	})
 
-	it('generates a key when the key column is absent', async () => {
+	it('uses the injected key factory when the key column is absent', async () => {
+		let n = 0
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { events: { id: optionalShape(stringShape()), kind: stringShape() } },
+			key: () => `k${++n}`,
+		})
+		const events = db.table('events')
+		const key = await events.set({ kind: 'click' })
+		expect(key).toBe('k1')
+		expect((await events.get(key))?.kind).toBe('click')
+	})
+
+	it('throws VALIDATION when the key column is absent and no key factory was provided', async () => {
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: { events: { id: optionalShape(stringShape()), kind: stringShape() } },
 		})
 		const events = db.table('events')
-		const key = await events.set({ kind: 'click' })
-		expect(typeof key).toBe('string')
-		expect((await events.get(key))?.kind).toBe('click')
+		await expect(events.set({ kind: 'click' })).rejects.toMatchObject({ code: 'VALIDATION' })
 	})
 })
 

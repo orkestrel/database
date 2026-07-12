@@ -4,7 +4,6 @@ import {
 	compareValues,
 	computeAggregate,
 	extractKey,
-	generateKey,
 	globMatch,
 	isDatabaseError,
 	likeMatch,
@@ -306,16 +305,6 @@ describe('extractKey', () => {
 		expect(extractKey({ id: Number.NaN }, 'id')).toBeUndefined()
 		expect(extractKey({}, 'id')).toBeUndefined()
 		expect(extractKey({ id: { nested: true } }, 'id')).toBeUndefined()
-	})
-})
-
-describe('generateKey', () => {
-	it('returns a fresh UUID string each call', () => {
-		const a = generateKey()
-		const b = generateKey()
-		expect(typeof a).toBe('string')
-		expect(a).not.toBe(b)
-		expect(a).toMatch(/^[0-9a-f-]{36}$/i)
 	})
 })
 

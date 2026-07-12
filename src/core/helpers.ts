@@ -345,27 +345,6 @@ export function extractKey(row: Row, column: string): Key | undefined {
 	return undefined
 }
 
-/**
- * Generate a fresh unique key — a v4 UUID string.
- *
- * @remarks
- * Used when a row is written without a primary-key value. Strings work as keys
- * on every backend; supply your own value to use numeric keys.
- *
- * @returns A new UUID string
- */
-export function generateKey(): string {
-	const scope: object = globalThis
-	if ('crypto' in scope && typeof scope.crypto === 'object' && scope.crypto !== null) {
-		const source: object = scope.crypto
-		if ('randomUUID' in source && typeof source.randomUUID === 'function') {
-			const key: unknown = source.randomUUID.call(source)
-			if (typeof key === 'string') return key
-		}
-	}
-	throw new Error('generateKey: the host provides no crypto.randomUUID')
-}
-
 // === Schema
 
 /**
