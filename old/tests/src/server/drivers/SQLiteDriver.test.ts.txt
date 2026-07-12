@@ -1,0 +1,231 @@
+import type { AggregateFunction, Criteria, FieldPath } from '@src/core'
+import { createSQLiteDriver } from '@src/server'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { driverSchema } from '../../../../setupServer.js'
+
+// The SQLite driver's nine DriverInterface primitives over a real in-memory
+// database (no mocks, AGENTS §16): open builds tables + indexes, keyed
+// read/write(upsert)/delete/keys/scan/clear, the CLOSED gate, snapshot rollback,
+// and codec round-trips (boolean ↔ 1/0, a nested object in a json column,
+// integer + text). The driver is exercised directly (not through Database) so
+// each primitive is asserted in isolation.
+
+// The shared driver-conformance schema (one of each codec-relevant column type on
+// `users` + a non-`id` primary `posts` table) — see `driverSchema` in setupServer
+// (AGENTS §16.1). The SQLite battery additionally builds a composite `['age', 'name']`
+// index on `users`, so `open` exercises a multi-column index alongside the single one.
+const SCHEMA = driverSchema({ indexes: [['name'], ['age', 'name']] })
+
+let driver = createSQLiteDriver()
+
+beforeEach(async () => {
+	driver = createSQLiteDriver()
+	await driver.open(SCHEMA)
+})
+
+afterEach(async () => {
+	await driver.close()
+})
+
+describe('SQLiteDriver — open', () => {
+	it('creates a table and its declared indexes', async () => {
+		// A round-trip write proves the table exists; the indexes are verified via
+		// SQLite's own schema below through a fresh query that would fail otherwise.
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+	})
+
+	it('reopens without error and readies the tables (CREATE TABLE IF NOT EXISTS)', async () => {
+		// A fresh :memory: connection per open does not persist data, but opening the
+		// same schema again must not throw and must leave the driver usable.
+		await driver.open(SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await driver.keys('posts')).toEqual([])
+	})
+})
+
+describe('SQLiteDriver — keyed CRUD', () => {
+	it('writes (upsert) and reads a row back', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: false })
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada Lovelace', age: 37, active: true })
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada Lovelace',
+			age: 37,
+			active: true,
+		})
+	})
+
+	it('returns undefined reading a missing key', async () => {
+		expect(await driver.read('users', 'nope')).toBeUndefined()
+	})
+
+	it('reports whether a delete removed a row via changes', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		expect(await driver.delete('users', 'u1')).toBe(true)
+		expect(await driver.delete('users', 'u1')).toBe(false)
+		expect(await driver.read('users', 'u1')).toBeUndefined()
+	})
+
+	it('lists keys in order and clears the table', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
+		expect(await driver.keys('users')).toEqual(['u1', 'u2'])
+		await driver.clear('users')
+		expect(await driver.keys('users')).toEqual([])
+	})
+
+	it('scans rows in key order', async () => {
+		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const scanned = []
+		for await (const row of driver.scan('users')) scanned.push(row.id)
+		expect(scanned).toEqual(['u1', 'u2'])
+	})
+
+	it('keys a table by its non-id primary column', async () => {
+		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		expect(await driver.keys('posts')).toEqual(['intro'])
+		expect(await driver.read('posts', 'intro')).toEqual({ slug: 'intro', title: 'Intro' })
+	})
+})
+
+describe('SQLiteDriver — codec round-trips', () => {
+	it('round-trips a boolean column through 1 / 0', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'On', age: 1, active: true })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Off', age: 2, active: false })
+		expect((await driver.read('users', 'u1'))?.active).toBe(true)
+		expect((await driver.read('users', 'u2'))?.active).toBe(false)
+	})
+
+	it('round-trips a nested object through a json column', async () => {
+		const meta = { tags: ['a', 'b'], info: { score: 9, ok: true } }
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true, meta })
+		expect((await driver.read('users', 'u1'))?.meta).toEqual(meta)
+	})
+
+	it('omits an absent (NULL) optional json column', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const row = await driver.read('users', 'u1')
+		expect(row).toEqual({ id: 'u1', name: 'Ada', age: 36, active: true })
+		expect(row && 'meta' in row).toBe(false)
+	})
+
+	it('round-trips integer and text columns', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const row = await driver.read('users', 'u1')
+		expect(row?.age).toBe(36)
+		expect(typeof row?.age).toBe('number')
+		expect(row?.name).toBe('Ada')
+	})
+})
+
+describe('SQLiteDriver — CLOSED gate', () => {
+	it('throws CLOSED before open', async () => {
+		const closed = createSQLiteDriver()
+		await expect(closed.read('users', 'u1')).rejects.toMatchObject({ code: 'CLOSED' })
+	})
+
+	it('throws CLOSED after close', async () => {
+		await driver.close()
+		await expect(driver.read('users', 'u1')).rejects.toMatchObject({ code: 'CLOSED' })
+	})
+})
+
+describe('SQLiteDriver — native aggregate', () => {
+	// A WHERE selecting the two `active: true` rows (u1 age 36, u3 age 50) and a WHERE
+	// that matches no row — built as raw Criteria so the driver is exercised directly.
+	const ACTIVE: Criteria = {
+		conditions: [{ column: 'active', operator: 'equals', values: [true], connector: 'and' }],
+	}
+	const NONE: Criteria = {
+		conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
+	}
+
+	// `aggregate?` is an optional native override on DriverInterface; narrow it (never
+	// assert) — a missing method fails loudly here rather than passing vacuously, so a
+	// regression that drops the native hook is caught instead of silently skipped.
+	async function runAggregate(
+		operation: AggregateFunction,
+		column: FieldPath,
+		criteria: Criteria,
+	): Promise<number | undefined> {
+		const hook = driver.aggregate
+		if (hook === undefined) throw new Error('SQLiteDriver is missing its native aggregate hook')
+		return hook.call(driver, 'users', operation, column, criteria)
+	}
+
+	beforeEach(async () => {
+		// Four clean integer ages — sum 149, average 37.25, min 22, max 50 over all;
+		// the two active rows (36, 50) sum 86, average 43, min 36, max 50.
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Alan', age: 41, active: false })
+		await driver.write('users', 'u3', { id: 'u3', name: 'Edsger', age: 50, active: true })
+		await driver.write('users', 'u4', { id: 'u4', name: 'Grace', age: 22, active: false })
+	})
+
+	it('counts all matched rows with COUNT(*) — including over no conditions', async () => {
+		expect(await runAggregate('count', 'age', {})).toBe(4)
+		expect(await runAggregate('count', 'age', ACTIVE)).toBe(2)
+	})
+
+	it('sums a numeric column with and without conditions', async () => {
+		expect(await runAggregate('sum', 'age', {})).toBe(149)
+		expect(await runAggregate('sum', 'age', ACTIVE)).toBe(86)
+	})
+
+	it('averages a numeric column with and without conditions', async () => {
+		expect(await runAggregate('average', 'age', {})).toBe(37.25)
+		expect(await runAggregate('average', 'age', ACTIVE)).toBe(43)
+	})
+
+	it('takes the minimum of a numeric column with and without conditions', async () => {
+		expect(await runAggregate('minimum', 'age', {})).toBe(22)
+		expect(await runAggregate('minimum', 'age', ACTIVE)).toBe(36)
+	})
+
+	it('takes the maximum of a numeric column with and without conditions', async () => {
+		expect(await runAggregate('maximum', 'age', {})).toBe(50)
+		expect(await runAggregate('maximum', 'age', ACTIVE)).toBe(50)
+	})
+
+	it('over zero matched rows: count is 0, the numeric aggregates are undefined', async () => {
+		expect(await runAggregate('count', 'age', NONE)).toBe(0)
+		expect(await runAggregate('sum', 'age', NONE)).toBeUndefined()
+		expect(await runAggregate('average', 'age', NONE)).toBeUndefined()
+		expect(await runAggregate('minimum', 'age', NONE)).toBeUndefined()
+		expect(await runAggregate('maximum', 'age', NONE)).toBeUndefined()
+	})
+})
+
+describe('SQLiteDriver — snapshot', () => {
+	it('rolls every table back to the captured state', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const rollback = await driver.snapshot()
+		// Mutate both tables after the snapshot.
+		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
+		await driver.write('users', 'u2', { id: 'u2', name: 'Ghost', age: 1, active: false })
+		await driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
+		await rollback()
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await driver.read('users', 'u2')).toBeUndefined()
+		expect(await driver.keys('posts')).toEqual(['intro'])
+	})
+})

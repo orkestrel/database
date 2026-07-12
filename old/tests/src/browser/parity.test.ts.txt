@@ -1,0 +1,270 @@
+import type { DatabaseInterface, QueryInterface, TableInterface } from '@src/core'
+import {
+	booleanShape,
+	createDatabase,
+	createMemoryDriver,
+	integerShape,
+	nullableShape,
+	objectShape,
+	stringShape,
+} from '@src/core'
+import { createIndexedDBDriver } from '@src/browser'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { deleteDatabase, uniqueName } from '../../../setupBrowser.js'
+
+// THE SAFETY NET (real Chromium). Over identical data, the IndexedDBDriver's native
+// records / count (key-range pushdown via selectPlan, then the core engine refining
+// the candidate superset) must return results IDENTICAL to the pure engine path
+// (MemoryDriver, no native hooks → applyCriteria over scan). A battery of queries —
+// every WHERE operator on BOTH an indexed and a non-indexed column, and/or mixes,
+// ordering, paging, and a zero-match case — is run against both and asserted equal,
+// proving pushdown == scan. `age` is a single-column secondary INDEX (so its
+// comparisons push to a range); `name` / `id` / `payload` are NOT secondary-indexed,
+// so the same operators there fall back to a full scan + the engine.
+
+type ParityUser = {
+	readonly id: string
+	readonly name: string
+	readonly age: number
+	readonly active: boolean
+	readonly payload: { readonly tag: string; readonly note: string | null }
+}
+
+// Typed columns so ordering agrees across backends; `tag` carries LIKE wildcards and
+// `note` mixes present strings with `null` so escape / present-but-null paths run.
+// Listed OUT of primary-key order (u3, u6, u1, u2, u5, u4) so both backends are
+// seeded non-monotonically: an unordered `.all()` then genuinely proves the
+// IndexedDBDriver and the core engine (MemoryDriver) BOTH return rows in KEY order
+// (the DriverInterface contract), not insertion order. The age=36 TIE (u1 / u6) is
+// seeded KEY-DESCENDING (u6 before u1), so an `.ascending('age')` read proves the
+// tie resolves in KEY order on both backends, not insertion order. Reordering
+// changes only the insertion order — the row content and count are unchanged.
+const ROWS: readonly ParityUser[] = [
+	{ id: 'u3', name: 'Edsger', age: 50, active: true, payload: { tag: 'blue_z', note: 'third' } },
+	{ id: 'u6', name: 'Brenda', age: 36, active: false, payload: { tag: 'red%y', note: null } },
+	{ id: 'u1', name: 'Ada', age: 36, active: true, payload: { tag: 'red_x', note: 'first' } },
+	{ id: 'u2', name: 'Alan', age: 41, active: false, payload: { tag: 'red%y', note: null } },
+	{ id: 'u5', name: 'Bob', age: 22, active: true, payload: { tag: 'redish', note: 'fifth' } },
+	{ id: 'u4', name: 'Grace', age: 45, active: false, payload: { tag: 'green', note: null } },
+]
+
+const TABLES = {
+	users: {
+		id: stringShape(),
+		name: stringShape(),
+		age: integerShape(),
+		active: booleanShape(),
+		payload: objectShape({ tag: stringShape(), note: nullableShape(stringShape()) }),
+	},
+} as const
+
+type Build = (table: TableInterface<ParityUser>) => QueryInterface<ParityUser>
+
+let dbName = ''
+let indexed: DatabaseInterface<typeof TABLES>
+let memory: DatabaseInterface<typeof TABLES>
+
+// Run one query builder against both backends, returning each side's rows + count.
+const parity = async (
+	build: Build,
+): Promise<{
+	readonly native: { rows: readonly ParityUser[]; count: number }
+	readonly engine: { rows: readonly ParityUser[]; count: number }
+}> => ({
+	native: {
+		rows: await build(indexed.table('users')).all(),
+		count: await build(indexed.table('users')).count(),
+	},
+	engine: {
+		rows: await build(memory.table('users')).all(),
+		count: await build(memory.table('users')).count(),
+	},
+})
+
+beforeEach(async () => {
+	dbName = uniqueName('taverna-idb-parity')
+	await deleteDatabase(dbName)
+	indexed = createDatabase({
+		driver: createIndexedDBDriver(dbName),
+		tables: TABLES,
+		indexes: { users: [['age']] }, // age is range-pushed; name / id / payload scan
+	})
+	memory = createDatabase({ driver: createMemoryDriver(), tables: TABLES })
+	await indexed.table('users').set([...ROWS])
+	await memory.table('users').set([...ROWS])
+})
+
+afterEach(async () => {
+	await indexed.close()
+	await deleteDatabase(dbName)
+})
+
+// The operator battery, run against an indexed column (`age`, pushes to a range) and
+// a non-indexed column (`name` / `id`, scans), proving the result is identical either
+// way. Each entry builds one query; both the pushed and the scanned forms are checked.
+const INDEXED_OPERATORS: readonly (readonly [string, Build])[] = [
+	['equals', (t) => t.query().where('age').equals(36)],
+	['not', (t) => t.query().where('age').not(36)],
+	['above', (t) => t.query().where('age').above(40)],
+	['below', (t) => t.query().where('age').below(40)],
+	['from', (t) => t.query().where('age').from(41)],
+	['to', (t) => t.query().where('age').to(36)],
+	['between', (t) => t.query().where('age').between(30, 45)],
+	['any', (t) => t.query().where('age').any([22, 41, 99])],
+	['none', (t) => t.query().where('age').none([22, 41])],
+	['absent', (t) => t.query().where('age').absent()],
+	['present', (t) => t.query().where('age').present()],
+]
+
+const SCANNED_OPERATORS: readonly (readonly [string, Build])[] = [
+	['equals', (t) => t.query().where('name').equals('Ada')],
+	['not', (t) => t.query().where('name').not('Ada')],
+	['above', (t) => t.query().where('name').above('B')],
+	['below', (t) => t.query().where('name').below('C')],
+	['from', (t) => t.query().where('name').from('B')],
+	['to', (t) => t.query().where('name').to('B')],
+	['between', (t) => t.query().where('name').between('A', 'C')],
+	['like', (t) => t.query().where('name').like('A%')],
+	['glob', (t) => t.query().where('name').glob('A*')],
+	['starts', (t) => t.query().where('name').starts('A')],
+	['ends', (t) => t.query().where('name').ends('a')],
+	['any', (t) => t.query().where('id').any(['u1', 'u3', 'u5'])],
+	['none', (t) => t.query().where('id').none(['u1', 'u3'])],
+	['absent', (t) => t.query().where('name').absent()],
+	['present', (t) => t.query().where('name').present()],
+]
+
+describe('IndexedDBDriver pushdown parity — indexed column (age, key-range)', () => {
+	for (const [label, build] of INDEXED_OPERATORS) {
+		it(`${label} matches the engine`, async () => {
+			const { native, engine } = await parity(build)
+			expect(native).toEqual(engine)
+		})
+	}
+})
+
+describe('IndexedDBDriver pushdown parity — non-indexed column (scan + engine)', () => {
+	for (const [label, build] of SCANNED_OPERATORS) {
+		it(`${label} matches the engine`, async () => {
+			const { native, engine } = await parity(build)
+			expect(native).toEqual(engine)
+		})
+	}
+})
+
+describe('IndexedDBDriver pushdown parity — nested FieldPath (json, always scanned)', () => {
+	it('equals on a nested string field', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where(['payload', 'tag']).equals('green'),
+		)
+		expect(native).toEqual(engine)
+	})
+
+	it('starts on a nested string field with a wildcard operand', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where(['payload', 'tag']).starts('red_'),
+		)
+		expect(native).toEqual(engine)
+	})
+
+	it('absent / present on a present-but-null nested field', async () => {
+		const absent = await parity((t) => t.query().where(['payload', 'note']).absent())
+		expect(absent.native).toEqual(absent.engine)
+		const present = await parity((t) => t.query().where(['payload', 'note']).present())
+		expect(present.native).toEqual(present.engine)
+	})
+})
+
+describe('IndexedDBDriver pushdown parity — and/or mixes', () => {
+	it('two ANDs (indexed + scanned)', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where('age').from(36).and('active').equals(true),
+		)
+		expect(native).toEqual(engine)
+	})
+
+	it('two ORs', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where('age').below(25).or('age').above(48),
+		)
+		expect(native).toEqual(engine)
+	})
+
+	it('AND then OR (left-to-right grouping)', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where('age').from(36).and('active').equals(true).or('name').starts('B'),
+		)
+		expect(native).toEqual(engine)
+	})
+
+	it('OR then AND (left-to-right grouping)', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where('name').starts('A').or('age').above(48).and('active').equals(false),
+		)
+		expect(native).toEqual(engine)
+	})
+})
+
+describe('IndexedDBDriver pushdown parity — ordering and paging', () => {
+	it('an UNORDERED query returns rows in KEY order on both backends', async () => {
+		// No .ascending/.descending: the contract says scan/records yield in key order.
+		// ROWS is seeded out of key order (u3, u1, u6, …), so this genuinely proves the
+		// IndexedDB backend (primary reads are key-ordered) and the engine (MemoryDriver,
+		// now key-ordered) agree — it would FAIL if MemoryDriver leaked insertion order.
+		const { native, engine } = await parity((t) => t.query())
+		expect(native).toEqual(engine)
+		expect(native.rows.map((row) => row.id)).toEqual(['u1', 'u2', 'u3', 'u4', 'u5', 'u6'])
+	})
+
+	it('order ascending (resolves the age=36 tie in KEY order, not insertion order)', async () => {
+		// ROWS seeds the age=36 tie KEY-DESCENDING (u6 before u1), so insertion order
+		// disagrees with key order on the tie. `.ascending('age')` must place u1 before
+		// u6 on BOTH backends (each refines a key-ordered candidate set with the engine's
+		// stable sort), so the tie resolves in key order, not insertion order.
+		const { native, engine } = await parity((t) => t.query().ascending('age'))
+		expect(native).toEqual(engine)
+		expect(native.rows.map((row) => row.id)).toEqual(['u5', 'u1', 'u6', 'u2', 'u4', 'u3'])
+	})
+
+	it('order descending then ascending (tie-break)', async () => {
+		const { native, engine } = await parity((t) => t.query().descending('age').ascending('name'))
+		expect(native).toEqual(engine)
+	})
+
+	it('limit', async () => {
+		const { native, engine } = await parity((t) => t.query().ascending('age').limit(3))
+		expect(native).toEqual(engine)
+	})
+
+	it('offset', async () => {
+		const { native, engine } = await parity((t) => t.query().ascending('age').offset(2))
+		expect(native).toEqual(engine)
+	})
+
+	it('limit and offset', async () => {
+		const { native, engine } = await parity((t) => t.query().ascending('age').limit(2).offset(1))
+		expect(native).toEqual(engine)
+	})
+
+	it('filtered (indexed range), ordered, and paged together', async () => {
+		const { native, engine } = await parity((t) =>
+			t.query().where('age').from(36).descending('age').limit(2),
+		)
+		expect(native).toEqual(engine)
+	})
+})
+
+describe('IndexedDBDriver pushdown parity — zero-match', () => {
+	it('an indexed range matching no rows', async () => {
+		const { native, engine } = await parity((t) => t.query().where('age').above(100))
+		expect(native).toEqual(engine)
+		expect(native.count).toBe(0)
+		expect(native.rows).toEqual([])
+	})
+
+	it('a scanned predicate matching no rows', async () => {
+		const { native, engine } = await parity((t) => t.query().where('name').equals('Nobody'))
+		expect(native).toEqual(engine)
+		expect(native.count).toBe(0)
+	})
+})

@@ -1,0 +1,288 @@
+import type { EmitterErrorHandler } from '@src/core'
+import { createDatabase, createMemoryDriver, integerShape, stringShape } from '@src/core'
+import { describe, expect, it } from 'vitest'
+import { createErrorRecorder, createRecorder, recordEmitterEvents } from '../../../setup.js'
+
+// Database-level behavior only — lazy connect / close lifecycle, the per-table
+// `keys` / `indexes` options, the typed `table()` accessor, `import` / `export`,
+// `transaction`, and the push observation `emitter` (§13). Keyed CRUD, batch
+// overloads, coercion / error paths, and contract introspection are `Table`'s own
+// surface and live in `Table.test.ts`.
+
+function userDatabase(error?: EmitterErrorHandler) {
+	const db = createDatabase({
+		driver: createMemoryDriver(),
+		name: 'app',
+		tables: {
+			users: { id: stringShape(), name: stringShape({ min: 1 }), age: integerShape({ min: 0 }) },
+		},
+		...(error === undefined ? {} : { error }),
+	})
+	return { db, users: db.table('users') }
+}
+
+describe('Database lifecycle', () => {
+	it('connects lazily on first use', async () => {
+		const { db, users } = userDatabase()
+		expect(db.status).toBe('idle')
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		expect(db.status).toBe('open')
+	})
+
+	it('opens explicitly without an operation', async () => {
+		const { db } = userDatabase()
+		await db.open()
+		expect(db.status).toBe('open')
+	})
+
+	it('rejects operations after close', async () => {
+		const { db, users } = userDatabase()
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		await db.close()
+		expect(db.status).toBe('closed')
+		await expect(users.get('u1')).rejects.toMatchObject({ code: 'CLOSED' })
+	})
+})
+
+describe('table() accessor', () => {
+	it('returns the typed table for a declared name', () => {
+		const { db } = userDatabase()
+		const users = db.table('users')
+		expect(users.name).toBe('users')
+		expect(users.primary).toBe('id')
+	})
+})
+
+describe('keys option', () => {
+	it('names a non-id primary-key column per table', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { posts: { slug: stringShape(), title: stringShape() } },
+			keys: { posts: 'slug' },
+		})
+		const posts = db.table('posts')
+		expect(posts.primary).toBe('slug')
+		expect(await posts.set({ slug: 'hello', title: 'Hello' })).toBe('hello')
+		expect((await posts.get('hello'))?.title).toBe('Hello')
+	})
+})
+
+describe('indexes option', () => {
+	it('accepts a per-table indexes option; CRUD works (the scan-only driver ignores it)', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: {
+				posts: { id: stringShape(), title: stringShape(), author: stringShape() },
+			},
+			indexes: { posts: [['title'], ['author', 'title']] },
+		})
+		const posts = db.table('posts')
+		await posts.set({ id: 'p1', title: 'Hello', author: 'u1' })
+		await posts.set({ id: 'p2', title: 'World', author: 'u1' })
+		expect((await posts.get('p1'))?.title).toBe('Hello')
+		expect(await posts.count()).toBe(2)
+		expect((await posts.query().where('author').equals('u1').all()).map((p) => p.id)).toEqual([
+			'p1',
+			'p2',
+		])
+	})
+})
+
+describe('import / export', () => {
+	it('imports tables as a typed view over the same driver', async () => {
+		const { db, users } = userDatabase()
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		const logs = db.import({ logs: { id: stringShape(), msg: stringShape() } }).table('logs')
+		await logs.set({ id: 'l1', msg: 'hello' })
+		expect((await logs.get('l1'))?.msg).toBe('hello')
+		// Same driver/storage: the original table is still intact.
+		expect((await users.get('u1'))?.name).toBe('Ada')
+	})
+
+	it('exports a portable schema per table', () => {
+		const { db } = userDatabase()
+		const exported = db.export()
+		expect(Object.keys(exported)).toEqual(['users'])
+		expect(exported.users?.key).toBe('id')
+		expect(exported.users?.schema.type).toBe('object')
+		expect(Object.keys(exported.users?.columns ?? {})).toEqual(['id', 'name', 'age'])
+	})
+})
+
+describe('transactions', () => {
+	it('commits on success', async () => {
+		const { db, users } = userDatabase()
+		await db.transaction(async () => {
+			await users.set({ id: 'u1', name: 'Ada', age: 36 })
+			await users.set({ id: 'u2', name: 'Bo', age: 41 })
+		})
+		expect(await users.count()).toBe(2)
+	})
+
+	it('returns the scope value', async () => {
+		const { db, users } = userDatabase()
+		const value = await db.transaction(async () => {
+			await users.set({ id: 'u1', name: 'Ada', age: 36 })
+			return 'done'
+		})
+		expect(value).toBe('done')
+	})
+
+	it('rolls back every write on a throw', async () => {
+		const { db, users } = userDatabase()
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		await expect(
+			db.transaction(async () => {
+				await users.update('u1', { age: 99 })
+				await users.set({ id: 'u2', name: 'Bo', age: 41 })
+				throw new Error('boom')
+			}),
+		).rejects.toThrow('boom')
+		expect((await users.get('u1'))?.age).toBe(36) // restored
+		expect(await users.has('u2')).toBe(false) // never committed
+	})
+})
+
+// ── Emitter — the PUSH observation surface (AGENTS §13) ──────────────────────
+//
+// The Database exposes a typed `emitter` (`DatabaseEventMap`) carrying its connection +
+// transaction lifecycle for fire-and-forget observers. Every event is emitted directly; the
+// emitter isolates a listener throw (it can never escape into the snapshot / commit / rollback
+// flow, AGENTS §13), routing it to the emitter's own `error` handler (the `error` option), and
+// every emit sits AFTER its transition (`commit` after the scope succeeds, `rollback` after
+// every table is restored — and the `rollback` emit OBSERVES the propagated error, never
+// swallowing it). These pin: each event fires at the right moment; `on?` wires initial
+// listeners; and the LOAD-BEARING emit-safety guarantee — a throwing observer can corrupt
+// neither the committed state nor the propagation of the original transaction error, yet the
+// `error` handler fires.
+
+// The DatabaseEventMap event names recorded across the emitter tests — fed to the shared
+// `recordEmitterEvents` (AGENTS §16.1: the per-event wiring is centralized; this file
+// keeps only the names its scenarios observe).
+const DATABASE_EVENTS = ['open', 'close', 'transaction', 'commit', 'rollback'] as const
+
+describe('Database — emitter (push observation surface)', () => {
+	it('fires open on lazy first-use connect, then once more on a reconnect after close', async () => {
+		const { db, users } = userDatabase()
+		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		expect(events.open.count).toBe(0) // idle — nothing connected yet
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		expect(events.open.count).toBe(1) // the lazy connect fired `open` once
+		await users.get('u1') // a further op re-awaits the cached connect — no new `open`
+		expect(events.open.count).toBe(1)
+		await db.close()
+		expect(events.close.calls).toEqual([[]])
+	})
+
+	it('fires open on an explicit open() with no operation', async () => {
+		const { db } = userDatabase()
+		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		await db.open()
+		expect(events.open.calls).toEqual([[]])
+	})
+
+	it('fires transaction then commit on a successful scope (no rollback)', async () => {
+		const { db, users } = userDatabase()
+		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		await db.transaction(async () => {
+			await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		})
+		expect(events.transaction.count).toBe(1)
+		expect(events.commit.count).toBe(1)
+		expect(events.rollback.count).toBe(0)
+	})
+
+	it('fires transaction then rollback (with the error) on a throwing scope; commit never fires', async () => {
+		const { db, users } = userDatabase()
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const boom = new Error('boom')
+		await expect(
+			db.transaction(async () => {
+				await users.update('u1', { age: 99 })
+				throw boom
+			}),
+		).rejects.toBe(boom)
+		expect(events.transaction.count).toBe(1)
+		expect(events.commit.count).toBe(0) // a throwing scope never commits
+		// `rollback` fired once, carrying the propagated error — and the table was restored.
+		expect(events.rollback.calls).toEqual([[boom]])
+		expect((await users.get('u1'))?.age).toBe(36)
+	})
+
+	it('wires initial listeners from the `on` option at construction', async () => {
+		const open = createRecorder<[]>()
+		const commit = createRecorder<[]>()
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+			on: { open: open.handler, commit: commit.handler },
+		})
+		await db.transaction(async () => {
+			await db.table('users').set({ id: 'u1', name: 'Ada', age: 36 })
+		})
+		expect(open.calls).toEqual([[]]) // the lazy connect inside the txn fired `open`
+		expect(commit.calls).toEqual([[]])
+	})
+
+	it('EMIT SAFETY: a throwing commit listener cannot corrupt the committed state, and routes to the error handler', async () => {
+		const errors = createErrorRecorder()
+		const { db, users } = userDatabase(errors.handler)
+		// A buggy `commit` observer that throws on the audited transaction path. It must NOT
+		// undo the commit nor escape the transaction.
+		db.emitter.on('commit', () => {
+			throw new Error('commit observer blew up')
+		})
+		// The transaction still resolves (the throw never escaped) and the writes committed.
+		await db.transaction(async () => {
+			await users.set({ id: 'u1', name: 'Ada', age: 36 })
+			await users.set({ id: 'u2', name: 'Bo', age: 41 })
+		})
+		// THE LOAD-BEARING ASSERTION: the committed state is intact despite the throwing observer.
+		expect(await users.count()).toBe(2)
+		expect((await users.get('u1'))?.name).toBe('Ada')
+		// The throw was routed to the emitter's error handler — (error, event) order.
+		expect(errors.calls).toEqual([[expect.any(Error), 'commit']])
+		// A fresh transaction still commits after the storm.
+		await db.transaction(async () => users.set({ id: 'u3', name: 'Cy', age: 22 }))
+		expect(await users.count()).toBe(3)
+	})
+
+	it('EMIT SAFETY: a throwing rollback listener cannot suppress the propagated txn error', async () => {
+		const errors = createErrorRecorder()
+		const { db, users } = userDatabase(errors.handler)
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		db.emitter.on('rollback', () => {
+			throw new Error('rollback observer blew up')
+		})
+		const boom = new Error('boom')
+		// THE LOAD-BEARING ASSERTION: the ORIGINAL transaction error still propagates — the
+		// throwing `rollback` observer did not replace or swallow it.
+		await expect(
+			db.transaction(async () => {
+				await users.update('u1', { age: 99 })
+				throw boom
+			}),
+		).rejects.toBe(boom)
+		expect((await users.get('u1'))?.age).toBe(36) // the rollback still restored the table
+		expect(errors.calls).toEqual([[expect.any(Error), 'rollback']])
+	})
+
+	it('EMIT SAFETY: a throwing error handler neither escapes nor recurses', async () => {
+		const errors = createErrorRecorder()
+		const { db, users } = userDatabase((error, event) => {
+			errors.handler(error, event)
+			throw new Error('error handler blew up too')
+		})
+		db.emitter.on('commit', () => {
+			throw new Error('commit listener blew up')
+		})
+		// The transaction STILL commits — neither throw escaped into the flow.
+		await db.transaction(async () => users.set({ id: 'u1', name: 'Ada', age: 36 }))
+		expect(await users.count()).toBe(1)
+		// The error handler fired exactly once (its own throw was swallowed, not re-entered —
+		// so it could not recurse).
+		expect(errors.count).toBe(1)
+		expect(errors.calls[0]?.[1]).toBe('commit')
+	})
+})

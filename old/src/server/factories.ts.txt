@@ -1,0 +1,68 @@
+import type { DriverInterface } from '@src/core'
+import { JSONDriver } from './drivers/JSONDriver.js'
+import { SQLiteDriver } from './drivers/SQLiteDriver.js'
+
+/**
+ * Create a persistent SQLite {@link DriverInterface} for the core database layer.
+ *
+ * @remarks
+ * Pass it to `createDatabase` from `@src/core` to run the whole typed database +
+ * relations stack against SQLite instead of memory — the `Database` / `Table` /
+ * `Query` / relations API is unchanged; only where the bytes live changes, and
+ * `records` / `count` run natively as SQL. The driver is built on the
+ * `src/server/sqlite` wrapper (never raw `node:sqlite`). The `path` is a database
+ * file path; omit it (or pass `':memory:'`) for an ephemeral in-memory database —
+ * an in-memory database does not persist across a `close` / reopen, so use a real
+ * file path when persistence matters.
+ *
+ * @param path - The database file path, or `':memory:'` (the default) for in-memory
+ * @returns A {@link DriverInterface} backed by SQLite
+ *
+ * @example
+ * ```ts
+ * import { createDatabase, stringShape } from '@src/core'
+ * import { createSQLiteDriver } from '@src/server'
+ *
+ * const db = createDatabase({
+ * 	driver: createSQLiteDriver('app.db'),
+ * 	tables: { users: { id: stringShape(), name: stringShape() } },
+ * })
+ * await db.table('users').set({ id: 'u1', name: 'Ada' }) // persisted to SQLite
+ * ```
+ */
+export function createSQLiteDriver(path?: string): DriverInterface {
+	return new SQLiteDriver(path ?? ':memory:')
+}
+
+/**
+ * Create a persistent JSON-file {@link DriverInterface} for the core database layer.
+ *
+ * @remarks
+ * Pass it to `createDatabase` from `@src/core` to run the whole typed database +
+ * relations stack against a single JSON file instead of memory — the `Database` /
+ * `Table` / `Query` / relations API is unchanged; only where the bytes live changes.
+ * The driver is the reference `MemoryDriver` plus JSON-file persistence: `open` loads
+ * the file, every mutation flushes the whole store back, and querying runs through
+ * the core engine over `scan` (it is scan-only — no native `records` / `count` /
+ * `aggregate`). A missing, corrupt, or wrong-shaped file starts empty rather than
+ * throwing. Best for development, small datasets, and portable / inspectable data;
+ * reach for {@link createSQLiteDriver} for large or concurrent workloads.
+ *
+ * @param path - The JSON file path data is loaded from and flushed to
+ * @returns A {@link DriverInterface} backed by a JSON file
+ *
+ * @example
+ * ```ts
+ * import { createDatabase, stringShape } from '@src/core'
+ * import { createJSONDriver } from '@src/server'
+ *
+ * const db = createDatabase({
+ * 	driver: createJSONDriver('data/app.json'),
+ * 	tables: { users: { id: stringShape(), name: stringShape() } },
+ * })
+ * await db.table('users').set({ id: 'u1', name: 'Ada' }) // persisted to app.json
+ * ```
+ */
+export function createJSONDriver(path: string): DriverInterface {
+	return new JSONDriver(path)
+}
