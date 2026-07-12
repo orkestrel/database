@@ -504,9 +504,9 @@ describe('migrate()', () => {
 				name: 'users',
 				primary: 'id',
 				columns: [
-					{ name: 'id', type: 'string', nullable: false },
-					{ name: 'name', type: 'string', nullable: false },
-					{ name: 'legacy', type: 'string', nullable: false },
+					{ name: 'id', type: 'text', nullable: false },
+					{ name: 'name', type: 'text', nullable: false },
+					{ name: 'legacy', type: 'text', nullable: false },
 				],
 				indexes: [],
 			},
@@ -581,8 +581,8 @@ describe('migrate()', () => {
 				name: 'users',
 				primary: 'id',
 				columns: [
-					{ name: 'id', type: 'string', nullable: false },
-					{ name: 'name', type: 'string', nullable: false },
+					{ name: 'id', type: 'text', nullable: false },
+					{ name: 'name', type: 'text', nullable: false },
 				],
 				indexes: [],
 			},

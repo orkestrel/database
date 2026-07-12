@@ -1,7 +1,7 @@
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { seedUsersTable } from '../../setup.js'
+import { collectRows, seedUsersTable } from '../../setup.js'
 
 // `Query`'s own surface — the where / and / or dispatch (the per-operator
 // behavior is `Clause`'s and lives in Clause.test.ts), the post-fetch
@@ -128,23 +128,17 @@ describe('Query — stream (lazy streaming)', () => {
 		users = await seeded()
 	})
 
-	async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-		const rows: T[] = []
-		for await (const row of iterable) rows.push(row)
-		return rows
-	}
-
 	it('yields lazily honoring conditions plus limit/offset', async () => {
-		const rows = await collect(users.query().where('age').from(18).stream())
+		const rows = await collectRows(users.query().where('age').from(18).stream())
 		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u3', 'u4'])
 
-		const paged = await collect(users.query().ascending('age').offset(1).limit(2).stream())
+		const paged = await collectRows(users.query().ascending('age').offset(1).limit(2).stream())
 		// order is ignored by stream — paging counts over unsorted (insertion) order.
 		expect(paged).toHaveLength(2)
 	})
 
 	it('applies a post-fetch filter per row', async () => {
-		const rows = await collect(
+		const rows = await collectRows(
 			users
 				.query()
 				.filter((user) => user.name.length === 2)
