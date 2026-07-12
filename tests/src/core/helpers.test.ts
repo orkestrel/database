@@ -1,12 +1,14 @@
 import type { DriverInterface, Key, Row, TableSchema } from '@src/core'
 import {
 	applyCriteria,
+	auditDriver,
 	checkAbort,
 	compareValues,
 	computeAggregate,
 	conformDriver,
 	createMemoryDriver,
 	deepEqual,
+	driverFindings,
 	extractKey,
 	filterRows,
 	globMatch,
@@ -608,5 +610,159 @@ describe('conformDriver', () => {
 		const error = await conformDriver(() => createBrokenDriver()).catch((caught: unknown) => caught)
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
+	})
+})
+
+// A driver wrapper violating TWO independent invariants: copy-out isolation
+// (phase c) AND reversed key order (phase e) — auditDriver must report BOTH,
+// while conformDriver (fail-fast) must report only the first (copy-out).
+function createDoublyBrokenDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	const stored = new Map<Key, Row>()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		async write(table: string, key: Key, row: Row): Promise<void> {
+			await inner.write(table, key, row)
+			stored.set(key, row) // stores the reference directly (breaks copy-in/copy-out)
+		},
+		async read(table: string, key: Key): Promise<Row | undefined> {
+			if (stored.has(key)) return stored.get(key)
+			return inner.read(table, key)
+		},
+		delete: (table, key) => inner.delete(table, key),
+		async keys(table: string): Promise<readonly Key[]> {
+			return [...(await inner.keys(table))].reverse()
+		},
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: (tables) => inner.snapshot(tables),
+	}
+}
+
+// A driver whose scan throws an unexpected plain Error mid-phase.
+function createCrashingDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan(): AsyncIterable<Row> {
+			throw new Error('scan exploded')
+		},
+		clear: (table) => inner.clear(table),
+		snapshot: (tables) => inner.snapshot(tables),
+	}
+}
+
+describe('driverFindings', () => {
+	it('yields no findings for a conformant driver (the reference memory driver)', async () => {
+		const findings: unknown[] = []
+		for await (const finding of driverFindings(() => createMemoryDriver())) findings.push(finding)
+		expect(findings).toEqual([])
+	})
+
+	it('yields lazily — breaking after the first finding never throws and never drains the rest', async () => {
+		const collected: string[] = []
+		for await (const finding of driverFindings(() => createDoublyBrokenDriver())) {
+			collected.push(finding.check)
+			break
+		}
+		expect(collected).toEqual(['copy-in'])
+	})
+
+	it('yields a finding (not an escaped throw) when a driver method throws unexpectedly', async () => {
+		const findings: { check: string; message: string }[] = []
+		for await (const finding of driverFindings(() => createCrashingDriver())) {
+			findings.push({ check: finding.check, message: finding.message })
+		}
+		expect(findings.some((finding) => finding.message === 'scan exploded')).toBe(true)
+	})
+
+	it('runs the meta/stamp phase for a driver that implements both hooks (MemoryDriver — landed at validation time) and finds a violation when meta() disagrees with the stamped value', async () => {
+		function createMismatchedMetaDriver(): DriverInterface {
+			const inner = createMemoryDriver()
+			return {
+				open: (tables) => inner.open(tables),
+				close: () => inner.close(),
+				read: (table, key) => inner.read(table, key),
+				write: (table, key, row) => inner.write(table, key, row),
+				delete: (table, key) => inner.delete(table, key),
+				keys: (table) => inner.keys(table),
+				scan: (table) => inner.scan(table),
+				clear: (table) => inner.clear(table),
+				snapshot: (tables) => inner.snapshot(tables),
+				async meta() {
+					return { version: 99, schema: [] }
+				},
+				async stamp() {
+					// Deliberately ignores the stamped value.
+				},
+			}
+		}
+		const findings: string[] = []
+		for await (const finding of driverFindings(() => createMismatchedMetaDriver())) {
+			findings.push(finding.check)
+		}
+		expect(findings).toContain('meta-fresh')
+
+		// And the reference MemoryDriver — which now implements meta/stamp — passes cleanly.
+		const clean: string[] = []
+		for await (const finding of driverFindings(() => createMemoryDriver())) clean.push(finding.check)
+		expect(clean.some((check) => check.startsWith('meta'))).toBe(false)
+	})
+
+	it('runs the scoped-snapshot phase and finds a violation when snapshot rolls back the whole store instead of only the named table', async () => {
+		function createWholeStoreSnapshotDriver(): DriverInterface {
+			const inner = createMemoryDriver()
+			return {
+				open: (tables) => inner.open(tables),
+				close: () => inner.close(),
+				read: (table, key) => inner.read(table, key),
+				write: (table, key, row) => inner.write(table, key, row),
+				delete: (table, key) => inner.delete(table, key),
+				keys: (table) => inner.keys(table),
+				scan: (table) => inner.scan(table),
+				clear: (table) => inner.clear(table),
+				snapshot: () => inner.snapshot(), // ignores the `tables` scope entirely
+			}
+		}
+		const findings: string[] = []
+		for await (const finding of driverFindings(() => createWholeStoreSnapshotDriver())) {
+			findings.push(finding.check)
+		}
+		expect(findings).toContain('snapshot-scoped-posts')
+
+		// And the reference MemoryDriver honors the scope and passes cleanly.
+		const clean: string[] = []
+		for await (const finding of driverFindings(() => createMemoryDriver())) clean.push(finding.check)
+		expect(clean.some((check) => check.startsWith('snapshot-scoped'))).toBe(false)
+	})
+})
+
+describe('auditDriver', () => {
+	it('returns an empty array for a conformant driver (the reference memory driver)', async () => {
+		await expect(auditDriver(() => createMemoryDriver())).resolves.toEqual([])
+	})
+
+	it('reports BOTH violations of a driver breaking two independent invariants', async () => {
+		const findings = await auditDriver(() => createDoublyBrokenDriver())
+		const checks = findings.map((finding) => finding.check)
+		expect(checks).toContain('copy-in')
+		expect(checks).toContain('keys-order')
+	})
+})
+
+describe('conformDriver (fail-fast over driverFindings)', () => {
+	it('throws only the FIRST violation of a driver breaking two independent invariants', async () => {
+		const error = await conformDriver(() => createDoublyBrokenDriver()).catch(
+			(caught: unknown) => caught,
+		)
+		expect(isDatabaseError(error)).toBe(true)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
+		expect(isDatabaseError(error) ? error.context?.check : undefined).toBe('copy-in')
 	})
 })
