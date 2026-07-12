@@ -14,9 +14,12 @@ import type { DatabaseErrorCode } from './types.js'
  * `resolve` miss (`NOT_FOUND`), an `add` onto an existing key (`CONFLICT`), a
  * row that fails its table's contract (`VALIDATION`), a cancelled operation whose
  * {@link ReadOptions.signal} aborted (`ABORTED`, carrying `signal.reason` in
- * `context`), an inapplicable {@link Migration} plan (`MIGRATION`), and a
+ * `context`), an inapplicable {@link Migration} plan (`MIGRATION`), a
  * driver that violates a {@link DriverInterface} invariant, thrown by the
- * `conformDriver` helper (`CONFORMANCE`).
+ * `conformDriver` helper (`CONFORMANCE`), and an unexpected infrastructure
+ * fault surfaced by a driver seam — e.g. a filesystem failure while
+ * persisting (`DRIVER`) — as opposed to expected domain conditions, which
+ * keep their specific codes.
  */
 export class DatabaseError extends Error {
 	readonly code: DatabaseErrorCode

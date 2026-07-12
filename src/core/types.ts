@@ -145,6 +145,21 @@ export type DatabaseErrorCode =
 	| 'ABORTED'
 	| 'MIGRATION'
 	| 'CONFORMANCE'
+	| 'DRIVER'
+
+/**
+ * One violated invariant from the driver-conformance battery.
+ *
+ * @remarks
+ * Mirrors the payload shape of a `DatabaseError` `CONFORMANCE` `context` —
+ * `check` names the invariant, `message` describes the violation, and
+ * `context` carries the offending table / key / value that failed it.
+ */
+export interface ConformanceFinding {
+	readonly check: string
+	readonly message: string
+	readonly context: Readonly<Record<string, unknown>>
+}
 
 /**
  * The push observation surface of a {@link DatabaseInterface} (AGENTS §13) — the
@@ -230,6 +245,21 @@ export interface ColumnSchema {
 	readonly name: string
 	readonly type: ColumnType
 	readonly nullable: boolean
+}
+
+/**
+ * Persisted schema metadata a versioning driver stores verbatim and returns on
+ * demand.
+ *
+ * @remarks
+ * The driver never introspects this payload — it hands back exactly what was
+ * last stamped via {@link DriverInterface.stamp}. `meta()` returning `undefined`
+ * is how a fresh store is distinguished from an upgradable one: it means the
+ * store has never been stamped, not that it is at version zero.
+ */
+export interface DriverMeta {
+	readonly version: number
+	readonly schema: readonly TableSchema[]
 }
 
 /**
@@ -329,8 +359,13 @@ export interface DriverInterface {
 	 * Capture the current state and return a thunk that rolls every table back to
 	 * it — the primitive transactions are built on (SQL `SAVEPOINT`, an IndexedDB
 	 * key buffer, a cloned map).
+	 *
+	 * @remarks
+	 * `tables` omitted captures/rolls back the WHOLE store (existing behavior).
+	 * `tables` provided captures/restores ONLY the named tables — the returned
+	 * rollback thunk leaves every other table untouched.
 	 */
-	snapshot(): Promise<() => Promise<void>>
+	snapshot(tables?: readonly string[]): Promise<() => Promise<void>>
 	/**
 	 * Optional native filtered read (AGENTS §21). A backend that can evaluate a
 	 * {@link Criteria} natively (SQL `WHERE` + `ORDER`/`LIMIT`, an index range)
@@ -375,6 +410,18 @@ export interface DriverInterface {
 	 * table.
 	 */
 	migrate?(plan: Migration): Promise<void>
+	/**
+	 * Optional persisted-metadata read (PAIRED with {@link stamp} — a driver
+	 * implements both or neither). Returns the {@link DriverMeta} last stamped,
+	 * or `undefined` when the store has never been stamped.
+	 */
+	meta?(): Promise<DriverMeta | undefined>
+	/**
+	 * Optional persisted-metadata write (PAIRED with {@link meta} — a driver
+	 * implements both or neither). Persists `meta` verbatim for a later `meta()`
+	 * to return.
+	 */
+	stamp?(meta: DriverMeta): Promise<void>
 }
 
 // === Database
@@ -457,6 +504,28 @@ export interface DatabaseOptions<T extends TablesShape = TablesShape> {
 	readonly indexes?: TableIndexes
 	readonly name?: string
 	readonly key?: KeyFunction
+	/**
+	 * The declared schema version.
+	 *
+	 * @remarks
+	 * Only meaningful when the driver implements BOTH {@link DriverInterface.meta}
+	 * and {@link DriverInterface.stamp} (a versioning driver); unset, or a
+	 * non-versioning driver, leaves `open()` unchanged from today's behavior.
+	 * When set and the driver versions, `open()` reconciles against the
+	 * driver's persisted {@link DriverMeta}:
+	 * - **Fresh store** (`meta()` returns `undefined`) — no migration is
+	 *   possible (there is nothing deployed to diff against), so `open()`
+	 *   simply `stamp`s `{ version, schema }` for next time.
+	 * - **Stored version < `version`** — `planMigration(stored.schema, declared
+	 *   schema)` computes the upgrade plan, applied via the driver's optional
+	 *   `migrate` hook. If `migrate` is absent and the plan is non-empty,
+	 *   `open()` throws `DatabaseError` `MIGRATION`. On success, `open()`
+	 *   `stamp`s the new `{ version, schema }` and emits the `migrate` event.
+	 * - **Stored version > `version`** — the store is newer than the declared
+	 *   schema; `open()` throws `DatabaseError` `MIGRATION`.
+	 * - **Stored version === `version`** — no-op.
+	 */
+	readonly version?: number
 }
 
 /**
