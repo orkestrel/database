@@ -894,9 +894,10 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
   listener-isolated emits is already correct.
 - **JSON-as-decorator + `TableSchema`-driven `open`.** The `JSONDriver`-over-`MemoryDriver`
   decorator and the contract-derived `TableSchema` handed to `open` are kept.
-- **The legacy multi-backend seams.** The (currently archived) SQLite compiler and IndexedDB
-  `selectPlan` designs are the correct exploit implementations; they return in phase-next over
-  their new backing packages.
+- **The legacy multi-backend seams.** The archived SQLite compiler and IndexedDB `selectPlan`
+  designs were the correct exploit implementations; both have since been realized as the shipped
+  `SQLiteDriver` and `IndexedDBDriver` over their new backing packages (see the real-backends
+  entry below).
 - **Native transaction exploitation.** The optional `transaction?()` hook (`{ commit; rollback }`)
   now exists on `DriverInterface`, and `Database.transaction` dispatches to it when a driver
   implements it, falling back to the `snapshot` floor with the same events otherwise. `JSONDriver`
@@ -945,17 +946,38 @@ An honest appendix so the owner sees a migration path, not a greenfield fantasy.
   tolerance unchanged); and the conformance battery splits into the lazy `driverFindings`
   generator, the fail-fast `conformDriver`, and the drain-all `auditDriver`.
 
+### Where today already matches this proposal (real backends, shipped)
+
+- **The real backends themselves — done.** Both real drivers are complete and pass the shared
+  conformance battery (`conformDriver`/`auditDriver`) alongside `MemoryDriver` and `JSONDriver`.
+  `SQLiteDriver` (`src/server/drivers/SQLiteDriver.ts`, exported from `./server`, built on
+  published `@orkestrel/sqlite@0.0.1`) is a trusted-mode driver implementing the full optional
+  hook matrix — `records`, `count`, `aggregate`, `stream`, `transaction`, `migrate`, and
+  `meta`/`stamp` (metadata persisted in a `_meta` table, atomic migrate+stamp, and it joins an
+  enclosing transaction instead of nesting `BEGIN`). SQL compilation now matches the core
+  engine's ordering semantics for absent values (`NULL` handling; nested JSON discrimination via
+  `json_type`, including the newly-exported `jsonTypeColumn` helper). `IndexedDBDriver`
+  (`src/browser/drivers/IndexedDBDriver.ts`, exported from `./browser`, built on published
+  `@orkestrel/indexeddb@0.0.1`) is a narrow-then-refine driver implementing `records`, `count`,
+  `stream`, `migrate`, and `meta`/`stamp` (metadata in a `__meta__` store); it deliberately has no
+  `aggregate`/`transaction` hooks — IDB's auto-commit model makes a returnable transaction handle
+  impossible, and the engine's snapshot/scan fallbacks cover both. Its `migrate` hook is
+  failure-safe: the upgraded schema is adopted only after the upgraded connection successfully
+  opens, and on failure the pre-migration connection is restored. Persisted schema-version
+  tracking with auto-migrate on open (`DatabaseOptions.version` + `migrations`) works end-to-end
+  across all drivers that implement `meta`/`stamp`, including across process restarts on real
+  SQLite files.
+
 ### Prioritized gaps (the migration path)
 
-1. **The real backends themselves.** Everything the `sqlite` and `indexeddb` drivers need from
-   this package now exists and is conformance-tested: the `meta`/`stamp` versioning seam with
-   atomic reconcile-on-open, the full optional-hook set, the shared `conformDriver` battery,
-   and (for SQLite) the complete engine-free compilation layer — `compileCriteria`, the
-   value/row codecs, and the `schemaToTable`/`schemaToIndexes` DDL projections, golden-tested
-   against the exact strings the driver will execute. What remains is the drivers proper:
-   `SQLiteDriver` binding the compiled SQL to a real engine (`src/server/drivers/`), and the
-   IndexedDB driver plus its key-range planner (`selectPlan`), which lands WITH the resurrected
-   `src/browser` surface — the planner's output is DOM-typed, so it ships with its consumer.
+1. **Wrapper 0.0.2 adoption.** `@orkestrel/sqlite` 0.0.2 (adds a `transacting` getter and
+   `begin`/`commit`/`rollback` primitives) and `@orkestrel/indexeddb` 0.0.2 (adds
+   `context.index`/`context.deindex` DDL and a `createIndex` helper) are staged on their
+   repos' main branches awaiting publish. Once published, the two drivers here should adopt
+   those seams: `SQLiteDriver`'s hand-rolled `#transacting` bookkeeping replaced by the
+   wrapper's native `transacting` getter, and `IndexedDBDriver` index DDL routed through the
+   new `context.index`/`context.deindex`/`createIndex` surface instead of its current
+   workaround.
 2. **Consumer-gated leftovers, revisit with a real consumer:** a table-scoped
    `Database.transaction(scope, { tables })` public option threading the now-supported
    `snapshot(tables)` (driver surface is ready; the public API waits for a use case), and
