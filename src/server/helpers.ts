@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto'
  * Generate a fresh unique key — a v4 UUID string, backed by `node:crypto`.
  *
  * @remarks
- * Supply this as {@link import('@src/core').DatabaseOptions.key} so a table mints
+ * Supply this as {@link import('@orkestrel/database').DatabaseOptions.key} so a table mints
  * a key when a written row lacks its primary-key value. Strings work as keys on
  * every backend; supply your own key values directly to use numeric keys instead.
  *

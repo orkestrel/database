@@ -6,7 +6,7 @@ import { SQLiteDriver } from './drivers/SQLiteDriver.js'
  * Create a persistent JSON-file {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@src/core` to run the whole typed database +
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
  * relations stack against a single JSON file instead of memory — the `Database` /
  * `Table` / `Query` / relations API is unchanged; only where the bytes live changes.
  * The driver is the reference `MemoryDriver` plus JSON-file persistence: `open` loads
@@ -39,7 +39,7 @@ export function createJSONDriver(path: string): DriverInterface {
  * Create a trusted-mode SQLite {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@src/core` to run the whole typed database +
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
  * relations stack against a real SQLite database — the `Database` / `Table` /
  * `Query` / relations API is unchanged; only where the bytes live changes. Built
  * on the published `@orkestrel/sqlite` synchronous wrapper: `open` issues real

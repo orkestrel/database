@@ -357,8 +357,16 @@ describe('IndexedDBDriver — migrate / meta / stamp', () => {
 		// Reopen with ONLY 'users' declared — the ghost 'posts' table must not
 		// remain resolvable by planning (`#table` / `records` / `count` / `stream`).
 		await driver.open(tableSchemas('users'))
-		await expect(driver.records('posts', { conditions: [] })).rejects.toThrow('posts')
-		await expect(driver.count('posts', { conditions: [] })).rejects.toThrow('posts')
+		const ghostRecords =
+			driver.records === undefined
+				? Promise.resolve(undefined)
+				: driver.records('posts', { conditions: [] })
+		await expect(ghostRecords).rejects.toThrow('posts')
+		const ghostCount =
+			driver.count === undefined
+				? Promise.resolve(undefined)
+				: driver.count('posts', { conditions: [] })
+		await expect(ghostCount).rejects.toThrow('posts')
 	})
 
 	it('a mid-upgrade migrate failure leaves #schema/database at the pre-failure state, and a later valid migrate still succeeds', async () => {

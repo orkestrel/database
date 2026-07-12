@@ -5,7 +5,7 @@ import { IndexedDBDriver } from './drivers/IndexedDBDriver.js'
  * Create a persistent IndexedDB {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@src/core` to run the whole typed database +
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
  * relations stack against IndexedDB instead of memory — the `Database` / `Table` /
  * `Query` / relations API is unchanged; only where the bytes live changes. The
  * driver is built on the published `@orkestrel/indexeddb` wrapper in auto-managed
@@ -18,8 +18,9 @@ import { IndexedDBDriver } from './drivers/IndexedDBDriver.js'
  *
  * @example
  * ```ts
- * import { createDatabase, stringShape } from '@src/core'
- * import { createIndexedDBDriver } from '@src/browser'
+ * import { createDatabase } from '@orkestrel/database'
+ * import { stringShape } from '@orkestrel/contract'
+ * import { createIndexedDBDriver } from '@orkestrel/database/browser'
  *
  * const db = createDatabase({
  * 	driver: createIndexedDBDriver('app'),

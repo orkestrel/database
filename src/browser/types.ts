@@ -1,6 +1,6 @@
 // The IndexedDB driver's own module types. Types are the source of truth
 // (AGENTS §2). The shared database vocabulary (`Criteria`, `TableSchema`, `Row`,
-// …) lives in `@src/core`; only this driver's pushdown-planning shape is local.
+// …) lives in `@orkestrel/database`; only this driver's pushdown-planning shape is local.
 
 /**
  * A pushdown plan — which index (or the primary store, `null`) to read and the
