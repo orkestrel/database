@@ -515,6 +515,11 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     unrecoverable and throws `MIGRATION`; an equal version is a no-op.
     `version` left unset, or set against a non-versioning driver, leaves
     `open()` unchanged — versioning is opt-in per driver AND per database.
+    When the driver also implements `transaction`, the migrate + `stamp`
+    pair applies atomically (all-or-nothing); prefer ONE mode per database —
+    setting `version` and also calling `migrate()` explicitly runs
+    reconciliation on open and the explicit plan separately, emitting
+    `migrate` for each.
 12. **Driver conformance.** `conformDriver(factory)` is a framework-agnostic
     battery (no test-runner import) any new `DriverInterface` backend can run
     against itself — a smoke script, a unit test, or a new driver's own

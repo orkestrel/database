@@ -229,11 +229,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 				},
 			)
 		}
-		await this.#driver.migrate(plan)
-		// Observe the successful apply — AFTER the driver applied the plan, mirroring the
-		// transaction lifecycle's emit-after-transition contract (AGENTS §13).
-		this.#emitter.emit('migrate', plan)
-		await this.#stamp()
+		await this.#apply(plan)
 		return plan
 	}
 
@@ -334,10 +330,37 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 					{ name: this.#name, stored: meta.version, declared: this.#version },
 				)
 			}
-			await this.#driver.migrate?.(plan)
-			await this.#stamp()
-			this.#emitter.emit('migrate', plan)
+			await this.#apply(plan)
 		}
+	}
+
+	// Apply `plan` through the driver's optional `migrate` hook and persist the new meta
+	// as one unit — the shared orchestration behind both `#reconcile`'s upgrade branch and
+	// the public `migrate()`. WHEN the driver implements the optional native `transaction`
+	// hook, the migrate + stamp pair commits or rolls back atomically through that handle:
+	// a mid-plan `migrate` failure, or a failing `stamp`, rolls back cleanly, so the store
+	// never ends up with the new data under the OLD meta (which would otherwise re-trigger
+	// the same non-idempotent plan on the next `open()`). WITHOUT the hook, `migrate` then
+	// `stamp` run sequentially with a small window between them (documented on
+	// {@link DatabaseOptions.version}). Either path applies, stamps, then emits `migrate`
+	// strictly AFTER the full transition (AGENTS §13).
+	async #apply(plan: Migration): Promise<void> {
+		const native = await this.#driver.transaction?.()
+		if (native !== undefined) {
+			try {
+				await this.#driver.migrate?.(plan)
+				await this.#stamp()
+			} catch (error) {
+				await native.rollback()
+				throw error
+			}
+			await native.commit()
+			this.#emitter.emit('migrate', plan)
+			return
+		}
+		await this.#driver.migrate?.(plan)
+		await this.#stamp()
+		this.#emitter.emit('migrate', plan)
 	}
 
 	// Persist the current declared { version, schema } via the driver's optional `stamp` —

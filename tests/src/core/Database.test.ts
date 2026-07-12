@@ -664,6 +664,166 @@ function createCountingDriver(): {
 	return { driver, metaCalls, stampCalls }
 }
 
+/**
+ * Wrap `createMemoryDriver()` with BOTH a native `transaction()` hook and its own
+ * `meta` / `stamp` store — used to prove `#apply`'s atomic migrate+stamp pairing (the
+ * private orchestration shared by `#reconcile`'s upgrade branch and `migrate()`).
+ * `order` records `'migrate'` / `'stamp'` in call order. `stampFails`, when true,
+ * makes the FIRST `stamp` call reject with `error` and never touch `meta` — every
+ * `stamp` call after that first failure succeeds normally, so a second `Database`
+ * over the same driver can prove the store recovers instead of staying bricked.
+ */
+function createNativeVersioningDriver(options?: {
+	readonly initial?: DriverMeta
+	readonly stampFails?: boolean
+	readonly error?: Error
+}): {
+	readonly driver: DriverInterface
+	readonly commits: number[]
+	readonly rollbacks: number[]
+	readonly order: string[]
+} {
+	const memory = createMemoryDriver()
+	const commits: number[] = []
+	const rollbacks: number[] = []
+	const order: string[] = []
+	let meta: DriverMeta | undefined = options?.initial
+	let failed = false
+	const driver: DriverInterface = {
+		open: (schema) => memory.open(schema),
+		close: () => memory.close(),
+		read: (table, key) => memory.read(table, key),
+		write: (table, key, row) => memory.write(table, key, row),
+		delete: (table, key) => memory.delete(table, key),
+		keys: (table) => memory.keys(table),
+		scan: (table) => memory.scan(table),
+		clear: (table) => memory.clear(table),
+		snapshot: (tables) => memory.snapshot(tables),
+		async migrate(plan) {
+			order.push('migrate')
+			await memory.migrate?.(plan)
+		},
+		async meta() {
+			return meta
+		},
+		async stamp(next) {
+			if (options?.stampFails === true && !failed) {
+				failed = true
+				throw options.error ?? new Error('stamp failed')
+			}
+			order.push('stamp')
+			meta = next
+		},
+		async transaction() {
+			const rollback = await memory.snapshot()
+			return {
+				async commit() {
+					commits.push(commits.length + 1)
+				},
+				async rollback() {
+					rollbacks.push(rollbacks.length + 1)
+					await rollback()
+				},
+			}
+		},
+	}
+	return { driver, commits, rollbacks, order }
+}
+
+// ── atomic migrate+stamp pairing (native transaction hook) ────────────────────
+//
+// When the driver ALSO implements `transaction()`, `#reconcile`'s upgrade branch and
+// `migrate()` route the migrate+stamp pair through the native handle: a failing `stamp`
+// after a successful `migrate` rolls back cleanly (unmigrated data, unchanged meta), so
+// a retry over the same driver is not stuck replaying a non-idempotent plan forever.
+
+describe('atomic migrate+stamp pairing (native transaction hook)', () => {
+	const LEGACY_SCHEMA: readonly TableSchema[] = [
+		{
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', type: 'text', nullable: false },
+				{ name: 'name', type: 'text', nullable: false },
+				{ name: 'legacy', type: 'text', nullable: false },
+			],
+			indexes: [],
+		},
+	]
+
+	it('open(): a failing stamp rolls back — unmigrated data, unchanged meta; a second db over the same driver recovers', async () => {
+		const { driver, commits, rollbacks } = createNativeVersioningDriver({
+			initial: { version: 1, schema: LEGACY_SCHEMA },
+			stampFails: true,
+		})
+		await driver.open(LEGACY_SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: 'x' })
+
+		const failing = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 2,
+		})
+		await expect(failing.open()).rejects.toThrow('stamp failed')
+		expect(commits).toEqual([])
+		expect(rollbacks).toEqual([1])
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', legacy: 'x' })
+		const meta = await driver.meta?.()
+		expect(meta).toEqual({ version: 1, schema: LEGACY_SCHEMA })
+
+		// A second Database over the SAME driver, now with a working stamp, is not bricked.
+		const recovered = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 2,
+		})
+		await expect(recovered.open()).resolves.toBeUndefined()
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+		const recoveredMeta = await driver.meta?.()
+		expect(recoveredMeta?.version).toBe(2)
+	})
+
+	it('open(): happy path commits once via the native handle, never rolls back, and emits migrate AFTER stamp', async () => {
+		const { driver, commits, rollbacks, order } = createNativeVersioningDriver({
+			initial: { version: 1, schema: LEGACY_SCHEMA },
+		})
+		await driver.open(LEGACY_SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: 'x' })
+
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 2,
+		})
+		db.emitter.on('migrate', () => order.push('event'))
+		await db.open()
+		expect(commits).toEqual([1])
+		expect(rollbacks).toEqual([])
+		expect(order).toEqual(['migrate', 'stamp', 'event'])
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+		const meta = await driver.meta?.()
+		expect(meta?.version).toBe(2)
+	})
+
+	it('migrate(): same atomic pairing — commits once, stamp before the migrate event', async () => {
+		const { driver, commits, rollbacks, order } = createNativeVersioningDriver()
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 1,
+		})
+		await db.open()
+		order.length = 0
+		commits.length = 0
+		db.emitter.on('migrate', () => order.push('event'))
+		const plan = await db.migrate(LEGACY_SCHEMA)
+		expect(plan.steps).toEqual([{ operation: 'column.remove', table: 'users', column: 'legacy' }])
+		expect(commits).toEqual([1])
+		expect(rollbacks).toEqual([])
+		expect(order).toEqual(['migrate', 'stamp', 'event'])
+	})
+})
+
 describe('version reconciliation (open())', () => {
 	it('fresh memory driver: stamps { version, declared schema }, no migrate event', async () => {
 		const driver = createMemoryDriver()

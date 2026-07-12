@@ -477,6 +477,81 @@ describe('JSONDriver — meta persistence', () => {
 		await reopened.close()
 	})
 
+	it('drops a meta block whose column type is not a ColumnType but keeps tables intact', async () => {
+		const badSchema = [
+			{
+				...SCHEMA[0],
+				columns: [{ name: 'id', type: 'string', nullable: false }],
+			},
+			SCHEMA[1],
+		]
+		await mkdir(dirname(path), { recursive: true })
+		await writeFile(
+			path,
+			JSON.stringify({
+				meta: { version: 1, schema: badSchema },
+				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+			}),
+			'utf-8',
+		)
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toBeUndefined()
+		expect(await reopened.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await reopened.close()
+	})
+
+	it('drops a meta block with a non-string index entry but keeps tables intact', async () => {
+		const badSchema = [{ ...SCHEMA[0], indexes: [[42]] }, SCHEMA[1]]
+		await mkdir(dirname(path), { recursive: true })
+		await writeFile(
+			path,
+			JSON.stringify({
+				meta: { version: 1, schema: badSchema },
+				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+			}),
+			'utf-8',
+		)
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toBeUndefined()
+		expect(await reopened.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await reopened.close()
+	})
+
+	it('drops a meta block whose column entry is not a record but keeps tables intact', async () => {
+		const badSchema = [{ ...SCHEMA[0], columns: [42] }, SCHEMA[1]]
+		await mkdir(dirname(path), { recursive: true })
+		await writeFile(
+			path,
+			JSON.stringify({
+				meta: { version: 1, schema: badSchema },
+				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+			}),
+			'utf-8',
+		)
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toBeUndefined()
+		expect(await reopened.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await reopened.close()
+	})
+
 	it('serializes the exact { meta, tables } shape once stamped', async () => {
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
 		const meta = { version: 1, schema: SCHEMA }

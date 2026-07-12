@@ -524,6 +524,12 @@ export interface DatabaseOptions<T extends TablesShape = TablesShape> {
 	 * - **Stored version > `version`** — the store is newer than the declared
 	 *   schema; `open()` throws `DatabaseError` `MIGRATION`.
 	 * - **Stored version === `version`** — no-op.
+	 *
+	 * When the driver ALSO implements {@link DriverInterface.transaction}, the
+	 * `migrate` + `stamp` pair applies atomically through that native handle
+	 * (all-or-nothing, rolled back cleanly on a mid-plan failure); otherwise the
+	 * pair applies sequentially, with a small documented window in which a `stamp`
+	 * failure after a successful `migrate` can leave new data under old meta.
 	 */
 	readonly version?: number
 }
