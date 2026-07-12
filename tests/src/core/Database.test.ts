@@ -1,4 +1,4 @@
-import type { DriverInterface, Migration, TableSchema, TransactionInterface } from '@src/core'
+import type { DriverInterface, DriverMeta, Migration, TableSchema, TransactionInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
@@ -590,5 +590,186 @@ describe('migrate()', () => {
 		const plan = await db.migrate(deployed)
 		expect(plan.steps).toEqual([])
 		expect(events.migrate.calls).toEqual([[plan]])
+	})
+})
+
+// ── version reconciliation (open()) ──────────────────────────────────────────
+//
+// When `version` is set and the driver implements BOTH `meta` and `stamp`, `open()`
+// reconciles the driver's persisted `DriverMeta` against the declared version INSIDE the
+// same lazy-connect chain, AFTER the `open` event (AGENTS §13 emit-after-transition).
+
+/**
+ * Wrap `createMemoryDriver()` with its own `meta` / `stamp` store but WITHOUT `migrate` —
+ * used to prove `open()` throws `MIGRATION` when an upgrade plan is non-empty and the
+ * driver cannot apply it natively.
+ */
+function createMetaOnlyDriver(): { readonly driver: DriverInterface } {
+	const memory = createMemoryDriver()
+	let meta: DriverMeta | undefined
+	const driver: DriverInterface = {
+		open: (schema) => memory.open(schema),
+		close: () => memory.close(),
+		read: (table, key) => memory.read(table, key),
+		write: (table, key, row) => memory.write(table, key, row),
+		delete: (table, key) => memory.delete(table, key),
+		keys: (table) => memory.keys(table),
+		scan: (table) => memory.scan(table),
+		clear: (table) => memory.clear(table),
+		snapshot: (tables) => memory.snapshot(tables),
+		async meta() {
+			return meta
+		},
+		async stamp(next) {
+			meta = next
+		},
+	}
+	return { driver }
+}
+
+/** Wrap `createMemoryDriver()`, counting calls to `meta` / `stamp` — proves reconciliation is skipped. */
+function createCountingDriver(): {
+	readonly driver: DriverInterface
+	readonly metaCalls: number[]
+	readonly stampCalls: DriverMeta[]
+} {
+	const memory = createMemoryDriver()
+	const metaCalls: number[] = []
+	const stampCalls: DriverMeta[] = []
+	const driver: DriverInterface = {
+		open: (schema) => memory.open(schema),
+		close: () => memory.close(),
+		read: (table, key) => memory.read(table, key),
+		write: (table, key, row) => memory.write(table, key, row),
+		delete: (table, key) => memory.delete(table, key),
+		keys: (table) => memory.keys(table),
+		scan: (table) => memory.scan(table),
+		clear: (table) => memory.clear(table),
+		snapshot: (tables) => memory.snapshot(tables),
+		async meta() {
+			metaCalls.push(1)
+			return memory.meta()
+		},
+		async stamp(next) {
+			stampCalls.push(next)
+			await memory.stamp(next)
+		},
+	}
+	return { driver, metaCalls, stampCalls }
+}
+
+describe('version reconciliation (open())', () => {
+	it('fresh memory driver: stamps { version, declared schema }, no migrate event', async () => {
+		const driver = createMemoryDriver()
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 1,
+		})
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		await db.open()
+		expect(events.migrate.count).toBe(0)
+		const meta = await driver.meta?.()
+		expect(meta?.version).toBe(1)
+		expect(meta?.schema.map((table) => table.name)).toEqual(['users'])
+	})
+
+	it('reopening at a higher version applies a column.remove plan, strips rows, and re-stamps', async () => {
+		const driver = createMemoryDriver()
+		const legacySchema: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'id', type: 'text', nullable: false },
+					{ name: 'name', type: 'text', nullable: false },
+					{ name: 'legacy', type: 'text', nullable: false },
+				],
+				indexes: [],
+			},
+		]
+		await driver.open(legacySchema)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: 'x' })
+		await driver.stamp?.({ version: 1, schema: legacySchema })
+
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 2,
+		})
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		await db.open()
+		expect(events.migrate.count).toBe(1)
+		expect(events.migrate.calls[0]?.[0]?.steps).toEqual([
+			{ operation: 'column.remove', table: 'users', column: 'legacy' },
+		])
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+		const meta = await driver.meta?.()
+		expect(meta?.version).toBe(2)
+	})
+
+	it('stored version newer than declared: open() rejects MIGRATION', async () => {
+		const driver = createMemoryDriver()
+		await driver.open([])
+		await driver.stamp?.({ version: 5, schema: [] })
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 1,
+		})
+		await expect(db.open()).rejects.toMatchObject({ code: 'MIGRATION' })
+	})
+
+	it('stored version older, non-empty plan, driver lacks migrate: open() rejects MIGRATION', async () => {
+		const { driver } = createMetaOnlyDriver()
+		const legacySchema: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [{ name: 'id', type: 'text', nullable: false }],
+				indexes: [],
+			},
+		]
+		await driver.open?.(legacySchema)
+		await driver.stamp?.({ version: 1, schema: legacySchema })
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 2,
+		})
+		await expect(db.open()).rejects.toMatchObject({ code: 'MIGRATION' })
+	})
+
+	it('version unset: reconciliation is skipped — meta/stamp never called', async () => {
+		const { driver, metaCalls, stampCalls } = createCountingDriver()
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		await db.open()
+		expect(metaCalls).toEqual([])
+		expect(stampCalls).toEqual([])
+	})
+
+	it('version set, driver without meta/stamp: open() succeeds silently', async () => {
+		const memory = createMemoryDriver()
+		const driver: DriverInterface = {
+			open: (schema) => memory.open(schema),
+			close: () => memory.close(),
+			read: (table, key) => memory.read(table, key),
+			write: (table, key, row) => memory.write(table, key, row),
+			delete: (table, key) => memory.delete(table, key),
+			keys: (table) => memory.keys(table),
+			scan: (table) => memory.scan(table),
+			clear: (table) => memory.clear(table),
+			snapshot: (tables) => memory.snapshot(tables),
+		}
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			version: 1,
+		})
+		await expect(db.open()).resolves.toBeUndefined()
+		expect(db.status).toBe('open')
 	})
 })

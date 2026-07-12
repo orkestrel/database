@@ -6,6 +6,7 @@ import type {
 	DatabaseOptions,
 	DatabaseStatus,
 	DriverInterface,
+	DriverMeta,
 	KeyFunction,
 	Migration,
 	ReadOptions,
@@ -38,6 +39,11 @@ import { Table } from './Table.js'
  * SQL's and IndexedDB's incompatible native transactions.
  *
  * @remarks
+ * - **Versioned (optional).** When {@link DatabaseOptions.version} is set and the driver
+ *   implements both {@link DriverInterface.meta} and {@link DriverInterface.stamp},
+ *   `open()` reconciles the driver's persisted {@link DriverMeta} against the declared
+ *   version INSIDE the same lazy-connect chain, AFTER the `open` event fires — see
+ *   {@link DatabaseOptions.version} for the full reconciliation contract.
  * - **Observable (§13).** The owned {@link emitter} ({@link DatabaseEventMap}) carries the
  *   connection + transaction lifecycle — `open` / `close` / `transaction` / `commit` /
  *   `rollback` — for fire-and-forget observers, ALONGSIDE each table's per-row events. Every
@@ -55,6 +61,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 	readonly #indexes: TableIndexes
 	readonly #name: string
 	readonly #generate: KeyFunction | undefined
+	readonly #version: number | undefined
 	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into the
 	// transaction flow.
@@ -69,6 +76,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		this.#indexes = options.indexes ?? {}
 		this.#name = options.name ?? 'database'
 		this.#generate = options.key
+		this.#version = options.version
 		this.#emitter = new Emitter<DatabaseEventMap>({ on: options.on, error: options.error })
 	}
 
@@ -225,6 +233,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		// Observe the successful apply — AFTER the driver applied the plan, mirroring the
 		// transaction lifecycle's emit-after-transition contract (AGENTS §13).
 		this.#emitter.emit('migrate', plan)
+		await this.#stamp()
 		return plan
 	}
 
@@ -275,18 +284,67 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 
 	// Open the driver once, lazily; every table operation awaits the same promise. The
 	// `open` event fires from the one-time `.then` (so it observes the actual connect, not
-	// each cached re-await) — AFTER the driver opened and the status flipped. A reconnect
-	// after `close()` (which clears `#ready`) re-runs this and emits `open` again.
+	// each cached re-await) — AFTER the driver opened and the status flipped. Version
+	// reconciliation (`#reconcile`) runs INSIDE this same one-time chain, AFTER the `open`
+	// emit, so `await db.open()` (and every cached re-await) resolves only once
+	// reconciliation has settled. A reconnect after `close()` (which clears `#ready`)
+	// re-runs this and emits `open` again.
 	#connect(): Promise<void> {
 		if (this.#status === 'closed') {
 			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, { name: this.#name })
 		}
 		if (this.#ready === undefined) {
-			this.#ready = this.#driver.open(this.#schema()).then(() => {
+			this.#ready = this.#driver.open(this.#schema()).then(async () => {
 				if (this.#status === 'idle') this.#status = 'open'
 				this.#emitter.emit('open')
+				await this.#reconcile()
 			})
 		}
 		return this.#ready
+	}
+
+	// Reconcile the driver's persisted DriverMeta against the declared `#version` (AGENTS
+	// §13 emits AFTER the transition). Skips silently when versioning is not configured
+	// (no `#version`, or the driver implements neither `meta` nor `stamp`). A fresh store
+	// (`meta()` undefined) has nothing to diff against, so it just stamps for next time. A
+	// stored version newer than declared is unrecoverable here — throws MIGRATION. A stored
+	// version older than declared computes and applies the upgrade plan (throwing MIGRATION
+	// when the plan is non-empty and the driver lacks `migrate`), then stamps and emits.
+	async #reconcile(): Promise<void> {
+		if (this.#version === undefined || this.#driver.meta === undefined) return
+		const declared = this.#schema()
+		const meta = await this.#driver.meta()
+		if (meta === undefined) {
+			await this.#stamp()
+			return
+		}
+		if (meta.version > this.#version) {
+			throw new DatabaseError(
+				'MIGRATION',
+				`Database '${this.#name}' store version ${meta.version} is newer than declared version ${this.#version}`,
+				{ name: this.#name, stored: meta.version, declared: this.#version },
+			)
+		}
+		if (meta.version < this.#version) {
+			const plan = planMigration(meta.schema, declared, meta.version, this.#version)
+			if (plan.steps.length > 0 && this.#driver.migrate === undefined) {
+				throw new DatabaseError(
+					'MIGRATION',
+					`Database '${this.#name}' driver does not support migration`,
+					{ name: this.#name, stored: meta.version, declared: this.#version },
+				)
+			}
+			await this.#driver.migrate?.(plan)
+			await this.#stamp()
+			this.#emitter.emit('migrate', plan)
+		}
+	}
+
+	// Persist the current declared { version, schema } via the driver's optional `stamp` —
+	// a no-op when versioning is not configured (no `#version`, or no `stamp` hook).
+	async #stamp(): Promise<void> {
+		if (this.#version === undefined || this.#driver.stamp === undefined) return
+		const meta: DriverMeta = { version: this.#version, schema: this.#schema() }
+		await this.#driver.stamp(meta)
 	}
 }

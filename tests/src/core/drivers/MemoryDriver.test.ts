@@ -197,4 +197,40 @@ describe('MemoryDriver', () => {
 			expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 		})
 	})
+
+	describe('meta / stamp', () => {
+		it('has no meta until stamped, then round-trips it', async () => {
+			const driver = createMemoryDriver()
+			expect(await driver.meta?.()).toBeUndefined()
+			const meta = { version: 3, schema: tableSchemas('users') }
+			await driver.stamp?.(meta)
+			expect(await driver.meta?.()).toEqual(meta)
+		})
+	})
+
+	describe('scoped snapshot', () => {
+		it('restores only the listed tables; unlisted tables keep later mutations', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('users', 'a', { id: 'a', n: 1 })
+			await driver.write('posts', 'p1', { id: 'p1', n: 1 })
+			const rollback = await driver.snapshot(['users'])
+			await driver.write('users', 'a', { id: 'a', n: 2 })
+			await driver.write('posts', 'p1', { id: 'p1', n: 2 })
+			await rollback()
+			expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+			expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', n: 2 })
+		})
+
+		it('with no argument still restores the whole store', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('users', 'a', { id: 'a', n: 1 })
+			await driver.write('posts', 'p1', { id: 'p1', n: 1 })
+			const rollback = await driver.snapshot()
+			await driver.write('users', 'a', { id: 'a', n: 2 })
+			await driver.write('posts', 'p1', { id: 'p1', n: 2 })
+			await rollback()
+			expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+			expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', n: 1 })
+		})
+	})
 })

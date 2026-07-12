@@ -1,4 +1,4 @@
-import type { Criteria, DriverInterface, Key, Migration, Row, TableSchema } from '../types.js'
+import type { Criteria, DriverInterface, DriverMeta, Key, Migration, Row, TableSchema } from '../types.js'
 import { DatabaseError } from '../errors.js'
 import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
 
@@ -19,6 +19,7 @@ import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
  */
 export class MemoryDriver implements DriverInterface {
 	readonly #tables = new Map<string, Map<Key, Row>>()
+	#meta: DriverMeta | undefined
 
 	async open(schema: readonly TableSchema[]): Promise<void> {
 		for (const table of schema) {
@@ -105,17 +106,66 @@ export class MemoryDriver implements DriverInterface {
 		this.#store(table).clear()
 	}
 
-	async snapshot(): Promise<() => Promise<void>> {
+	/**
+	 * Capture the current state and return a thunk that rolls back to it.
+	 *
+	 * @remarks
+	 * `tables` omitted clones and restores the WHOLE store, byte-identical to the
+	 * prior whole-store behavior. `tables` provided clones ONLY the named tables,
+	 * and the returned thunk restores ONLY those — every other table keeps
+	 * whatever it was mutated to after the snapshot was taken.
+	 *
+	 * @param tables - The table names to scope the snapshot to; omitted captures every table
+	 * @returns A thunk that restores the captured tables
+	 */
+	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
+		if (tables === undefined) {
+			const copy = new Map<string, Map<Key, Row>>()
+			for (const [name, store] of this.#tables) {
+				const cloned = new Map<Key, Row>()
+				for (const [key, row] of store) cloned.set(key, { ...row })
+				copy.set(name, cloned)
+			}
+			return async () => {
+				this.#tables.clear()
+				for (const [name, store] of copy) this.#tables.set(name, store)
+			}
+		}
 		const copy = new Map<string, Map<Key, Row>>()
-		for (const [name, store] of this.#tables) {
+		for (const name of tables) {
+			const store = this.#tables.get(name)
+			if (store === undefined) continue
 			const cloned = new Map<Key, Row>()
 			for (const [key, row] of store) cloned.set(key, { ...row })
 			copy.set(name, cloned)
 		}
 		return async () => {
-			this.#tables.clear()
 			for (const [name, store] of copy) this.#tables.set(name, store)
 		}
+	}
+
+	/**
+	 * Return the persisted {@link DriverMeta}, or `undefined` when the store has
+	 * never been stamped.
+	 *
+	 * @remarks
+	 * In-process only — the metadata lives in this instance's memory, exactly
+	 * like the rest of this driver's storage. A driver-conformance-valid
+	 * implementation of the optional `meta` / `stamp` pair.
+	 *
+	 * @returns The last-stamped {@link DriverMeta}, or `undefined`
+	 */
+	async meta(): Promise<DriverMeta | undefined> {
+		return this.#meta
+	}
+
+	/**
+	 * Persist `meta` verbatim for a later `meta()` to return.
+	 *
+	 * @param meta - The {@link DriverMeta} to persist
+	 */
+	async stamp(meta: DriverMeta): Promise<void> {
+		this.#meta = meta
 	}
 
 	/**
