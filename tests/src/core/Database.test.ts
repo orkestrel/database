@@ -1,4 +1,4 @@
-import type { DriverInterface, TransactionInterface } from '@src/core'
+import type { DriverInterface, Migration, TableSchema, TransactionInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
@@ -478,5 +478,117 @@ describe('Database — emitter (push observation surface)', () => {
 		// so it could not recurse).
 		expect(errors.count).toBe(1)
 		expect(errors.calls[0]?.[1]).toBe('commit')
+	})
+})
+
+// ── migrate() ─────────────────────────────────────────────────────────────────
+//
+// Diffs a caller-supplied `deployed` schema against the database's declared schema
+// via `planMigration`, applies the resulting plan through the driver's optional
+// `migrate` hook, and returns the applied plan. Throws `MIGRATION` when the driver
+// lacks the hook (propagated driver errors, e.g. unknown-table, pass through as-is —
+// covered by `MemoryDriver`'s own tests and `conformDriver`). Checks abort at entry.
+// Emits `migrate` AFTER a successful apply (AGENTS §13).
+
+describe('migrate()', () => {
+	it('applies a column.remove plan, strips stored rows, and emits migrate once', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users')
+		await users.set({ id: 'u1', name: 'Ada' })
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		const deployed: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'id', type: 'string', nullable: false },
+					{ name: 'name', type: 'string', nullable: false },
+					{ name: 'legacy', type: 'string', nullable: false },
+				],
+				indexes: [],
+			},
+		]
+		const plan = await db.migrate(deployed)
+		expect(plan.steps).toEqual([{ operation: 'column.remove', table: 'users', column: 'legacy' }])
+		expect(events.migrate.calls).toEqual([[plan]])
+		expect(events.migrate.count).toBe(1)
+	})
+
+	it('rejects with MIGRATION when the driver has no migrate hook; no event fires', async () => {
+		const memory = createMemoryDriver()
+		const driver: DriverInterface = {
+			open: (schema) => memory.open(schema),
+			close: () => memory.close(),
+			read: (table, key) => memory.read(table, key),
+			write: (table, key, row) => memory.write(table, key, row),
+			delete: (table, key) => memory.delete(table, key),
+			keys: (table) => memory.keys(table),
+			scan: (table) => memory.scan(table),
+			clear: (table) => memory.clear(table),
+			snapshot: () => memory.snapshot(),
+		}
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		await expect(db.migrate([])).rejects.toMatchObject({ code: 'MIGRATION' })
+		expect(events.migrate.count).toBe(0)
+	})
+
+	it('checks the abort signal at entry; driver.migrate is never called, no event fires', async () => {
+		const memory = createMemoryDriver()
+		const calls: Migration[] = []
+		const driver: DriverInterface = {
+			open: (schema) => memory.open(schema),
+			close: () => memory.close(),
+			read: (table, key) => memory.read(table, key),
+			write: (table, key, row) => memory.write(table, key, row),
+			delete: (table, key) => memory.delete(table, key),
+			keys: (table) => memory.keys(table),
+			scan: (table) => memory.scan(table),
+			clear: (table) => memory.clear(table),
+			snapshot: () => memory.snapshot(),
+			async migrate(plan) {
+				calls.push(plan)
+			},
+		}
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		const controller = new AbortController()
+		controller.abort('too slow')
+		await expect(db.migrate([], { signal: controller.signal })).rejects.toMatchObject({
+			code: 'ABORTED',
+		})
+		expect(calls).toEqual([])
+		expect(events.migrate.count).toBe(0)
+	})
+
+	it('returns a zero-step plan and still invokes the driver when deployed matches declared', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const events = recordEmitterEvents(db.emitter, ['migrate'] as const)
+		const deployed: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'id', type: 'string', nullable: false },
+					{ name: 'name', type: 'string', nullable: false },
+				],
+				indexes: [],
+			},
+		]
+		const plan = await db.migrate(deployed)
+		expect(plan.steps).toEqual([])
+		expect(events.migrate.calls).toEqual([[plan]])
 	})
 })

@@ -7,6 +7,7 @@ import type {
 	DatabaseStatus,
 	DriverInterface,
 	KeyFunction,
+	Migration,
 	ReadOptions,
 	RowOf,
 	TableExport,
@@ -20,7 +21,7 @@ import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { checkAbort, shapeToColumnType } from './helpers.js'
+import { checkAbort, planMigration, shapeToColumnType } from './helpers.js'
 import { Table } from './Table.js'
 
 /**
@@ -192,6 +193,35 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 			this.#emitter.emit('rollback', error)
 			throw error
 		}
+	}
+
+	/**
+	 * Diff `deployed` against this database's declared schema and apply the
+	 * resulting plan through the driver's optional `migrate` hook.
+	 *
+	 * @param deployed - The schema currently deployed, as {@link TableSchema}s
+	 * @param options - `{ signal }` to abort before the migration starts
+	 * @returns The applied {@link Migration} plan
+	 * @throws A `MIGRATION` {@link DatabaseError} when the driver does not
+	 * implement `migrate`, or when a step references an unknown table
+	 * (propagated from the driver)
+	 * @throws An `ABORTED` {@link DatabaseError} when `options.signal` has
+	 * already fired at entry
+	 */
+	async migrate(deployed: readonly TableSchema[], options?: ReadOptions): Promise<Migration> {
+		checkAbort(options?.signal)
+		await this.#connect()
+		const plan = planMigration(deployed, this.#schema())
+		if (this.#driver.migrate === undefined) {
+			throw new DatabaseError('MIGRATION', `Database '${this.#name}' driver does not support migration`, {
+				name: this.#name,
+			})
+		}
+		await this.#driver.migrate(plan)
+		// Observe the successful apply — AFTER the driver applied the plan, mirroring the
+		// transaction lifecycle's emit-after-transition contract (AGENTS §13).
+		this.#emitter.emit('migrate', plan)
+		return plan
 	}
 
 	// Construct a table over an opaque row type `R`, so the deep `Infer<T[K]>` of
