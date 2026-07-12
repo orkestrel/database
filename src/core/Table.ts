@@ -21,6 +21,7 @@ import {
 	checkAbort,
 	computeAggregate,
 	extractKey,
+	filterRows,
 	matchesCriteria,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
@@ -145,7 +146,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		const conditions = criteria?.conditions
 		const native = await this.#driver.count?.(this.#name, conditions ? { conditions } : {})
 		if (native !== undefined) return native
-		return this.#match(await this.#collect(), criteria).length
+		return filterRows(await this.#collect(), criteria?.conditions ?? []).length
 	}
 
 	async aggregate(
@@ -164,7 +165,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		const native = this.#driver.aggregate?.(this.#name, operation, column, filter)
 		if (native !== undefined) return native
 		const rows = await this.#driver.records?.(this.#name, filter)
-		const matched = rows ?? this.#match(await this.#collect(), criteria)
+		const matched = rows ?? filterRows(await this.#collect(), criteria?.conditions ?? [])
 		return computeAggregate(matched, operation, column)
 	}
 
@@ -218,38 +219,58 @@ export class Table<T = Row> implements TableInterface<T> {
 		}
 	}
 
-	set(row: T): Promise<Key>
-	set(rows: readonly T[]): Promise<readonly Key[]>
-	async set(rows: T | readonly T[]): Promise<Key | readonly Key[]> {
+	set(row: T, options?: ReadOptions): Promise<Key>
+	set(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	async set(
+		rows: T | readonly T[],
+		options?: ReadOptions,
+	): Promise<Key | readonly Key[]> {
+		checkAbort(options?.signal)
 		await this.#ready()
-		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, false))
+		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, false), options?.signal)
 		return this.#put(rows, false)
 	}
 
-	add(row: T): Promise<Key>
-	add(rows: readonly T[]): Promise<readonly Key[]>
-	async add(rows: T | readonly T[]): Promise<Key | readonly Key[]> {
+	add(row: T, options?: ReadOptions): Promise<Key>
+	add(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	async add(
+		rows: T | readonly T[],
+		options?: ReadOptions,
+	): Promise<Key | readonly Key[]> {
+		checkAbort(options?.signal)
 		await this.#ready()
-		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, true))
+		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, true), options?.signal)
 		return this.#put(rows, true)
 	}
 
-	update(key: Key, changes: Partial<T>): Promise<boolean>
-	update(keys: readonly Key[], changes: Partial<T>): Promise<readonly boolean[]>
+	update(key: Key, changes: Partial<T>, options?: ReadOptions): Promise<boolean>
+	update(
+		keys: readonly Key[],
+		changes: Partial<T>,
+		options?: ReadOptions,
+	): Promise<readonly boolean[]>
 	async update(
 		keys: Key | readonly Key[],
 		changes: Partial<T>,
+		options?: ReadOptions,
 	): Promise<boolean | readonly boolean[]> {
+		checkAbort(options?.signal)
 		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, (key) => this.#updateOne(key, changes))
+		if (isArray(keys)) {
+			return this.#each(keys, (key) => this.#updateOne(key, changes), options?.signal)
+		}
 		return this.#updateOne(keys, changes)
 	}
 
-	remove(key: Key): Promise<boolean>
-	remove(keys: readonly Key[]): Promise<readonly boolean[]>
-	async remove(keys: Key | readonly Key[]): Promise<boolean | readonly boolean[]> {
+	remove(key: Key, options?: ReadOptions): Promise<boolean>
+	remove(keys: readonly Key[], options?: ReadOptions): Promise<readonly boolean[]>
+	async remove(
+		keys: Key | readonly Key[],
+		options?: ReadOptions,
+	): Promise<boolean | readonly boolean[]> {
+		checkAbort(options?.signal)
 		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, (key) => this.#delete(key))
+		if (isArray(keys)) return this.#each(keys, (key) => this.#delete(key), options?.signal)
 		return this.#delete(keys)
 	}
 
@@ -274,13 +295,19 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	// Run a single-item operation across each item in order — the batch overloads
 	// loop one item at a time (sequential, so writes never race) rather than
-	// pushing batch logic into the thin driver.
+	// pushing batch logic into the thin driver. `signal` (write batches only) is
+	// checked before EVERY item, so an abort mid-batch stops before the next
+	// item runs — already-applied items stay applied (no rollback).
 	async #each<I, R>(
 		items: readonly I[],
 		operation: (item: I) => Promise<R>,
+		signal?: AbortSignal,
 	): Promise<readonly R[]> {
 		const results: R[] = []
-		for (const item of items) results.push(await operation(item))
+		for (const item of items) {
+			checkAbort(signal)
+			results.push(await operation(item))
+		}
 		return results
 	}
 
@@ -343,14 +370,6 @@ export class Table<T = Row> implements TableInterface<T> {
 		const rows: Row[] = []
 		for await (const row of this.#driver.scan(this.#name)) rows.push(row)
 		return rows
-	}
-
-	// Filter rows by a criteria's conditions only (no sort/page) — the shared basis
-	// for count and aggregate, matching what the native count/records paths compute.
-	#match(rows: readonly Row[], criteria?: Criteria): readonly Row[] {
-		const conditions = criteria?.conditions
-		if (conditions === undefined || conditions.length === 0) return rows
-		return rows.filter((row) => matchesCriteria(row, conditions))
 	}
 
 	// Copy the input and assign a generated key when the key column is empty.

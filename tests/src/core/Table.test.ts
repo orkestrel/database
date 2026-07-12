@@ -3,6 +3,7 @@ import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import {
+	collectRows,
 	createConstrainedUsersDatabase,
 	createRecorder,
 	createRecordingDriver,
@@ -185,6 +186,59 @@ describe('Table — batch overloads (array in → array out, same order)', () =>
 	})
 })
 
+describe('Table — batch write abort signal (AGENTS §9.2)', () => {
+	it('throws ABORTED and applies nothing when the signal is already fired before a batch set', async () => {
+		const users = userTable()
+		const controller = new AbortController()
+		controller.abort('too slow')
+		await expect(
+			users.set(
+				[
+					{ id: 'u1', name: 'Ada', age: 36 },
+					{ id: 'u2', name: 'Bo', age: 41 },
+				],
+				{ signal: controller.signal },
+			),
+		).rejects.toMatchObject({ code: 'ABORTED' })
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('throws ABORTED on a single-row write with an already-fired signal', async () => {
+		const users = userTable()
+		const controller = new AbortController()
+		controller.abort('too slow')
+		await expect(
+			users.set(createUserRow(), { signal: controller.signal }),
+		).rejects.toMatchObject({ code: 'ABORTED' })
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('aborting between items after the first write leaves the first item applied (no rollback)', async () => {
+		const users = userTable()
+		const controller = new AbortController()
+		// The table emitter fires `write` AFTER the driver write completes but BEFORE
+		// `#each` proceeds to the next item — abort from inside the listener to land
+		// squarely in the between-items gate without any mocks.
+		users.emitter.on('write', () => controller.abort('stop after first'))
+		let error: unknown
+		try {
+			await users.set(
+				[
+					{ id: 'u1', name: 'Ada', age: 36 },
+					{ id: 'u2', name: 'Bo', age: 41 },
+				],
+				{ signal: controller.signal },
+			)
+		} catch (caught) {
+			error = caught
+		}
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
+		// The first item is already applied — no rollback (AGENTS §9.2 remarks).
+		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
+		expect(await users.get('u2')).toBeUndefined()
+	})
+})
+
 describe('Table — coercion and validation', () => {
 	it('coerces a coercible row through the contract on write', async () => {
 		const db = createDatabase({
@@ -304,21 +358,15 @@ describe('Table — scan (lazy streaming)', () => {
 		return users
 	}
 
-	async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-		const rows: T[] = []
-		for await (const row of iterable) rows.push(row)
-		return rows
-	}
-
 	it('yields all rows in driver key-order (order is ignored)', async () => {
 		const users = await seeded()
-		const rows = await collect(users.scan())
+		const rows = await collectRows(users.scan())
 		expect(rows.map((row) => row.id)).toEqual(['u1', 'u2', 'u3'])
 	})
 
 	it('applies criteria conditions lazily', async () => {
 		const users = await seeded()
-		const rows = await collect(
+		const rows = await collectRows(
 			users.scan({
 				conditions: [{ column: 'age', operator: 'above', values: [30], connector: 'and' }],
 			}),
@@ -328,7 +376,7 @@ describe('Table — scan (lazy streaming)', () => {
 
 	it('applies offset and limit via lazy counting', async () => {
 		const users = await seeded()
-		const rows = await collect(users.scan({ offset: 1, limit: 1 }))
+		const rows = await collectRows(users.scan({ offset: 1, limit: 1 }))
 		expect(rows.map((row) => row.id)).toEqual(['u2'])
 	})
 
@@ -416,7 +464,7 @@ describe('Table — scan (lazy streaming)', () => {
 		const criteria: Criteria = {
 			conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
 		}
-		const rows = await collect(users.scan(criteria))
+		const rows = await collectRows(users.scan(criteria))
 		expect(rows).toEqual([{ id: 'native', name: 'Native', age: 7 }])
 		expect(streamCalls).toEqual([criteria])
 	})
