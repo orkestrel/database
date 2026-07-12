@@ -25,11 +25,7 @@ import {
 	stepToSchema,
 	stepToSQL,
 } from '../helpers.js'
-
-// The reserved single-row metadata table `meta` / `stamp` persist through — a
-// user table named `_meta` collides with it (the caller's concern to avoid,
-// documented on the class below).
-const META_TABLE = '_meta'
+import { META_TABLE } from '../constants.js'
 
 /**
  * The SQLite {@link DriverInterface} — the server-native, trusted-mode backend
