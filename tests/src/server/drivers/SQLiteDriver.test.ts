@@ -372,6 +372,75 @@ describe('SQLiteDriver — native transaction', () => {
 	})
 })
 
+describe('SQLiteDriver — migrate joined into an enclosing native transaction', () => {
+	// The regression: `migrate` must NOT open its own native transaction when the
+	// caller already has one open (Database's versioned reconcile / #apply path) —
+	// node:sqlite rejects a nested `BEGIN`.
+	it('runs migrate directly inside an already-open driver.transaction() handle (no nested BEGIN)', async () => {
+		const migrate = driver.migrate
+		if (migrate === undefined) throw new Error('SQLiteDriver is missing its native migrate hook')
+		const transaction = driver.transaction
+		if (transaction === undefined) throw new Error('SQLiteDriver is missing its transaction hook')
+
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const handle = await transaction.call(driver)
+		const step: MigrationStep = { operation: 'column.remove', table: 'users', column: 'active' }
+		await migrate.call(driver, { from: 0, to: 1, steps: [step] })
+		await handle.commit()
+
+		const row = await driver.read('users', 'u1')
+		expect(row).toEqual({ id: 'u1', name: 'Ada', age: 36 })
+		expect(row && 'active' in row).toBe(false)
+	})
+
+	it('versioned reconcile survives a real reopen at a new version with a dropped column', async () => {
+		const temp = tempDatabasePath()
+		const v1Users = {
+			id: stringShape(),
+			name: stringShape(),
+			age: integerShape(),
+			active: booleanShape(),
+		}
+		const v1 = createDatabase({
+			driver: createSQLiteDriver(temp.path),
+			name: 'versioned',
+			tables: { users: v1Users },
+			version: 1,
+		})
+		const v1Table = v1.table('users')
+		await v1Table.set({ id: 'u1', name: 'Ada', age: 36, active: true })
+		await v1.close()
+
+		const v2Users = { id: stringShape(), name: stringShape(), age: integerShape() }
+		const v2 = createDatabase({
+			driver: createSQLiteDriver(temp.path),
+			name: 'versioned',
+			tables: { users: v2Users },
+			version: 2,
+		})
+		const v2Table = v2.table('users')
+		await v2.open()
+		const row = await v2Table.get('u1')
+		expect(row).toEqual({ id: 'u1', name: 'Ada', age: 36 })
+		expect(row && 'active' in row).toBe(false)
+		await v2.close()
+
+		// A second reopen at the same declared version is a no-op reconcile.
+		const v2Again = createDatabase({
+			driver: createSQLiteDriver(temp.path),
+			name: 'versioned',
+			tables: { users: v2Users },
+			version: 2,
+		})
+		await v2Again.open()
+		const rowAgain = await v2Again.table('users').get('u1')
+		expect(rowAgain).toEqual({ id: 'u1', name: 'Ada', age: 36 })
+		await v2Again.close()
+
+		temp.cleanup()
+	})
+})
+
 describe('SQLiteDriver — stream laziness', () => {
 	it('breaking out of a stream early yields only the consumed rows and leaves the driver usable', async () => {
 		for (const id of ['a', 'b', 'c', 'd', 'e']) {

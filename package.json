@@ -68,8 +68,8 @@
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && tsc -p configs/src/tsconfig.core.json",
-		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json",
-		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json",
+		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json && node configs/src/rewrite.paths.mjs dist/src/browser",
+		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json && node configs/src/rewrite.paths.mjs dist/src/server",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {

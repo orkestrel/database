@@ -50,11 +50,15 @@ import { META_TABLE } from '../constants.js'
  * `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (via `aggregateSQL`) over the same compiled
  * WHERE. `transaction` wraps native `BEGIN` / `COMMIT` / `ROLLBACK` with
  * double-settle guards. `migrate` runs the plan's projected DDL
- * ({@link import('../helpers.js').stepToSQL}) inside one native
- * `database.transaction` — a mid-plan failure rolls back atomically, an
- * improvement over the non-atomic `MemoryDriver` / `JSONDriver` migrate; a
- * step referencing an undeclared table throws `DatabaseError` `MIGRATION`
- * before any DDL for that step runs. `snapshot` is capture-replay (SELECT the
+ * ({@link import('../helpers.js').stepToSQL}) inside whichever native
+ * transaction is active: joined into an already-open `transaction()` handle
+ * when one exists (the core's versioned reconcile path wraps migrate + stamp
+ * in one native `BEGIN`, and node:sqlite rejects a nested `BEGIN`), or inside
+ * its own `database.transaction` otherwise — a mid-plan failure rolls back
+ * atomically either way, an improvement over the non-atomic `MemoryDriver` /
+ * `JSONDriver` migrate; a step referencing an undeclared table throws
+ * `DatabaseError` `MIGRATION` before any DDL for that step runs. `snapshot` is
+ * capture-replay (SELECT the
  * named tables' rows, replay via DELETE + INSERT OR REPLACE inside a native
  * transaction on rollback) rather than a SQL `SAVEPOINT`, since the core
  * `transaction` calls the rollback thunk only on failure with no commit-on-
@@ -67,6 +71,7 @@ export class SQLiteDriver implements DriverInterface {
 	readonly #path: string
 	#database: SQLiteDatabaseInterface | undefined
 	#schema = new Map<string, TableSchema>()
+	#transacting = false
 
 	constructor(path: string) {
 		this.#path = path
@@ -228,12 +233,14 @@ export class SQLiteDriver implements DriverInterface {
 		const database = this.#require()
 		database.exec('BEGIN')
 		let settled = false
+		this.#transacting = true
 		return {
 			commit: async () => {
 				if (settled) {
 					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
 				}
 				settled = true
+				this.#transacting = false
 				database.exec('COMMIT')
 			},
 			rollback: async () => {
@@ -241,6 +248,7 @@ export class SQLiteDriver implements DriverInterface {
 					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
 				}
 				settled = true
+				this.#transacting = false
 				database.exec('ROLLBACK')
 			},
 		}
@@ -248,38 +256,35 @@ export class SQLiteDriver implements DriverInterface {
 
 	/**
 	 * Apply a {@link Migration} plan by executing each step's projected DDL
-	 * ({@link import('../helpers.js').stepToSQL}) inside one native
-	 * `database.transaction` — atomic: a mid-plan failure rolls back every
-	 * DDL statement already applied by the plan.
+	 * ({@link import('../helpers.js').stepToSQL}).
 	 *
 	 * @remarks
-	 * A step referencing a table not in this driver's declared schema (and
-	 * that is not itself a `table.add`) throws `DatabaseError` `MIGRATION`
-	 * before any DDL for that step runs, propagating out of the native
-	 * transaction (which rolls back on a throw).
+	 * Atomicity is provided by whichever native transaction is active: when
+	 * this driver's own `transaction()` hook already has a handle open (the
+	 * core's versioned reconcile / migrate path joins migrate + stamp under
+	 * one native `BEGIN`), the plan's DDL runs directly inside that enclosing
+	 * transaction — a mid-plan failure propagates out and the CALLER's
+	 * `commit`/`rollback` provides atomicity. node:sqlite (and SQLite
+	 * generally) rejects a nested `BEGIN`, so this driver must never open a
+	 * second native transaction while one is already open. Otherwise (no
+	 * enclosing transaction), `migrate` wraps the plan in its own native
+	 * `database.transaction` — atomic on its own: a mid-plan failure rolls
+	 * back every DDL statement already applied by the plan. A step
+	 * referencing a table not in this driver's declared schema (and that is
+	 * not itself a `table.add`) throws `DatabaseError` `MIGRATION` before any
+	 * DDL for that step runs, propagating out of whichever transaction is
+	 * active (which rolls back on a throw).
 	 *
 	 * @param plan - The migration plan to apply
 	 */
 	async migrate(plan: Migration): Promise<void> {
 		const database = this.#require()
 		const schema = new Map(this.#schema)
-		database.transaction(() => {
-			for (const step of plan.steps) {
-				const table = step.operation === 'table.add' ? step.table.name : step.table
-				if (step.operation !== 'table.add' && !schema.has(table)) {
-					throw new DatabaseError('MIGRATION', `migrate: unknown table '${table}'`, { table })
-				}
-				for (const sql of stepToSQL(step)) database.exec(sql)
-				if (step.operation === 'table.add') {
-					schema.set(step.table.name, step.table)
-				} else if (step.operation === 'table.remove') {
-					schema.delete(step.table)
-				} else {
-					const existing = schema.get(table)
-					if (existing !== undefined) schema.set(table, stepToSchema(existing, step))
-				}
-			}
-		})
+		if (this.#transacting) {
+			this.#applyPlan(database, plan, schema)
+		} else {
+			database.transaction(() => this.#applyPlan(database, plan, schema))
+		}
 		this.#schema = schema
 	}
 
@@ -393,5 +398,30 @@ export class SQLiteDriver implements DriverInterface {
 	#key(key: Key, schema: TableSchema): SQLiteValue {
 		const primary = schema.columns.find((column) => column.name === schema.primary)
 		return encodeValue(key, primary === undefined ? 'text' : primary.type)
+	}
+
+	// Walk a migration plan's steps, executing each one's projected DDL and updating
+	// the working `schema` copy in place — shared by both `migrate`'s joined-transaction
+	// (native handle already open) and self-wrapped (own `database.transaction`) paths.
+	#applyPlan(
+		database: SQLiteDatabaseInterface,
+		plan: Migration,
+		schema: Map<string, TableSchema>,
+	): void {
+		for (const step of plan.steps) {
+			const table = step.operation === 'table.add' ? step.table.name : step.table
+			if (step.operation !== 'table.add' && !schema.has(table)) {
+				throw new DatabaseError('MIGRATION', `migrate: unknown table '${table}'`, { table })
+			}
+			for (const sql of stepToSQL(step)) database.exec(sql)
+			if (step.operation === 'table.add') {
+				schema.set(step.table.name, step.table)
+			} else if (step.operation === 'table.remove') {
+				schema.delete(step.table)
+			} else {
+				const existing = schema.get(table)
+				if (existing !== undefined) schema.set(table, stepToSchema(existing, step))
+			}
+		}
 	}
 }

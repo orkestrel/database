@@ -256,7 +256,9 @@ export class IndexedDBDriver implements DriverInterface {
 	 * @param meta - The {@link DriverMeta} to persist
 	 */
 	async stamp(meta: DriverMeta): Promise<void> {
-		await this.#require().store(META_STORE).set({ ...meta }, 'meta')
+		await this.#require()
+			.store(META_STORE)
+			.set({ ...meta }, 'meta')
 	}
 
 	/**
@@ -372,7 +374,10 @@ export class IndexedDBDriver implements DriverInterface {
 					break
 				case 'column.add': {
 					const table = this.#schema.get(step.table)
-					if (table !== undefined && !table.columns.some((column) => column.name === step.column.name)) {
+					if (
+						table !== undefined &&
+						!table.columns.some((column) => column.name === step.column.name)
+					) {
 						this.#schema.set(step.table, { ...table, columns: [...table.columns, step.column] })
 					}
 					break
