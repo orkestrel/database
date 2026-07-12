@@ -1,5 +1,5 @@
 import type { DriverInterface } from '@src/core'
-import { applyCriteria, createDatabase } from '@src/core'
+import { applyCriteria, createDatabase, isDatabaseError } from '@src/core'
 import { createIndexedDBDriver } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
@@ -252,5 +252,121 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 			if (seen.length === 2) break
 		}
 		expect(seen.length).toBe(2)
+	})
+})
+
+describe('IndexedDBDriver — migrate / meta / stamp', () => {
+	it('meta is undefined until stamped, and round-trips exactly on stamp', async () => {
+		expect(await driver.meta?.()).toBeUndefined()
+		const meta = { version: 1, schema: tableSchemas('users') }
+		await driver.stamp?.(meta)
+		expect(await driver.meta?.()).toEqual(meta)
+	})
+
+	it('meta persists across close and reopen (same database name)', async () => {
+		const meta = { version: 2, schema: tableSchemas('users') }
+		await driver.stamp?.(meta)
+		await driver.close()
+		const reopened = createIndexedDBDriver(name)
+		await reopened.open(tableSchemas('users'))
+		expect(await reopened.meta?.()).toEqual(meta)
+		await reopened.close()
+	})
+
+	it('the reserved meta store is excluded from a whole-store snapshot rollback', async () => {
+		const first = { version: 1, schema: tableSchemas('users') }
+		await driver.stamp?.(first)
+		const rollback = await driver.snapshot()
+		const second = { version: 2, schema: tableSchemas('users') }
+		await driver.stamp?.(second)
+		await rollback()
+		// The whole-store rollback restored table data but must NOT have touched
+		// the reserved meta store — the newer stamp survives.
+		expect(await driver.meta?.()).toEqual(second)
+	})
+
+	it('table.add creates a usable store via migrate', async () => {
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [
+				{
+					operation: 'table.add',
+					table: { name: 'posts', primary: 'id', columns: [], indexes: [] },
+				},
+			],
+		})
+		await driver.write('posts', 'p1', { id: 'p1', title: 'Hello' })
+		expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
+	})
+
+	it('table.remove drops a store via migrate', async () => {
+		await driver.open(tableSchemas('users', 'posts'))
+		await driver.write('posts', 'p1', { id: 'p1' })
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'table.remove', table: 'posts' }],
+		})
+		await expect(driver.read('posts', 'p1')).rejects.toThrow('posts')
+	})
+
+	it('index.add on an existing store becomes visible (secondary-index read works)', async () => {
+		await driver.write('users', 'u1', { id: 'u1', age: 30 })
+		await driver.write('users', 'u2', { id: 'u2', age: 41 })
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+		})
+		await driver.close()
+		// Read the live IDBIndex through a fresh wrapper connection over the SAME
+		// database — a non-tautological existence proof of the created index.
+		const wrapper = createIndexedDBDatabase({
+			name,
+			stores: { users: { indexes: [{ name: 'age', path: 'age' }] } },
+		})
+		await wrapper.connect()
+		expect((await wrapper.store('users').index('age').get(41))?.id).toBe('u2')
+		wrapper.close()
+		driver = createIndexedDBDriver(name)
+		await driver.open(tableSchemas('users'))
+	})
+
+	it('a column.remove migration rewrites stored rows (verified post-reconnect)', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'column.remove', table: 'users', column: 'legacy' }],
+		})
+		const migrated = await driver.read('users', 'u1')
+		expect(migrated).toEqual({ id: 'u1', name: 'Ada' })
+		await driver.close()
+		const reopened = createIndexedDBDriver(name)
+		await reopened.open(tableSchemas('users'))
+		expect(await reopened.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
+		await reopened.close()
+		driver = createIndexedDBDriver(name)
+		await driver.open(tableSchemas('users'))
+	})
+
+	it('an unknown-table migration step throws MIGRATION without consuming a version', async () => {
+		await driver.write('users', 'u1', { id: 'u1' })
+		let caught: unknown
+		try {
+			await driver.migrate?.({
+				from: 0,
+				to: 1,
+				steps: [{ operation: 'table.remove', table: 'ghost' }],
+			})
+		} catch (error) {
+			caught = error
+		}
+		expect(isDatabaseError(caught) && caught.code === 'MIGRATION').toBe(true)
+		// The connection is still usable — no version bump was wasted.
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
+		await driver.write('users', 'u2', { id: 'u2' })
+		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2' })
 	})
 })

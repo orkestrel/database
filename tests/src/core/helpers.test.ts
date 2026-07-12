@@ -13,6 +13,7 @@ import {
 	filterRows,
 	globMatch,
 	isDatabaseError,
+	isDriverMeta,
 	likeMatch,
 	matchesCondition,
 	matchesCriteria,
@@ -345,6 +346,56 @@ describe('shapeToColumnType', () => {
 		expect(shapeToColumnType(literalShape([1, 2]))).toBe('integer')
 		expect(shapeToColumnType(literalShape([1.5, 2]))).toBe('real')
 		expect(shapeToColumnType(literalShape([true, false]))).toBe('boolean')
+	})
+})
+
+describe('isDriverMeta', () => {
+	const validSchema: TableSchema = {
+		name: 'users',
+		primary: 'id',
+		columns: [{ name: 'id', type: 'text', nullable: false }],
+		indexes: [['id']],
+	}
+
+	it('accepts a well-formed DriverMeta', () => {
+		expect(isDriverMeta({ version: 1, schema: [validSchema] })).toBe(true)
+		expect(isDriverMeta({ version: 0, schema: [] })).toBe(true)
+	})
+
+	it('rejects a non-record value', () => {
+		expect(isDriverMeta(null)).toBe(false)
+		expect(isDriverMeta('meta')).toBe(false)
+		expect(isDriverMeta([])).toBe(false)
+	})
+
+	it('rejects a non-finite version', () => {
+		expect(isDriverMeta({ version: Number.NaN, schema: [] })).toBe(false)
+		expect(isDriverMeta({ version: Number.POSITIVE_INFINITY, schema: [] })).toBe(false)
+		expect(isDriverMeta({ version: '1', schema: [] })).toBe(false)
+	})
+
+	it('rejects a schema that is not an array', () => {
+		expect(isDriverMeta({ version: 1, schema: {} })).toBe(false)
+		expect(isDriverMeta({ version: 1 })).toBe(false)
+	})
+
+	it('rejects a table schema with a bad column type', () => {
+		const bad = { ...validSchema, columns: [{ name: 'id', type: 'nope', nullable: false }] }
+		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+	})
+
+	it('rejects a table schema with a non-record column', () => {
+		const bad = { ...validSchema, columns: ['id'] }
+		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+	})
+
+	it('rejects a table schema with a non-string index entry', () => {
+		const bad = { ...validSchema, indexes: [[1]] }
+		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+	})
+
+	it('rejects a table schema that is not a record', () => {
+		expect(isDriverMeta({ version: 1, schema: ['users'] })).toBe(false)
 	})
 })
 

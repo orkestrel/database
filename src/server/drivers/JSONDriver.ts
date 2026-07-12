@@ -1,6 +1,4 @@
 import type {
-	ColumnSchema,
-	ColumnType,
 	Criteria,
 	DriverInterface,
 	DriverMeta,
@@ -10,8 +8,8 @@ import type {
 	TableSchema,
 	TransactionInterface,
 } from '@src/core'
-import { DatabaseError, MemoryDriver, extractKey } from '@src/core'
-import { isArray, isBoolean, isRecord, isString } from '@orkestrel/contract'
+import { DatabaseError, MemoryDriver, extractKey, isDriverMeta } from '@src/core'
+import { isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
@@ -260,45 +258,7 @@ export class JSONDriver implements DriverInterface {
 				await this.#memory.write(table.name, key, entry)
 			}
 		}
-		// The closed set of portable column types (mirrors core's ColumnType union) —
-		// used to narrow a loaded meta's column.type without trusting the file.
-		const COLUMN_TYPES: readonly ColumnType[] = [
-			'text',
-			'integer',
-			'real',
-			'boolean',
-			'json',
-			'blob',
-		]
-		const isColumnType = (value: unknown): value is ColumnType =>
-			isString(value) && COLUMN_TYPES.some((type) => type === value)
-		const isColumnSchema = (value: unknown): value is ColumnSchema =>
-			isRecord(value) &&
-			isString(value.name) &&
-			isColumnType(value.type) &&
-			isBoolean(value.nullable)
-		const isIndexGroup = (value: unknown): value is readonly string[] =>
-			isArray(value) && value.every(isString)
-		const isTableSchema = (value: unknown): value is TableSchema =>
-			isRecord(value) &&
-			isString(value.name) &&
-			isString(value.primary) &&
-			isArray(value.columns) &&
-			value.columns.every(isColumnSchema) &&
-			isArray(value.indexes) &&
-			value.indexes.every(isIndexGroup)
-		if (isRecord(parsed.meta)) {
-			const version = parsed.meta.version
-			const schema = parsed.meta.schema
-			if (
-				typeof version === 'number' &&
-				Number.isFinite(version) &&
-				isArray(schema) &&
-				schema.every(isTableSchema)
-			) {
-				this.#meta = { version, schema }
-			}
-		}
+		if (isDriverMeta(parsed.meta)) this.#meta = parsed.meta
 	}
 
 	// Queue a flush behind #chain — see #flush @remarks for why.

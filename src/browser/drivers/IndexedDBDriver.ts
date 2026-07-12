@@ -1,13 +1,32 @@
-import type { Criteria, DriverInterface, Key, Row, TableSchema } from '@src/core'
-import { applyCriteria, compareValues, DatabaseError, extractKey, matchesCriteria } from '@src/core'
+import type {
+	Criteria,
+	DriverInterface,
+	DriverMeta,
+	Key,
+	Migration,
+	MigrationStep,
+	Row,
+	TableSchema,
+} from '@src/core'
+import {
+	applyCriteria,
+	compareValues,
+	DatabaseError,
+	extractKey,
+	isDriverMeta,
+	matchesCriteria,
+	migrateRows,
+} from '@src/core'
 import type {
 	IndexedDBDatabaseInterface,
 	IndexedDBStoreInterface,
+	IndexedDBUpgradeContext,
 	StoreDefinition,
 } from '@orkestrel/indexeddb'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import type { QueryPlan } from '../types.js'
 import { selectPlan } from '../helpers.js'
+import { META_STORE } from '../constants.js'
 
 /**
  * The IndexedDB {@link DriverInterface} — the persistent browser backend, built on
@@ -35,8 +54,23 @@ import { selectPlan } from '../helpers.js'
  * to a full scan + the engine.
  *
  * @remarks
- * This unit deliberately OMITS `aggregate` / `transaction` / `migrate` / `meta` /
- * `stamp` (a follow-up unit adds `migrate` / `meta` / `stamp`). There is no native
+ * This driver also implements `migrate` / `meta` / `stamp`. `meta` / `stamp`
+ * persist the {@link DriverMeta} in a reserved out-of-line store,
+ * {@link META_STORE} (`__meta__`) — excluded from a whole-store `snapshot`
+ * capture, since it is driver bookkeeping, not caller data. `migrate` applies a
+ * {@link Migration} plan natively: IndexedDB schema DDL (creating/dropping a
+ * store, creating/dropping an index) is legal only inside a versionchange
+ * transaction (`onupgradeneeded`), so `migrate` closes the current connection
+ * and opens a FRESH one at `version + 1` with an `upgrade` hook that walks the
+ * plan's steps — dropping stores, adding/removing indexes on the raw
+ * `IDBTransaction`, and rewriting rows for `column.remove` via a cursor walk
+ * (the one step needing to touch existing data; `column.add` is a no-op — this
+ * driver stores whatever a row carries, so there is nothing to backfill). A
+ * step referencing an unknown table is validated BEFORE the reconnect, so a
+ * `MIGRATION` `DatabaseError` never wastes a version bump.
+ *
+ * @remarks
+ * This unit deliberately OMITS `aggregate` / `transaction`. There is no native
  * `aggregate` (IndexedDB has no native SUM/AVG); the engine over the narrowed
  * `records` covers it. `transaction` is impossible here: the wrapper auto-commits
  * an `IDBTransaction` the moment control yields to a non-IDB `await`, so a
@@ -57,7 +91,9 @@ export class IndexedDBDriver implements DriverInterface {
 		// Reconnect cleanly so an auto-managed version bump (to create new stores) is
 		// never blocked by this driver's own open handle.
 		this.#database?.close()
-		const stores: Record<string, StoreDefinition> = {}
+		// The reserved meta store is declared alongside every open — out-of-line,
+		// no indexes — so `meta` / `stamp` always have somewhere to read/write.
+		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
 		for (const table of schema) {
 			// Out-of-line stores (no `path`): keys are passed explicitly. The declared
 			// secondary indexes become the store's `createIndex` definitions.
@@ -164,7 +200,11 @@ export class IndexedDBDriver implements DriverInterface {
 
 	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
 		const database = this.#require()
-		const names = tables ?? database.stores
+		// A whole-store capture excludes the reserved meta store — it is driver
+		// bookkeeping, not caller data, and rolling it back would undo a `stamp`
+		// unrelated to the caller's snapshot scope. An explicit `tables` list is
+		// caller-scoped already and passes through untouched.
+		const names = tables ?? database.stores.filter((name) => name !== META_STORE)
 		const captured = new Map<
 			string,
 			{ readonly keys: readonly IDBValidKey[]; readonly rows: readonly Row[] }
@@ -190,6 +230,86 @@ export class IndexedDBDriver implements DriverInterface {
 				}
 			})
 		}
+	}
+
+	/**
+	 * Return the persisted {@link DriverMeta}, or `undefined` when the store has
+	 * never been stamped.
+	 *
+	 * @remarks
+	 * Reads `'meta'` from the reserved {@link META_STORE}, narrowing the
+	 * structured-clone value with the core {@link isDriverMeta} guard (never
+	 * asserted, AGENTS §14) — a missing or malformed record returns `undefined`,
+	 * exactly like a fresh, never-stamped store.
+	 *
+	 * @returns The last-stamped {@link DriverMeta}, or `undefined`
+	 */
+	async meta(): Promise<DriverMeta | undefined> {
+		const record = await this.#require().store(META_STORE).get('meta')
+		if (!isDriverMeta(record)) return undefined
+		return record
+	}
+
+	/**
+	 * Persist `meta` verbatim for a later `meta()` to return.
+	 *
+	 * @param meta - The {@link DriverMeta} to persist
+	 */
+	async stamp(meta: DriverMeta): Promise<void> {
+		await this.#require().store(META_STORE).set({ ...meta }, 'meta')
+	}
+
+	/**
+	 * Apply a {@link Migration} plan by reconnecting at a bumped version and
+	 * running the plan's steps inside the wrapper's `upgrade` hook.
+	 *
+	 * @remarks
+	 * IndexedDB schema DDL is legal only inside `onupgradeneeded`, so this closes
+	 * the current connection and opens a FRESH one at `version + 1`, declaring
+	 * every currently-known store (plus {@link META_STORE}) so nothing is lost,
+	 * and applying `table.remove` / `index.add` / `index.remove` /
+	 * `column.remove` inside `upgrade`. Every step's `table` is validated against
+	 * the driver's own `#schema` BEFORE the reconnect — an unknown-table step
+	 * throws `DatabaseError` `MIGRATION` without ever bumping the version.
+	 * `table.add` / `column.add` need no upgrade-time action: `table.add` is
+	 * created by the wrapper's built-in create-missing-stores pass (its
+	 * definition is already in the declared `stores`), and this driver stores
+	 * whatever a row carries — there is nothing to backfill for a new column.
+	 * `#schema` bookkeeping is updated to match the applied plan, mirroring what
+	 * `open` tracks, so subsequent pushdown planning and a later `migrate` /
+	 * `open` see the new shape.
+	 *
+	 * @param plan - The migration plan to apply
+	 */
+	async migrate(plan: Migration): Promise<void> {
+		for (const step of plan.steps) {
+			if (step.operation !== 'table.add' && !this.#schema.has(step.table)) {
+				throw new DatabaseError('MIGRATION', `migrate: unknown table '${step.table}'`, {
+					table: step.table,
+				})
+			}
+		}
+		const current = this.#require()
+		const version = current.version
+		current.close()
+		this.#applySteps(plan.steps)
+		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
+		for (const table of this.#schema.values()) {
+			stores[table.name] = {
+				indexes: table.indexes.map((columns) => ({
+					name: columns.join('_'),
+					path: columns.length === 1 ? columns[0] : [...columns],
+				})),
+			}
+		}
+		const database = createIndexedDBDatabase({
+			name: this.#name,
+			version: version + 1,
+			stores,
+			upgrade: (context) => this.#upgrade(context, plan.steps),
+		})
+		await database.connect()
+		this.#database = database
 	}
 
 	// === Private
@@ -231,5 +351,98 @@ export class IndexedDBDriver implements DriverInterface {
 			throw new DatabaseError('NOT_FOUND', `table '${name}' is not declared`, { table: name })
 		}
 		return schema
+	}
+
+	// Mirror a migration plan's steps onto #schema — the same bookkeeping `open`
+	// does for a freshly declared schema, kept in sync so pushdown planning and a
+	// later migrate/open see the post-migration shape.
+	#applySteps(steps: readonly MigrationStep[]): void {
+		// Deep-equal two index-column-group arrays (order-sensitive: an index over
+		// `[a, b]` is not the same index as `[b, a]`) — mirrors planMigration's own
+		// local `sameIndex` (src/core/helpers.ts).
+		const sameIndex = (left: readonly string[], right: readonly string[]): boolean =>
+			left.length === right.length && left.every((column, position) => column === right[position])
+		for (const step of steps) {
+			switch (step.operation) {
+				case 'table.add':
+					if (!this.#schema.has(step.table.name)) this.#schema.set(step.table.name, step.table)
+					break
+				case 'table.remove':
+					this.#schema.delete(step.table)
+					break
+				case 'column.add': {
+					const table = this.#schema.get(step.table)
+					if (table !== undefined && !table.columns.some((column) => column.name === step.column.name)) {
+						this.#schema.set(step.table, { ...table, columns: [...table.columns, step.column] })
+					}
+					break
+				}
+				case 'column.remove': {
+					const table = this.#schema.get(step.table)
+					if (table !== undefined) {
+						this.#schema.set(step.table, {
+							...table,
+							columns: table.columns.filter((column) => column.name !== step.column),
+						})
+					}
+					break
+				}
+				case 'index.add': {
+					const table = this.#schema.get(step.table)
+					if (table !== undefined) {
+						this.#schema.set(step.table, { ...table, indexes: [...table.indexes, step.index] })
+					}
+					break
+				}
+				case 'index.remove': {
+					const table = this.#schema.get(step.table)
+					if (table !== undefined) {
+						this.#schema.set(step.table, {
+							...table,
+							indexes: table.indexes.filter((index) => !sameIndex(index, step.index)),
+						})
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Runs INSIDE the wrapper's versionchange transaction (see `migrate`
+	// @remarks). `table.add` / `column.add` are no-ops here — see `migrate`
+	// @remarks for why. `column.remove` is the one step touching existing rows:
+	// it walks a live cursor and rewrites each row through the core
+	// `migrateRows`, updating in place — the only IDB-await-only work permitted
+	// inside an upgrade transaction.
+	async #upgrade(context: IndexedDBUpgradeContext, steps: readonly MigrationStep[]): Promise<void> {
+		for (const step of steps) {
+			switch (step.operation) {
+				case 'table.remove':
+					context.drop(step.table)
+					break
+				case 'index.add': {
+					const name = step.index.join('_')
+					const path = step.index.length === 1 ? step.index[0] : [...step.index]
+					context.transaction.objectStore(step.table).createIndex(name, path)
+					break
+				}
+				case 'index.remove':
+					context.transaction.objectStore(step.table).deleteIndex(step.index.join('_'))
+					break
+				case 'column.remove': {
+					const store = context.store(step.table)
+					let cursor = await store.cursor()
+					while (cursor !== null) {
+						const [migrated] = migrateRows([cursor.value], [step])
+						await cursor.update(migrated)
+						cursor = await cursor.continue()
+					}
+					break
+				}
+				case 'table.add':
+				case 'column.add':
+					break
+			}
+		}
 	}
 }

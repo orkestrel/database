@@ -6,6 +6,7 @@ import type {
 	Condition,
 	Criteria,
 	DriverInterface,
+	DriverMeta,
 	Key,
 	Migration,
 	MigrationStep,
@@ -13,7 +14,15 @@ import type {
 	Row,
 	TableSchema,
 } from './types.js'
-import { isFiniteNumber, isRecord, isString, parseNumber, resolveField } from '@orkestrel/contract'
+import {
+	isArray,
+	isBoolean,
+	isFiniteNumber,
+	isRecord,
+	isString,
+	parseNumber,
+	resolveField,
+} from '@orkestrel/contract'
 import { MAX_PATTERN_LENGTH } from './constants.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
 
@@ -472,6 +481,56 @@ export function shapeToColumnType(shape: ContractShape): ColumnType {
 		case 'raw':
 			return 'json'
 	}
+}
+
+/**
+ * Whether a value is a well-formed {@link DriverMeta} — the boundary guard a
+ * versioning driver's `meta()` narrows a stored (structured-clone or
+ * `JSON.parse`d) value through before trusting it, replacing the per-driver
+ * duplicated narrowing every backend used to hand-roll (AGENTS §14: never `as`).
+ *
+ * @remarks
+ * Total and total-recursive over the whole shape: a finite `version`, and a
+ * `schema` array of well-formed {@link TableSchema} entries — each a `name` /
+ * `primary` string pair, a `columns` array of well-formed {@link ColumnSchema}
+ * entries (a `name` string, a {@link ColumnType} literal, a `nullable`
+ * boolean), and an `indexes` array of string arrays. Anything off-shape
+ * (including a non-record) returns `false` rather than throwing.
+ *
+ * @param value - The value to test
+ * @returns `true` when `value` is a well-formed `DriverMeta`
+ *
+ * @example
+ * ```ts
+ * isDriverMeta({ version: 1, schema: [] }) // true
+ * isDriverMeta({ version: 1, schema: [{ name: 'users' }] }) // false
+ * ```
+ */
+export function isDriverMeta(value: unknown): value is DriverMeta {
+	const COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean', 'json', 'blob']
+	const isColumnType = (candidate: unknown): candidate is ColumnType =>
+		isString(candidate) && COLUMN_TYPES.some((type) => type === candidate)
+	const isColumnSchema = (candidate: unknown): boolean =>
+		isRecord(candidate) &&
+		isString(candidate.name) &&
+		isColumnType(candidate.type) &&
+		isBoolean(candidate.nullable)
+	const isIndexGroup = (candidate: unknown): boolean =>
+		isArray(candidate) && candidate.every((entry) => isString(entry))
+	const isTableSchema = (candidate: unknown): candidate is TableSchema =>
+		isRecord(candidate) &&
+		isString(candidate.name) &&
+		isString(candidate.primary) &&
+		isArray(candidate.columns) &&
+		candidate.columns.every(isColumnSchema) &&
+		isArray(candidate.indexes) &&
+		candidate.indexes.every(isIndexGroup)
+	return (
+		isRecord(value) &&
+		isFiniteNumber(value.version) &&
+		isArray(value.schema) &&
+		value.schema.every(isTableSchema)
+	)
 }
 
 // === Cancellation

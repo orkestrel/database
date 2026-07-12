@@ -1,14 +1,7 @@
-import type {
-	AggregateFunction,
-	ColumnSchema,
-	ColumnType,
-	MigrationStep,
-	Row,
-	TableSchema,
-} from '@src/core'
+import type { AggregateFunction, ColumnType, MigrationStep, Row, TableSchema } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from './types.js'
-import { isArray, isBoolean, isRecord, isString } from '@orkestrel/contract'
+import { isString } from '@orkestrel/contract'
 import { randomUUID } from 'node:crypto'
 
 // The server's key-minting `KeyFunction` implementation — `core` mints no keys
@@ -460,47 +453,4 @@ export function stepToSchema(schema: TableSchema, step: MigrationStep): TableSch
 		case 'table.remove':
 			return schema
 	}
-}
-
-/**
- * Whether a value is a well-formed {@link TableSchema} — the boundary guard a
- * SQLite driver's `meta()` narrows a stored, `JSON.parse`d schema through
- * before trusting it (AGENTS §14: never `as`).
- *
- * @remarks
- * Total and total-recursive over the shape: `name` / `primary` strings, each
- * `columns` entry a well-formed {@link ColumnSchema} (a `name` string, a
- * {@link ColumnType} literal, a `nullable` boolean), and each `indexes` entry
- * an array of strings. Anything off-shape (including a non-record) returns
- * `false` rather than throwing.
- *
- * @param value - The value to test
- * @returns `true` when `value` is a well-formed `TableSchema`
- *
- * @example
- * ```ts
- * isTableSchema({ name: 'users', primary: 'id', columns: [], indexes: [] }) // true
- * isTableSchema({ name: 'users' }) // false
- * ```
- */
-export function isTableSchema(value: unknown): value is TableSchema {
-	const COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean', 'json', 'blob']
-	const isColumnType = (candidate: unknown): candidate is ColumnType =>
-		isString(candidate) && COLUMN_TYPES.some((type) => type === candidate)
-	const isColumnSchema = (candidate: unknown): candidate is ColumnSchema =>
-		isRecord(candidate) &&
-		isString(candidate.name) &&
-		isColumnType(candidate.type) &&
-		isBoolean(candidate.nullable)
-	const isIndexGroup = (candidate: unknown): candidate is readonly string[] =>
-		isArray(candidate) && candidate.every(isString)
-	return (
-		isRecord(value) &&
-		isString(value.name) &&
-		isString(value.primary) &&
-		isArray(value.columns) &&
-		value.columns.every(isColumnSchema) &&
-		isArray(value.indexes) &&
-		value.indexes.every(isIndexGroup)
-	)
 }

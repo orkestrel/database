@@ -11,7 +11,7 @@ import type {
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
-import { DatabaseError } from '@src/core'
+import { DatabaseError, isDriverMeta } from '@src/core'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import { compileCriteria } from '../compilers.js'
 import {
@@ -19,7 +19,6 @@ import {
 	decodeRow,
 	encodeRow,
 	encodeValue,
-	isTableSchema,
 	quote,
 	schemaToIndexes,
 	schemaToTable,
@@ -303,20 +302,16 @@ export class SQLiteDriver implements DriverInterface {
 		const version = row.version
 		const text = row.schema
 		if (typeof text !== 'string') return undefined
+		if (typeof version !== 'number' && typeof version !== 'bigint') return undefined
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(text)
 		} catch {
 			return undefined
 		}
-		if (
-			(typeof version !== 'number' && typeof version !== 'bigint') ||
-			!Array.isArray(parsed) ||
-			!parsed.every(isTableSchema)
-		) {
-			return undefined
-		}
-		return { version: Number(version), schema: parsed }
+		const candidate = { version: Number(version), schema: parsed }
+		if (!isDriverMeta(candidate)) return undefined
+		return candidate
 	}
 
 	/**
