@@ -1,11 +1,14 @@
-import type { TableSchema } from '@src/core'
+import type { DriverInterface, Key, Row, TableSchema } from '@src/core'
 import {
 	applyCriteria,
 	checkAbort,
-	columnType,
 	compareValues,
 	computeAggregate,
+	conformDriver,
+	createMemoryDriver,
+	deepEqual,
 	extractKey,
+	filterRows,
 	globMatch,
 	isDatabaseError,
 	likeMatch,
@@ -14,6 +17,7 @@ import {
 	MAX_PATTERN_LENGTH,
 	migrateRows,
 	planMigration,
+	shapeToColumnType,
 	sortRows,
 	wildcardMatch,
 } from '@src/core'
@@ -312,33 +316,33 @@ describe('extractKey', () => {
 	})
 })
 
-describe('columnType', () => {
+describe('shapeToColumnType', () => {
 	it('maps scalar shapes to their portable type', () => {
-		expect(columnType(stringShape())).toBe('text')
-		expect(columnType(integerShape())).toBe('integer')
-		expect(columnType(numberShape())).toBe('real')
-		expect(columnType(booleanShape())).toBe('boolean')
+		expect(shapeToColumnType(stringShape())).toBe('text')
+		expect(shapeToColumnType(integerShape())).toBe('integer')
+		expect(shapeToColumnType(numberShape())).toBe('real')
+		expect(shapeToColumnType(booleanShape())).toBe('boolean')
 	})
 
 	it('maps null / object / array / union / json / raw to json', () => {
-		expect(columnType(nullShape())).toBe('json')
-		expect(columnType(objectShape({ a: stringShape() }))).toBe('json')
-		expect(columnType(arrayShape(stringShape()))).toBe('json')
-		expect(columnType(unionShape(stringShape(), integerShape()))).toBe('json')
-		expect(columnType(jsonShape())).toBe('json')
-		expect(columnType(rawShape({ type: 'object' }))).toBe('json')
+		expect(shapeToColumnType(nullShape())).toBe('json')
+		expect(shapeToColumnType(objectShape({ a: stringShape() }))).toBe('json')
+		expect(shapeToColumnType(arrayShape(stringShape()))).toBe('json')
+		expect(shapeToColumnType(unionShape(stringShape(), integerShape()))).toBe('json')
+		expect(shapeToColumnType(jsonShape())).toBe('json')
+		expect(shapeToColumnType(rawShape({ type: 'object' }))).toBe('json')
 	})
 
 	it('unwraps optional / nullable to the inner type', () => {
-		expect(columnType(optionalShape(integerShape()))).toBe('integer')
-		expect(columnType(nullableShape(stringShape()))).toBe('text')
+		expect(shapeToColumnType(optionalShape(integerShape()))).toBe('integer')
+		expect(shapeToColumnType(nullableShape(stringShape()))).toBe('text')
 	})
 
 	it('takes a literal shape from its values', () => {
-		expect(columnType(literalShape(['a', 'b']))).toBe('text')
-		expect(columnType(literalShape([1, 2]))).toBe('integer')
-		expect(columnType(literalShape([1.5, 2]))).toBe('real')
-		expect(columnType(literalShape([true, false]))).toBe('boolean')
+		expect(shapeToColumnType(literalShape(['a', 'b']))).toBe('text')
+		expect(shapeToColumnType(literalShape([1, 2]))).toBe('integer')
+		expect(shapeToColumnType(literalShape([1.5, 2]))).toBe('real')
+		expect(shapeToColumnType(literalShape([true, false]))).toBe('boolean')
 	})
 })
 
@@ -504,5 +508,105 @@ describe('migrateRows', () => {
 			{ operation: 'index.add', table: 'users', index: ['name'] },
 		])
 		expect(result).toEqual(rows)
+	})
+})
+
+describe('deepEqual', () => {
+	it('compares primitives by SameValueZero (NaN equal to itself)', () => {
+		expect(deepEqual(1, 1)).toBe(true)
+		expect(deepEqual(1, 2)).toBe(false)
+		expect(deepEqual('a', 'a')).toBe(true)
+		expect(deepEqual(Number.NaN, Number.NaN)).toBe(true)
+		expect(deepEqual(0, -0)).toBe(true)
+		expect(deepEqual(undefined, undefined)).toBe(true)
+		expect(deepEqual(null, null)).toBe(true)
+		expect(deepEqual(null, undefined)).toBe(false)
+	})
+
+	it('compares nested objects and arrays structurally', () => {
+		expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
+		expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 3 }] })).toBe(false)
+		expect(deepEqual([1, 2, 3], [1, 2, 3])).toBe(true)
+		expect(deepEqual([1, 2, 3], [1, 2])).toBe(false)
+	})
+
+	it('rejects mismatched shapes (array vs object, extra keys)', () => {
+		expect(deepEqual([1, 2], { 0: 1, 1: 2 })).toBe(false)
+		expect(deepEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false)
+	})
+
+	it('treats a key present with value undefined as NOT equal to that key being absent', () => {
+		expect(deepEqual({ a: undefined }, {})).toBe(false)
+		expect(deepEqual({}, { a: undefined })).toBe(false)
+		expect(deepEqual({ a: undefined }, { a: undefined })).toBe(true)
+	})
+})
+
+describe('filterRows', () => {
+	const rows = [{ age: 30 }, { age: 12 }, { age: 45 }]
+
+	it('matches every row on an empty condition list', () => {
+		expect(filterRows(rows, [])).toBe(rows)
+	})
+
+	it('filters by the given conditions', () => {
+		const result = filterRows(rows, [buildCondition('age', 'above', [18])])
+		expect(result.map((row) => row.age)).toEqual([30, 45])
+	})
+})
+
+describe('conformDriver', () => {
+	it('resolves for a conformant driver (the reference memory driver)', async () => {
+		await expect(conformDriver(() => createMemoryDriver())).resolves.toBeUndefined()
+	})
+
+	it('rejects with a CONFORMANCE DatabaseError when read violates copy-out isolation', async () => {
+		function createBrokenDriver(): DriverInterface {
+			const inner = createMemoryDriver()
+			const stored = new Map<Key, Row>()
+			return {
+				open: (tables) => inner.open(tables),
+				close: () => inner.close(),
+				async write(table: string, key: Key, row: Row): Promise<void> {
+					await inner.write(table, key, row)
+					stored.set(key, row) // stores the reference directly (breaks copy-in)
+				},
+				async read(table: string, key: Key): Promise<Row | undefined> {
+					// Returns the stored reference directly instead of a copy — breaks copy-out.
+					if (stored.has(key)) return stored.get(key)
+					return inner.read(table, key)
+				},
+				delete: (table, key) => inner.delete(table, key),
+				keys: (table) => inner.keys(table),
+				scan: (table) => inner.scan(table),
+				clear: (table) => inner.clear(table),
+				snapshot: () => inner.snapshot(),
+			}
+		}
+		const error = await conformDriver(() => createBrokenDriver()).catch((caught: unknown) => caught)
+		expect(isDatabaseError(error)).toBe(true)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
+	})
+
+	it('rejects with a CONFORMANCE DatabaseError when keys are not ascending', async () => {
+		function createBrokenDriver(): DriverInterface {
+			const inner = createMemoryDriver()
+			return {
+				open: (tables) => inner.open(tables),
+				close: () => inner.close(),
+				read: (table, key) => inner.read(table, key),
+				write: (table, key, row) => inner.write(table, key, row),
+				delete: (table, key) => inner.delete(table, key),
+				async keys(table: string): Promise<readonly Key[]> {
+					return [...(await inner.keys(table))].reverse()
+				},
+				scan: (table) => inner.scan(table),
+				clear: (table) => inner.clear(table),
+				snapshot: () => inner.snapshot(),
+			}
+		}
+		const error = await conformDriver(() => createBrokenDriver()).catch((caught: unknown) => caught)
+		expect(isDatabaseError(error)).toBe(true)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 	})
 })

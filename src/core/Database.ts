@@ -20,7 +20,7 @@ import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { checkAbort, columnType } from './helpers.js'
+import { checkAbort, shapeToColumnType } from './helpers.js'
 import { Table } from './Table.js'
 
 /**
@@ -230,7 +230,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 					const shape = columns[column]
 					return {
 						name: column,
-						type: columnType(shape),
+						type: shapeToColumnType(shape),
 						nullable: shape.type === 'optional' || shape.type === 'nullable',
 					}
 				}),

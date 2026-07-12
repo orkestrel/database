@@ -4,6 +4,7 @@ import type {
 	ColumnType,
 	Condition,
 	Criteria,
+	DriverInterface,
 	Key,
 	Migration,
 	MigrationStep,
@@ -13,7 +14,7 @@ import type {
 } from './types.js'
 import { isFiniteNumber, isRecord, isString, parseNumber, resolveField } from '@orkestrel/contract'
 import { MAX_PATTERN_LENGTH } from './constants.js'
-import { DatabaseError } from './errors.js'
+import { DatabaseError, isDatabaseError } from './errors.js'
 
 // The query engine. Every backend's `scan` yields rows; these pure helpers do
 // the filtering, ordering, paging, and aggregation once, so a driver never
@@ -63,6 +64,49 @@ export function compareValues(left: unknown, right: unknown): number {
 		return left === right ? 0 : left ? 1 : -1
 	}
 	return 0
+}
+
+/**
+ * Structural equality by SameValueZero leaves — the comparator behind conformance
+ * checks and any test/fixture that needs "same data", not "same reference".
+ *
+ * @remarks
+ * Primitives compare by SameValueZero (`NaN` equals itself; `+0` equals `-0`).
+ * Arrays compare by index (same length, every element `deepEqual`). Plain
+ * records (via `isRecord`) compare by their OWN enumerable keys: same key
+ * COUNT and, for every key in `left`, `right` has that key (`Object.hasOwn`)
+ * with a `deepEqual` value — so a key present with value `undefined` is NOT
+ * equal to that key being absent (both differ in `Object.keys` membership).
+ * Anything else (functions, class instances, mismatched shapes) falls through
+ * to `false`. There is no cycle detection — a cyclic input recurses forever;
+ * callers pass acyclic data (rows, plans, config).
+ *
+ * @param left - The left value
+ * @param right - The right value
+ * @returns Whether `left` and `right` are structurally equal
+ *
+ * @example
+ * ```ts
+ * deepEqual(Number.NaN, Number.NaN) // true
+ * deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }) // true
+ * deepEqual({ a: undefined }, {}) // false — present-undefined ≠ absent
+ * ```
+ */
+export function deepEqual(left: unknown, right: unknown): boolean {
+	if (typeof left === 'number' && typeof right === 'number') {
+		return (Number.isNaN(left) && Number.isNaN(right)) || left === right
+	}
+	if (left === right) return true
+	if (Array.isArray(left) && Array.isArray(right)) {
+		return left.length === right.length && left.every((item, index) => deepEqual(item, right[index]))
+	}
+	if (isRecord(left) && isRecord(right)) {
+		const leftKeys = Object.keys(left)
+		const rightKeys = Object.keys(right)
+		if (leftKeys.length !== rightKeys.length) return false
+		return leftKeys.every((key) => Object.hasOwn(right, key) && deepEqual(left[key], right[key]))
+	}
+	return false
 }
 
 // === Pattern matching
@@ -237,6 +281,31 @@ export function matchesCriteria(row: Row, conditions: readonly Condition[]): boo
 	return result
 }
 
+/**
+ * Filter rows by a list of conditions — the shared basis for a table's count
+ * and aggregate paths (no sort/page, unlike {@link applyCriteria}).
+ *
+ * @remarks
+ * An empty condition list matches every row (returned as-is, no copy). Folds
+ * each row through {@link matchesCriteria}.
+ *
+ * @param rows - The rows to filter
+ * @param conditions - The conditions to apply (empty matches everything)
+ * @returns The matching rows
+ *
+ * @example
+ * ```ts
+ * filterRows(
+ * 	[{ age: 30 }, { age: 12 }],
+ * 	[{ column: 'age', operator: 'above', values: [18], connector: 'and' }],
+ * ) // => [{ age: 30 }]
+ * ```
+ */
+export function filterRows(rows: readonly Row[], conditions: readonly Condition[]): readonly Row[] {
+	if (conditions.length === 0) return rows
+	return rows.filter((row) => matchesCriteria(row, conditions))
+}
+
 // === Ordering & paging
 
 /**
@@ -368,13 +437,13 @@ export function extractKey(row: Row, column: string): Key | undefined {
  *
  * @example
  * ```ts
- * columnType(stringShape()) // 'text'
- * columnType(integerShape()) // 'integer'
- * columnType(optionalShape(integerShape())) // 'integer'
- * columnType(objectShape({ a: stringShape() })) // 'json'
+ * shapeToColumnType(stringShape()) // 'text'
+ * shapeToColumnType(integerShape()) // 'integer'
+ * shapeToColumnType(optionalShape(integerShape())) // 'integer'
+ * shapeToColumnType(objectShape({ a: stringShape() })) // 'json'
  * ```
  */
-export function columnType(shape: ContractShape): ColumnType {
+export function shapeToColumnType(shape: ContractShape): ColumnType {
 	switch (shape.type) {
 		case 'string':
 			return 'text'
@@ -391,7 +460,7 @@ export function columnType(shape: ContractShape): ColumnType {
 		}
 		case 'optional':
 		case 'nullable':
-			return columnType(shape.inner)
+			return shapeToColumnType(shape.inner)
 		case 'null':
 		case 'object':
 		case 'array':
@@ -563,4 +632,405 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 		}
 		return next
 	})
+}
+
+// === Conformance
+
+// Fixed two-table schema every conformDriver phase opens: `users` keyed by
+// `id` (the default primary), `posts` keyed by a non-id `slug` — exercising
+// both primary-key shapes in one battery.
+const CONFORMANCE_USERS_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', type: 'text', nullable: false },
+		{ name: 'name', type: 'text', nullable: false },
+		{ name: 'age', type: 'integer', nullable: true },
+	],
+	indexes: [],
+}
+
+const CONFORMANCE_POSTS_SCHEMA: TableSchema = {
+	name: 'posts',
+	primary: 'slug',
+	columns: [
+		{ name: 'slug', type: 'text', nullable: false },
+		{ name: 'title', type: 'text', nullable: false },
+	],
+	indexes: [],
+}
+
+const CONFORMANCE_SCHEMA: readonly TableSchema[] = [CONFORMANCE_USERS_SCHEMA, CONFORMANCE_POSTS_SCHEMA]
+
+// Throw a CONFORMANCE DatabaseError naming which check failed plus the
+// expected/actual summary — the single failure-reporting path every phase
+// below funnels through.
+function failConformance(check: string, message: string, context: Readonly<Record<string, unknown>>): never {
+	throw new DatabaseError('CONFORMANCE', message, { check, ...context })
+}
+
+/**
+ * Run the driver-conformance battery against a fresh {@link DriverInterface}
+ * per phase — the shared invariant suite every backend (in-memory, SQLite,
+ * IndexedDB) must uphold to be a drop-in {@link DriverInterface}.
+ *
+ * @remarks
+ * Framework-agnostic: no test-runner or Node imports, only sibling core
+ * modules — so it runs equally from a unit test, a smoke script, or a new
+ * driver's own README. Opens a fixed two-table schema (`users` keyed by the
+ * default `id`, `posts` keyed by a non-id `slug`) and, calling `factory()`
+ * fresh for each phase so failures stay isolated, verifies: `open`/`close`;
+ * `read` of a missing key returns `undefined`; `write`/`read` round-trip with
+ * copy-in/copy-out isolation (mutating the caller's row after `write`, or the
+ * row `read` returns, never perturbs stored state) and upsert-overwrite;
+ * `delete` returns `true` then `false`; `keys`/`scan` yield in ascending key
+ * order; `clear` empties only its target table; `snapshot`'s rollback thunk
+ * restores pre-snapshot state; a non-`id` primary key (`posts.slug`)
+ * round-trips; a nested-object row round-trips structurally (via
+ * {@link deepEqual}). The optional surface is presence-gated: when `migrate`
+ * exists, a `column.remove` plan strips the column from stored rows and a
+ * plan referencing an unknown table throws `DatabaseError` `MIGRATION`; when
+ * `stream` exists, it yields only condition-matching rows and honors
+ * `offset`/`limit`; when `transaction` exists, `commit` persists and
+ * `rollback` restores. The first violation throws a `CONFORMANCE`
+ * {@link DatabaseError} naming the failed check plus expected/actual context
+ * — every later phase is skipped.
+ *
+ * @param factory - Mints a fresh, unopened driver instance (called once per phase)
+ * @returns Nothing — resolves once every phase has passed
+ * @throws A `CONFORMANCE` {@link DatabaseError} on the first violated invariant
+ *
+ * @example
+ * ```ts
+ * import { conformDriver, createMemoryDriver } from '@orkestrel/database'
+ *
+ * await conformDriver(() => createMemoryDriver()) // resolves when every invariant holds
+ * ```
+ */
+export async function conformDriver(factory: () => DriverInterface): Promise<void> {
+	// a. open with the inline two-table schema, then close cleanly.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		await driver.close()
+	}
+
+	// b. read of a missing key -> undefined.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		const missing = await driver.read('users', 'nope')
+		if (missing !== undefined) {
+			failConformance('read-missing', 'read of a missing key must return undefined', {
+				table: 'users',
+				expected: undefined,
+				actual: missing,
+			})
+		}
+		await driver.close()
+	}
+
+	// c. write/read round-trip, copy-in/copy-out isolation, upsert-overwrite.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		const input: Row = { id: 'u1', name: 'Ada', age: 30 }
+		await driver.write('users', 'u1', input)
+		input.name = 'Mutated after write'
+		const stored = await driver.read('users', 'u1')
+		const original = { id: 'u1', name: 'Ada', age: 30 }
+		if (stored === undefined || !deepEqual(stored, original)) {
+			failConformance('copy-in', 'write must copy the input row rather than store it by reference', {
+				table: 'users',
+				expected: original,
+				actual: stored,
+			})
+		} else {
+			stored.name = 'Mutated after read'
+			const reread = await driver.read('users', 'u1')
+			if (reread === undefined || !deepEqual(reread, original)) {
+				failConformance('copy-out', 'read must copy the stored row rather than return it by reference', {
+					table: 'users',
+					expected: original,
+					actual: reread,
+				})
+			}
+		}
+		const overwrite = { id: 'u1', name: 'Ada Overwritten', age: 31 }
+		await driver.write('users', 'u1', overwrite)
+		const overwritten = await driver.read('users', 'u1')
+		if (overwritten === undefined || !deepEqual(overwritten, overwrite)) {
+			failConformance('upsert', 'write must upsert-overwrite an existing key', {
+				table: 'users',
+				expected: overwrite,
+				actual: overwritten,
+			})
+		}
+		await driver.close()
+	}
+
+	// d. delete -> true then false.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
+		const first = await driver.delete('users', 'u1')
+		if (first !== true) {
+			failConformance('delete-true', 'delete of an existing key must return true', {
+				table: 'users',
+				expected: true,
+				actual: first,
+			})
+		}
+		const second = await driver.delete('users', 'u1')
+		if (second !== false) {
+			failConformance('delete-false', 'delete of an already-removed key must return false', {
+				table: 'users',
+				expected: false,
+				actual: second,
+			})
+		}
+		await driver.close()
+	}
+
+	// e. keys and scan in ascending key order.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		const rows = [
+			{ id: 'c', name: 'C', age: 3 },
+			{ id: 'a', name: 'A', age: 1 },
+			{ id: 'b', name: 'B', age: 2 },
+		]
+		for (const row of rows) await driver.write('users', row.id, row)
+		const expected = ['a', 'b', 'c']
+		const keys = [...(await driver.keys('users'))]
+		if (!deepEqual(keys, expected)) {
+			failConformance('keys-order', 'keys must be returned in ascending key order', {
+				table: 'users',
+				expected,
+				actual: keys,
+			})
+		}
+		const scanned: Row[] = []
+		for await (const row of driver.scan('users')) scanned.push(row)
+		const scannedIds = scanned.map((row) => row.id)
+		if (!deepEqual(scannedIds, expected)) {
+			failConformance('scan-order', 'scan must yield rows in ascending key order', {
+				table: 'users',
+				expected,
+				actual: scannedIds,
+			})
+		}
+		await driver.close()
+	}
+
+	// f. clear empties only the targeted table.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
+		await driver.write('posts', 'p1', { slug: 'p1', title: 'Post' })
+		await driver.clear('users')
+		const usersKeys = await driver.keys('users')
+		const postsKeys = await driver.keys('posts')
+		if (usersKeys.length !== 0) {
+			failConformance('clear-target', 'clear must empty the targeted table', {
+				table: 'users',
+				expected: [],
+				actual: usersKeys,
+			})
+		}
+		if (postsKeys.length !== 1) {
+			failConformance('clear-other', 'clear must not affect other tables', {
+				table: 'posts',
+				expected: 1,
+				actual: postsKeys.length,
+			})
+		}
+		await driver.close()
+	}
+
+	// g. snapshot rollback restores pre-snapshot state.
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		const original = { id: 'u1', name: 'Ada', age: 30 }
+		await driver.write('users', 'u1', original)
+		const rollback = await driver.snapshot()
+		await driver.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
+		await driver.delete('users', 'u1')
+		await rollback()
+		const keys = [...(await driver.keys('users'))]
+		if (!deepEqual(keys, ['u1'])) {
+			failConformance('snapshot-rollback', 'snapshot rollback must restore the pre-snapshot key set', {
+				table: 'users',
+				expected: ['u1'],
+				actual: keys,
+			})
+		}
+		const restored = await driver.read('users', 'u1')
+		if (restored === undefined || !deepEqual(restored, original)) {
+			failConformance('snapshot-rollback-value', 'snapshot rollback must restore pre-snapshot row values', {
+				table: 'users',
+				expected: original,
+				actual: restored,
+			})
+		}
+		await driver.close()
+	}
+
+	// h. non-id primary extraction (posts keyed by slug).
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		await driver.write('posts', 'hello-world', { slug: 'hello-world', title: 'Hello' })
+		const post = await driver.read('posts', 'hello-world')
+		const key = post === undefined ? undefined : extractKey(post, 'slug')
+		if (key !== 'hello-world') {
+			failConformance('non-id-primary', 'a non-id primary key column must round-trip through the store', {
+				table: 'posts',
+				expected: 'hello-world',
+				actual: key,
+			})
+		}
+		await driver.close()
+	}
+
+	// i. nested-object row round-trip (structural, via deepEqual).
+	{
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		const nested = {
+			id: 'u3',
+			name: 'Nested',
+			age: 20,
+			meta: { tags: ['a', 'b'], deep: { flag: true } },
+		}
+		await driver.write('users', 'u3', nested)
+		const readBack = await driver.read('users', 'u3')
+		if (readBack === undefined || !deepEqual(readBack, nested)) {
+			failConformance('nested-roundtrip', 'a nested-object row must round-trip structurally', {
+				table: 'users',
+				expected: nested,
+				actual: readBack,
+			})
+		}
+		await driver.close()
+	}
+
+	// j. migrate (presence-gated): a planMigration-built column.remove plan strips
+	// stored rows; an unknown-table plan throws a MIGRATION DatabaseError.
+	{
+		const driver = factory()
+		if (driver.migrate !== undefined) {
+			await driver.open(CONFORMANCE_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
+			const deployedUsers: TableSchema = {
+				...CONFORMANCE_USERS_SCHEMA,
+				columns: [...CONFORMANCE_USERS_SCHEMA.columns, { name: 'legacy', type: 'boolean', nullable: false }],
+			}
+			const removePlan = planMigration([deployedUsers], [CONFORMANCE_USERS_SCHEMA])
+			await driver.migrate(removePlan)
+			const migrated = await driver.read('users', 'u1')
+			if (migrated === undefined || 'legacy' in migrated) {
+				failConformance('migrate-column-remove', 'a column.remove migration must strip the column from stored rows', {
+					table: 'users',
+					expected: undefined,
+					actual: migrated === undefined ? undefined : migrated.legacy,
+				})
+			}
+			let caught: unknown
+			try {
+				await driver.migrate({
+					from: 0,
+					to: 1,
+					steps: [{ operation: 'table.remove', table: 'ghost' }],
+				})
+			} catch (error) {
+				caught = error
+			}
+			if (!isDatabaseError(caught) || caught.code !== 'MIGRATION') {
+				failConformance(
+					'migrate-unknown-table',
+					'a migration step referencing an unknown table must throw a MIGRATION DatabaseError',
+					{
+						table: 'ghost',
+						expected: 'MIGRATION',
+						actual: isDatabaseError(caught) ? caught.code : caught,
+					},
+				)
+			}
+			await driver.close()
+		}
+	}
+
+	// k. stream (presence-gated): yields only condition-matching rows, honors offset/limit.
+	{
+		const driver = factory()
+		if (driver.stream !== undefined) {
+			await driver.open(CONFORMANCE_SCHEMA)
+			const rows = [
+				{ id: 'a', name: 'A', age: 10 },
+				{ id: 'b', name: 'B', age: 20 },
+				{ id: 'c', name: 'C', age: 30 },
+			]
+			for (const row of rows) await driver.write('users', row.id, row)
+			const criteria: Criteria = {
+				conditions: [{ column: 'age', operator: 'above', values: [10], connector: 'and' }],
+			}
+			const matched: Row[] = []
+			for await (const row of driver.stream('users', criteria)) matched.push(row)
+			const matchedIds = matched.map((row) => row.id).sort()
+			if (!deepEqual(matchedIds, ['b', 'c'])) {
+				failConformance('stream-match', 'stream must yield only condition-matching rows', {
+					table: 'users',
+					expected: ['b', 'c'],
+					actual: matchedIds,
+				})
+			}
+			const paged: Row[] = []
+			for await (const row of driver.stream('users', { offset: 1, limit: 1 })) paged.push(row)
+			if (paged.length !== 1) {
+				failConformance('stream-page', 'stream must honor offset and limit', {
+					table: 'users',
+					expected: 1,
+					actual: paged.length,
+				})
+			}
+			await driver.close()
+		}
+	}
+
+	// l. transaction (presence-gated): commit persists, rollback restores.
+	{
+		const driver = factory()
+		if (driver.transaction !== undefined) {
+			await driver.open(CONFORMANCE_SCHEMA)
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
+			const committing = await driver.transaction()
+			await driver.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
+			await committing.commit()
+			const afterCommit = [...(await driver.keys('users'))].sort()
+			if (!deepEqual(afterCommit, ['u1', 'u2'])) {
+				failConformance('transaction-commit', 'transaction commit must persist writes made during the scope', {
+					table: 'users',
+					expected: ['u1', 'u2'],
+					actual: afterCommit,
+				})
+			}
+			const rollingBack = await driver.transaction()
+			await driver.write('users', 'u3', { id: 'u3', name: 'Marie', age: 50 })
+			await rollingBack.rollback()
+			const afterRollback = [...(await driver.keys('users'))].sort()
+			if (!deepEqual(afterRollback, ['u1', 'u2'])) {
+				failConformance('transaction-rollback', 'transaction rollback must restore pre-transaction state', {
+					table: 'users',
+					expected: ['u1', 'u2'],
+					actual: afterRollback,
+				})
+			}
+			await driver.close()
+		}
+	}
 }
