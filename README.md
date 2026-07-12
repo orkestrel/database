@@ -15,13 +15,14 @@ npm install @orkestrel/database
 ## Requirements
 
 - Node.js >= 24
-- ESM-only (no CommonJS build)
+- Core is ESM; the `./server` subpath ships a CommonJS build
 
 ## Status
 
-The public API is under design and not yet implemented — this package
-currently ships no runtime code. This README will gain an install snippet,
-usage examples, and a guide link once the design lands.
+Pre-release (`0.0.1`): the core engine and the memory and JSON file drivers
+are implemented and tested, but the public API is still unstable and may
+change without notice. See [guides/src/database.md](./guides/src/database.md)
+for the full documented surface.
 
 ## Package
 

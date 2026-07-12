@@ -18,8 +18,10 @@ import {
 	arrayShape,
 	booleanShape,
 	integerShape,
+	jsonShape,
 	literalShape,
 	nullableShape,
+	nullShape,
 	numberShape,
 	objectShape,
 	optionalShape,
@@ -325,10 +327,12 @@ describe('columnType', () => {
 		expect(columnType(booleanShape())).toBe('boolean')
 	})
 
-	it('maps object / array / union / raw to json', () => {
+	it('maps null / object / array / union / json / raw to json', () => {
+		expect(columnType(nullShape())).toBe('json')
 		expect(columnType(objectShape({ a: stringShape() }))).toBe('json')
 		expect(columnType(arrayShape(stringShape()))).toBe('json')
 		expect(columnType(unionShape(stringShape(), integerShape()))).toBe('json')
+		expect(columnType(jsonShape())).toBe('json')
 		expect(columnType(rawShape({ type: 'object' }))).toBe('json')
 	})
 
