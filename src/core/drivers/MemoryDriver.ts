@@ -1,6 +1,6 @@
-import type { DriverInterface, Key, Migration, Row, TableSchema } from '../types.js'
+import type { Criteria, DriverInterface, Key, Migration, Row, TableSchema } from '../types.js'
 import { DatabaseError } from '../errors.js'
-import { compareValues, migrateRows } from '../helpers.js'
+import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
 
 /**
  * The reference {@link DriverInterface} — nested maps, no I/O.
@@ -50,6 +50,54 @@ export class MemoryDriver implements DriverInterface {
 		for (const key of this.#ordered(table)) {
 			const row = store.get(key)
 			if (row !== undefined) yield { ...row }
+		}
+	}
+
+	/**
+	 * Natively filtered lazy iteration — the {@link DriverInterface.stream} hook.
+	 *
+	 * @remarks
+	 * Iterates the table's keys in the same key order `scan` and `keys` yield
+	 * (sorted by {@link compareValues}), testing each row against
+	 * `criteria.conditions` (via {@link matchesCriteria}) before counting it
+	 * toward `offset` / `limit`. Both are applied lazily as matches are found —
+	 * `offset` matches are skipped without being yielded, and iteration stops the
+	 * instant `limit` yields have been produced, so a large table is never fully
+	 * walked for a small page. `criteria.order` is IGNORED (the same contract as
+	 * `TableInterface.scan` and `QueryInterface.stream`): streaming yields key
+	 * order, sorted output is `records()`'s job. Rows yield copy-out (AGENTS
+	 * §11), and an unknown table mirrors `scan`'s empty-yield behavior.
+	 *
+	 * @param table - The table to stream
+	 * @param criteria - The filter / offset / limit to apply lazily
+	 *
+	 * @example
+	 * ```ts
+	 * for await (const row of driver.stream('users', { conditions, limit: 10 })) {
+	 *   // one matched row at a time, in key order
+	 * }
+	 * ```
+	 */
+	async *stream(table: string, criteria: Criteria): AsyncIterable<Row> {
+		const store = this.#store(table)
+		const conditions = criteria.conditions
+		const offset = criteria.offset ?? 0
+		const limit = criteria.limit
+		let skipped = 0
+		let yielded = 0
+		for (const key of this.#ordered(table)) {
+			if (limit !== undefined && yielded >= limit) return
+			const row = store.get(key)
+			if (row === undefined) continue
+			if (conditions !== undefined && conditions.length > 0 && !matchesCriteria(row, conditions)) {
+				continue
+			}
+			if (skipped < offset) {
+				skipped += 1
+				continue
+			}
+			yield { ...row }
+			yielded += 1
 		}
 	}
 

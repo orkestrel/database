@@ -80,6 +80,78 @@ describe('MemoryDriver', () => {
 		expect(await driver.read('t', 'b')).toBeUndefined()
 	})
 
+	describe('stream', () => {
+		it('yields condition-matched rows only, in key order', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('t', 'c', { id: 'c', n: 3 })
+			await driver.write('t', 'a', { id: 'a', n: 1 })
+			await driver.write('t', 'b', { id: 'b', n: 2 })
+			const conditions = [
+				{ column: 'n', operator: 'above' as const, values: [1], connector: 'and' as const },
+			]
+			const rows = await collectRows(driver.stream?.('t', { conditions }) ?? (async function* () {})())
+			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
+		})
+
+		it('applies offset then limit lazily', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('t', 'a', { id: 'a' })
+			await driver.write('t', 'b', { id: 'b' })
+			await driver.write('t', 'c', { id: 'c' })
+			await driver.write('t', 'd', { id: 'd' })
+			const rows = await collectRows(
+				driver.stream?.('t', { offset: 1, limit: 2 }) ?? (async function* () {})(),
+			)
+			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
+		})
+
+		it('ignores criteria.order (yields key order regardless)', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('t', 'b', { id: 'b', n: 2 })
+			await driver.write('t', 'a', { id: 'a', n: 1 })
+			const rows = await collectRows(
+				driver.stream?.('t', { order: [{ column: 'n', direction: 'descending' }] }) ??
+					(async function* () {})(),
+			)
+			expect(rows.map((row) => row.id)).toEqual(['a', 'b'])
+		})
+
+		it('yields copy-out rows, isolated from later mutation', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('t', 'a', { id: 'a', n: 1 })
+			const [row] = await collectRows(driver.stream?.('t', {}) ?? (async function* () {})())
+			if (row) row.n = 999
+			expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
+		})
+
+		it('terminates cleanly on an early break', async () => {
+			const driver = createMemoryDriver()
+			await driver.write('t', 'a', { id: 'a' })
+			await driver.write('t', 'b', { id: 'b' })
+			await driver.write('t', 'c', { id: 'c' })
+			const seen: string[] = []
+			const source = driver.stream?.('t', {})
+			if (source !== undefined) {
+				for await (const row of source) {
+					seen.push(row.id as string)
+					if (seen.length === 2) break
+				}
+			}
+			expect(seen).toEqual(['a', 'b'])
+		})
+
+		it('yields nothing for an empty or unknown table, mirroring scan', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			expect(await collectRows(driver.stream?.('users', {}) ?? (async function* () {})())).toEqual(
+				[],
+			)
+			expect(
+				await collectRows(driver.stream?.('missing', {}) ?? (async function* () {})()),
+			).toEqual(await collectRows(driver.scan('missing')))
+		})
+	})
+
 	describe('migrate', () => {
 		it('applies a table.add step by creating the table', async () => {
 			const driver = createMemoryDriver()
