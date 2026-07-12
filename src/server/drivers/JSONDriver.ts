@@ -1,6 +1,7 @@
 import type {
 	Criteria,
 	DriverInterface,
+	DriverMeta,
 	Key,
 	Migration,
 	Row,
@@ -21,21 +22,32 @@ import { dirname } from 'node:path'
  * {@link MemoryDriver}, so querying, key-order `scan` / `keys`, and capture-replay
  * `snapshot` are inherited unchanged — this layer adds only persistence. `open`
  * loads the file into memory; every mutation (`write` / `delete` / `clear`) flushes
- * the whole store back. The file is one JSON object, `{ tables: { [name]: rows } }`
- * — a per-table array of rows; each row carries its own primary (the table
- * contract), so the key is recovered on load with {@link extractKey} and the file
- * need not store it. The parsed JSON crosses the boundary as `unknown` and is
- * narrowed with {@link isRecord} / {@link extractKey}, never asserted (AGENTS §14):
- * a missing, corrupt, or wrong-shaped file starts empty rather than throwing, and a
- * malformed row is skipped. It is scan-only — it implements none of the optional
- * native `records` / `count` / `aggregate` hooks, so the core engine over `scan`
- * answers every query. For development, small datasets, and portable / inspectable
- * data; for large or concurrent workloads reach for a SQLite-backed driver.
+ * the whole store back. The file is one JSON object, `{ meta?: DriverMeta, tables: {
+ * [name]: rows } }` — `meta` is present only once the store has been `stamp`ed
+ * (an unstamped store serializes the old `{ tables }` shape, preserving
+ * backward compatibility); a per-table array of rows, each row carrying its own
+ * primary (the table contract), so the key is recovered on load with
+ * {@link extractKey} and the file need not store it. The parsed JSON crosses the
+ * boundary as `unknown` and is narrowed with {@link isRecord} / {@link extractKey},
+ * never asserted (AGENTS §14): a missing, corrupt, or wrong-shaped file starts
+ * empty rather than throwing, and a malformed row (or malformed `meta`) is
+ * skipped/dropped rather than thrown on. It is scan-only — it implements none of
+ * the optional native `records` / `count` / `aggregate` hooks, so the core engine
+ * over `scan` answers every query. For development, small datasets, and portable /
+ * inspectable data; for large or concurrent workloads reach for a SQLite-backed
+ * driver.
+ *
+ * A failure in the write path ({@link JSONDriver.#serialize} — `mkdir` /
+ * `writeFile` / `rename`) is wrapped and rethrown as `DatabaseError` `DRIVER`,
+ * carrying the target `path` in its context; the read path ({@link
+ * JSONDriver.#load}) tolerance above is a separate, deliberate contract and is
+ * never touched by this wrapping.
  */
 export class JSONDriver implements DriverInterface {
 	readonly #path: string
 	readonly #memory = new MemoryDriver()
 	#schema: readonly TableSchema[] = []
+	#meta: DriverMeta | undefined
 	#flushCount = 0
 	// Serializes #flush calls — each queued flush awaits the prior one before
 	// serializing state, so the persisted snapshot always reflects the latest
@@ -150,14 +162,33 @@ export class JSONDriver implements DriverInterface {
 		}
 	}
 
-	async snapshot(): Promise<() => Promise<void>> {
-		const rollback = await this.#memory.snapshot()
+	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
+		const rollback = await this.#memory.snapshot(tables)
 		// Restore the in-memory state, then re-persist it — the file was rewritten
 		// on each write during the scope, so a rollback must flush the restored state.
 		return async () => {
 			await rollback()
 			await this.#flush()
 		}
+	}
+
+	async meta(): Promise<DriverMeta | undefined> {
+		return this.#meta
+	}
+
+	/**
+	 * Persist `meta` verbatim for a later `meta()` to return.
+	 *
+	 * @remarks
+	 * Respects the same defer-flush suppression as `write` / `delete` / `clear`
+	 * (see {@link JSONDriver.transaction} @remarks) — stamping inside an active
+	 * transaction updates memory but does not flush until the transaction settles.
+	 *
+	 * @param meta - The {@link DriverMeta} to persist
+	 */
+	async stamp(meta: DriverMeta): Promise<void> {
+		this.#meta = meta
+		if (!this.#deferring) await this.#flush()
 	}
 
 	/**
@@ -198,7 +229,10 @@ export class JSONDriver implements DriverInterface {
 
 	// Load the file into memory; a missing / corrupt / wrong-shaped file starts
 	// empty (never throws). Each entry is narrowed via isRecord and its key recovered
-	// with extractKey from the schema's primary column; bad entries are skipped.
+	// with extractKey from the schema's primary column; bad entries are skipped. A
+	// `meta` block is narrowed with the same tolerance — a malformed or absent
+	// `meta` leaves #meta undefined (unstamped) rather than throwing, which is how
+	// an old-format file (no `meta` key) is distinguished from a stamped one.
 	async #load(): Promise<void> {
 		let raw: string
 		try {
@@ -222,6 +256,24 @@ export class JSONDriver implements DriverInterface {
 				const key = extractKey(entry, table.primary)
 				if (key === undefined) continue
 				await this.#memory.write(table.name, key, entry)
+			}
+		}
+		if (isRecord(parsed.meta)) {
+			const version = parsed.meta.version
+			const schema = parsed.meta.schema
+			const isTableSchema = (value: unknown): value is TableSchema =>
+				isRecord(value) &&
+				typeof value.name === 'string' &&
+				typeof value.primary === 'string' &&
+				Array.isArray(value.columns) &&
+				Array.isArray(value.indexes)
+			if (
+				typeof version === 'number' &&
+				Number.isFinite(version) &&
+				Array.isArray(schema) &&
+				schema.every(isTableSchema)
+			) {
+				this.#meta = { version, schema }
 			}
 		}
 	}
@@ -249,7 +301,11 @@ export class JSONDriver implements DriverInterface {
 	// its predecessor before draining `#memory` and writing, so the payload always
 	// reflects the latest memory state. Without this, overlapping flushes triggered
 	// by non-awaited concurrent mutations could serialize out of order and persist a
-	// stale snapshot as the "latest" file.
+	// stale snapshot as the "latest" file. `meta` is included in the payload only
+	// once the store has been stamped, so an unstamped store keeps serializing the
+	// old `{ tables }` shape (backward compat). Any failure in this write path
+	// (`mkdir` / `writeFile` / `rename`) is wrapped as `DatabaseError` `DRIVER`
+	// carrying `path` in its context, after the temp-file cleanup below runs.
 	async #serialize(): Promise<void> {
 		const tables: Record<string, readonly Row[]> = {}
 		for (const table of this.#schema) {
@@ -257,15 +313,19 @@ export class JSONDriver implements DriverInterface {
 			for await (const row of this.#memory.scan(table.name)) rows.push(row)
 			tables[table.name] = rows
 		}
-		await mkdir(dirname(this.#path), { recursive: true })
 		this.#flushCount += 1
 		const temp = `${this.#path}.${process.pid}.${this.#flushCount}.tmp`
+		const payload = this.#meta === undefined ? { tables } : { meta: this.#meta, tables }
 		try {
-			await writeFile(temp, JSON.stringify({ tables }, null, 2), 'utf-8')
+			await mkdir(dirname(this.#path), { recursive: true })
+			await writeFile(temp, JSON.stringify(payload, null, 2), 'utf-8')
 			await rename(temp, this.#path)
 		} catch (error) {
 			await rm(temp, { force: true }).catch(() => {})
-			throw error
+			throw new DatabaseError('DRIVER', 'Failed to persist the database file', {
+				path: this.#path,
+				cause: error,
+			})
 		}
 	}
 }

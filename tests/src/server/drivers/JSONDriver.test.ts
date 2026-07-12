@@ -418,6 +418,137 @@ describe('JSONDriver — transaction', () => {
 	})
 })
 
+describe('JSONDriver — meta persistence', () => {
+	it('is undefined on a fresh store', async () => {
+		expect(await driver.meta?.()).toBeUndefined()
+	})
+
+	it('stamps and persists meta across close and reopen', async () => {
+		const meta = { version: 2, schema: SCHEMA }
+		await driver.stamp?.(meta)
+		await driver.close()
+
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toEqual(meta)
+		await reopened.close()
+	})
+
+	it('loads an old-shape file (no meta key) with meta undefined and tables intact', async () => {
+		await mkdir(dirname(path), { recursive: true })
+		await writeFile(
+			path,
+			JSON.stringify({
+				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+			}),
+			'utf-8',
+		)
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toBeUndefined()
+		expect(await reopened.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await reopened.close()
+	})
+
+	it('drops a malformed meta block (version as a string) but keeps tables intact', async () => {
+		await mkdir(dirname(path), { recursive: true })
+		await writeFile(
+			path,
+			JSON.stringify({
+				meta: { version: 'two', schema: SCHEMA },
+				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+			}),
+			'utf-8',
+		)
+		const reopened = createJSONDriver(path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.meta?.()).toBeUndefined()
+		expect(await reopened.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await reopened.close()
+	})
+
+	it('serializes the exact { meta, tables } shape once stamped', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const meta = { version: 1, schema: SCHEMA }
+		await driver.stamp?.(meta)
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			meta,
+			tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+		})
+	})
+
+	it('serializes without a meta key while unstamped', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
+		})
+		expect(Object.keys(parsed as Record<string, unknown>)).not.toContain('meta')
+	})
+})
+
+describe('JSONDriver — driver error seam', () => {
+	it('rejects a write with a DRIVER DatabaseError carrying the path when the write path is blocked', async () => {
+		const temp = tempDatabasePath()
+		const blockerPath = `${dirname(temp.path)}/blocker`
+		await writeFile(blockerPath, 'not a directory', 'utf-8')
+		const driverPath = `${blockerPath}/db.json`
+		const blocked = createJSONDriver(driverPath)
+		await blocked.open(SCHEMA)
+		const error = await blocked
+			.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+			.catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('DRIVER')
+		expect(isDatabaseError(error) ? error.context?.path : undefined).toBe(driverPath)
+		temp.cleanup()
+	})
+})
+
+describe('JSONDriver — scoped snapshot', () => {
+	it('restores only the snapshotted table on rollback, in memory and in the file', async () => {
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const rollback = await driver.snapshot(['users'])
+
+		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
+		await driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
+		await rollback()
+
+		expect(await driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await driver.keys('posts')).toEqual(['extra', 'intro'])
+
+		const raw = await readFile(path, 'utf-8')
+		const parsed: unknown = JSON.parse(raw)
+		expect(parsed).toEqual({
+			tables: {
+				users: [{ id: 'u1', name: 'Ada', age: 36, active: true }],
+				posts: [
+					{ slug: 'extra', title: 'Extra' },
+					{ slug: 'intro', title: 'Intro' },
+				],
+			},
+		})
+	})
+})
+
 describe('JSONDriver — atomic flush', () => {
 	it('leaves no leftover temp files after a burst of writes, and the file always parses', async () => {
 		const ids = Array.from({ length: 20 }, (_, index) => `u${String(index).padStart(2, '0')}`)
