@@ -29,6 +29,17 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
  */
 export type Key = string | number
 
+/**
+ * A caller-supplied key minting function.
+ *
+ * @remarks
+ * Environment surfaces provide implementations (the server's `node:crypto`-backed
+ * `generateKey`); the core mints no keys itself. Supplied via
+ * {@link DatabaseOptions.key} and used by a table when a written row lacks its
+ * primary key. Without one, writing a keyless row is a `VALIDATION` error.
+ */
+export type KeyFunction = () => Key
+
 /** A table row — a plain record of column values keyed by column name. */
 export type Row = Record<string, unknown>
 
@@ -107,13 +118,32 @@ export interface Criteria {
 /** An aggregate computed over a numeric column. */
 export type AggregateFunction = 'count' | 'sum' | 'average' | 'minimum' | 'maximum'
 
+/**
+ * Options for a cancellable read / iteration operation.
+ *
+ * @remarks
+ * When `signal` aborts, the operation throws a {@link DatabaseError} with code
+ * `ABORTED` carrying `signal.reason` in `context`. `TableInterface.scan` and
+ * `QueryInterface.stream` check the signal before each yield; other read
+ * methods check it at entry.
+ */
+export interface ReadOptions {
+	readonly signal?: AbortSignal
+}
+
 // === Lifecycle
 
 /** The lifecycle state of a {@link DatabaseInterface}. */
 export type DatabaseStatus = 'idle' | 'open' | 'closed'
 
 /** A machine-readable {@link DatabaseError} code. */
-export type DatabaseErrorCode = 'CLOSED' | 'NOT_FOUND' | 'CONFLICT' | 'VALIDATION'
+export type DatabaseErrorCode =
+	| 'CLOSED'
+	| 'NOT_FOUND'
+	| 'CONFLICT'
+	| 'VALIDATION'
+	| 'ABORTED'
+	| 'MIGRATION'
 
 /**
  * The push observation surface of a {@link DatabaseInterface} (AGENTS §13) — the
@@ -217,6 +247,56 @@ export interface TableSchema {
 }
 
 /**
+ * One step of a {@link Migration} plan — a single schema change applied to one
+ * table.
+ *
+ * @remarks
+ * `operation` names the axis it splits on (AGENTS §4.4): adding / removing a
+ * whole table, a column, or an index. A driver's optional `migrate` applies each
+ * step natively; a step referencing an unknown table throws `DatabaseError`
+ * `MIGRATION`.
+ */
+export type MigrationStep =
+	| { readonly operation: 'table.add'; readonly table: TableSchema }
+	| { readonly operation: 'table.remove'; readonly table: string }
+	| { readonly operation: 'column.add'; readonly table: string; readonly column: ColumnSchema }
+	| { readonly operation: 'column.remove'; readonly table: string; readonly column: string }
+	| { readonly operation: 'index.add'; readonly table: string; readonly index: readonly string[] }
+	| {
+			readonly operation: 'index.remove'
+			readonly table: string
+			readonly index: readonly string[]
+	  }
+
+/**
+ * A schema migration plan — an ordered set of {@link MigrationStep}s moving a
+ * database from one schema version to another.
+ *
+ * @remarks
+ * `from` / `to` are the source and target schema versions; `steps` runs in
+ * order. Applied natively via {@link DriverInterface.migrate} when a driver
+ * implements it.
+ */
+export interface Migration {
+	readonly from: number
+	readonly to: number
+	readonly steps: readonly MigrationStep[]
+}
+
+/**
+ * The handle a driver's native `transaction` hook returns.
+ *
+ * @remarks
+ * `commit` finalizes the native BEGIN; `rollback` undoes it. When a driver
+ * implements {@link DriverInterface.transaction}, the engine uses this handle
+ * instead of the snapshot-based rollback floor.
+ */
+export interface TransactionInterface {
+	commit(): Promise<void>
+	rollback(): Promise<void>
+}
+
+/**
  * The storage primitive every backend implements — the whole of the bridge.
  *
  * @remarks
@@ -274,6 +354,24 @@ export interface DriverInterface {
 		column: FieldPath,
 		criteria: Criteria,
 	): Promise<number | undefined>
+	/**
+	 * Optional native transaction (BEGIN). When present, the engine uses the
+	 * returned {@link TransactionInterface}'s `commit` / `rollback` instead of
+	 * the snapshot-based rollback floor.
+	 */
+	transaction?(): Promise<TransactionInterface>
+	/**
+	 * Optional natively filtered lazy iteration — a {@link Criteria}-aware
+	 * streaming read. Drivers without it are served by the core scan fallback
+	 * (filtering `scan` lazily).
+	 */
+	stream?(table: string, criteria: Criteria): AsyncIterable<Row>
+	/**
+	 * Optional native migration — applies a {@link Migration} plan directly.
+	 * Throws `DatabaseError` `MIGRATION` when a step references an unknown
+	 * table.
+	 */
+	migrate?(plan: Migration): Promise<void>
 }
 
 // === Database
@@ -341,7 +439,10 @@ export type TableIndexes = Readonly<Record<string, readonly (readonly string[])[
  * otherwise); `indexes` declares secondary indexes per table (contracts don't
  * express them) that flow into each derived {@link TableSchema}; `name` labels
  * the database; `on` wires initial {@link DatabaseEventMap} listeners (§8); `error`
- * is the emitter's listener-error handler (§13 — a listener throw routes here).
+ * is the emitter's listener-error handler (§13 — a listener throw routes here);
+ * `key` is the key factory a table uses when a written row lacks its primary
+ * key — without one, writing a keyless row is a `VALIDATION` error (the core
+ * mints no keys itself).
  */
 export interface DatabaseOptions<T extends TablesShape = TablesShape> {
 	readonly on?: EmitterHooks<DatabaseEventMap>
@@ -352,6 +453,7 @@ export interface DatabaseOptions<T extends TablesShape = TablesShape> {
 	readonly keys?: TableKeys
 	readonly indexes?: TableIndexes
 	readonly name?: string
+	readonly key?: KeyFunction
 }
 
 /**
@@ -394,7 +496,7 @@ export interface DatabaseInterface<T extends TablesShape = TablesShape> {
 	export(): Readonly<Record<string, TableExport>>
 	open(): Promise<void>
 	close(): Promise<void>
-	transaction<R>(scope: () => Promise<R>): Promise<R>
+	transaction<R>(scope: () => Promise<R>, options?: ReadOptions): Promise<R>
 }
 
 // === Table
@@ -427,13 +529,25 @@ export interface TableInterface<T = Row> {
 	has(key: Key): Promise<boolean>
 	has(keys: readonly Key[]): Promise<readonly boolean[]>
 	keys(): Promise<readonly Key[]>
-	records(criteria?: Criteria): Promise<readonly T[]>
-	count(criteria?: Criteria): Promise<number>
+	records(criteria?: Criteria, options?: ReadOptions): Promise<readonly T[]>
+	count(criteria?: Criteria, options?: ReadOptions): Promise<number>
 	aggregate(
 		operation: AggregateFunction,
 		column: FieldPath,
 		criteria?: Criteria,
+		options?: ReadOptions,
 	): Promise<number | undefined>
+	/**
+	 * Lazy filtered iteration over the table's rows.
+	 *
+	 * @remarks
+	 * `criteria`'s `conditions` / `offset` / `limit` are honored lazily as rows
+	 * stream; `order` is intentionally IGNORED — streaming yields driver
+	 * key-order, sorted output is `records()`'s job. Breaking out of the
+	 * iteration early closes the underlying source. The signal (if any) is
+	 * checked before each yield.
+	 */
+	scan(criteria?: Criteria, options?: ReadOptions): AsyncIterable<T>
 	set(row: T): Promise<Key>
 	set(rows: readonly T[]): Promise<readonly Key[]>
 	add(row: T): Promise<Key>
@@ -473,6 +587,17 @@ export interface QueryInterface<T = Row> {
 	all(): Promise<readonly T[]>
 	first(): Promise<T | undefined>
 	count(): Promise<number>
+	/**
+	 * Lazy per-row evaluation of this query's conditions / filters / offset /
+	 * limit.
+	 *
+	 * @remarks
+	 * `order` and its comparators are IGNORED (streaming yields unsorted, as
+	 * rows are evaluated one at a time). Same abort semantics as
+	 * {@link TableInterface.scan}: the signal (if any) is checked before each
+	 * yield, and breaking out early closes the underlying source.
+	 */
+	stream(options?: ReadOptions): AsyncIterable<T>
 	sum(column: FieldPath): Promise<number | undefined>
 	average(column: FieldPath): Promise<number | undefined>
 	minimum(column: FieldPath): Promise<number | undefined>

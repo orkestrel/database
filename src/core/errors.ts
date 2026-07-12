@@ -11,8 +11,10 @@ import type { DatabaseErrorCode } from './types.js'
  * @remarks
  * Carries a {@link DatabaseErrorCode} and an optional `context` bag naming the
  * offending table / key. Thrown for: operating on a closed database (`CLOSED`), a
- * `resolve` miss (`NOT_FOUND`), an `add` onto an existing key (`CONFLICT`), and a
- * row that fails its table's contract (`VALIDATION`).
+ * `resolve` miss (`NOT_FOUND`), an `add` onto an existing key (`CONFLICT`), a
+ * row that fails its table's contract (`VALIDATION`), a cancelled operation whose
+ * {@link ReadOptions.signal} aborted (`ABORTED`, carrying `signal.reason` in
+ * `context`), and an inapplicable {@link Migration} plan (`MIGRATION`).
  */
 export class DatabaseError extends Error {
 	readonly code: DatabaseErrorCode
