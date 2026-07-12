@@ -3,6 +3,29 @@ import type { CompiledSQL, SQLiteValue } from './types.js'
 import { isString } from '@orkestrel/contract'
 import { encodeValue, fieldColumn, quote } from './helpers.js'
 
+/**
+ * Compile a NESTED {@link FieldPath} to the `json_type(<col>, <path>)` SQL
+ * expression — the {@link fieldColumn} `json_extract` sibling used to tell a
+ * PRESENT JSON `null` apart from an ABSENT path (both read back as SQL `NULL`
+ * through `json_extract`, but `json_type` reports `'null'` for the former and
+ * SQL `NULL` for the latter).
+ *
+ * @param path - The nested field path (a column plus its JSON keys)
+ * @returns The SQL expression reading the value's JSON type
+ *
+ * @example
+ * ```ts
+ * jsonTypeColumn(['payload', 'user', 'id']) // "json_type(\"payload\", '$.user.id')"
+ * ```
+ */
+export function jsonTypeColumn(path: readonly string[]): string {
+	const rest = path
+		.slice(1)
+		.map((key) => '.' + key.replaceAll("'", "''"))
+		.join('')
+	return 'json_type(' + quote(path[0]) + ", '$" + rest + "')"
+}
+
 // The `Criteria` → parameterized SQL compiler — the native-query payoff. It turns
 // a portable `Criteria` (the same one the core engine's `applyCriteria` folds)
 // into the `WHERE` / `ORDER BY` / `LIMIT` tail of a `SELECT`, with bound `?`
@@ -75,7 +98,7 @@ export function valueType(value: unknown): ColumnType {
 
 /**
  * Compile one condition to its `<column> <operator>` SQL fragment and the params
- * it binds.
+ * it binds — engine-exact under SQL's three-valued NULL logic.
  *
  * @remarks
  * Every operand is run through `encodeValue`, so a bound value matches the SQL
@@ -84,10 +107,53 @@ export function valueType(value: unknown): ColumnType {
  * encodes each operand as the NATIVE scalar `json_extract` returns, derived from
  * the operand's runtime type (per-operand, since `between` / `any` / `none` can
  * mix types). `any` / `none` collapse an empty list to a constant (`0` matches
- * nothing, `1` matches all) with no params. A nested field with a null/undefined
- * operand under `equals` / `not` compiles to `IS NULL` / `IS NOT NULL` (no bound
- * param) instead of `= ?` / `!= ?`, matching the engine's treatment of a
- * present-but-null nested value.
+ * nothing, `1` matches all) with no params.
+ *
+ * The core engine's total order ranks `undefined` (rank 0) BELOW `null`
+ * (rank 1) (see `compareValues`), so a MISSING/`NULL` column MATCHES
+ * `below` / `to` / a scalar `not` / `none` — the opposite of raw SQL, where a
+ * comparison against `NULL` is `NULL` (excluded). This fragment replicates the
+ * engine exactly. Truth table (`value` = the engine's decoded field read; a
+ * FLAT column's stored `NULL` decodes to `undefined` per `decodeRow`, so a
+ * flat `value` is NEVER a present `null` — only a NESTED path can be
+ * present-but-`null`):
+ *
+ * ```text
+ * operator            | value=undefined (absent)      | value=null (nested only) | value=scalar
+ * --------------------|--------------------------------|---------------------------|-------------
+ * equals, first=null  | no match                       | MATCH                     | no match
+ * equals, first=X     | no match                       | no match                  | value===X
+ * not, first=null     | MATCH (flat: unconditionally;  | no match                  | MATCH
+ *                     |   nested: absent still matches)|                           |
+ * not, first=X        | MATCH                          | MATCH                     | value!==X
+ * below/to, first=X   | MATCH (rank 0 < rank(X))       | MATCH (rank 1 < rank(X))  | rank compare
+ * none, list=[…]       | MATCH (no scalar rank-equal)   | MATCH                     | not-in-list
+ * any, list=[…]        | no match                       | no match                  | in-list
+ * above/from/between  | no match                       | no match                  | rank compare
+ * like/glob/starts/…  | no match (not a string)        | no match                  | string test
+ * present              | false                          | false                     | true
+ * absent                | true                           | true                      | false
+ * ```
+ *
+ * Because a flat column's `NULL` always decodes to `undefined`, `equals`
+ * against a `null` operand needs no special flat compilation (`col = ?`
+ * binding a `NULL` param is already always-false in SQL, matching "no match"
+ * above) — but flat `not` against `null` must match EVERY row (both the
+ * absent and the scalar rows), which `col != ? OR col IS NULL` cannot express
+ * (it only catches the `IS NULL` row), so a flat `not`-with-`null`-operand
+ * compiles to the constant `1`.
+ *
+ * A NESTED path can be present-but-`null` (a stored JSON `null`), which
+ * `json_extract` reads back as SQL `NULL` — indistinguishable from an ABSENT
+ * path. `json_type(col, path)` disambiguates them (`'null'` for present-null,
+ * SQL `NULL` for absent), so nested `equals` / `not` against a `null` operand
+ * compile through `json_type` instead of `IS NULL` / `IS NOT NULL`.
+ *
+ * Every other MATCH-on-null-or-absent row is expressed uniformly (flat and
+ * nested alike) as `(<column> <op> ? OR <column> IS NULL)` — for a nested
+ * path, `json_extract` already collapses BOTH absent and present-null to SQL
+ * `NULL`, so `IS NULL` catches both in one clause; for a flat column there is
+ * only the absent case to catch.
  *
  * @param condition - The condition to compile
  * @param schema - The table's schema (for declared column types)
@@ -97,6 +163,8 @@ export function valueType(value: unknown): ColumnType {
  * ```ts
  * fragment({ column: 'age', operator: 'above', values: [18], connector: 'and' }, schema)
  * // { sql: '"age" > ?', params: [18] }
+ * fragment({ column: 'age', operator: 'below', values: [18], connector: 'and' }, schema)
+ * // { sql: '("age" < ? OR "age" IS NULL)', params: [18] }
  * ```
  */
 export function fragment(condition: Condition, schema: TableSchema): CompiledSQL {
@@ -107,30 +175,37 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 		encodeValue(value, nested ? valueType(value) : (declared ?? 'json'))
 	const first = condition.values[0]
 	const second = condition.values[1]
-	// A nested (`json_extract`) field with a null/undefined operand under
-	// `equals` / `not`: `json_extract` collapses a stored JSON `null` to SQL
-	// `NULL`, and `<col> = ?` / `!= ?` binding `NULL` never matches under SQL's
-	// three-valued logic — so compile `IS NULL` / `IS NOT NULL` (no bound param)
-	// to match the engine, which treats a present-but-null nested value as equal
-	// to `null`. This is NESTED-ONLY: a flat null column is left as `= ?` / `!= ?`
-	// (a null flat column decodes to absent, so the engine and `= NULL` already
-	// agree on matching nothing).
-	const nullOperand = nested && (first === null || first === undefined)
+	const nullOperand = first === null || first === undefined
+	// The nested `json_type` read — built only when `condition.column` is an
+	// array (a nested path) — disambiguates a present JSON `null` from an
+	// absent path under `equals` / `not` (see the truth table above).
+	const jsonType = !isString(condition.column) ? jsonTypeColumn(condition.column) : ''
 	switch (condition.operator) {
 		case 'equals':
-			if (nullOperand) return { sql: column + ' IS NULL', params: [] }
+			if (nullOperand && nested) return { sql: jsonType + " = 'null'", params: [] }
 			return { sql: column + ' = ?', params: [encode(first)] }
 		case 'not':
-			if (nullOperand) return { sql: column + ' IS NOT NULL', params: [] }
-			return { sql: column + ' != ?', params: [encode(first)] }
+			if (nullOperand) {
+				if (nested) {
+					return {
+						sql: '(' + jsonType + ' IS NULL OR ' + jsonType + " != 'null')",
+						params: [],
+					}
+				}
+				// A flat column's decoded value is never a present null, so
+				// `compareValues(value, null)` is nonzero for EVERY row (absent or
+				// scalar) — the engine's `not null` matches unconditionally.
+				return { sql: '1', params: [] }
+			}
+			return { sql: '(' + column + ' != ? OR ' + column + ' IS NULL)', params: [encode(first)] }
 		case 'above':
 			return { sql: column + ' > ?', params: [encode(first)] }
 		case 'below':
-			return { sql: column + ' < ?', params: [encode(first)] }
+			return { sql: '(' + column + ' < ? OR ' + column + ' IS NULL)', params: [encode(first)] }
 		case 'from':
 			return { sql: column + ' >= ?', params: [encode(first)] }
 		case 'to':
-			return { sql: column + ' <= ?', params: [encode(first)] }
+			return { sql: '(' + column + ' <= ? OR ' + column + ' IS NULL)', params: [encode(first)] }
 		case 'between':
 			return { sql: column + ' BETWEEN ? AND ?', params: [encode(first), encode(second)] }
 		case 'like':
@@ -156,7 +231,14 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 		case 'none':
 			if (condition.values.length === 0) return { sql: '1', params: [] }
 			return {
-				sql: column + ' NOT IN (' + condition.values.map(() => '?').join(', ') + ')',
+				sql:
+					'(' +
+					column +
+					' NOT IN (' +
+					condition.values.map(() => '?').join(', ') +
+					') OR ' +
+					column +
+					' IS NULL)',
 				params: condition.values.map(encode),
 			}
 		case 'absent':
@@ -172,6 +254,10 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
  *
  * @remarks
  * The first condition's connector is ignored, per the {@link Condition} types.
+ * Every fragment (see {@link fragment}'s truth table) replicates the core
+ * engine's total order EXACTLY under SQL's three-valued NULL logic, so this
+ * clause matches `applyCriteria` row-for-row over the same table — a native
+ * `records` / `count` read never disagrees with a scan-and-filter fallback.
  *
  * @param conditions - The conditions to fold
  * @param schema - The table's schema

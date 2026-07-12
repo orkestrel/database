@@ -80,7 +80,7 @@ import { META_STORE } from '../constants.js'
  */
 export class IndexedDBDriver implements DriverInterface {
 	readonly #name: string
-	readonly #schema = new Map<string, TableSchema>()
+	#schema = new Map<string, TableSchema>()
 	#database: IndexedDBDatabaseInterface | undefined
 
 	constructor(name: string) {
@@ -91,26 +91,18 @@ export class IndexedDBDriver implements DriverInterface {
 		// Reconnect cleanly so an auto-managed version bump (to create new stores) is
 		// never blocked by this driver's own open handle.
 		this.#database?.close()
-		// The reserved meta store is declared alongside every open — out-of-line,
-		// no indexes — so `meta` / `stamp` always have somewhere to read/write.
-		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
-		for (const table of schema) {
-			// Out-of-line stores (no `path`): keys are passed explicitly. The declared
-			// secondary indexes become the store's `createIndex` definitions.
-			stores[table.name] = {
-				indexes: table.indexes.map((columns) => ({
-					name: columns.join('_'),
-					path: columns.length === 1 ? columns[0] : [...columns],
-				})),
-			}
-			// Remember the schema so the native `records` / `count` / `stream` hooks
-			// can plan a key-range pushdown (the primary key, column types, secondary
-			// indexes).
-			this.#schema.set(table.name, table)
-		}
-		const database = createIndexedDBDatabase({ name: this.#name, stores })
+		// Build the new schema into a LOCAL map first — never mutate `#schema` in
+		// place — so a reopen with a REDUCED schema replaces the map wholesale
+		// instead of retaining ghost tables the caller no longer declared.
+		const map = new Map<string, TableSchema>()
+		for (const table of schema) map.set(table.name, table)
+		const database = createIndexedDBDatabase({ name: this.#name, stores: this.#stores(map) })
 		await database.connect()
 		this.#database = database
+		// Remember the schema so the native `records` / `count` / `stream` hooks
+		// can plan a key-range pushdown (the primary key, column types, secondary
+		// indexes).
+		this.#schema = map
 	}
 
 	async close(): Promise<void> {
@@ -293,25 +285,30 @@ export class IndexedDBDriver implements DriverInterface {
 		}
 		const current = this.#require()
 		const version = current.version
+		// Project the post-migration shape into a LOCAL copy first — `#schema`
+		// stays untouched until the upgrade actually commits, so a mid-upgrade
+		// failure never leaves the driver's bookkeeping ahead of the real database.
+		const schema = new Map(this.#schema)
+		this.#applySteps(schema, plan.steps)
 		current.close()
-		this.#applySteps(plan.steps)
-		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
-		for (const table of this.#schema.values()) {
-			stores[table.name] = {
-				indexes: table.indexes.map((columns) => ({
-					name: columns.join('_'),
-					path: columns.length === 1 ? columns[0] : [...columns],
-				})),
-			}
+		try {
+			const database = createIndexedDBDatabase({
+				name: this.#name,
+				version: version + 1,
+				stores: this.#stores(schema),
+				upgrade: (context) => this.#upgrade(context, plan.steps),
+			})
+			await database.connect()
+			// Only on success: adopt the connection AND commit the local map.
+			this.#database = database
+			this.#schema = schema
+		} catch (error) {
+			// The old connection was closed to allow the versionchange attempt;
+			// reconnect at the PRE-migration schema/version so the driver is left
+			// usable, with `#schema` (and the real database) unchanged.
+			await this.#reopen()
+			throw error
 		}
-		const database = createIndexedDBDatabase({
-			name: this.#name,
-			version: version + 1,
-			stores,
-			upgrade: (context) => this.#upgrade(context, plan.steps),
-		})
-		await database.connect()
-		this.#database = database
 	}
 
 	// === Private
@@ -327,6 +324,33 @@ export class IndexedDBDriver implements DriverInterface {
 
 	#store(table: string) {
 		return this.#require().store(table)
+	}
+
+	// Project a schema map into the wrapper's declared-stores shape — the
+	// reserved meta store is always declared alongside every table, out-of-line
+	// (keys are passed explicitly), with the declared secondary indexes becoming
+	// each store's `createIndex` definitions. Shared by `open`, `migrate`, and
+	// `#reopen` so the projection never drifts between them.
+	#stores(schema: ReadonlyMap<string, TableSchema>): Record<string, StoreDefinition> {
+		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
+		for (const table of schema.values()) {
+			stores[table.name] = {
+				indexes: table.indexes.map((columns) => ({
+					name: columns.join('_'),
+					path: columns.length === 1 ? columns[0] : [...columns],
+				})),
+			}
+		}
+		return stores
+	}
+
+	// Reconnect at the CURRENT `#schema` with no version bump (auto-managed
+	// mode, mirroring `open`) — used to restore a working connection after a
+	// failed `migrate` left the prior connection closed.
+	async #reopen(): Promise<void> {
+		const database = createIndexedDBDatabase({ name: this.#name, stores: this.#stores(this.#schema) })
+		await database.connect()
+		this.#database = database
 	}
 
 	// The candidate-superset read for a plan. The primary store already returns rows
@@ -355,10 +379,12 @@ export class IndexedDBDriver implements DriverInterface {
 		return schema
 	}
 
-	// Mirror a migration plan's steps onto #schema — the same bookkeeping `open`
-	// does for a freshly declared schema, kept in sync so pushdown planning and a
-	// later migrate/open see the post-migration shape.
-	#applySteps(steps: readonly MigrationStep[]): void {
+	// Mirror a migration plan's steps onto a LOCAL schema map — the same
+	// bookkeeping `open` does for a freshly declared schema — without touching
+	// `#schema`, so a failed migrate never leaves the driver's bookkeeping ahead
+	// of the real database. The caller commits the map into `#schema` only after
+	// the upgrade connects successfully.
+	#applySteps(schema: Map<string, TableSchema>, steps: readonly MigrationStep[]): void {
 		// Deep-equal two index-column-group arrays (order-sensitive: an index over
 		// `[a, b]` is not the same index as `[b, a]`) — mirrors planMigration's own
 		// local `sameIndex` (src/core/helpers.ts).
@@ -367,25 +393,25 @@ export class IndexedDBDriver implements DriverInterface {
 		for (const step of steps) {
 			switch (step.operation) {
 				case 'table.add':
-					if (!this.#schema.has(step.table.name)) this.#schema.set(step.table.name, step.table)
+					if (!schema.has(step.table.name)) schema.set(step.table.name, step.table)
 					break
 				case 'table.remove':
-					this.#schema.delete(step.table)
+					schema.delete(step.table)
 					break
 				case 'column.add': {
-					const table = this.#schema.get(step.table)
+					const table = schema.get(step.table)
 					if (
 						table !== undefined &&
 						!table.columns.some((column) => column.name === step.column.name)
 					) {
-						this.#schema.set(step.table, { ...table, columns: [...table.columns, step.column] })
+						schema.set(step.table, { ...table, columns: [...table.columns, step.column] })
 					}
 					break
 				}
 				case 'column.remove': {
-					const table = this.#schema.get(step.table)
+					const table = schema.get(step.table)
 					if (table !== undefined) {
-						this.#schema.set(step.table, {
+						schema.set(step.table, {
 							...table,
 							columns: table.columns.filter((column) => column.name !== step.column),
 						})
@@ -393,16 +419,16 @@ export class IndexedDBDriver implements DriverInterface {
 					break
 				}
 				case 'index.add': {
-					const table = this.#schema.get(step.table)
+					const table = schema.get(step.table)
 					if (table !== undefined) {
-						this.#schema.set(step.table, { ...table, indexes: [...table.indexes, step.index] })
+						schema.set(step.table, { ...table, indexes: [...table.indexes, step.index] })
 					}
 					break
 				}
 				case 'index.remove': {
-					const table = this.#schema.get(step.table)
+					const table = schema.get(step.table)
 					if (table !== undefined) {
-						this.#schema.set(step.table, {
+						schema.set(step.table, {
 							...table,
 							indexes: table.indexes.filter((index) => !sameIndex(index, step.index)),
 						})

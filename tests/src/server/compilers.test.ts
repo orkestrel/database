@@ -56,26 +56,47 @@ describe('compileCriteria — operators', () => {
 		})
 	})
 
-	it('compiles not to `!= ?`', () => {
+	it('compiles not to `(!= ? OR IS NULL)` — a missing column ranks below every scalar', () => {
+		// The engine's `compareValues(undefined, 36) !== 0` matches an absent/NULL
+		// column too, so `not` must also match the `IS NULL` row — SQL's raw
+		// `!= ?` alone would exclude it (NULL comparisons are never true).
 		expect(compile({ conditions: [cond('age', 'not', [36])] })).toEqual({
-			sql: 'WHERE "age" != ? ORDER BY "id"',
+			sql: 'WHERE ("age" != ? OR "age" IS NULL) ORDER BY "id"',
 			params: [36],
 		})
 	})
 
-	it('compiles above / below / from / to to > / < / >= / <=', () => {
+	it('compiles above / from to raw > / >= (a NULL column never matches)', () => {
 		expect(compile({ conditions: [cond('age', 'above', [18])] }).sql).toBe(
 			'WHERE "age" > ? ORDER BY "id"',
-		)
-		expect(compile({ conditions: [cond('age', 'below', [18])] }).sql).toBe(
-			'WHERE "age" < ? ORDER BY "id"',
 		)
 		expect(compile({ conditions: [cond('age', 'from', [18])] }).sql).toBe(
 			'WHERE "age" >= ? ORDER BY "id"',
 		)
-		expect(compile({ conditions: [cond('age', 'to', [18])] }).sql).toBe(
-			'WHERE "age" <= ? ORDER BY "id"',
-		)
+	})
+
+	it('compiles below / to to `(< / <= ? OR IS NULL)` — a missing column ranks below every scalar', () => {
+		// The engine's `compareValues(undefined, 18) < 0` matches an absent/NULL
+		// column (rank 0 < any scalar's rank), so `below` / `to` must match it too.
+		expect(compile({ conditions: [cond('age', 'below', [18])] })).toEqual({
+			sql: 'WHERE ("age" < ? OR "age" IS NULL) ORDER BY "id"',
+			params: [18],
+		})
+		expect(compile({ conditions: [cond('age', 'to', [18])] })).toEqual({
+			sql: 'WHERE ("age" <= ? OR "age" IS NULL) ORDER BY "id"',
+			params: [18],
+		})
+	})
+
+	it('compiles a flat not(null) to the constant 1 (matches every row)', () => {
+		// A flat column's decoded value is never a present null (NULL decodes to
+		// absent), so `compareValues(value, null)` is nonzero for every row —
+		// `not null` matches unconditionally, which no `!= ? OR IS NULL` shape
+		// can express (it would only match the IS NULL row).
+		expect(compile({ conditions: [cond('age', 'not', [null])] })).toEqual({
+			sql: 'WHERE 1 ORDER BY "id"',
+			params: [],
+		})
 	})
 
 	it('compiles between to BETWEEN ? AND ?', () => {
@@ -122,9 +143,12 @@ describe('compileCriteria — operators', () => {
 		})
 	})
 
-	it('compiles a non-empty none to NOT IN (?, ?)', () => {
+	it('compiles a non-empty none to `(NOT IN (?, ?) OR IS NULL)`', () => {
+		// An absent/NULL column never rank-equals a listed scalar, so the engine's
+		// `none` matches it too — plain `NOT IN` alone would exclude it (SQL's
+		// three-valued `NULL NOT IN (...)` is never true).
 		expect(compile({ conditions: [cond('id', 'none', ['u1', 'u2'])] })).toEqual({
-			sql: 'WHERE "id" NOT IN (?, ?) ORDER BY "id"',
+			sql: 'WHERE ("id" NOT IN (?, ?) OR "id" IS NULL) ORDER BY "id"',
 			params: ['u1', 'u2'],
 		})
 	})
@@ -188,20 +212,41 @@ describe('compileCriteria — operators', () => {
 		})
 	})
 
-	it('compiles a nested equals(null) to IS NULL with no params', () => {
-		// json_extract collapses a stored JSON `null` to SQL `NULL`, so `= ?` binding
-		// NULL never matches; the nested-null branch compiles `IS NULL` (no param) to
-		// match the engine's equals(null) on a present-but-null nested value.
+	it('compiles a nested equals(null) to json_type = \'null\' (present-null only)', () => {
+		// json_extract collapses BOTH a present JSON `null` AND an absent path to SQL
+		// `NULL` — indistinguishable. json_type disambiguates: `'null'` only for a
+		// present JSON null, matching the engine's `compareValues(null, null) === 0`
+		// (absent decodes to `undefined`, which does NOT equal `null`).
 		expect(compile({ conditions: [cond(['meta', 'note'], 'equals', [null])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.note\') IS NULL ORDER BY "id"',
+			sql: 'WHERE json_type("meta", \'$.note\') = \'null\' ORDER BY "id"',
 			params: [],
 		})
 	})
 
-	it('compiles a nested not(null) to IS NOT NULL with no params', () => {
+	it('compiles a nested not(null) to (json_type IS NULL OR json_type != \'null\')', () => {
+		// Matches absent (json_type IS NULL) or present-scalar (json_type != 'null');
+		// excludes only a present JSON null — matching the engine's
+		// `compareValues(value, null) !== 0`.
 		expect(compile({ conditions: [cond(['meta', 'note'], 'not', [null])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.note\') IS NOT NULL ORDER BY "id"',
+			sql: 'WHERE (json_type("meta", \'$.note\') IS NULL OR json_type("meta", \'$.note\') != \'null\') ORDER BY "id"',
 			params: [],
+		})
+	})
+
+	it('compiles a nested below to `(< ? OR json_extract IS NULL)` — absent and present-null both match', () => {
+		// json_extract collapses BOTH absent and present-null to SQL NULL, so one
+		// `IS NULL` clause catches both — matching the engine, where both an
+		// undefined (rank 0) and a null (rank 1) nested value rank below any scalar.
+		expect(compile({ conditions: [cond(['meta', 'score'], 'below', [18])] })).toEqual({
+			sql: 'WHERE (json_extract("meta", \'$.score\') < ? OR json_extract("meta", \'$.score\') IS NULL) ORDER BY "id"',
+			params: [18],
+		})
+	})
+
+	it('compiles a nested none to `(NOT IN (...) OR json_extract IS NULL)`', () => {
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', ['a', 'b'])] })).toEqual({
+			sql: 'WHERE (json_extract("meta", \'$.tag\') NOT IN (?, ?) OR json_extract("meta", \'$.tag\') IS NULL) ORDER BY "id"',
+			params: ['a', 'b'],
 		})
 	})
 
@@ -410,11 +455,12 @@ describe('fragment', () => {
 		expect(fragment(cond('id', 'none', []), SCHEMA)).toEqual({ sql: '1', params: [] })
 	})
 
-	it('compiles a nested null equals to IS NULL with no bound param', () => {
-		// A nested (json_extract) field with a null operand under equals collapses to
-		// IS NULL — json_extract returns SQL NULL for a stored JSON null.
+	it('compiles a nested null equals to json_type = \'null\' with no bound param', () => {
+		// A nested (json_extract) field with a null operand under equals compiles
+		// through json_type — 'null' means present-JSON-null, distinguishing it
+		// from an absent path (which json_extract alone cannot tell apart).
 		expect(fragment(cond(['meta', 'note'], 'equals', [null]), SCHEMA)).toEqual({
-			sql: 'json_extract("meta", \'$.note\') IS NULL',
+			sql: 'json_type("meta", \'$.note\') = \'null\'',
 			params: [],
 		})
 	})

@@ -103,6 +103,7 @@ None of these import a SQLite package; they speak strings and values only.
 | `escapeLike`      | function | Escape `\` / `%` / `_` so a `starts` / `ends` operand matches literally under `LIKE … ESCAPE '\'`.                |
 | `declaredType`    | function | The declared `ColumnType` of a flat column, read from the schema.                                                 |
 | `valueType`       | function | The `ColumnType` a nested (`json_extract`) operand encodes as, derived from its runtime value.                    |
+| `jsonTypeColumn`  | function | Compile a nested `FieldPath` to its `json_type(<col>, <path>)` SQL expression — disambiguates a present JSON `null` from an absent path. |
 | `fragment`        | function | Compile one `Condition` to its `<column> <operator>` SQL fragment plus bound params.                              |
 | `compileWhere`    | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold.                |
 | `compileOrder`    | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                               |

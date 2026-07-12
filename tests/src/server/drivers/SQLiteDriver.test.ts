@@ -539,3 +539,125 @@ describe('SQLiteDriver — trusted-query parity vs the core engine', () => {
 		expect(native).toBe(expected)
 	})
 })
+
+describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic fix)', () => {
+	// The regression this covers: SQL's three-valued NULL logic diverges from
+	// the core engine's total order (undefined < null < boolean < number <
+	// string — `compareValues`), where a missing/NULL column MATCHES `below` /
+	// `to` / a scalar `not` / `none`. A NULLABLE flat `rank` column (some rows
+	// omit it entirely, so SQLite stores NULL) plus a nested `meta.note` path
+	// (some rows a present JSON `null`, some absent entirely) exercise every
+	// rewritten operator against the shared engine oracle (`applyCriteria` /
+	// `computeAggregate` over the memory driver's scan).
+	const NULL_SCHEMA: readonly TableSchema[] = [
+		{
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', type: 'text', nullable: false },
+				{ name: 'rank', type: 'integer', nullable: true },
+				{ name: 'meta', type: 'json', nullable: true },
+			],
+			indexes: [],
+		},
+	]
+
+	// u1: rank present, meta.note present-null. u2: rank ABSENT (SQL NULL),
+	// meta.note present-null. u3: rank present, meta.note ABSENT (key missing).
+	// u4: rank ABSENT, meta ABSENT entirely (both column-null and path-absent).
+	const NULL_ROWS = [
+		{ id: 'u1', rank: 10, meta: { note: null, tag: 'a' } },
+		{ id: 'u2', meta: { note: null, tag: 'b' } },
+		{ id: 'u3', rank: 20, meta: { tag: 'c' } },
+		{ id: 'u4' },
+	]
+
+	const memory = createMemoryDriver()
+	let sqlite = createSQLiteDriver()
+
+	beforeEach(async () => {
+		await memory.open(NULL_SCHEMA)
+		sqlite = createSQLiteDriver()
+		await sqlite.open(NULL_SCHEMA)
+		for (const row of NULL_ROWS) {
+			await memory.write('users', row.id, row)
+			await sqlite.write('users', row.id, row)
+		}
+	})
+
+	afterEach(async () => {
+		await sqlite.close()
+	})
+
+	async function engineRows(criteria: Criteria): Promise<readonly Row[]> {
+		return applyCriteria(await collectRows(memory.scan('users')), criteria)
+	}
+
+	async function nativeIds(criteria: Criteria): Promise<readonly string[]> {
+		const rows = sqlite.records === undefined ? [] : await sqlite.records('users', criteria)
+		return rows.map((row) => String(row.id)).sort()
+	}
+
+	async function expectedIds(criteria: Criteria): Promise<readonly string[]> {
+		return (await engineRows(criteria)).map((row) => String(row.id)).sort()
+	}
+
+	it('below on a nullable flat column matches the engine (absent column ranks below every scalar)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'below', [15])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('to on a nullable flat column matches the engine', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'to', [10])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('a scalar not on a nullable flat column matches the engine (absent column also matches)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'not', [10])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('a null-operand not on a flat column matches every row (the engine oracle)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'not', [null])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+		expect(await nativeIds(criteria)).toEqual(['u1', 'u2', 'u3', 'u4'])
+	})
+
+	it('none on a nullable flat column matches the engine (absent column also matches)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'none', [10, 20])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('a nested equals(null) matches only present-JSON-null, not an absent path', async () => {
+		const criteria: Criteria = { conditions: [buildCondition(['meta', 'note'], 'equals', [null])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+		expect(await nativeIds(criteria)).toEqual(['u1', 'u2'])
+	})
+
+	it('a nested not(null) matches an absent path or a present scalar, excluding present-null', async () => {
+		const criteria: Criteria = { conditions: [buildCondition(['meta', 'note'], 'not', [null])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('a nested below matches the engine (absent path and present-null both rank below a scalar)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition(['meta', 'tag'], 'below', ['b'])] }
+		expect(await nativeIds(criteria)).toEqual(await expectedIds(criteria))
+	})
+
+	it('count matches the engine over a below-filtered nullable column', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'below', [15])] }
+		const expected = (await engineRows(criteria)).length
+		const native =
+			sqlite.aggregate === undefined ? undefined : await sqlite.aggregate('users', 'count', 'rank', criteria)
+		expect(native).toBe(expected)
+	})
+
+	it('sum over a nullable rank column, below-filtered, matches the engine aggregate', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'below', [25])] }
+		const expectedRows = await engineRows(criteria)
+		const expected = computeAggregate(expectedRows, 'sum', 'rank')
+		const native =
+			sqlite.aggregate === undefined ? undefined : await sqlite.aggregate('users', 'sum', 'rank', criteria)
+		expect(native).toBe(expected)
+	})
+})

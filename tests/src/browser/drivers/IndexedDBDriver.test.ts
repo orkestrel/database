@@ -351,6 +351,68 @@ describe('IndexedDBDriver — migrate / meta / stamp', () => {
 		await driver.open(tableSchemas('users'))
 	})
 
+	it('reopening with a reduced schema drops ghost tables (unresolvable, no stale pushdown)', async () => {
+		await driver.open(tableSchemas('users', 'posts'))
+		await driver.write('posts', 'p1', { id: 'p1' })
+		// Reopen with ONLY 'users' declared — the ghost 'posts' table must not
+		// remain resolvable by planning (`#table` / `records` / `count` / `stream`).
+		await driver.open(tableSchemas('users'))
+		await expect(driver.records('posts', { conditions: [] })).rejects.toThrow('posts')
+		await expect(driver.count('posts', { conditions: [] })).rejects.toThrow('posts')
+	})
+
+	it('a mid-upgrade migrate failure leaves #schema/database at the pre-failure state, and a later valid migrate still succeeds', async () => {
+		await driver.write('users', 'u1', { id: 'u1', age: 30 })
+		const meta = { version: 1, schema: tableSchemas('users') }
+		await driver.stamp?.(meta)
+		// First migrate: add a real secondary index — succeeds and commits.
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+		})
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
+		// A real native `close()` settles asynchronously; give it a tick so the
+		// SECOND migrate's version bump below rejects for the intended reason
+		// (a genuine mid-upgrade failure) instead of a native `BLOCKED` fault
+		// racing the first migrate's connection teardown.
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		// Second migrate: adds the SAME index again — a real native
+		// `createIndex` ConstraintError (duplicate index name) mid-upgrade,
+		// rejecting `connect()` after the first index.add already committed.
+		await expect(
+			driver.migrate?.({
+				from: 1,
+				to: 2,
+				steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+			}),
+		).rejects.toThrow(`Upgrade of '${name}' failed`)
+		// The driver reconnects cleanly at the pre-failure (post-first-migrate)
+		// state: an ORIGINAL row still reads, meta is unchanged, and a fresh
+		// write still works.
+		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
+		expect(await driver.meta?.()).toEqual(meta)
+		await driver.write('users', 'u2', { id: 'u2', age: 40 })
+		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2', age: 40 })
+		// A SUBSEQUENT valid migrate (a genuinely new index) still succeeds —
+		// #schema was not corrupted by the failed attempt.
+		await driver.migrate?.({
+			from: 2,
+			to: 3,
+			steps: [{ operation: 'index.add', table: 'users', index: ['id'] }],
+		})
+		await driver.close()
+		const wrapper = createIndexedDBDatabase({
+			name,
+			stores: { users: { indexes: [{ name: 'age', path: 'age' }, { name: 'id', path: 'id' }] } },
+		})
+		await wrapper.connect()
+		expect((await wrapper.store('users').index('age').get(40))?.id).toBe('u2')
+		wrapper.close()
+		driver = createIndexedDBDriver(name)
+		await driver.open(tableSchemas('users'))
+	})
+
 	it('an unknown-table migration step throws MIGRATION without consuming a version', async () => {
 		await driver.write('users', 'u1', { id: 'u1' })
 		let caught: unknown
