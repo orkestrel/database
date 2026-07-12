@@ -81,12 +81,39 @@ produces the JSON Schema, and seeds fixtures.
 | ------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
 | `generateKey` | function | Generate a fresh UUID string, `node:crypto`-backed — pass as `DatabaseOptions.key` in a server environment. |
 
+### SQL compilation
+
+Pure, server-only functions that turn a core `Criteria` / `TableSchema` into
+parameterized SQL text — the native-query payoff for a SQLite-backed driver.
+None of these import a SQLite package; they speak strings and values only.
+
+| API             | Kind     | Summary                                                                                            |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `escapeLike`    | function | Escape `\` / `%` / `_` so a `starts` / `ends` operand matches literally under `LIKE … ESCAPE '\'`. |
+| `declaredType`  | function | The declared `ColumnType` of a flat column, read from the schema.                                  |
+| `valueType`     | function | The `ColumnType` a nested (`json_extract`) operand encodes as, derived from its runtime value.     |
+| `fragment`      | function | Compile one `Condition` to its `<column> <operator>` SQL fragment plus bound params.               |
+| `compileWhere`  | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold. |
+| `compileOrder`  | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                |
+| `compilePage`   | function | Compile the `LIMIT` / `OFFSET` clause.                                                             |
+| `compileCriteria` | function | Compile a `Criteria` into the full SQL clause (`WHERE` + `ORDER BY` + `LIMIT`) plus bound params.  |
+| `quote`         | function | Quote a SQL identifier (table / column name), doubling an embedded quote.                          |
+| `fieldColumn`   | function | Compile a `FieldPath` to the SQL expression that reads it (a column, or a `json_extract` path).    |
+| `columnSQL`     | function | Map a portable `ColumnType` to its SQLite column type keyword.                                      |
+| `aggregateSQL`  | function | Compile an `AggregateFunction` over a `FieldPath` to its SQL aggregate expression.                  |
+| `encodeValue`   | function | Encode a JS value to its stored `SQLiteValue` for a column's type — total, never throws.           |
+| `decodeValue`   | function | Decode a stored `SQLiteValue` back to its JS value — the exact inverse of `encodeValue`.            |
+| `encodeRow`     | function | Encode a whole `Row` to a `SQLiteRow` by its table's schema.                                        |
+| `decodeRow`     | function | Decode a stored `SQLiteRow` back to a `Row` by its table's schema (absent columns omitted).         |
+| `schemaToTable` | function | Project a `TableSchema` to its `CREATE TABLE IF NOT EXISTS` statement.                              |
+| `schemaToIndexes` | function | Project a `TableSchema` to its `CREATE INDEX IF NOT EXISTS` statements.                            |
+
 ### Errors
 
-| API               | Kind     | Summary                                                                                                                       |
-| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION` / `ABORTED` / `MIGRATION` / `CONFORMANCE`). |
-| `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                                                          |
+| API               | Kind     | Summary                                                                                                                                  |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DatabaseError`   | class    | Carries a `DatabaseErrorCode` (`CLOSED` / `NOT_FOUND` / `CONFLICT` / `VALIDATION` / `ABORTED` / `MIGRATION` / `CONFORMANCE` / `DRIVER`). |
+| `isDatabaseError` | function | Narrow an unknown caught value to a `DatabaseError`.                                                                                      |
 
 ### Query engine
 
@@ -124,9 +151,11 @@ transform; version tracking is deferred to future persistent backends.
 
 ### Conformance
 
-| API             | Kind     | Behavior                                                                                                                                                                    |
-| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conformDriver` | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
+| API              | Kind     | Behavior                                                                                                                                                                       |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `conformDriver`  | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant.  |
+| `driverFindings` | function | Lazy `AsyncGenerator` over the same battery, one phase per yield (14 phases) — a fresh factory-minted driver per phase; an unexpected phase crash is captured as a finding.  |
+| `auditDriver`    | function | Drain `driverFindings` to completion and collect every violation — `[]` means the driver is fully conformant.                                                                |
 
 ### Helpers & guards
 
@@ -161,7 +190,8 @@ Pure helpers behind the query engine's pattern matching.
 | `AggregateFunction`    | type      | `'count' \| 'sum' \| 'average' \| 'minimum' \| 'maximum'`.                                                                                                                                                                                          |
 | `ReadOptions`          | interface | `{ signal? }` — options for a cancellable read / iteration; an aborted signal throws `ABORTED` (checked before each yield in `scan` / `stream`, at entry elsewhere).                                                                                |
 | `DatabaseStatus`       | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                     |
-| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE'`.                                                                                                                                               |
+| `DatabaseErrorCode`    | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE' \| 'DRIVER'`.                                                                                                                                   |
+| `ConformanceFinding`   | interface | `{ check, message, context }` — one violated invariant yielded by `driverFindings` / collected by `auditDriver`.                                                                                                                                    |
 | `DatabaseEventMap`     | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                             |
 | `TableEventMap`        | type      | A table's push observation surface (§13) — `write(key)` · `remove(key)` · `clear` (key only, no value).                                                                                                                                             |
 | `Columns`              | type      | `Readonly<Record<string, ContractShape>>` — one table's `column → shape` map (an `objectShape`'s properties).                                                                                                                                       |
@@ -175,8 +205,12 @@ Pure helpers behind the query engine's pattern matching.
 | `MigrationStep`        | type      | A discriminated union of one schema change: `table.add` / `table.remove` / `column.add` / `column.remove` / `index.add` / `index.remove`, each naming its `table`.                                                                                  |
 | `Migration`            | interface | `{ from, to, steps }` — an ordered schema migration plan moving a database from one version to another.                                                                                                                                             |
 | `TransactionInterface` | interface | `{ commit, rollback }` — the handle a driver's native `transaction` hook returns; used by `Database.transaction` in place of the snapshot floor when present.                                                                                       |
-| `DriverInterface`      | interface | The minimal storage contract: `open` (takes a `TableSchema[]`) / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear` / `snapshot`, plus optional native `records` / `count` / `aggregate` / `transaction` / `stream` / `migrate`.     |
-| `DatabaseOptions`      | interface | `{ on?, error?, driver, tables, keys?, indexes?, name?, key? }` — input to `createDatabase` (`on?` wires initial `DatabaseEventMap` listeners, §8; `key?` is the key factory a table uses for a keyless write).                                     |
+| `DriverMeta`           | interface | `{ version, schema }` — persisted schema metadata a versioning driver stores verbatim; `meta()` returns `undefined` until the store has been `stamp`ed once.                                                                                        |
+| `DriverInterface`      | interface | The minimal storage contract: `open` (takes a `TableSchema[]`) / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear` / `snapshot`, plus optional native `records` / `count` / `aggregate` / `transaction` / `stream` / `migrate` / paired `meta` / `stamp`. |
+| `DatabaseOptions`      | interface | `{ on?, error?, driver, tables, keys?, indexes?, name?, key?, version? }` — input to `createDatabase` (`on?` wires initial `DatabaseEventMap` listeners, §8; `key?` is the key factory a table uses for a keyless write; `version?` opts into open-time schema reconciliation against a versioning driver's `meta` / `stamp`). |
+| `SQLiteValue`          | type      | `null \| number \| bigint \| string \| Uint8Array` — the value domain a SQLite binding accepts / returns.                                                                                                                                            |
+| `SQLiteRow`            | type      | `Record<string, SQLiteValue>` — one row as a SQLite binding returns it.                                                                                                                                                                               |
+| `CompiledSQL`          | interface | `{ sql, params }` — a parameterized SQL fragment or statement plus its bind values, produced by the `compilers.ts` functions.                                                                                                                        |
 | `TableExport`          | interface | `{ key, columns, schema }` — one table's portable definition, produced by `export`.                                                                                                                                                                 |
 | `DatabaseInterface`    | interface | `emitter` / `name` / `status` / `table` / `import` / `export` / `open` / `close` / `transaction` (takes an optional `ReadOptions`) / `migrate` (diffs a deployed schema against the declared one and applies it, taking an optional `ReadOptions`). |
 | `TableInterface`       | interface | `emitter` / `name` / `primary` / `contract` + keyed CRUD (`set` / `add` / `update` / `remove` each take an optional `ReadOptions`) + `records` / `count` / `aggregate` (each taking an optional `ReadOptions`) + `scan` + `query` / `cursor`.       |
@@ -202,7 +236,9 @@ methods and inherits the entire query surface unchanged. `records` / `count`
 overrides** (AGENTS §21) — a backend that can push a query, a native BEGIN, a
 filtered lazy read, or a schema change down implements them and the engine
 prefers them, falling back to the portable path otherwise; a backend may omit
-any or all of them.
+any or all of them. `meta` / `stamp` are a PAIRED optional override — a
+versioning backend implements both or neither — that persist and return a
+`DriverMeta` verbatim, powering `DatabaseOptions.version` reconciliation.
 
 | Method        | Returns                         | Behavior                                                                                                                     |
 | ------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -214,13 +250,15 @@ any or all of them.
 | `keys`        | `Promise<readonly Key[]>`       | List a table's keys in order.                                                                                                |
 | `scan`        | `AsyncIterable<Row>`            | Iterate a table's rows in key order.                                                                                         |
 | `clear`       | `Promise<void>`                 | Empty a table.                                                                                                               |
-| `snapshot`    | `Promise<() => Promise<void>>`  | Capture state; the returned thunk rolls every table back to it.                                                              |
+| `snapshot`    | `Promise<() => Promise<void>>`  | Capture state; `tables` omitted captures/restores the WHOLE store, provided captures/restores ONLY the named tables.         |
 | `records`     | `Promise<readonly Row[]>`       | Optional native filtered read honoring the full `Criteria` (filter, order, page).                                            |
 | `count`       | `Promise<number>`               | Optional native count over the criteria's conditions (paging is irrelevant).                                                 |
 | `aggregate`   | `Promise<number \| undefined>`  | Optional native aggregate (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`) over the criteria's conditions (paging is irrelevant).           |
 | `transaction` | `Promise<TransactionInterface>` | Optional native BEGIN; when present, `Database.transaction` uses its `commit` / `rollback` instead of the snapshot floor.    |
 | `stream`      | `AsyncIterable<Row>`            | Optional natively filtered lazy iteration over a `Criteria`; drivers without it are served by the core scan fallback.        |
 | `migrate`     | `Promise<void>`                 | Optional native migration — applies a `Migration` plan directly; throws `DatabaseError('MIGRATION')` on an unknown table.    |
+| `meta`        | `Promise<DriverMeta \| undefined>` | Optional persisted-metadata read (PAIRED with `stamp`) — the last-stamped `DriverMeta`, or `undefined` before the first stamp. |
+| `stamp`       | `Promise<void>`                 | Optional persisted-metadata write (PAIRED with `meta`) — persists `meta` verbatim for a later `meta()` to return.            |
 
 #### `DatabaseInterface`
 
@@ -359,8 +397,19 @@ These invariants hold across the core database source tree ↔ this guide:
    one atomic flush of the net state, `rollback` restores the pre-transaction
    snapshot then flushes it; re-entering or double-settling a transaction
    throws `CONFLICT`) — so `Database.transaction` over a `JSONDriver` prefers
-   this native path over the snapshot floor. A new backend implements a
-   handful of small methods and inherits the entire query surface unchanged.
+   this native path over the snapshot floor. Both reference drivers now also
+   implement the paired `meta?` / `stamp?` — `MemoryDriver` in-process only
+   (the `DriverMeta` lives in instance memory), `JSONDriver` persisted:
+   the file is `{ meta?: DriverMeta, tables }`, with `meta` present only
+   once the store has been `stamp`ed at least once (an old, pre-versioning
+   file — bare `{ tables }` — reads back as unstamped, i.e. `meta()` resolves
+   `undefined`, preserving backward compatibility). A `JSONDriver` write-path
+   fault (`mkdir` / `writeFile` / `rename` failing during `#serialize`)
+   surfaces as a `DatabaseError` `DRIVER` (carrying `path` in `context`) —
+   an unexpected infrastructure fault, distinct from the deliberate read-path
+   tolerance (a missing/corrupt/wrong-shaped file starts empty rather than
+   throwing). A new backend implements a handful of small methods and
+   inherits the entire query surface unchanged.
 4. **Total query helpers.** `compareValues`, `matchesCondition`, and
    `matchesCriteria` never throw — a type mismatch is a non-match and the
    comparator is a total order (it never returns `NaN`), mirroring the
@@ -409,13 +458,13 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
    (`Database` / `MemoryDriver` / `JSONDriver` / `Table` / `Query` /
    `Clause` / `Cursor`) implements every REQUIRED method and adds none
    beyond the interface (optional members like `records?` / `count?` /
-   `aggregate?` / `transaction?` / `stream?` / `migrate?` may be omitted).
-   `MemoryDriver` and `JSONDriver` both omit `records?` / `count?` /
-   `aggregate?`, and both now implement `stream?` / `migrate?`;
-   `MemoryDriver` still omits `transaction?` (snapshot floor only) while
-   `JSONDriver` now implements `transaction?` too (flush-coalescing over the
-   inner memory driver) (AGENTS §22). A renamed / added / removed method
-   breaks the gate until the table is reconciled.
+   `aggregate?` / `transaction?` / `stream?` / `migrate?` / `meta?` / `stamp?`
+   may be omitted). `MemoryDriver` and `JSONDriver` both omit `records?` /
+   `count?` / `aggregate?`, and both now implement `stream?` / `migrate?` /
+   `meta?` / `stamp?`; `MemoryDriver` still omits `transaction?` (snapshot
+   floor only) while `JSONDriver` now implements `transaction?` too
+   (flush-coalescing over the inner memory driver) (AGENTS §22). A renamed /
+   added / removed method breaks the gate until the table is reconciled.
 9. **Cancellation is a shared gate, not per-method reinvention.**
    `checkAbort(signal)` is the one place `ABORTED` is thrown — a no-op for
    `undefined` or a live signal. `records` / `count` / `aggregate` check it
@@ -434,12 +483,12 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     `generateKey` (`node:crypto`-backed) to wire in as `key`; other
     environments supply their own `KeyFunction`, or callers always provide
     their own key values.
-11. **Caller-driven migrations.** There is no migration runner or version
-    tracking in core — `planMigration(deployed, declared, from?, to?)`
-    structurally diffs two `TableSchema[]` into an ordered `Migration` plan
-    (`table.add` / `table.remove`, then each shared table's `column.add` /
-    `column.remove` / `index.add` / `index.remove`), which the caller hands
-    to `driver.migrate?.(plan)` — a step referencing an unknown table throws
+11. **Caller-driven migrations, plus opt-in versioned reconciliation.**
+    `planMigration(deployed, declared, from?, to?)` structurally diffs two
+    `TableSchema[]` into an ordered `Migration` plan (`table.add` /
+    `table.remove`, then each shared table's `column.add` / `column.remove`
+    / `index.add` / `index.remove`), which the caller hands to
+    `driver.migrate?.(plan)` — a step referencing an unknown table throws
     `DatabaseError('MIGRATION')`. `Database.migrate(deployed, options?)`
     orchestrates this for the caller: it diffs `deployed` against the
     database's own declared `tables`, applies the resulting plan through the
@@ -450,9 +499,22 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     transform (`column.remove` drops the field from a fresh copy of each
     row; the other operations act on storage shape, not row shape, so they
     are no-ops here) — a driver's own `migrate` decides how to apply it to
-    stored rows. Version tracking itself (recording which plan applied) is
-    still deferred to future persistent backends — `Database.migrate` takes
-    the deployed schema as an argument rather than tracking it itself.
+    stored rows. This caller-driven path remains the way to migrate against
+    an UNVERSIONED driver (one that implements neither `meta` nor `stamp`),
+    which still owns knowing what is currently deployed. A driver that DOES
+    implement both `meta` and `stamp` can instead opt into automatic
+    reconciliation by passing `DatabaseOptions.version`: `Database.open()`
+    reads the driver's persisted `DriverMeta` and reconciles it against the
+    declared version, inside the same lazy-connect chain, after the `open`
+    event fires — a fresh store (`meta()` is `undefined`) simply `stamp`s
+    `{ version, schema }` for next time (nothing to diff yet); a stored
+    version below the declared one computes and applies the upgrade plan via
+    `planMigration` + `driver.migrate?` (throwing `MIGRATION` when the plan
+    is non-empty and the driver lacks `migrate`), then `stamp`s the new
+    metadata and emits `migrate`; a stored version above the declared one is
+    unrecoverable and throws `MIGRATION`; an equal version is a no-op.
+    `version` left unset, or set against a non-versioning driver, leaves
+    `open()` unchanged — versioning is opt-in per driver AND per database.
 12. **Driver conformance.** `conformDriver(factory)` is a framework-agnostic
     battery (no test-runner import) any new `DriverInterface` backend can run
     against itself — a smoke script, a unit test, or a new driver's own
@@ -855,6 +917,34 @@ plan.steps // the applied Migration steps
 db.emitter.on('migrate', (applied) => console.log('migrated to', applied.to))
 ```
 
+### Versioned auto-migrate on open
+
+A driver that implements the paired `meta` / `stamp` (both reference drivers
+do) can skip the caller-driven `Database.migrate` call entirely: pass
+`DatabaseOptions.version`, and `open()` reconciles the driver's persisted
+schema against the declared one for you, migrating and re-stamping as needed:
+
+```ts
+import { createDatabase, createMemoryDriver } from '@src/core'
+import { generateKey } from '@src/server'
+import { integerShape, stringShape } from '@orkestrel/contract'
+
+const driver = createMemoryDriver() // any DriverInterface implementing meta/stamp
+const db = createDatabase({
+	driver,
+	tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+	version: 2, // the declared schema version
+	key: generateKey,
+})
+
+await db.open() // fresh store → just stamps { version: 2, schema } for next time
+db.emitter.on('migrate', (applied) => console.log('auto-migrated to', applied.to))
+
+// Reopening the SAME driver/store later with a higher `version` diffs the
+// stored schema against the newly declared one, applies the plan through
+// `driver.migrate?`, re-stamps, and emits `migrate` — all inside `open()`.
+```
+
 ### Driver conformance
 
 `conformDriver(factory)` runs the same invariant battery every backend must
@@ -866,6 +956,27 @@ import { conformDriver, createMemoryDriver } from '@src/core'
 
 await conformDriver(() => createMemoryDriver()) // resolves once every phase passes
 // A driver that violates an invariant rejects with DatabaseError('CONFORMANCE', ...)
+```
+
+### Auditing a custom driver
+
+`auditDriver(factory)` drains the full battery instead of failing fast,
+collecting every violation — useful when developing a new backend and
+wanting the complete picture in one run rather than fixing one invariant at
+a time:
+
+```ts
+import { auditDriver, createMemoryDriver } from '@src/core'
+
+const findings = await auditDriver(() => createMemoryDriver())
+// [] — a fully conformant driver
+for (const finding of findings) console.log(`${finding.check}: ${finding.message}`)
+
+// The lower-level generator these two build on — one phase per yield, lazy:
+import { driverFindings } from '@src/core'
+for await (const finding of driverFindings(() => createMemoryDriver())) {
+	console.log(finding.check, finding.context)
+}
 ```
 
 ### Key factories
@@ -1076,6 +1187,37 @@ every mutation, and starts empty rather than throwing on a missing, corrupt,
 or wrong-shaped file. It is a decorator over `MemoryDriver` — every read,
 scan, and `snapshot` delegates to the inner memory driver, so behavior is
 identical to `MemoryDriver` except that writes survive a restart.
+
+### Compiling criteria to SQL
+
+The server's pure `compilers.ts` turns a core `Criteria` (the same one
+`applyCriteria` folds) into the `WHERE` / `ORDER BY` / `LIMIT` tail of a
+`SELECT`, with `?`-bound params in clause order — the payload a native SQLite
+driver's `records` / `count` hook runs directly:
+
+```ts
+import { compileCriteria } from '@src/server'
+import type { TableSchema } from '@src/core'
+
+const schema: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', type: 'text', nullable: false },
+		{ name: 'age', type: 'integer', nullable: false },
+	],
+	indexes: [],
+}
+
+const { sql, params } = compileCriteria(
+	{ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] },
+	schema,
+)
+// sql: 'WHERE "age" >= ? ORDER BY "id"', params: [18]
+
+// A parameterized SQLite binding runs it directly:
+// db.prepare(`SELECT * FROM "users" ${sql}`).all(...params)
+```
 
 ### Practices
 
