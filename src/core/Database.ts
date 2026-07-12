@@ -7,6 +7,7 @@ import type {
 	DatabaseStatus,
 	DriverInterface,
 	KeyFunction,
+	ReadOptions,
 	RowOf,
 	TableExport,
 	TableIndexes,
@@ -19,7 +20,7 @@ import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { columnType } from './helpers.js'
+import { checkAbort, columnType } from './helpers.js'
 import { Table } from './Table.js'
 
 /**
@@ -119,8 +120,50 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		this.#emitter.emit('close')
 	}
 
-	async transaction<R>(scope: () => Promise<R>): Promise<R> {
+	/**
+	 * Run `scope` transactionally: commit its writes on success, roll every table
+	 * back if it throws.
+	 *
+	 * @remarks
+	 * When the driver implements the optional native {@link DriverInterface.transaction}
+	 * hook, that native `commit` / `rollback` handle drives the transaction; otherwise
+	 * the universal snapshot floor (`driver.snapshot()`) runs unchanged. Either path
+	 * emits the same `transaction` / `commit` / `rollback` lifecycle (AGENTS §13).
+	 * `options.signal` is checked ONCE at entry, before connecting or starting any
+	 * transactional work — an already-aborted signal throws `ABORTED` and neither the
+	 * native hook nor the snapshot floor is invoked. Nesting is unguarded and
+	 * unsupported exactly as before: this is a single-writer model, not reentrant.
+	 *
+	 * @param scope - The transactional work to run
+	 * @param options - `{ signal }` to abort before the transaction starts
+	 * @returns The scope's resolved value
+	 * @throws An `ABORTED` {@link DatabaseError} when `options.signal` has already fired
+	 */
+	async transaction<R>(scope: () => Promise<R>, options?: ReadOptions): Promise<R> {
+		checkAbort(options?.signal)
 		await this.#connect()
+		const native = await this.#driver.transaction?.()
+		if (native !== undefined) {
+			// Observe the scope beginning — AFTER the native BEGIN, mirroring the snapshot
+			// path's `transaction` emit placement (after the floor is laid, before the scope runs).
+			this.#emitter.emit('transaction')
+			try {
+				const value = await scope()
+				await native.commit()
+				// Observe the successful commit — AFTER the native commit resolved, mirroring
+				// the snapshot path's emit-after-transition contract.
+				this.#emitter.emit('commit')
+				return value
+			} catch (error) {
+				// The scope threw: roll back via the native handle FIRST, then observe —
+				// mirrors the snapshot path exactly. A rollback throw is NOT caught here (the
+				// snapshot path likewise lets a failing restore propagate uncaught), so it
+				// would replace the original error as the rejection.
+				await native.rollback()
+				this.#emitter.emit('rollback', error)
+				throw error
+			}
+		}
 		const rollback = await this.#driver.snapshot()
 		// Observe the scope beginning — AFTER the store was snapshotted and BEFORE the scope
 		// runs, so a swallowed listener throw can't perturb the snapshot the scope builds on.
