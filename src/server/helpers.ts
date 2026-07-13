@@ -60,11 +60,38 @@ export function generateKey(): string {
 // exact → native, otherwise → refine, never a silent semantics drift.
 
 /**
- * The declared {@link ColumnType}s whose SQL comparisons are provably
+ * The declared {@link ColumnType}s whose SQL EQUALITY comparisons (`equals` /
+ * `not` / `any` / `none`) and `starts` / `ends` compiles are provably
  * engine-exact under declared-type trust — `text` / `integer` / `real` /
  * `boolean`; a `json` or `blob` column always refines instead.
+ *
+ * @remarks
+ * This set governs equality and prefix/suffix matching only. RANGE
+ * comparisons (`above` / `below` / `from` / `to` / `between`) and `ORDER BY`
+ * are exact for `integer` / `real` / `boolean` but NOT for `text`: compiled
+ * SQL orders/ranges under SQLite's default BINARY collation, which compares
+ * TEXT byte-for-byte as UTF-8 — equivalent to Unicode CODE-POINT order —
+ * while the core engine's `compareValues` orders JS strings with `<`, which
+ * compares UTF-16 CODE-UNIT order. The two orders diverge for supplementary-
+ * plane characters (code points ≥ U+10000, e.g. many emoji): a lead surrogate
+ * (`\uD800`–`\uDBFF`) sorts BELOW ``–`￿` in code-unit order, while
+ * its code point sorts ABOVE them. So `isExactCondition`'s range family and
+ * `isExactOrder` exclude `text`, refining through the core engine instead. A
+ * future opt-in "trusted collation" mode (the caller vouches the column's
+ * values are BMP-only, or a custom SQLite collation matching `compareValues`
+ * is registered) could restore native text ranges/ordering.
  */
 export const EXACT_COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean']
+
+/**
+ * The declared {@link ColumnType}s whose SQL RANGE comparisons
+ * (`above` / `below` / `from` / `to` / `between`) and `ORDER BY` compiles are
+ * provably engine-exact — `integer` / `real` / `boolean` only. `text` is
+ * excluded: see {@link EXACT_COLUMN_TYPES}'s remarks for the BINARY-collation
+ * (code-point) vs. JS `<` (code-unit) divergence on supplementary-plane
+ * characters.
+ */
+export const EXACT_RANGE_COLUMN_TYPES: readonly ColumnType[] = ['integer', 'real', 'boolean']
 
 /**
  * Whether a value's runtime type matches a column's declared exact type —
@@ -105,15 +132,22 @@ export function matchesDeclaredType(value: unknown, type: ColumnType): boolean {
  * column's declared type (a `null` / `undefined` operand is never exact here —
  * `encodeRow` stores both an explicit `null` and an absent field as SQL NULL,
  * so native `IS NULL` semantics cannot match the engine's `deepEqual`-over-
- * decoded-rows truth). `above` / `below` / `from` / `to` likewise require a
- * matching scalar operand; `between` requires both operands to match.
+ * decoded-rows truth). `above` / `below` / `from` / `to` / `between` are exact
+ * ONLY for a declared type in {@link EXACT_RANGE_COLUMN_TYPES} (`integer` /
+ * `real` / `boolean`) — a `text` column's range conditions REFINE, because
+ * SQLite's default BINARY collation orders TEXT by Unicode CODE POINT while
+ * the core engine's `compareValues` orders JS strings by UTF-16 CODE UNIT,
+ * and the two diverge for supplementary-plane characters (see
+ * {@link EXACT_COLUMN_TYPES}'s remarks for the full rationale).
  * `any` / `none` require a NON-EMPTY list where every element matches (an empty
  * list is exact under neither: the engine's `any([])` matches nothing while
- * `none([])` matches everything, and SQL `IN ()` is a syntax error). `starts` /
- * `ends` are exact only on a `text` column with a string operand (case-
- * sensitive `substr` compile, see {@link fragment}). `like` / `glob` are NEVER
- * exact — SQLite `LIKE` folds case ASCII-only against the engine's Unicode
- * fold, and `GLOB` has character classes the engine treats literally.
+ * `none([])` matches everything, and SQL `IN ()` is a syntax error) — these
+ * stay exact on `text` (byte equality is collation-independent and engine-
+ * identical). `starts` / `ends` are exact only on a `text` column with a
+ * string operand (case-sensitive `substr` compile, see {@link fragment}) —
+ * likewise collation-independent. `like` / `glob` are NEVER exact — SQLite
+ * `LIKE` folds case ASCII-only against the engine's Unicode fold, and `GLOB`
+ * has character classes the engine treats literally.
  *
  * @param condition - The condition to test
  * @param schema - The table's schema
@@ -130,13 +164,21 @@ export function isExactCondition(condition: Condition, schema: TableSchema): boo
 	switch (condition.operator) {
 		case 'equals':
 		case 'not':
+			return matchesDeclaredType(first, column.type)
 		case 'above':
 		case 'below':
 		case 'from':
 		case 'to':
-			return matchesDeclaredType(first, column.type)
+			return (
+				EXACT_RANGE_COLUMN_TYPES.some((type) => type === column.type) &&
+				matchesDeclaredType(first, column.type)
+			)
 		case 'between':
-			return matchesDeclaredType(first, column.type) && matchesDeclaredType(second, column.type)
+			return (
+				EXACT_RANGE_COLUMN_TYPES.some((type) => type === column.type) &&
+				matchesDeclaredType(first, column.type) &&
+				matchesDeclaredType(second, column.type)
+			)
 		case 'any':
 		case 'none':
 			return (
@@ -158,7 +200,12 @@ export function isExactCondition(condition: Condition, schema: TableSchema): boo
  *
  * @remarks
  * `false` for a nested `FieldPath`, a column absent from `schema`, or a
- * declared type outside `text` / `integer` / `real` / `boolean`.
+ * declared type outside {@link EXACT_RANGE_COLUMN_TYPES} (`integer` / `real` /
+ * `boolean`). `text` is NOT exact here: SQLite's default BINARY collation
+ * orders TEXT by Unicode code point while the core engine's `compareValues`
+ * orders JS strings by UTF-16 code unit, and the two diverge for
+ * supplementary-plane characters (see {@link EXACT_COLUMN_TYPES}'s remarks) —
+ * a `text` order term REFINES through the core engine instead.
  *
  * @param order - The order term to test
  * @param schema - The table's schema
@@ -168,7 +215,7 @@ export function isExactOrder(order: Order, schema: TableSchema): boolean {
 	if (!isString(order.column)) return false
 	const column = schema.columns.find((candidate) => candidate.name === order.column)
 	if (column === undefined) return false
-	return EXACT_COLUMN_TYPES.some((type) => type === column.type)
+	return EXACT_RANGE_COLUMN_TYPES.some((type) => type === column.type)
 }
 
 /**

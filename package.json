@@ -25,7 +25,6 @@
 	"sideEffects": false,
 	"main": "./dist/src/core/index.cjs",
 	"module": "./dist/src/core/index.js",
-	"types": "./dist/src/core/index.d.ts",
 	"exports": {
 		".": {
 			"import": {

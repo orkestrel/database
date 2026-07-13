@@ -103,6 +103,32 @@ const ROWS: readonly UserRow[] = [
 		meta: { tags: ['big'], info: { level: 2, ok: false } },
 		rank: 1,
 	},
+	// Non-BMP parity fixture (AGENTS/audit FIX 1 + FIX 8): `u8`'s name starts
+	// with a SUPPLEMENTARY-plane character (U+1F600, encoded as the UTF-16
+	// surrogate pair 😀 — lead surrogate 0xD83D), `u9`'s starts with
+	// a single BMP PRIVATE-USE character (U+E050 — code unit 0xE050). Ordered
+	// by Unicode CODE POINT (SQLite's default BINARY collation), u8 (U+1F600)
+	// sorts ABOVE u9 (U+E050); ordered by UTF-16 CODE UNIT (the core engine's
+	// `compareValues`, using JS `<`), u8's lead surrogate (0xD83D = 55357) is
+	// NUMERICALLY LESS than u9's single code unit (0xE050 = 57424), so u8
+	// sorts BELOW u9 — the exact divergence `isExactCondition` / `isExactOrder`
+	// now refine `text` ranges/order to avoid (FIX 1).
+	{
+		id: 'u8',
+		name: '\u{1F600}-user',
+		age: 40,
+		score: 12.5,
+		active: true,
+		meta: { tags: ['emoji'], info: { level: 4, ok: true } },
+	},
+	{
+		id: 'u9',
+		name: '-zzz',
+		age: 41,
+		score: 13.5,
+		active: false,
+		meta: { tags: ['private-use'], info: { level: 6, ok: false } },
+	},
 ]
 
 const INDEXES = { users: [['age'], ['name'], ['rank']] } as const
@@ -280,6 +306,33 @@ const ROW_CASES: readonly RowCase[] = [
 		run: (users) => users.query().where('name').equals(36).all(),
 	},
 
+	// ── non-BMP text RANGE parity (FIX 1 — code point vs. code unit) ─────
+	// Threshold '' sits between u8's lead surrogate (0xD83D) and u9's
+	// code unit (0xE050): a code-unit (engine) comparison puts u8 BELOW the
+	// threshold while a code-point (SQLite BINARY) comparison would put it
+	// ABOVE — `isExactCondition` now refines these through the engine so both
+	// backends agree.
+	{
+		name: 'above on non-BMP text (name) — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').above('').all(),
+	},
+	{
+		name: 'below on non-BMP text (name) — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').below('').all(),
+	},
+	{
+		name: 'from on non-BMP text (name) — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').from('').all(),
+	},
+	{
+		name: 'to on non-BMP text (name) — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').to('').all(),
+	},
+	{
+		name: 'between on non-BMP text (name) — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').between('\u{10000}', '').all(),
+	},
+
 	// ── ordering ──────────────────────────────────────────────────────────
 	{
 		name: 'ascending on text (name)',
@@ -290,6 +343,16 @@ const ROW_CASES: readonly RowCase[] = [
 		name: 'descending on text (name)',
 		ordered: true,
 		run: (users) => users.query().descending('name').all(),
+	},
+	{
+		name: 'ascending on non-BMP text (name) with limit — code point vs. code unit divergence',
+		ordered: true,
+		run: (users) => users.query().ascending('name').limit(4).all(),
+	},
+	{
+		name: 'descending on non-BMP text (name) with limit — code point vs. code unit divergence',
+		ordered: true,
+		run: (users) => users.query().descending('name').limit(4).all(),
 	},
 	{
 		name: 'ascending on integer (age)',
@@ -388,6 +451,10 @@ const SCALAR_CASES: readonly ScalarCase[] = [
 	{
 		name: 'rank count over a from-filtered range (indexed optional column)',
 		run: (users) => users.query().where('rank').from(5).count(),
+	},
+	{
+		name: 'count over a non-BMP text (name) range — code point vs. code unit divergence',
+		run: (users) => users.query().where('name').above('').count(),
 	},
 ]
 

@@ -22,7 +22,7 @@ import {
 } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
-import { compileCriteria } from '../compilers.js'
+import { compileCriteria, compileWhere } from '../compilers.js'
 import {
 	aggregateSQL,
 	decodeRow,
@@ -74,9 +74,16 @@ import { META_TABLE } from '../constants.js'
  * transaction on rollback) rather than a SQL `SAVEPOINT`, since the core
  * `transaction` calls the rollback thunk only on failure with no commit-on-
  * success signal — a long-lived `SAVEPOINT` would leave the connection
- * uncommitted (lost on close). The only {@link DatabaseError} it emits directly
- * is `CLOSED` (a use before `open` / after `close`) and `MIGRATION`; every
- * other propagated fault is a backend `SQLiteError`.
+ * uncommitted (lost on close). Every backend interaction runs through `#guard`,
+ * which maps a thrown backend `SQLiteError` (or any unexpected non-`SQLiteError`
+ * throw) to a typed {@link DatabaseError} — never a raw backend error escapes
+ * `DriverInterface`: `CONSTRAINT` → `CONFLICT`, the wrapper's own `CLOSED` →
+ * `CLOSED`, `BUSY` (a locked database that outlasted the configured `timeout`)
+ * → a retryable `DRIVER` (`context.retryable` is `true`), and `UNKNOWN` / any
+ * other throw → `DRIVER`. The original error is preserved as `context.cause`.
+ * A `DatabaseError` this driver throws directly (`CLOSED` from the `#require`
+ * gate, `NOT_FOUND` from `#table`, `MIGRATION` from a migration-plan fault)
+ * passes through `#guard` unchanged, never re-wrapped.
  */
 export class SQLiteDriver implements DriverInterface {
 	readonly #path: string
@@ -192,15 +199,19 @@ export class SQLiteDriver implements DriverInterface {
 	async *scan(table: string): AsyncIterable<Row> {
 		const schema = this.#table(table)
 		// ORDER BY the primary key so the scan yields rows in key order (the engine
-		// and cursors depend on it), not SQLite's default rowid order. The iterator
-		// setup runs through #guard; per-row decode faults are not expected in
-		// practice and propagate as-is.
-		for (const row of this.#guard(() =>
+		// and cursors depend on it), not SQLite's default rowid order. Every step —
+		// the iterator setup, each `next()` pull, and each row's decode — runs
+		// through #guard, so a mid-iteration backend fault (not just the initial
+		// call) surfaces as a mapped DatabaseError rather than leaking raw.
+		const iterator = this.#guard(() =>
 			this.#require()
 				.prepare('SELECT * FROM ' + quote(table) + ' ORDER BY ' + quote(schema.primary))
 				.iterate(),
-		)) {
-			yield decodeRow(row, schema)
+		)[Symbol.iterator]()
+		while (true) {
+			const step = this.#guard(() => iterator.next())
+			if (step.done === true) return
+			yield this.#guard(() => decodeRow(step.value, schema))
 		}
 	}
 
@@ -244,7 +255,11 @@ export class SQLiteDriver implements DriverInterface {
 		const conditions = criteria.conditions ?? []
 		if (conditions.every((condition) => isExactCondition(condition, schema))) {
 			return this.#guard(() => {
-				const { sql, params } = compileCriteria(criteria, schema)
+				// Compile only the WHERE clause — no ORDER BY, no LIMIT/OFFSET — so a
+				// direct call with `criteria.offset` set never skips the single
+				// aggregate row (`compileCriteria`'s paging would otherwise apply
+				// OFFSET/LIMIT to the one-row COUNT result).
+				const { sql, params } = compileWhere(conditions, schema)
 				const row = this.#require()
 					.prepare('SELECT COUNT(*) AS count FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
 					.get(params)
@@ -281,7 +296,9 @@ export class SQLiteDriver implements DriverInterface {
 				))
 		if (conditionsExact && columnExact) {
 			return this.#guard(() => {
-				const { sql, params } = compileCriteria(criteria, schema)
+				// WHERE-only compile — same rationale as `count`: paging must never
+				// apply to the single aggregate row.
+				const { sql, params } = compileWhere(conditions, schema)
 				const value = this.#require()
 					.prepare(
 						'SELECT ' +
@@ -413,10 +430,11 @@ export class SQLiteDriver implements DriverInterface {
 	 *   (or the stored row is malformed)
 	 */
 	async meta(): Promise<DriverMeta | undefined> {
-		const database = this.#require()
-		const row = database
-			.prepare('SELECT "version", "schema" FROM ' + quote(META_TABLE) + ' WHERE "id" = 1')
-			.get()
+		const row = this.#guard(() =>
+			this.#require()
+				.prepare('SELECT "version", "schema" FROM ' + quote(META_TABLE) + ' WHERE "id" = 1')
+				.get(),
+		)
 		if (row === undefined) return undefined
 		const version = row.version
 		const text = row.schema
