@@ -25,7 +25,6 @@
 	"sideEffects": false,
 	"main": "./dist/src/core/index.cjs",
 	"module": "./dist/src/core/index.js",
-	"types": "./dist/src/core/index.d.ts",
 	"exports": {
 		".": {
 			"import": {
@@ -78,10 +77,10 @@
 		"test:src:server": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:server",
 		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
 		"build": "npm run clean && npm run build:src",
-		"build:src": "npm run build:src:server && npm run build:src:browser && npm run build:src:core",
+		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
-		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json && node configs/src/dts.browser.mjs",
-		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json && node configs/src/dts.server.mjs",
+		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts",
+		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
 	},
 	"dependencies": {
@@ -98,8 +97,6 @@
 		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.58.0",
 		"oxlint": "^1.73.0",
-		"rollup": "^4.62.2",
-		"rollup-plugin-dts": "^6.4.1",
 		"typescript": "^6.0.3",
 		"vite": "^8.1.4",
 		"vite-plugin-dts": "^5.0.3",
