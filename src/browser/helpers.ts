@@ -195,9 +195,11 @@ export function selectPlan(
  * `context.retryable: true` — a concurrent connection holding the database open
  * is a transient condition, not a permanent one. Every other code (`UPGRADE`
  * here — see {@link mapMigrationError} for the `migrate()`-only remapping to
- * `MIGRATION` — `ABORTED`, `NOT_FOUND`, `DATA`, `OPEN`, `INACTIVE`, `UNKNOWN`)
- * is an unexpected infrastructure fault and maps to `DRIVER`. The original
- * error is always preserved as `context.cause` for diagnostics.
+ * `MIGRATION` — `ABORTED`, `NOT_FOUND`, `DATA`, `OPEN`, `INACTIVE`, `READONLY`,
+ * `UNKNOWN`) is an unexpected infrastructure fault and maps to `DRIVER` — the
+ * driver opens its own readwrite transactions, so a `READONLY` fault can only
+ * mean the backend behaved unexpectedly. The original error is always
+ * preserved as `context.cause` for diagnostics.
  *
  * @param error - The backend error to translate
  * @returns The portable `DatabaseError`
@@ -224,6 +226,7 @@ export function mapIndexedDBError(error: IndexedDBError): DatabaseError {
 		case 'DATA':
 		case 'OPEN':
 		case 'INACTIVE':
+		case 'READONLY':
 		case 'UNKNOWN':
 			return new DatabaseError('DRIVER', error.message, { cause: error })
 	}
