@@ -23,23 +23,35 @@
 	],
 	"type": "module",
 	"sideEffects": false,
-	"main": "./dist/src/core/index.js",
+	"main": "./dist/src/core/index.cjs",
+	"module": "./dist/src/core/index.js",
 	"types": "./dist/src/core/index.d.ts",
 	"exports": {
 		".": {
-			"types": "./dist/src/core/index.d.ts",
-			"import": "./dist/src/core/index.js",
-			"default": "./dist/src/core/index.js"
+			"import": {
+				"types": "./dist/src/core/index.d.ts",
+				"default": "./dist/src/core/index.js"
+			},
+			"require": {
+				"types": "./dist/src/core/index.d.cts",
+				"default": "./dist/src/core/index.cjs"
+			}
 		},
 		"./browser": {
-			"types": "./dist/src/browser/index.d.ts",
-			"import": "./dist/src/browser/index.js",
-			"default": "./dist/src/browser/index.js"
+			"import": {
+				"types": "./dist/src/browser/index.d.ts",
+				"default": "./dist/src/browser/index.js"
+			}
 		},
 		"./server": {
-			"types": "./dist/src/server/index.d.ts",
-			"require": "./dist/src/server/index.cjs",
-			"default": "./dist/src/server/index.cjs"
+			"import": {
+				"types": "./dist/src/server/index.d.ts",
+				"default": "./dist/src/server/index.js"
+			},
+			"require": {
+				"types": "./dist/src/server/index.d.cts",
+				"default": "./dist/src/server/index.cjs"
+			}
 		},
 		"./package.json": "./package.json"
 	},
@@ -66,10 +78,10 @@
 		"test:src:server": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:server",
 		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
 		"build": "npm run clean && npm run build:src",
-		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",
-		"build:src:core": "vite build --config configs/src/vite.core.config.ts && tsc -p configs/src/tsconfig.core.json",
-		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json && node configs/src/rewrite.paths.mjs dist/src/browser",
-		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json && node configs/src/rewrite.paths.mjs dist/src/server",
+		"build:src": "npm run build:src:server && npm run build:src:browser && npm run build:src:core",
+		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
+		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json && node configs/src/dts.browser.mjs",
+		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json && node configs/src/dts.server.mjs",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {
@@ -80,13 +92,17 @@
 		"@orkestrel/sqlite": "^0.0.1"
 	},
 	"devDependencies": {
+		"@microsoft/api-extractor": "^7.58.9",
 		"@orkestrel/guide": "^0.0.1",
 		"@types/node": "^26.1.1",
 		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.58.0",
 		"oxlint": "^1.73.0",
+		"rollup": "^4.62.2",
+		"rollup-plugin-dts": "^6.4.1",
 		"typescript": "^6.0.3",
 		"vite": "^8.1.4",
+		"vite-plugin-dts": "^5.0.3",
 		"vitest": "^4.1.10"
 	},
 	"engines": {

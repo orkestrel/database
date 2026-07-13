@@ -141,13 +141,12 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 	)
 
 // Extends srcCore: server-only library (`src/server`, e.g. the JSON file driver
-// and, later, the SQLite driver over node:sqlite). Builds a CJS lib for Node and
-// runs its tests in the node environment. Externalizes `node:*` (so node:sqlite
-// is never bundled) AND `@src/core` → the sibling `dist/src/core` ESM build
-// (core and server ship as two subpaths of one package; `require()` of the ESM
-// core works because engines pins Node >= 24, which supports require(esm)).
-// Build-only — the test project resolves `@src/core` from source through the
-// shared `resolve` alias.
+// and, later, the SQLite driver over node:sqlite). Builds a dual ESM+CJS lib for
+// Node and runs its tests in the node environment. Externalizes `node:*` (so
+// node:sqlite is never bundled) AND `@src/core` → the sibling `dist/src/core`
+// build (format-aware: `../core/index.js` for the ESM output, `../core/index.cjs`
+// for the CJS output), exactly as core ships dual-format. Build-only — the
+// test project resolves `@src/core` from source through the shared `resolve` alias.
 export const srcServer = (config?: UserConfig): UserConfig =>
 	srcCore(
 		mergeConfig(
@@ -155,14 +154,32 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 				build: {
 					lib: {
 						entry: resolveWorkspacePath('src/server/index.ts'),
-						formats: ['cjs'],
-						fileName: () => 'index.cjs',
+						formats: ['es', 'cjs'],
+						fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
 					},
 					outDir: 'dist/src/server',
 					target: 'node22',
 					rolldownOptions: {
-						external: (id: string) => id === '@src/core' || id.startsWith('node:'),
-						output: { paths: { '@src/core': '../core/index.js' } },
+						// `@orkestrel/sqlite` ships a require-only build (its `exports` map
+						// points `import` at the same `.cjs` as `require`) — bundling it would
+						// inline a literal `require('node:sqlite')` into the ESM output, which
+						// throws in a pure-ESM runtime with no `require` global. Externalizing
+						// it lets Node's ESM↔CJS interop load it via a normal `import`
+						// statement in the ES output and a normal `require` in the CJS output.
+						external: (id: string) =>
+							id === '@src/core' || id === '@orkestrel/sqlite' || id.startsWith('node:'),
+						output: [
+							{
+								format: 'es',
+								entryFileNames: 'index.js',
+								paths: { '@src/core': '../core/index.js' },
+							},
+							{
+								format: 'cjs',
+								entryFileNames: 'index.cjs',
+								paths: { '@src/core': '../core/index.cjs' },
+							},
+						],
 					},
 				},
 				test: {
