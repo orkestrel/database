@@ -87,8 +87,8 @@
 		"@orkestrel/abort": "^0.0.1",
 		"@orkestrel/contract": "^0.0.1",
 		"@orkestrel/emitter": "^0.0.1",
-		"@orkestrel/indexeddb": "^0.0.1",
-		"@orkestrel/sqlite": "^0.0.1"
+		"@orkestrel/indexeddb": "^0.0.2",
+		"@orkestrel/sqlite": "^0.0.2"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.9",

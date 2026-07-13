@@ -37,13 +37,32 @@ ESM+CJS builds; `./browser` is ESM-only.
 
 ### Release order
 
-This package depends on `@orkestrel/sqlite` and `@orkestrel/indexeddb` at
-`^0.0.1`. Both of those packages have a `0.0.3` in progress (fixing several
-driver-level issues this package's SQLite and IndexedDB drivers rely on) —
-`@orkestrel/sqlite@0.0.3` and `@orkestrel/indexeddb@0.0.3` must publish
-before this package's next release, at which point those dependency ranges
-bump to `^0.0.3`. They stay `^0.0.1` in this commit so `npm ci` keeps
-resolving the currently-published `0.0.1` wrappers.
+Everything currently on the npm registry is at `0.0.1` — the wrapper repos'
+`0.0.2`s were never published, so `0.0.2` is the next version for all three
+packages and absorbs every change on this line.
+
+This package's SQLite and IndexedDB drivers are built against the wrapper
+surfaces documented by the mirrored guides in this repo — that is,
+`@orkestrel/sqlite@0.0.2` and `@orkestrel/indexeddb@0.0.2` — and the
+dependency ranges pin exactly those versions (`^0.0.2`; on a `0.0.x` version
+a caret means exactly that patch: `>=0.0.2 <0.0.3`). Publish in this order:
+
+1. Publish `@orkestrel/sqlite@0.0.2` and `@orkestrel/indexeddb@0.0.2` — they
+   are independent of each other (either order; both depend only on the
+   already-published `@orkestrel/contract`).
+2. In this repo, run `npm install` to re-resolve `package-lock.json` against
+   the newly published wrappers and commit the refreshed lockfile.
+3. Run the `prepublishOnly` gates and publish `@orkestrel/database@0.0.2`.
+
+Until step 1 happens, a fresh `npm ci` in this repo fails to resolve
+`^0.0.2` — deliberately. The exact pin makes it impossible to install or
+publish this package against the older `0.0.1` wrappers, which lack driver
+fixes this package's behavior relies on (the SQLite wrapper's mid-stream
+`iterate` fault mapping, the IndexedDB wrapper's abnormal-close recovery and
+`READONLY` fault code) and whose surfaces the mirrored guides here no longer
+describe. The same discipline applies to every future wrapper release: bump
+the pinned range, re-mirror the wrapper guides, and republish this package
+deliberately — wrapper changes never flow in silently.
 
 ## License
 
