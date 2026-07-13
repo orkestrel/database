@@ -82,7 +82,7 @@
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts && tsc -p configs/src/tsconfig.browser.json && node configs/src/dts.browser.mjs",
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && tsc -p configs/src/tsconfig.server.json && node configs/src/dts.server.mjs",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
 	},
 	"dependencies": {
 		"@orkestrel/abort": "^0.0.1",

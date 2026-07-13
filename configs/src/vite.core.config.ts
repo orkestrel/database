@@ -17,6 +17,9 @@ export default defineConfig(
 				fileName: (format) => (format === 'es' ? 'index.js' : 'index.cjs'),
 			},
 			outDir: 'dist/src/core',
+			rollupOptions: {
+				external: [/^node:/, /^@orkestrel\//],
+			},
 		},
 	}),
 )

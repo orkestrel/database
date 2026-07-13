@@ -46,6 +46,20 @@ surface (`Guide` / `Source`, the manifest and comparison helpers), not anything
 sourced in this repo; it is kept here so a reader of the parity suite can see
 the primitives it is built from without leaving this guide set.
 
+[`src/indexeddb.md`](src/indexeddb.md) is a byte-identical mirror of the guide
+for `@orkestrel/indexeddb` — this package's fourth runtime dependency. It
+documents **that package's** surface (`IndexedDBDatabase`, stores, indexes,
+cursors, and transactions), not anything sourced in this repo; it is kept
+here so a reader of this package can see the primitives its IndexedDB driver
+is built from without leaving this guide set.
+
+[`src/sqlite.md`](src/sqlite.md) is a byte-identical mirror of the guide for
+`@orkestrel/sqlite` — this package's fifth runtime dependency. It documents
+**that package's** surface (`SQLiteDatabase`, prepared statements, and
+transactions over `node:sqlite`), not anything sourced in this repo; it is
+kept here so a reader of this package can see the primitives its SQLite
+driver is built from without leaving this guide set.
+
 ## See also
 
 - [`AGENTS.md`](../AGENTS.md) — the rules; §22 documentation-as-contracts.

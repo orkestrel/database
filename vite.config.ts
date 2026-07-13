@@ -63,14 +63,6 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
-				// Dependency TSDoc (e.g. `@example` blocks referencing `@src/...` from
-				// bundled @orkestrel packages) survives unminified bundling as literal
-				// comments. Consumers read docs from the emitted `.d.ts` files, not
-				// bundle comments, so strip all non-legal comments from every JS/CJS
-				// output — legal (`@license`/`@preserve`) comments still pass through.
-				rolldownOptions: {
-					output: { comments: { legal: true, annotation: false, jsdoc: false } },
-				},
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
@@ -118,8 +110,10 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 					// so the published build references the sibling `dist/src/core` (ESM)
 					// instead of inlining a copy. Build-only — the test project below
 					// resolves `@src/core` from source through the shared `resolve` alias.
+					// `@orkestrel/*` dependencies are externalized too — consumers resolve
+					// them from their own installed packages instead of inlined copies.
 					rolldownOptions: {
-						external: (id: string) => id === '@src/core',
+						external: (id: string) => id === '@src/core' || id.startsWith('@orkestrel/'),
 						output: { paths: { '@src/core': '../core/index.js' } },
 					},
 				},
@@ -158,16 +152,10 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 						fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
 					},
 					outDir: 'dist/src/server',
-					target: 'node22',
+					target: 'node24',
 					rolldownOptions: {
-						// `@orkestrel/sqlite` ships a require-only build (its `exports` map
-						// points `import` at the same `.cjs` as `require`) — bundling it would
-						// inline a literal `require('node:sqlite')` into the ESM output, which
-						// throws in a pure-ESM runtime with no `require` global. Externalizing
-						// it lets Node's ESM↔CJS interop load it via a normal `import`
-						// statement in the ES output and a normal `require` in the CJS output.
 						external: (id: string) =>
-							id === '@src/core' || id === '@orkestrel/sqlite' || id.startsWith('node:'),
+							id === '@src/core' || id.startsWith('@orkestrel/') || id.startsWith('node:'),
 						output: [
 							{
 								format: 'es',
