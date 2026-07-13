@@ -139,6 +139,21 @@ export class Table<T = Row> implements TableInterface<T> {
 		return rows
 	}
 
+	/**
+	 * Count rows matching `criteria`'s conditions.
+	 *
+	 * @remarks
+	 * Unlike {@link records}, which narrows every row through the table's
+	 * contract guard before returning it, `count` operates on STORED rows
+	 * WITHOUT that guard (both the native `driver.count` hook and the
+	 * `filterRows`-over-`#collect()` fallback count raw storage) — so it can
+	 * exceed `(await records(criteria)).length` when storage holds rows that
+	 * no longer conform to the table's contract (legacy or migrated data).
+	 *
+	 * @param criteria - Optional conditions to filter by (paging is ignored)
+	 * @param options - `{ signal }` to abort
+	 * @returns The count of matching stored rows
+	 */
 	async count(criteria?: Criteria, options?: ReadOptions): Promise<number> {
 		checkAbort(options?.signal)
 		await this.#ready()
@@ -149,6 +164,23 @@ export class Table<T = Row> implements TableInterface<T> {
 		return filterRows(await this.#collect(), criteria?.conditions ?? []).length
 	}
 
+	/**
+	 * Compute an aggregate over `column` across rows matching `criteria`'s
+	 * conditions.
+	 *
+	 * @remarks
+	 * Like {@link count}, `aggregate` operates on STORED rows WITHOUT the
+	 * contract guard {@link records} / {@link scan} apply — a non-conforming
+	 * stored row still contributes to the computed aggregate when it matches
+	 * the conditions, even though it would never appear in `records()`'s
+	 * output.
+	 *
+	 * @param operation - The aggregate to compute
+	 * @param column - The column to aggregate
+	 * @param criteria - Optional conditions to filter by (paging is ignored)
+	 * @param options - `{ signal }` to abort
+	 * @returns The aggregate value, or `undefined` when undefined for the inputs
+	 */
 	async aggregate(
 		operation: AggregateFunction,
 		column: FieldPath,
@@ -182,9 +214,9 @@ export class Table<T = Row> implements TableInterface<T> {
 	 *
 	 * @param criteria - Optional conditions plus offset/limit paging
 	 * @param options - `{ signal }` to abort mid-stream
-	 * @returns An async generator of matching, guard-conforming rows
+	 * @returns An async iterable of matching, guard-conforming rows
 	 */
-	async *scan(criteria?: Criteria, options?: ReadOptions): AsyncGenerator<T> {
+	async *scan(criteria?: Criteria, options?: ReadOptions): AsyncIterable<T> {
 		checkAbort(options?.signal)
 		await this.#ready()
 		if (this.#driver.stream !== undefined) {

@@ -42,3 +42,27 @@ export interface CompiledSQL {
 	readonly sql: string
 	readonly params: readonly SQLiteValue[]
 }
+
+/**
+ * Options for {@link import('./factories.js').createSQLiteDriver}.
+ *
+ * @remarks
+ * Threaded into the underlying `@orkestrel/sqlite` wrapper's connection.
+ * `path` is the database file path (`':memory:'` when omitted); `readonly`
+ * opens the connection read-only (a write then fails as a typed `DRIVER`
+ * {@link DatabaseError}); `timeout` is the busy-timeout in milliseconds before
+ * a locked database fails `BUSY`; `foreignKeys` enables foreign-key
+ * constraint enforcement. `pragmas` is an ordered record of PRAGMA name to
+ * value, applied via the wrapper's `pragma()` right after `connect()`, in
+ * insertion order (e.g. `{ journal_mode: 'WAL' }`). Core rows are
+ * number-typed — this driver never surfaces a `bigint`, so a stored integer
+ * beyond `Number.MAX_SAFE_INTEGER` reads back imprecisely (the wrapper's own
+ * `bigints` option is not exposed here).
+ */
+export interface SQLiteDriverOptions {
+	readonly path?: string
+	readonly readonly?: boolean
+	readonly timeout?: number
+	readonly foreignKeys?: boolean
+	readonly pragmas?: Readonly<Record<string, string | number>>
+}

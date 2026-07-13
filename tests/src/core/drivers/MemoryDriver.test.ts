@@ -1,4 +1,5 @@
 import { createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
+import { isRecord } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
 import { collectRows, conformDriver, tableSchemas } from '../../../setup.js'
 
@@ -68,6 +69,25 @@ describe('MemoryDriver', () => {
 		expect((await driver.read('t', 'a'))?.n).toBe(1)
 	})
 
+	it('deep-isolates NESTED fields from caller mutation (copy in, copy out)', async () => {
+		const driver = createMemoryDriver()
+		const input = { id: 'a', meta: { tags: ['x'], deep: { flag: true } } }
+		await driver.write('t', 'a', input)
+		// Mutate a nested field of the input AFTER write — a shallow `{ ...row }`
+		// copy would still share the nested `meta` object by reference.
+		input.meta.tags.push('mutated')
+		input.meta.deep.flag = false
+		const read = await driver.read('t', 'a')
+		expect(read).toEqual({ id: 'a', meta: { tags: ['x'], deep: { flag: true } } })
+		// Mutate a nested field of the READ result — a shallow copy-out would
+		// still share the nested object with stored state.
+		if (read !== undefined && isRecord(read.meta) && Array.isArray(read.meta.tags)) {
+			read.meta.tags.push('mutated-after-read')
+		}
+		const reread = await driver.read('t', 'a')
+		expect(reread).toEqual({ id: 'a', meta: { tags: ['x'], deep: { flag: true } } })
+	})
+
 	it('rolls back to a snapshot', async () => {
 		const driver = createMemoryDriver()
 		await driver.write('t', 'a', { id: 'a', n: 1 })
@@ -78,6 +98,23 @@ describe('MemoryDriver', () => {
 		await rollback()
 		expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
 		expect(await driver.read('t', 'b')).toBeUndefined()
+	})
+
+	it('rolls back a NESTED field mutated in place (on a read-back row) between snapshot and restore', async () => {
+		const driver = createMemoryDriver()
+		const original = { id: 'a', meta: { tags: ['x'] } }
+		await driver.write('t', 'a', original)
+		const rollback = await driver.snapshot()
+		// Read back the row and mutate its nested field in place — a snapshot
+		// that shares nested references (or only clones top-level fields) would
+		// restore this mutated value instead of the pre-snapshot one.
+		const before = await driver.read('t', 'a')
+		if (before !== undefined && isRecord(before.meta) && Array.isArray(before.meta.tags)) {
+			before.meta.tags.push('mutated-between-snapshot-and-restore')
+		}
+		await driver.write('t', 'a', { id: 'a', meta: { tags: ['x', 'overwritten'] } })
+		await rollback()
+		expect(await driver.read('t', 'a')).toEqual({ id: 'a', meta: { tags: ['x'] } })
 	})
 
 	describe('stream', () => {

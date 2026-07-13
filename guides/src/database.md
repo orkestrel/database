@@ -87,10 +87,17 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Server
 
-| API           | Kind     | Summary                                                                                                                                 |
-| ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `generateKey` | function | Generate a fresh UUID string, `node:crypto`-backed — pass as `DatabaseOptions.key` in a server environment.                             |
-| `META_TABLE`  | const    | The reserved single-row table name (`_meta`) `SQLiteDriver` stamps its `DriverMeta` into — a user table named `_meta` collides with it. |
+| API                   | Kind      | Summary                                                                                                                                                                  |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `generateKey`         | function  | Generate a fresh UUID string, `node:crypto`-backed — pass as `DatabaseOptions.key` in a server environment.                                                              |
+| `META_TABLE`          | const     | The reserved single-row table name (`_meta`) `SQLiteDriver` stamps its `DriverMeta` into — a user table named `_meta` collides with it.                                  |
+| `isExactCondition`    | function  | Whether one `Condition` is provably SQL-vs-engine semantically identical over a `TableSchema` — `SQLiteDriver` runs it natively only when this proves true.              |
+| `isExactOrder`        | function  | Whether one `Order` term is provably exact over a `TableSchema` (an orderable column, not a nested path).                                                                |
+| `isExactCriteria`     | function  | Whether every condition and order term in a `Criteria` is exact — the gate `SQLiteDriver` checks before trusting a native SQL path over a full-scan refine.              |
+| `matchesDeclaredType` | function  | Whether an operand's runtime type matches a column's declared exact type (text↔string, integer/real↔finite number, boolean↔boolean) — backs `isExactCondition`.          |
+| `EXACT_COLUMN_TYPES`  | const     | The declared `ColumnType`s whose SQL comparisons are provably engine-exact under declared-type trust (`text` / `integer` / `real` / `boolean`).                          |
+| `indexName`           | function  | Derive a collision-free, length-prefixed SQL index name from a table and its column list (`idx_<len>_<table>_<len>_<col>…`) — used by `schemaToIndexes` and `stepToSQL`. |
+| `SQLiteDriverOptions` | interface | `{ path?, readonly?, timeout?, foreignKeys?, pragmas? }` — the options bag `createSQLiteDriver` accepts (widened from a bare path string, back-compat).                  |
 
 ### SQL compilation
 
@@ -128,14 +135,17 @@ Pure functions behind the IndexedDB driver's key-range pushdown planner — a
 candidate SUPERSET the core engine then refines to the exact result, never
 lossy.
 
-| API               | Kind      | Summary                                                                                                                                           |
-| ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `selectPlan`      | function  | Plan an IndexedDB read for a `Criteria` — pick the index (or primary store) and `IDBKeyRange` to narrow by, falling back to a full scan.          |
-| `conditionRange`  | function  | The `IDBKeyRange` one `Condition` maps to when its operator is an exact key comparison over a scalar operand, else `null`.                        |
-| `isKey`           | function  | Whether a value is a scalar IndexedDB key operand (`string \| number`).                                                                           |
-| `INDEXABLE_TYPES` | const     | The `ColumnType`s that are valid, orderable IndexedDB keys (`text` / `integer` / `real`).                                                         |
-| `META_STORE`      | const     | The reserved out-of-line store name (`__meta__`) `IndexedDBDriver` stamps its `DriverMeta` into — a user table named `__meta__` collides with it. |
-| `QueryPlan`       | interface | `{ index, range }` — which index (or the primary store, `null`) to read and the `IDBKeyRange` to narrow by (`null` = full scan).                  |
+| API                 | Kind      | Summary                                                                                                                                              |
+| ------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `selectPlan`        | function  | Plan an IndexedDB read for a `Criteria` — pick the index (or primary store) and `IDBKeyRange` to narrow by, falling back to a full scan.             |
+| `conditionRange`    | function  | The `IDBKeyRange` one `Condition` maps to when its operator is an exact key comparison over a scalar operand, else `null`.                           |
+| `isKey`             | function  | Whether a value is a scalar IndexedDB key operand (`string \| number`).                                                                              |
+| `INDEXABLE_TYPES`   | const     | The `ColumnType`s that are valid, orderable IndexedDB keys (`text` / `integer` / `real`).                                                            |
+| `META_STORE`        | const     | The reserved out-of-line store name (`__meta__`) `IndexedDBDriver` stamps its `DriverMeta` into — a user table named `__meta__` collides with it.    |
+| `QueryPlan`         | interface | `{ index, range }` — which index (or the primary store, `null`) to read and the `IDBKeyRange` to narrow by (`null` = full scan).                     |
+| `mapIndexedDBError` | function  | Map a backend `IndexedDBError` fault to its `DatabaseError` equivalent — no raw wrapper error crosses `IndexedDBDriver`'s `DriverInterface` surface. |
+| `mapMigrationError` | function  | Map a backend `IndexedDBError` fault from `migrate`'s versionchange path to its `DatabaseError` equivalent (remaps `UPGRADE` to `MIGRATION`).        |
+| `deriveIndexName`   | function  | Derive an IndexedDB index name from a column list — a single column is the bare name, a compound list is length-prefixed (`'2#1:a1:b'`-style).       |
 
 ### Errors
 
@@ -183,7 +193,7 @@ transform; version tracking is deferred to future persistent backends.
 | API              | Kind     | Behavior                                                                                                                                                                    |
 | ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `conformDriver`  | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
-| `driverFindings` | function | Lazy `AsyncGenerator` over the same battery, one phase per yield (14 phases) — a fresh factory-minted driver per phase; an unexpected phase crash is captured as a finding. |
+| `driverFindings` | function | Lazy `AsyncIterable` over the same battery, one phase per yield (14 phases) — a fresh factory-minted driver per phase; an unexpected phase crash is captured as a finding.  |
 | `auditDriver`    | function | Drain `driverFindings` to completion and collect every violation — `[]` means the driver is fully conformant.                                                               |
 
 ### Helpers & guards
@@ -305,7 +315,13 @@ versioning backend implements both or neither — that persist and return a
 #### `TableInterface`
 
 The keyed methods batch by overload (one in → one out; array in → array
-out) — a single verb, never `getMany` / `setAll`.
+out) — a single verb, never `getMany` / `setAll`. `records()` / `scan()`
+narrow every row through the table's contract guard, so a non-conforming
+stored row (legacy data, a row from before a migration) never appears in
+their results; `count()` / `aggregate()` operate on STORED rows WITHOUT that
+guard, counting/aggregating whatever matches in storage regardless of
+conformance — so `count()` CAN exceed `(await records(criteria)).length`
+when storage holds non-conforming rows.
 
 | Method      | Returns                              | Behavior                                                                                                                                                                                           |
 | ----------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -440,18 +456,43 @@ These invariants hold across the core database source tree ↔ this guide:
    tolerance (a missing/corrupt/wrong-shaped file starts empty rather than
    throwing). `SQLiteDriver` and `IndexedDBDriver` complete the native-override
    picture from opposite ends, each earning trust its own way (AGENTS §21).
-   `SQLiteDriver` is **trusted-mode / exact**: real `CREATE TABLE` / `CREATE
-INDEX` DDL backs every table, so `records?` / `count?` / `aggregate?` /
-   `stream?` compile the `Criteria` straight to SQL (`compileCriteria`,
-   `aggregateSQL`) and the returned rows/counts are already exact — no engine
-   re-filter needed. `IndexedDBDriver` is **narrow-then-refine**: `records?` /
+   `SQLiteDriver` is **prove-exactness-or-refine**: real `CREATE TABLE` /
+   `CREATE INDEX` DDL backs every table, but `records?` / `count?` /
+   `aggregate?` / `stream?` compile a `Criteria` straight to SQL
+   (`compileCriteria`, `aggregateSQL`) and run it natively ONLY when
+   `isExactCriteria` (built from `isExactCondition` / `isExactOrder`) first
+   proves the SQL and the engine's semantics are identical for every
+   condition and order term — otherwise the driver falls back to a full
+   `scan` refined through the SAME core engine every scan-only driver uses
+   (`applyCriteria` / `filterRows` / `computeAggregate` / `matchesCriteria`).
+   Refine, not native SQL, is the path for: `like` / `glob` patterns (SQL
+   `LIKE`/`GLOB` semantics can diverge from the engine's `wildcardMatch`),
+   a `null` or `undefined` operand (SQLite storage collapses an explicit
+   `null` to an absent column on read-back — `decodeRow` omits a `NULL`
+   column entirely, so an `absent`/`present` check must run through the
+   engine to stay exact), an empty `any` / `none` operand list, mismatched
+   operand types, `json` / `blob` columns, and any nested `FieldPath`.
+   `starts` / `ends` compile case-SENSITIVELY (a `substr` comparison plus a
+   `typeof text === 'string'` guard; an empty operand falls back to a
+   `typeof` check) when they DO qualify as exact. `IndexedDBDriver` is **narrow-then-refine**: `records?` /
    `count?` / `stream?` first ask `selectPlan` for a key-range pushdown over
    the primary key or a single-column secondary index — a candidate SUPERSET,
    never lossy — then hands that superset to the SAME core engine
    (`applyCriteria` / `matchesCriteria`) every scan-only driver uses, which
    refines it to the exact result; a plan that cannot prove itself range-exact
    (a nested path, a non-orderable column type, an `or`-joined condition, a
-   non-comparison operator) falls back to a full scan. Both drivers implement
+   non-comparison operator) falls back to a full scan. `below` / `to` push
+   down ONLY onto the primary store, never a secondary index — a secondary
+   index has no entry for a row whose indexed column is absent or `null`,
+   while the engine's total order (`compareValues`) lets those rows match a
+   `below` / `to` bound; `equals` / `above` / `from` / `between` remain
+   index-eligible on either. `conditionRange` returns `null` for a `between`
+   whose bounds are reversed (`compareValues(first, second) > 0`), so
+   `selectPlan` falls back to a full scan instead of handing a raw
+   backwards `IDBKeyRange` to the store (which would throw a `DataError`).
+   `IndexedDBDriver.snapshot()` captures every store in ONE read transaction,
+   so the capture is point-in-time consistent across stores even under
+   concurrent writers; `restore` was already atomic. Both drivers implement
    `migrate?` natively — `SQLiteDriver` inside one atomic `database.transaction`
    (`stepToSQL` projects each step's DDL; a mid-plan failure rolls back
    everything already applied), `IndexedDBDriver` via a versionchange
@@ -469,10 +510,18 @@ INDEX` DDL backs every table, so `records?` / `count?` / `aggregate?` /
    and OMITS `aggregate?` — IndexedDB has no native SUM/AVG/MIN/MAX, so the
    engine over the narrowed `records?` covers it. A new backend implements a
    handful of small methods and inherits the entire query surface unchanged.
-4. **Total query helpers.** `compareValues`, `matchesCondition`, and
-   `matchesCriteria` never throw — a type mismatch is a non-match and the
-   comparator is a total order (it never returns `NaN`), mirroring the
-   contracts guards' totality (AGENTS §14).
+4. **Total query helpers; the equality family is structural, not ranked.**
+   `compareValues`, `matchesCondition`, and `matchesCriteria` never throw — a
+   type mismatch is a non-match and the comparator is a total order (it
+   never returns `NaN`), mirroring the contracts guards' totality (AGENTS
+   §14). The range operators (`above` / `below` / `from` / `to` /
+   `between`) still rank through `compareValues`'s total order (which
+   collapses every object/array to one rank-5 bucket). The equality-family
+   operators (`equals` / `not` / `any` / `none`) instead compare through
+   `deepEqual` — STRUCTURAL equality by SameValueZero leaves, so `equals` on
+   an object/array compares field-by-field rather than by reference or rank,
+   and `NaN` equals `NaN` under `equals` / `any` (it never matched anything
+   under the old rank-based comparison).
 5. **Optimistic transactions, with a native fast path.** `transaction(scope,
 options?)` checks `options?.signal` ONCE at entry (an already-aborted
    signal throws `ABORTED` before anything else runs), then, when the driver
@@ -554,7 +603,12 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     `table.remove`, then each shared table's `column.add` / `column.remove`
     / `index.add` / `index.remove`), which the caller hands to
     `driver.migrate?.(plan)` — a step referencing an unknown table throws
-    `DatabaseError('MIGRATION')`. `Database.migrate(deployed, options?)`
+    `DatabaseError('MIGRATION')`; so does a `column.add` / `column.remove`-adjacent
+    shared column whose declared `type` or `nullable` differs between
+    `deployed` and `declared` (an in-place type/nullability change is not
+    auto-migrated — the JSDoc on `planMigration` documents the manual path:
+    add a new column, copy/convert the data, then remove the old one).
+    `Database.migrate(deployed, options?)`
     orchestrates this for the caller: it diffs `deployed` against the
     database's own declared `tables`, applies the resulting plan through the
     driver's `migrate?` hook (throwing `MIGRATION` when the driver lacks
@@ -594,8 +648,41 @@ options?)` checks `options?.signal` ONCE at entry (an already-aborted
     upsert-overwrite, key-ordered `keys`/`scan`, `snapshot` rollback, a
     non-`id` primary key, structural round-tripping via `deepEqual`), then
     presence-gates the optional `migrate?` / `stream?` / `transaction?`
-    hooks when the driver implements them. The first violated invariant
-    throws a `CONFORMANCE` `DatabaseError` naming the failed check.
+    hooks when the driver implements them. The battery's `write-read` phase
+    is deepened with nested-field checks (a written row's nested object/array
+    fields must copy-in/copy-out isolated, not just its top-level fields),
+    and a dedicated `snapshot-nested` phase asserts the same nested isolation
+    across a `snapshot()` capture/restore round-trip — a driver that
+    shallow-copies anywhere in its write/read/scan/snapshot boundary now
+    fails conformance (`MemoryDriver` passes by deep-copying via
+    `structuredClone` at every one of those boundaries). The first violated
+    invariant throws a `CONFORMANCE` `DatabaseError` naming the failed check.
+13. **Backend faults surface as `DatabaseError`, never raw.** No native
+    wrapper error (a SQLite fault, an IndexedDB `DOMException`) crosses a
+    `DriverInterface` implementation — `SQLiteDriver` and `IndexedDBDriver`
+    each map every backend fault to a `DatabaseError` at the boundary
+    (`#guard` internally on the SQLite side; `mapIndexedDBError` /
+    `mapMigrationError` on the IndexedDB side), preserving the original
+    error as `context.cause`. `SQLiteDriver`: a constraint violation maps to
+    `CONFLICT`, a closed-connection fault to `CLOSED`, a busy/locked database
+    to `DRIVER` with a `retryable` context flag, anything else to `DRIVER`.
+    `IndexedDBDriver`: a constraint violation maps to `CONFLICT`; a
+    closed/not-open/invalid-state fault to `CLOSED`; a quota fault to
+    `DRIVER` with `code: 'QUOTA'`; a blocked upgrade to `DRIVER` with
+    `code: 'BLOCKED'` and `retryable: true`; `migrate`'s versionchange path
+    remaps an upgrade fault to `MIGRATION`; anything else to `DRIVER`.
+14. **The reserved meta table/store is a hard guard, not a naming
+    convention.** `SQLiteDriver.open` throws `DatabaseError('VALIDATION')`
+    when the declared tables include one literally named `_meta`
+    (`META_TABLE`); `IndexedDBDriver.open` does the same for `__meta__`
+    (`META_STORE`) — a collision is caught at `open`, not discovered later
+    as corrupted metadata. Because both drivers derive their index names from
+    a length-prefixed scheme (`indexName` for SQLite, `deriveIndexName` for
+    IndexedDB) to stay collision-free across compound indexes, a database
+    file/store created under an OLDER naming scheme leaves its old-named
+    indexes orphaned (unreferenced, harmless) on reopen under the new scheme —
+    they are never queried and never collide, but a storage audit may notice
+    them.
 
 What ships is the **core in-between** (schema-aware: `open` receives a
 derived `TableSchema[]`, with `shapeToColumnType` mapping each column's shape), its
@@ -1303,12 +1390,15 @@ const { sql, params } = compileCriteria(
 // db.prepare(`SELECT * FROM "users" ${sql}`).all(...params)
 ```
 
-### Trusted vs. narrow-then-refine native reads
+### Exact-or-refine vs. narrow-then-refine native reads
 
 A native override earns the engine's trust one of two ways (AGENTS §21).
-**Trusted / exact** (`SQLiteDriver`): the backend has real typed columns and
-indexes, so it compiles the `Criteria` straight to SQL and the rows/count it
-returns back are already the exact answer — no re-filter. **Narrow-then-refine**
+**Prove-exactness-or-refine** (`SQLiteDriver`): the backend has real typed
+columns and indexes, so it compiles the `Criteria` straight to SQL and runs
+it natively ONLY when `isExactCriteria` first proves the SQL and the engine
+agree on every condition/order term for that schema — otherwise it falls
+back to a full scan refined through the same core engine (never a "trust
+blindly" path). **Narrow-then-refine**
 (`IndexedDBDriver`): the backend can only prove a candidate SUPERSET range-exact
 (a key-range pushdown), so it fetches that superset and hands it to the SAME
 core engine every scan-only driver uses (`applyCriteria` / `matchesCriteria`),
@@ -1316,6 +1406,31 @@ which refines it down to the exact result — conformance is earned by "never
 under-fetch," not by native filtering. Both are indistinguishable from the
 caller's side: `Table.records` / `count` / `stream` return identical rows
 either way; only the path to get there differs.
+
+```ts
+import { isExactCondition, isExactCriteria, isExactOrder } from '@src/server'
+import type { TableSchema } from '@src/core'
+
+const schema: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', type: 'text', nullable: false },
+		{ name: 'age', type: 'integer', nullable: false },
+	],
+	indexes: [],
+}
+
+const exact = { column: 'age', operator: 'above', values: [18], connector: 'and' } as const
+isExactCondition(exact, schema) // true — a plain comparison over a typed column
+
+const notExact = { column: 'age', operator: 'above', values: [null], connector: 'and' } as const
+isExactCondition(notExact, schema) // false — a null operand refines instead
+
+isExactOrder({ column: 'age', direction: 'ascending' }, schema) // true — a flat, orderable column
+
+isExactCriteria({ conditions: [exact], order: [{ column: 'age', direction: 'ascending' }] }, schema) // true
+```
 
 ### Persistence with the SQLite driver
 
@@ -1338,6 +1453,15 @@ await db.table('users').query().where('age').above(18).average('age')
 await db.transaction(async () => {
 	await db.table('users').update('u1', { age: 37 })
 }) // real BEGIN/COMMIT/ROLLBACK, not the snapshot floor
+
+// createSQLiteDriver also accepts a full SQLiteDriverOptions bag (a bare
+// string is still shorthand for `{ path }`, back-compat):
+createSQLiteDriver({
+	path: 'data/app.sqlite',
+	timeout: 5000,
+	foreignKeys: true,
+	pragmas: { journal_mode: 'WAL' }, // applied via pragma() right after connect(), in order
+})
 ```
 
 `SQLiteDriver` is the fully-native backend — it implements every optional
@@ -1345,8 +1469,10 @@ await db.transaction(async () => {
 / `stream?` / `migrate?` / `meta?` / `stamp?`). Reopen the same `path` with a
 higher `DatabaseOptions.version` and it reconciles automatically through its
 reserved `_meta` table (`META_TABLE`) — see
-[Versioned auto-migrate on open](#versioned-auto-migrate-on-open); avoid
-naming a table `_meta`, which collides with that reservation.
+[Versioned auto-migrate on open](#versioned-auto-migrate-on-open); `open()`
+throws `DatabaseError('VALIDATION')` if a declared table is literally named
+`_meta`, so the collision is caught immediately rather than silently
+corrupting metadata.
 
 ### Persistence with the IndexedDB driver
 
@@ -1369,10 +1495,11 @@ if (typeof indexedDB !== 'undefined') {
 `IndexedDBDriver` narrows a `Criteria` to a key-range candidate over the
 primary key or a single-column secondary index (`selectPlan`), then lets the
 core engine refine it to the exact result — see
-[Trusted vs. narrow-then-refine native reads](#trusted-vs-narrow-then-refine-native-reads).
+[Exact-or-refine vs. narrow-then-refine native reads](#exact-or-refine-vs-narrow-then-refine-native-reads).
 It implements `records?` / `count?` / `stream?` / `migrate?` / `meta?` /
-`stamp?` (persisted into a reserved `__meta__` store, `META_STORE` — avoid
-naming a table `__meta__`), but OMITS `transaction?` (the underlying
+`stamp?` (persisted into a reserved `__meta__` store, `META_STORE` —
+`open()` throws `DatabaseError('VALIDATION')` if a declared table is
+literally named `__meta__`), but OMITS `transaction?` (the underlying
 `IDBTransaction` auto-commits the moment control yields to a non-IDB
 `await`) and `aggregate?` (IndexedDB has no native SUM/AVG/MIN/MAX) by
 IndexedDB's own nature.
@@ -1415,6 +1542,22 @@ selectPlan(
 ) // { index: 'age', range: an IDBKeyRange bounding age >= 18 }
 ```
 
+### IndexedDB error mapping
+
+`IndexedDBDriver` never lets a raw backend fault cross its `DriverInterface`
+surface — every one is mapped to a `DatabaseError`, the original preserved
+as `context.cause`:
+
+```ts
+import { mapIndexedDBError, mapMigrationError } from '@src/browser'
+import type { IndexedDBError } from '@orkestrel/indexeddb'
+
+declare const fault: IndexedDBError // a caught backend fault
+
+mapIndexedDBError(fault) // → DatabaseError('CONFLICT' | 'CLOSED' | 'DRIVER', ...)
+mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATION'
+```
+
 ### Practices
 
 - **Declare tables in `createDatabase({ tables })` and hold the handles** —
@@ -1443,8 +1586,8 @@ selectPlan(
 ## Tests
 
 - [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the `## Surface` ↔ source bijection across `src/core`, `src/server`, and `src/browser` (value + type exports), plus each interface ↔ implementing-class method bijection.
-- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator, `matchesCriteria` folding, `filterRows`, `sortRows`, `applyCriteria`, `computeAggregate`, `extractKey`, `shapeToColumnType`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), `deepEqual`'s structural equality, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`).
-- [`tests/src/core/drivers/MemoryDriver.test.ts`](../../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/delete/keys/scan/clear + `snapshot` rollback.
+- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `deepEqual`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesCriteria` folding, `filterRows`, `sortRows`, `applyCriteria`, `computeAggregate`, `extractKey`, `shapeToColumnType`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), `deepEqual`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's type/nullable drift, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
+- [`tests/src/core/drivers/MemoryDriver.test.ts`](../../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/delete/keys/scan/clear + `snapshot` rollback, and deep-copy isolation via `structuredClone` at every boundary (write / read / scan / stream / snapshot) — mutating a caller's input or a returned row never affects stored state, including nested fields.
 - [`tests/src/core/Database.test.ts`](../../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, coercion + `VALIDATION` / `CONFLICT` / `NOT_FOUND`, custom keys, the `indexes` option, `import` / `export`, `transaction` commit/rollback, `migrate` (applies a diffed plan through the driver's `migrate` hook and emits `migrate` once, rejects `MIGRATION` when the driver lacks the hook), and the `emitter` (`DatabaseEventMap`): `open` on connect / reconnect, `transaction` → `commit` on success and → `rollback(error)` on a throw (never both), `on?` wiring, and the emit-safety guarantee (a throwing `commit` observer can't corrupt the committed state, a throwing `rollback` observer can't suppress the propagated error, the throw routes to the emitter's `error` handler, no recursion).
 - [`tests/src/core/Table.test.ts`](../../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, coercion + the `VALIDATION` / `CONFLICT` / `NOT_FOUND` paths, the records / count / aggregate engine path, the query / cursor accessors, the native ↔ engine dispatch: a real recording driver with `records` / `count` / `aggregate` hooks proves `Table` prefers them (including a present `aggregate` that resolves to `undefined`), a plain `MemoryDriver` the engine fallback — and the `emitter` (`TableEventMap`): `set` / `add` / `update` each fire one `write(key)`, `remove(key)` only on a real delete (a miss / no-op emits nothing), `clear`, a `VALIDATION` failure emits no `write`, and the emit-safety guarantee (a throwing `write` observer can't corrupt the row — the emitter isolates it; a `Table` reached via the `Database` has no `error` handler, so the throw is swallowed silently).
 - [`tests/src/core/Query.test.ts`](../../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, paging, `filter`, and aggregates.
@@ -1452,12 +1595,14 @@ selectPlan(
 - [`tests/src/core/Cursor.test.ts`](../../tests/src/core/Cursor.test.ts) — `Cursor`'s forward walk over a key snapshot: `value` / `index` / `done`, `next`, in-place `update` / `remove`, and `close`.
 - [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).
 - [`tests/src/server/drivers/JSONDriver.test.ts`](../../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver`'s persistence: `open` loads an existing file (and starts empty on a missing/corrupt/wrong-shaped one), every mutation flushes the whole store, `snapshot` rollback re-persists the restored state, querying runs through the inherited `MemoryDriver` engine unchanged, `stream` delegates to the inner memory driver, and `transaction` (flush-coalescing: the file stays unchanged mid-transaction then reflects every write on `commit`, `rollback` restores memory and the file, re-entering an active transaction throws `CONFLICT`, and normal per-mutation flushing resumes once the handle settles).
-- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s full native surface: `open`'s real DDL (reopen-safe), keyed CRUD + codec round-trips, the `CLOSED` gate, native `aggregate` (and its zero-row `undefined`/`0` cases), `snapshot` capture-replay, persistence across a reopen against a temp file, `migrate` (atomic DDL via `stepToSQL`/`stepToSchema`, rejecting `MIGRATION` on an unknown table), `meta` / `stamp` across a reopen, native `transaction` (double-settle `CONFLICT`), `stream` laziness, and trusted-query parity — the driver's `records` / `count` / `aggregate` results checked against the same criteria run through the core engine via `conformDriver`.
-- [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — the SQL bridge: `columnSQL`, `quote`, `fieldColumn`, `aggregateSQL`, `encodeValue` / `decodeValue` round-trips, `encodeRow` / `decodeRow` over a schema, and `schemaToTable` / `schemaToIndexes` DDL projections.
+- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s full native surface: `open`'s real DDL (reopen-safe), a `VALIDATION` throw when a declared table is named `_meta`, keyed CRUD + codec round-trips, the `CLOSED` gate, native `records` / `count` / `aggregate` / `stream` running natively ONLY when `isExactCriteria` proves the query exact and refining through the core engine otherwise (patterns, null/undefined operands, `json`/`blob` columns, nested paths), case-sensitive `starts` / `ends`, native `aggregate`'s zero-row `undefined`/`0` cases, `snapshot` capture-replay, persistence across a reopen against a temp file, `migrate` (atomic DDL via `stepToSQL`/`stepToSchema`, rejecting `MIGRATION` on an unknown table or a shared column's type/nullable drift), `meta` / `stamp` across a reopen, native `transaction` (double-settle `CONFLICT`), backend-fault → `DatabaseError` mapping (`CONSTRAINT`→`CONFLICT`, `CLOSED`→`CLOSED`, `BUSY`→`DRIVER` retryable, else `DRIVER`), and exact-vs-refine parity — the driver's results checked against the same criteria run through the core engine via `conformDriver`.
+- [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — the SQL bridge: `columnSQL`, `quote`, `fieldColumn`, `aggregateSQL`, `encodeValue` / `decodeValue` round-trips, `encodeRow` / `decodeRow` over a schema, `schemaToTable` / `schemaToIndexes` DDL projections, `indexName`'s collision-free length-prefixed naming, and `isExactCondition` / `isExactOrder` / `isExactCriteria`'s exactness predicates across every operator, nested path, and mismatched-type case.
 - [`tests/src/server/compilers.test.ts`](../../tests/src/server/compilers.test.ts) — the pure `Criteria` → SQL compilers: `escapeLike`, `declaredType` / `valueType`, `fragment`, `compileWhere`, `compileOrder`, `compilePage`, and `compileCriteria`'s full clause assembly.
-- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver`'s full surface against a real IndexedDB: `open`'s store/index creation (reopen-safe, auto-managed), keyed CRUD, native `records` / `count` / `stream` pushdown (primary-key and secondary-index ranges, full-scan fallback), `snapshot` capture-replay (excluding `__meta__`), `migrate` via a versionchange reconnect (rejecting `MIGRATION` on an unknown table), `meta` / `stamp` via the reserved `__meta__` store, and confirmation that `transaction` / `aggregate` are absent.
-- [`tests/src/browser/helpers.test.ts`](../../tests/src/browser/helpers.test.ts) — the pushdown planner: `isKey`, `conditionRange` over every comparison operator (and `null` for non-comparison operators / non-scalar operands), and `selectPlan`'s index/primary-key selection, `or`-join full-scan fallback, and non-orderable-type / nested-path skip cases.
+- [`tests/src/server/parity.test.ts`](../../tests/src/server/parity.test.ts) — cross-backend behavioral parity: the same `Criteria` set run against `MemoryDriver` and `SQLiteDriver` (both exact-path and refine-path queries) produce identical rows/counts/aggregates.
+- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver`'s full surface against a real IndexedDB: `open`'s store/index creation (reopen-safe, auto-managed) and a `VALIDATION` throw when a declared table is named `__meta__`, keyed CRUD, native `records` / `count` / `stream` pushdown (primary-key and secondary-index ranges, `below`/`to` primary-only pushdown, reversed-`between` full-scan fallback, general full-scan fallback), `snapshot` capture-replay in one read transaction (excluding `__meta__`), `migrate` via a versionchange reconnect (rejecting `MIGRATION` on an unknown table), `meta` / `stamp` via the reserved `__meta__` store, backend-fault → `DatabaseError` mapping (`CONSTRAINT`→`CONFLICT`, `CLOSED`/`NOT_OPEN`/`INVALID`→`CLOSED`, `QUOTA`/`BLOCKED`→`DRIVER`, migrate `UPGRADE`→`MIGRATION`), and confirmation that `transaction` / `aggregate` are absent.
+- [`tests/src/browser/helpers.test.ts`](../../tests/src/browser/helpers.test.ts) — the pushdown planner: `isKey`, `conditionRange` over every comparison operator (and `null` for non-comparison operators / non-scalar operands, and for a reversed `between`), `selectPlan`'s index/primary-key selection, `below`/`to` primary-only pushdown, `or`-join full-scan fallback, non-orderable-type / nested-path skip cases, `mapIndexedDBError` / `mapMigrationError`'s fault-code mapping, and `deriveIndexName`'s single-column/compound naming.
 - [`tests/src/browser/factories.test.ts`](../../tests/src/browser/factories.test.ts) — `createIndexedDBDriver` returns a working `DriverInterface` instance (a round-trip end to end).
+- [`tests/src/browser/parity.test.ts`](../../tests/src/browser/parity.test.ts) — cross-backend behavioral parity: the same `Criteria` set run against `MemoryDriver` and `IndexedDBDriver` produce identical rows/counts, including pushdown edge cases (`below`/`to` on a secondary-indexed column, a reversed `between`).
 
 ## See also
 

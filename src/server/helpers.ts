@@ -1,7 +1,16 @@
-import type { AggregateFunction, ColumnType, MigrationStep, Row, TableSchema } from '@src/core'
+import type {
+	AggregateFunction,
+	ColumnType,
+	Condition,
+	Criteria,
+	MigrationStep,
+	Order,
+	Row,
+	TableSchema,
+} from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from './types.js'
-import { isString } from '@orkestrel/contract'
+import { isBoolean, isFiniteNumber, isString } from '@orkestrel/contract'
 import { randomUUID } from 'node:crypto'
 
 // The server's key-minting `KeyFunction` implementation — `core` mints no keys
@@ -36,6 +45,148 @@ import { randomUUID } from 'node:crypto'
  */
 export function generateKey(): string {
 	return randomUUID()
+}
+
+// === Exactness (native ↔ engine parity gating)
+//
+// SQLiteDriver's `records` / `count` / `aggregate` / `stream` compile a
+// `Criteria` straight to SQL with NO engine re-filter — a huge perf win, but
+// only sound for a condition/order whose compiled SQL provably matches the
+// core engine's `matchesCondition` / `sortRows` semantics for every value a
+// contract-validated write can store ("declared-type trust"). These guards
+// decide, per condition/order/criteria, whether that proof holds; when it does
+// not, the driver falls back to a full scan refined through the same core
+// engine every scan-only driver (`MemoryDriver`, `JSONDriver`) already uses —
+// exact → native, otherwise → refine, never a silent semantics drift.
+
+/**
+ * The declared {@link ColumnType}s whose SQL comparisons are provably
+ * engine-exact under declared-type trust — `text` / `integer` / `real` /
+ * `boolean`; a `json` or `blob` column always refines instead.
+ */
+export const EXACT_COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean']
+
+/**
+ * Whether a value's runtime type matches a column's declared exact type —
+ * the operand side of the declared-type-trust proof.
+ *
+ * @remarks
+ * `text` ↔ string, `integer` / `real` ↔ FINITE number (`NaN` / `±Infinity`
+ * fail), `boolean` ↔ boolean. Backs {@link isExactCondition}'s operand checks.
+ *
+ * @param value - The condition operand to test
+ * @param type - The column's declared portable type
+ * @returns `true` when the operand's runtime type matches the declared type
+ *
+ * @example
+ * ```ts
+ * matchesDeclaredType('Ada', 'text') // true
+ * matchesDeclaredType(Number.NaN, 'integer') // false — only finite numbers
+ * ```
+ */
+export function matchesDeclaredType(value: unknown, type: ColumnType): boolean {
+	if (type === 'text') return isString(value)
+	if (type === 'boolean') return isBoolean(value)
+	return isFiniteNumber(value)
+}
+
+/**
+ * Whether one {@link Condition} compiles to SQL that is PROVABLY identical to
+ * the core engine's `matchesCondition` for every value its column's declared
+ * type can store.
+ *
+ * @remarks
+ * `false` for a nested `FieldPath` (an array), a column absent from `schema`,
+ * or a column whose declared type is not `text` / `integer` / `real` /
+ * `boolean` (a `json` / `blob` column) — EXCEPT `absent` / `present`, which
+ * compile to `IS NULL` / `IS NOT NULL` and match `decodeRow`'s "a stored NULL
+ * decodes to `undefined`" rule for every column type, so they are exact
+ * regardless of declared type. `equals` / `not` require a operand matching the
+ * column's declared type (a `null` / `undefined` operand is never exact here —
+ * `encodeRow` stores both an explicit `null` and an absent field as SQL NULL,
+ * so native `IS NULL` semantics cannot match the engine's `deepEqual`-over-
+ * decoded-rows truth). `above` / `below` / `from` / `to` likewise require a
+ * matching scalar operand; `between` requires both operands to match.
+ * `any` / `none` require a NON-EMPTY list where every element matches (an empty
+ * list is exact under neither: the engine's `any([])` matches nothing while
+ * `none([])` matches everything, and SQL `IN ()` is a syntax error). `starts` /
+ * `ends` are exact only on a `text` column with a string operand (case-
+ * sensitive `substr` compile, see {@link fragment}). `like` / `glob` are NEVER
+ * exact — SQLite `LIKE` folds case ASCII-only against the engine's Unicode
+ * fold, and `GLOB` has character classes the engine treats literally.
+ *
+ * @param condition - The condition to test
+ * @param schema - The table's schema
+ * @returns Whether `condition` is exact
+ */
+export function isExactCondition(condition: Condition, schema: TableSchema): boolean {
+	if (!isString(condition.column)) return false
+	const column = schema.columns.find((candidate) => candidate.name === condition.column)
+	if (column === undefined) return false
+	if (condition.operator === 'absent' || condition.operator === 'present') return true
+	if (!EXACT_COLUMN_TYPES.some((type) => type === column.type)) return false
+	const first = condition.values[0]
+	const second = condition.values[1]
+	switch (condition.operator) {
+		case 'equals':
+		case 'not':
+		case 'above':
+		case 'below':
+		case 'from':
+		case 'to':
+			return matchesDeclaredType(first, column.type)
+		case 'between':
+			return matchesDeclaredType(first, column.type) && matchesDeclaredType(second, column.type)
+		case 'any':
+		case 'none':
+			return (
+				condition.values.length > 0 &&
+				condition.values.every((value) => matchesDeclaredType(value, column.type))
+			)
+		case 'starts':
+		case 'ends':
+			return column.type === 'text' && isString(first)
+		case 'like':
+		case 'glob':
+			return false
+	}
+}
+
+/**
+ * Whether one {@link Order} term's column compiles to an `ORDER BY` that
+ * matches the engine's {@link import('@src/core').sortRows} exactly.
+ *
+ * @remarks
+ * `false` for a nested `FieldPath`, a column absent from `schema`, or a
+ * declared type outside `text` / `integer` / `real` / `boolean`.
+ *
+ * @param order - The order term to test
+ * @param schema - The table's schema
+ * @returns Whether `order` is exact
+ */
+export function isExactOrder(order: Order, schema: TableSchema): boolean {
+	if (!isString(order.column)) return false
+	const column = schema.columns.find((candidate) => candidate.name === order.column)
+	if (column === undefined) return false
+	return EXACT_COLUMN_TYPES.some((type) => type === column.type)
+}
+
+/**
+ * Whether a whole {@link Criteria} is exact — every condition and every order
+ * term is exact. `limit` / `offset` never affect exactness (SQL `LIMIT` /
+ * `OFFSET` are always engine-identical).
+ *
+ * @param criteria - The criteria to test
+ * @param schema - The table's schema
+ * @returns Whether every part of `criteria` is exact
+ */
+export function isExactCriteria(criteria: Criteria, schema: TableSchema): boolean {
+	const conditions = criteria.conditions ?? []
+	const order = criteria.order ?? []
+	return (
+		conditions.every((condition) => isExactCondition(condition, schema)) &&
+		order.every((term) => isExactOrder(term, schema))
+	)
 }
 
 // === SQL identifiers & types
@@ -321,12 +472,42 @@ export function schemaToTable(schema: TableSchema): string {
 }
 
 /**
+ * Build a collision-free SQL index name for a table + column-group index —
+ * shared by {@link schemaToIndexes} (an `open`-time `CREATE INDEX`) and
+ * {@link stepToSQL}'s `index.add` / `index.remove` (a migration-time DDL),
+ * so a plan-built index name always matches one `open` would have created.
+ *
+ * @remarks
+ * A naive `idx_<table>_<cols joined by _>` is AMBIGUOUS: table `'a_b'` with
+ * column `'c'` and table `'a'` with columns `['b', 'c']` both produce
+ * `idx_a_b_c`. This encodes each part (the table name, then each column name)
+ * length-prefixed (`<len>_<part>`) so the boundary between parts is always
+ * unambiguous, however the names themselves are punctuated.
+ *
+ * @param table - The table name
+ * @param columns - The index's column names, in order
+ * @returns The deterministic, collision-free index identifier (unquoted)
+ *
+ * @example
+ * ```ts
+ * indexName('users', ['name']) // 'idx_5_users_4_name'
+ * indexName('a_b', ['c']) // 'idx_3_a_b_1_c'
+ * indexName('a', ['b', 'c']) // 'idx_1_a_1_b_1_c'
+ * ```
+ */
+export function indexName(table: string, columns: readonly string[]): string {
+	const parts = [table, ...columns].map((part) => String(part.length) + '_' + part)
+	return 'idx_' + parts.join('_')
+}
+
+/**
  * Project a {@link TableSchema} to the `CREATE INDEX IF NOT EXISTS` statements a
  * SQLite driver's `open` issues for its declared indexes.
  *
  * @remarks
- * One statement per index group; the index name is `idx_<table>_<columns joined
- * by _>`, matching the driver's naming so a repeated `open` is idempotent.
+ * One statement per index group; the index name is built by {@link indexName}
+ * (collision-free and deterministic), matching the driver's naming so a
+ * repeated `open` is idempotent.
  *
  * @param schema - The table's schema
  * @returns One `CREATE INDEX IF NOT EXISTS …` statement per declared index
@@ -334,14 +515,14 @@ export function schemaToTable(schema: TableSchema): string {
  * @example
  * ```ts
  * schemaToIndexes(schema)
- * // ['CREATE INDEX IF NOT EXISTS "idx_users_name" ON "users" ("name")']
+ * // ['CREATE INDEX IF NOT EXISTS "idx_5_users_4_name" ON "users" ("name")']
  * ```
  */
 export function schemaToIndexes(schema: TableSchema): readonly string[] {
 	return schema.indexes.map(
 		(group) =>
 			'CREATE INDEX IF NOT EXISTS ' +
-			quote('idx_' + schema.name + '_' + group.join('_')) +
+			quote(indexName(schema.name, group)) +
 			' ON ' +
 			quote(schema.name) +
 			' (' +
@@ -395,7 +576,7 @@ export function stepToSQL(step: MigrationStep): readonly string[] {
 		case 'index.add':
 			return [
 				'CREATE INDEX IF NOT EXISTS ' +
-					quote('idx_' + step.table + '_' + step.index.join('_')) +
+					quote(indexName(step.table, step.index)) +
 					' ON ' +
 					quote(step.table) +
 					' (' +
@@ -403,7 +584,7 @@ export function stepToSQL(step: MigrationStep): readonly string[] {
 					')',
 			]
 		case 'index.remove':
-			return ['DROP INDEX IF EXISTS ' + quote('idx_' + step.table + '_' + step.index.join('_'))]
+			return ['DROP INDEX IF EXISTS ' + quote(indexName(step.table, step.index))]
 	}
 }
 

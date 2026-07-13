@@ -115,17 +115,33 @@ describe('compileCriteria — operators', () => {
 		)
 	})
 
-	it('compiles starts to LIKE ? ESCAPE with an escaped prefix', () => {
+	it('compiles starts to a case-sensitive substr(col, 1, N) = ? check (N = code-point count)', () => {
+		// Case-sensitive and exact — replaces the old LIKE-based compile (which
+		// was ASCII-only case-INsensitive, diverging from the engine's
+		// case-sensitive startsWith). N is a code-point count via Array.from,
+		// not `.length` (matters for astral characters).
 		expect(compile({ conditions: [cond('name', 'starts', ['A_d%'])] })).toEqual({
-			sql: 'WHERE "name" LIKE ? ESCAPE \'\\\' ORDER BY "id"',
-			params: ['A\\_d\\%%'],
+			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", 1, 4) = ?) ORDER BY "id"',
+			params: ['A_d%'],
 		})
 	})
 
-	it('compiles ends to LIKE ? ESCAPE with an escaped suffix', () => {
+	it('compiles ends to a case-sensitive substr(col, -N) = ? check', () => {
 		expect(compile({ conditions: [cond('name', 'ends', ['x'])] })).toEqual({
-			sql: 'WHERE "name" LIKE ? ESCAPE \'\\\' ORDER BY "id"',
-			params: ['%x'],
+			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", -1) = ?) ORDER BY "id"',
+			params: ['x'],
+		})
+	})
+
+	it('compiles an empty-string starts / ends operand to a bare text-typeof check', () => {
+		// The engine: every string cell starts with / ends with ''.
+		expect(compile({ conditions: [cond('name', 'starts', [''])] })).toEqual({
+			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
+			params: [],
+		})
+		expect(compile({ conditions: [cond('name', 'ends', [''])] })).toEqual({
+			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
+			params: [],
 		})
 	})
 
@@ -270,11 +286,11 @@ describe('compileCriteria — parenthesization', () => {
 				cond('active', 'equals', [true], 'and'),
 			],
 		}
-		// (((age >= ? OR name LIKE ?) AND active = ?)) — the fold wraps each step,
+		// (((age >= ? OR starts(name)) AND active = ?)) — the fold wraps each step,
 		// matching the engine's left-to-right matchesCriteria (NOT SQL precedence).
 		expect(compile(criteria)).toEqual({
-			sql: 'WHERE (("age" >= ? OR "name" LIKE ? ESCAPE \'\\\') AND "active" = ?) ORDER BY "id"',
-			params: [18, 'A%', 1],
+			sql: 'WHERE (("age" >= ? OR (typeof("name") = \'text\' AND substr("name", 1, 1) = ?)) AND "active" = ?) ORDER BY "id"',
+			params: [18, 'A', 1],
 		})
 	})
 
@@ -440,10 +456,10 @@ describe('fragment', () => {
 		})
 	})
 
-	it('escapes a starts operand under LIKE … ESCAPE', () => {
+	it('builds a case-sensitive starts fragment (substr(col, 1, N) = ?)', () => {
 		expect(fragment(cond('name', 'starts', ['A_d%']), SCHEMA)).toEqual({
-			sql: '"name" LIKE ? ESCAPE \'\\\'',
-			params: ['A\\_d\\%%'],
+			sql: '(typeof("name") = \'text\' AND substr("name", 1, 4) = ?)',
+			params: ['A_d%'],
 		})
 	})
 

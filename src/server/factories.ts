@@ -1,4 +1,6 @@
 import type { DriverInterface } from '@src/core'
+import type { SQLiteDriverOptions } from './types.js'
+import { isString } from '@orkestrel/contract'
 import { JSONDriver } from './drivers/JSONDriver.js'
 import { SQLiteDriver } from './drivers/SQLiteDriver.js'
 
@@ -49,8 +51,9 @@ export function createJSONDriver(path: string): DriverInterface {
  * `aggregate` / `stream`); `transaction` and `migrate` use real `BEGIN` /
  * `COMMIT` / `ROLLBACK`, so `migrate` is atomic even mid-plan.
  *
- * @param path - The database file path, or `':memory:'` (the default) for an
- *   in-memory database
+ * @param options - A bare database file path (`':memory:'` by default, for
+ *   back-compat), or a full {@link SQLiteDriverOptions} bag (`path`,
+ *   `readonly`, `timeout`, `foreignKeys`, `pragmas`)
  * @returns A {@link DriverInterface} backed by SQLite
  *
  * @example
@@ -64,8 +67,14 @@ export function createJSONDriver(path: string): DriverInterface {
  * 	tables: { users: { id: stringShape(), name: stringShape() } },
  * })
  * await db.table('users').set({ id: 'u1', name: 'Ada' }) // persisted to app.sqlite
+ *
+ * // Or with options:
+ * createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { journal_mode: 'WAL' } })
  * ```
  */
-export function createSQLiteDriver(path = ':memory:'): DriverInterface {
-	return new SQLiteDriver(path)
+export function createSQLiteDriver(
+	options: string | SQLiteDriverOptions = ':memory:',
+): DriverInterface {
+	const resolved: SQLiteDriverOptions = isString(options) ? { path: options } : options
+	return new SQLiteDriver(resolved.path ?? ':memory:', resolved)
 }

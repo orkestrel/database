@@ -665,3 +665,256 @@ describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic 
 		expect(native).toBe(expected)
 	})
 })
+
+describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
+	// A criteria whose compiled SQL is NOT provably identical to the engine
+	// (like/glob, a null-operand equals/not, an empty any/none, starts case-
+	// sensitivity) must go through a full-scan + core-engine refine, never the
+	// old always-native path — these are the audit's concrete counter-examples.
+	const REFINE_SCHEMA: readonly TableSchema[] = [
+		{
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', type: 'text', nullable: false },
+				{ name: 'name', type: 'text', nullable: false },
+				{ name: 'rank', type: 'integer', nullable: true },
+			],
+			indexes: [],
+		},
+	]
+
+	let refineDriver = createSQLiteDriver()
+
+	beforeEach(async () => {
+		refineDriver = createSQLiteDriver()
+		await refineDriver.open(REFINE_SCHEMA)
+		await refineDriver.write('users', 'u1', { id: 'u1', name: 'Ada', rank: 10 })
+		await refineDriver.write('users', 'u2', { id: 'u2', name: 'ada', rank: 20 })
+	})
+
+	afterEach(async () => {
+		await refineDriver.close()
+	})
+
+	// `records` is a presence-gated optional hook on DriverInterface — this
+	// asserts it exists (SQLiteDriver always implements it) and calls it,
+	// matching the `runAggregate` pattern used elsewhere in this file.
+	async function records(
+		target: ReturnType<typeof createSQLiteDriver>,
+		table: string,
+		criteria: Criteria,
+	): Promise<readonly Row[]> {
+		const hook = target.records
+		if (hook === undefined) throw new Error('SQLiteDriver is missing its native records hook')
+		return hook.call(target, table, criteria)
+	}
+
+	async function count(
+		target: ReturnType<typeof createSQLiteDriver>,
+		table: string,
+		criteria: Criteria,
+	): Promise<number> {
+		const hook = target.count
+		if (hook === undefined) throw new Error('SQLiteDriver is missing its native count hook')
+		return hook.call(target, table, criteria)
+	}
+
+	it("starts('ada') refines to case-SENSITIVE matching — 'Ada' never matches", async () => {
+		const criteria: Criteria = { conditions: [buildCondition('name', 'starts', ['ada'])] }
+		const rows = await records(refineDriver, 'users', criteria)
+		expect(rows.map((row) => row.id)).toEqual(['u2'])
+	})
+
+	it("starts('') and ends('') match every row of a text column", async () => {
+		const startsAll: Criteria = { conditions: [buildCondition('name', 'starts', [''])] }
+		const endsAll: Criteria = { conditions: [buildCondition('name', 'ends', [''])] }
+		expect((await records(refineDriver, 'users', startsAll)).map((row) => row.id).sort()).toEqual([
+			'u1',
+			'u2',
+		])
+		expect((await records(refineDriver, 'users', endsAll)).map((row) => row.id).sort()).toEqual([
+			'u1',
+			'u2',
+		])
+	})
+
+	it('none([null, 20]) refines to the engine: a row with rank=10 MATCHES (a null operand is never exact)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'none', [null, 20])] }
+		const rows = await records(refineDriver, 'users', criteria)
+		expect(rows.map((row) => row.id)).toEqual(['u1'])
+	})
+
+	it('any([]) matches nothing; none([]) matches everything — both refine (empty list is never exact)', async () => {
+		const anyEmpty: Criteria = { conditions: [buildCondition('rank', 'any', [])] }
+		const noneEmpty: Criteria = { conditions: [buildCondition('rank', 'none', [])] }
+		expect(await records(refineDriver, 'users', anyEmpty)).toEqual([])
+		expect((await records(refineDriver, 'users', noneEmpty)).map((row) => row.id).sort()).toEqual([
+			'u1',
+			'u2',
+		])
+	})
+
+	it('above(null) refines to the engine (a null operand is never exact for range operators)', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'above', [null])] }
+		const rows = await records(refineDriver, 'users', criteria)
+		// The engine's compareValues ranks every value above `null`'s rank-1 spot
+		// except undefined — both rows have a scalar rank, so both match.
+		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u2'])
+	})
+
+	it('a non-ASCII like / a bracketed glob refine to the engine result (never the SQL-native one)', async () => {
+		await refineDriver.write('users', 'u3', { id: 'u3', name: 'ÀDA', rank: 30 })
+		const likeCriteria: Criteria = { conditions: [buildCondition('name', 'like', ['%da%'])] }
+		const globCriteria: Criteria = { conditions: [buildCondition('name', 'glob', ['[Aa]da'])] }
+		const likeRows = await records(refineDriver, 'users', likeCriteria)
+		const globRows = await records(refineDriver, 'users', globCriteria)
+		// The engine's likeMatch/globMatch are case-fold/literal per the shared
+		// wildcardMatch — assert against the actual engine result rather than a
+		// SQL-native guess (the whole point of this test: refine, not native).
+		const all = [
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: 'ada' },
+			{ id: 'u3', name: 'ÀDA' },
+		]
+		const { likeMatch, globMatch } = await import('@src/core')
+		expect(likeRows.map((row) => row.id).sort()).toEqual(
+			all.filter((row) => likeMatch(row.name, '%da%')).map((row) => row.id),
+		)
+		expect(globRows.map((row) => row.id).sort()).toEqual(
+			all.filter((row) => globMatch(row.name, '[Aa]da')).map((row) => row.id),
+		)
+	})
+
+	it('equals with an object operand on a json column refines with deepEqual semantics', async () => {
+		const jsonSchema: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'id', type: 'text', nullable: false },
+					{ name: 'meta', type: 'json', nullable: true },
+				],
+				indexes: [],
+			},
+		]
+		const jsonDriver = createSQLiteDriver()
+		await jsonDriver.open(jsonSchema)
+		await jsonDriver.write('users', 'u1', { id: 'u1', meta: { a: 1, b: [2, 3] } })
+		await jsonDriver.write('users', 'u2', { id: 'u2', meta: { a: 1, b: [2, 4] } })
+		const criteria: Criteria = {
+			conditions: [buildCondition('meta', 'equals', [{ a: 1, b: [2, 3] }])],
+		}
+		const rows = await records(jsonDriver, 'users', criteria)
+		expect(rows.map((row) => row.id)).toEqual(['u1'])
+		await jsonDriver.close()
+	})
+
+	it('between with reversed bounds is empty on both the native and the refine path', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('rank', 'between', [20, 10])] }
+		expect(await records(refineDriver, 'users', criteria)).toEqual([])
+		// A null-operand condition forces refine for the whole criteria via the
+		// same reversed-bounds semantics.
+		const forcedRefine: Criteria = {
+			conditions: [
+				buildCondition('rank', 'between', [20, 10]),
+				buildCondition('rank', 'equals', [null]),
+			],
+		}
+		expect(await records(refineDriver, 'users', forcedRefine)).toEqual([])
+	})
+
+	it('count and aggregate refine identically to records when conditions are inexact', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('name', 'like', ['%da%'])] }
+		const rows = await records(refineDriver, 'users', criteria)
+		expect(await count(refineDriver, 'users', criteria)).toBe(rows.length)
+		const sum =
+			refineDriver.aggregate === undefined
+				? undefined
+				: await refineDriver.aggregate('users', 'sum', 'rank', criteria)
+		expect(sum).toBe(computeAggregate(rows, 'sum', 'rank'))
+	})
+
+	it('aggregate sum over a text column always refines (never a provably-exact numeric column)', async () => {
+		const rows = await records(refineDriver, 'users', {})
+		const expected = computeAggregate(rows, 'sum', 'name')
+		const native =
+			refineDriver.aggregate === undefined
+				? undefined
+				: await refineDriver.aggregate('users', 'sum', 'name', {})
+		expect(native).toBe(expected)
+		expect(native).toBeUndefined() // parseNumber('Ada' / 'ada') is undefined — no numeric cells
+	})
+
+	it('stream ignores order (per DriverInterface) and refines a non-exact condition lazily', async () => {
+		const criteria: Criteria = { conditions: [buildCondition('name', 'like', ['%da%'])] }
+		const collected: string[] = []
+		for await (const row of refineDriver.stream?.('users', criteria) ?? []) {
+			const id = row.id
+			if (typeof id === 'string') collected.push(id)
+		}
+		expect(collected.sort()).toEqual(['u1', 'u2'])
+	})
+})
+
+describe('SQLiteDriver — reserved _meta table guard', () => {
+	it('throws a VALIDATION DatabaseError when a declared table is named _meta', async () => {
+		const guarded = createSQLiteDriver()
+		const badSchema: readonly TableSchema[] = [
+			{
+				name: '_meta',
+				primary: 'id',
+				columns: [{ name: 'id', type: 'text', nullable: false }],
+				indexes: [],
+			},
+		]
+		const error = await guarded.open(badSchema).catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('VALIDATION')
+	})
+})
+
+describe('SQLiteDriver — options (path string, readonly, pragmas)', () => {
+	it('accepts a bare string as the path (back-compat)', async () => {
+		const stringOption = createSQLiteDriver(':memory:')
+		await stringOption.open(SCHEMA)
+		await stringOption.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		expect(await stringOption.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await stringOption.close()
+	})
+
+	it('applies ordered pragmas on open without throwing', async () => {
+		const temp = tempDatabasePath()
+		const pragmaDriver = createSQLiteDriver({ path: temp.path, pragmas: { journal_mode: 'WAL' } })
+		await expect(pragmaDriver.open(SCHEMA)).resolves.toBeUndefined()
+		await pragmaDriver.close()
+		temp.cleanup()
+	})
+
+	it('readonly rejects a write as a typed DRIVER DatabaseError', async () => {
+		const temp = tempDatabasePath()
+		const writable = createSQLiteDriver(temp.path)
+		await writable.open(SCHEMA)
+		await writable.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await writable.close()
+
+		const readonlyDriver = createSQLiteDriver({ path: temp.path, readonly: true })
+		await readonlyDriver.open(SCHEMA)
+		expect(await readonlyDriver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		const error = await readonlyDriver
+			.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40, active: true })
+			.catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('DRIVER')
+		await readonlyDriver.close()
+		temp.cleanup()
+	})
+})

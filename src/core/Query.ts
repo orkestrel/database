@@ -113,7 +113,7 @@ export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
 	 * @param options - `signal` to cancel the iteration; checked before each yield
 	 * @returns An async iterable of matching rows
 	 */
-	async *stream(options?: ReadOptions): AsyncGenerator<T> {
+	async *stream(options?: ReadOptions): AsyncIterable<T> {
 		// No JS filters → the table's own offset/limit apply directly against the
 		// condition-matched rows (matching `all()`'s no-filter fast path).
 		if (this.#filters.length === 0) {

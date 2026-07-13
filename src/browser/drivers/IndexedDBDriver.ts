@@ -23,9 +23,9 @@ import type {
 	IndexedDBUpgradeContext,
 	StoreDefinition,
 } from '@orkestrel/indexeddb'
-import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
+import { createIndexedDBDatabase, isIndexedDBError } from '@orkestrel/indexeddb'
 import type { QueryPlan } from '../types.js'
-import { selectPlan } from '../helpers.js'
+import { deriveIndexName, mapIndexedDBError, mapMigrationError, selectPlan } from '../helpers.js'
 import { META_STORE } from '../constants.js'
 
 /**
@@ -88,21 +88,36 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	async open(schema: readonly TableSchema[]): Promise<void> {
-		// Reconnect cleanly so an auto-managed version bump (to create new stores) is
-		// never blocked by this driver's own open handle.
-		this.#database?.close()
-		// Build the new schema into a LOCAL map first — never mutate `#schema` in
-		// place — so a reopen with a REDUCED schema replaces the map wholesale
-		// instead of retaining ghost tables the caller no longer declared.
-		const map = new Map<string, TableSchema>()
-		for (const table of schema) map.set(table.name, table)
-		const database = createIndexedDBDatabase({ name: this.#name, stores: this.#stores(map) })
-		await database.connect()
-		this.#database = database
-		// Remember the schema so the native `records` / `count` / `stream` hooks
-		// can plan a key-range pushdown (the primary key, column types, secondary
-		// indexes).
-		this.#schema = map
+		// The reserved meta store name may never collide with a caller-declared
+		// table — it would silently corrupt this driver's own `meta`/`stamp`
+		// bookkeeping (AGENTS §12 — a programmer error throws).
+		if (schema.some((table) => table.name === META_STORE)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`open: table name '${META_STORE}' is reserved for driver metadata`,
+				{ table: META_STORE },
+			)
+		}
+		try {
+			// Reconnect cleanly so an auto-managed version bump (to create new
+			// stores) is never blocked by this driver's own open handle.
+			this.#database?.close()
+			// Build the new schema into a LOCAL map first — never mutate `#schema`
+			// in place — so a reopen with a REDUCED schema replaces the map
+			// wholesale instead of retaining ghost tables the caller no longer
+			// declared.
+			const map = new Map<string, TableSchema>()
+			for (const table of schema) map.set(table.name, table)
+			const database = createIndexedDBDatabase({ name: this.#name, stores: this.#stores(map) })
+			await database.connect()
+			this.#database = database
+			// Remember the schema so the native `records` / `count` / `stream` hooks
+			// can plan a key-range pushdown (the primary key, column types, secondary
+			// indexes).
+			this.#schema = map
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async close(): Promise<void> {
@@ -111,116 +126,177 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	async read(table: string, key: Key): Promise<Row | undefined> {
-		return this.#store(table).get(key)
+		try {
+			return await this.#store(table).get(key)
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async write(table: string, key: Key, row: Row): Promise<void> {
-		await this.#store(table).set(row, key)
+		try {
+			await this.#store(table).set(row, key)
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async delete(table: string, key: Key): Promise<boolean> {
-		const store = this.#store(table)
-		const present = await store.has(key)
-		await store.remove(key)
-		return present
+		try {
+			const store = this.#store(table)
+			const present = await store.has(key)
+			await store.remove(key)
+			return present
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
-		const keys = await this.#store(table).keys()
-		return keys.filter((key): key is Key => typeof key === 'string' || typeof key === 'number')
+		try {
+			const keys = await this.#store(table).keys()
+			return keys.filter((key): key is Key => typeof key === 'string' || typeof key === 'number')
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async *scan(table: string): AsyncIterable<Row> {
-		for (const row of await this.#store(table).records()) yield row
+		try {
+			for (const row of await this.#store(table).records()) yield row
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async clear(table: string): Promise<void> {
-		await this.#store(table).clear()
+		try {
+			await this.#store(table).clear()
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	async records(table: string, criteria: Criteria): Promise<readonly Row[]> {
-		const schema = this.#table(table)
-		const store = this.#store(table)
-		const plan = selectPlan(criteria, schema, store.indexes)
-		return applyCriteria(await this.#candidates(store, schema, plan), criteria)
+		try {
+			const schema = this.#table(table)
+			const store = this.#store(table)
+			const plan = selectPlan(criteria, schema, store.indexes)
+			return applyCriteria(await this.#candidates(store, schema, plan), criteria)
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
+	// A single-condition native count is exact — never a superset needing a
+	// re-filter — because EVERY range `selectPlan` can produce excludes an
+	// absent/null-valued row by construction: `equals`/`above`/`from`/`between`
+	// are bounded below by a scalar (out-ranking absent/null in the engine's
+	// total order, @src/core `compareValues`), and `below`/`to` are restricted by
+	// `selectPlan` to the PRIMARY store, whose key is never absent/null. So a
+	// native range count over a single condition already equals the engine's
+	// `matchesCriteria` count for that condition — no row the range returns can
+	// fail the condition, and no row the range omits could have passed it.
 	async count(table: string, criteria: Criteria): Promise<number> {
-		const schema = this.#table(table)
-		const store = this.#store(table)
-		const conditions = criteria.conditions ?? []
-		if (conditions.length === 0) return store.count()
-		const plan = selectPlan(criteria, schema, store.indexes)
-		// A single pushable condition is fully expressed by its range → native count.
-		if (conditions.length === 1 && plan.range !== null) {
-			return plan.index === null
-				? store.count(plan.range)
-				: store.index(plan.index).count(plan.range)
+		try {
+			const schema = this.#table(table)
+			const store = this.#store(table)
+			const conditions = criteria.conditions ?? []
+			if (conditions.length === 0) return await store.count()
+			const plan = selectPlan(criteria, schema, store.indexes)
+			// A single pushable condition is fully expressed by its range → native count.
+			if (conditions.length === 1 && plan.range !== null) {
+				return plan.index === null
+					? await store.count(plan.range)
+					: await store.index(plan.index).count(plan.range)
+			}
+			// Otherwise the range is a superset (or a full scan) → engine filters exactly.
+			// Order is irrelevant to a count, so the candidates need no re-sort.
+			const candidates =
+				plan.index === null
+					? await store.records(plan.range)
+					: await store.index(plan.index).records(plan.range)
+			return candidates.reduce(
+				(total, row) => (matchesCriteria(row, conditions) ? total + 1 : total),
+				0,
+			)
+		} catch (error) {
+			throw this.#wrap(error)
 		}
-		// Otherwise the range is a superset (or a full scan) → engine filters exactly.
-		// Order is irrelevant to a count, so the candidates need no re-sort.
-		const candidates =
-			plan.index === null
-				? await store.records(plan.range)
-				: await store.index(plan.index).records(plan.range)
-		return candidates.reduce(
-			(total, row) => (matchesCriteria(row, conditions) ? total + 1 : total),
-			0,
-		)
 	}
 
 	async *stream(table: string, criteria: Criteria): AsyncIterable<Row> {
-		const schema = this.#table(table)
-		const store = this.#store(table)
-		const plan = selectPlan(criteria, schema, store.indexes)
-		const conditions = criteria.conditions ?? []
-		const offset = criteria.offset ?? 0
-		const limit = criteria.limit
-		let skipped = 0
-		let yielded = 0
-		for (const row of await this.#candidates(store, schema, plan)) {
-			if (limit !== undefined && yielded >= limit) break
-			if (!matchesCriteria(row, conditions)) continue
-			if (skipped < offset) {
-				skipped += 1
-				continue
+		try {
+			const schema = this.#table(table)
+			const store = this.#store(table)
+			const plan = selectPlan(criteria, schema, store.indexes)
+			const conditions = criteria.conditions ?? []
+			const offset = criteria.offset ?? 0
+			const limit = criteria.limit
+			let skipped = 0
+			let yielded = 0
+			for (const row of await this.#candidates(store, schema, plan)) {
+				if (limit !== undefined && yielded >= limit) break
+				if (!matchesCriteria(row, conditions)) continue
+				if (skipped < offset) {
+					skipped += 1
+					continue
+				}
+				yielded += 1
+				yield row
 			}
-			yielded += 1
-			yield row
+		} catch (error) {
+			throw this.#wrap(error)
 		}
 	}
 
 	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		const database = this.#require()
-		// A whole-store capture excludes the reserved meta store — it is driver
-		// bookkeeping, not caller data, and rolling it back would undo a `stamp`
-		// unrelated to the caller's snapshot scope. An explicit `tables` list is
-		// caller-scoped already and passes through untouched.
-		const names = tables ?? database.stores.filter((name) => name !== META_STORE)
-		const captured = new Map<
-			string,
-			{ readonly keys: readonly IDBValidKey[]; readonly rows: readonly Row[] }
-		>()
-		for (const name of names) {
-			const store = database.store(name)
-			captured.set(name, { keys: await store.keys(), rows: await store.records() })
-		}
-		return async () => {
-			const current = this.#require()
-			const restorable = names.filter((name) => current.stores.includes(name))
-			if (restorable.length === 0) return
-			// Restore every captured store in one transaction, so a rollback is atomic.
-			await current.write(restorable, async (transaction) => {
-				for (const name of restorable) {
-					const snapshot = captured.get(name)
-					if (snapshot === undefined) continue
-					const store = transaction.store(name)
-					await store.clear()
-					for (let index = 0; index < snapshot.keys.length; index += 1) {
-						await store.set(snapshot.rows[index], snapshot.keys[index])
+		try {
+			const database = this.#require()
+			// A whole-store capture excludes the reserved meta store — it is driver
+			// bookkeeping, not caller data, and rolling it back would undo a `stamp`
+			// unrelated to the caller's snapshot scope. An explicit `tables` list is
+			// caller-scoped already and passes through untouched.
+			const names = tables ?? database.stores.filter((name) => name !== META_STORE)
+			const captured = new Map<
+				string,
+				{ readonly keys: readonly IDBValidKey[]; readonly rows: readonly Row[] }
+			>()
+			if (names.length > 0) {
+				// Capture EVERY store inside ONE read transaction, so the snapshot is a
+				// single point-in-time view — a concurrent writer can never leave the
+				// capture straddling two different states (each store's keys/records
+				// call previously ran in its OWN implicit transaction).
+				await database.read(names, async (transaction) => {
+					for (const name of names) {
+						const store = transaction.store(name)
+						captured.set(name, { keys: await store.keys(), rows: await store.records() })
 					}
+				})
+			}
+			return async () => {
+				try {
+					const current = this.#require()
+					const restorable = names.filter((name) => current.stores.includes(name))
+					if (restorable.length === 0) return
+					// Restore every captured store in one transaction, so a rollback is atomic.
+					await current.write(restorable, async (transaction) => {
+						for (const name of restorable) {
+							const snapshot = captured.get(name)
+							if (snapshot === undefined) continue
+							const store = transaction.store(name)
+							await store.clear()
+							for (let index = 0; index < snapshot.keys.length; index += 1) {
+								await store.set(snapshot.rows[index], snapshot.keys[index])
+							}
+						}
+					})
+				} catch (error) {
+					throw this.#wrap(error)
 				}
-			})
+			}
+		} catch (error) {
+			throw this.#wrap(error)
 		}
 	}
 
@@ -237,9 +313,13 @@ export class IndexedDBDriver implements DriverInterface {
 	 * @returns The last-stamped {@link DriverMeta}, or `undefined`
 	 */
 	async meta(): Promise<DriverMeta | undefined> {
-		const record = await this.#require().store(META_STORE).get('meta')
-		if (!isDriverMeta(record)) return undefined
-		return record
+		try {
+			const record = await this.#require().store(META_STORE).get('meta')
+			if (!isDriverMeta(record)) return undefined
+			return record
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	/**
@@ -248,9 +328,13 @@ export class IndexedDBDriver implements DriverInterface {
 	 * @param meta - The {@link DriverMeta} to persist
 	 */
 	async stamp(meta: DriverMeta): Promise<void> {
-		await this.#require()
-			.store(META_STORE)
-			.set({ ...meta }, 'meta')
+		try {
+			await this.#require()
+				.store(META_STORE)
+				.set({ ...meta }, 'meta')
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	/**
@@ -307,7 +391,10 @@ export class IndexedDBDriver implements DriverInterface {
 			// reconnect at the PRE-migration schema/version so the driver is left
 			// usable, with `#schema` (and the real database) unchanged.
 			await this.#reopen()
-			throw error
+			// Inside `migrate()`, an `UPGRADE` fault means THIS migration failed —
+			// map it to `MIGRATION`, not the generic `DRIVER` every other caller gets
+			// (see `mapMigrationError` @remarks).
+			throw isIndexedDBError(error) ? mapMigrationError(error) : error
 		}
 	}
 
@@ -320,6 +407,15 @@ export class IndexedDBDriver implements DriverInterface {
 			})
 		}
 		return this.#database
+	}
+
+	// The shared backend-fault boundary: no `IndexedDBError` may leak through
+	// `DriverInterface` — every public method's `catch` routes here. A
+	// `DatabaseError` this driver threw itself (the `CLOSED` gate, the
+	// `NOT_FOUND` table guard, `migrate`'s own `MIGRATION` validation) passes
+	// through unchanged; only a genuine backend `IndexedDBError` is remapped.
+	#wrap(error: unknown): unknown {
+		return isIndexedDBError(error) ? mapIndexedDBError(error) : error
 	}
 
 	#store(table: string) {
@@ -336,7 +432,7 @@ export class IndexedDBDriver implements DriverInterface {
 		for (const table of schema.values()) {
 			stores[table.name] = {
 				indexes: table.indexes.map((columns) => ({
-					name: columns.join('_'),
+					name: deriveIndexName(columns),
 					path: columns.length === 1 ? columns[0] : [...columns],
 				})),
 			}
@@ -455,13 +551,13 @@ export class IndexedDBDriver implements DriverInterface {
 					context.drop(step.table)
 					break
 				case 'index.add': {
-					const name = step.index.join('_')
+					const name = deriveIndexName(step.index)
 					const path = step.index.length === 1 ? step.index[0] : [...step.index]
 					context.transaction.objectStore(step.table).createIndex(name, path)
 					break
 				}
 				case 'index.remove':
-					context.transaction.objectStore(step.table).deleteIndex(step.index.join('_'))
+					context.transaction.objectStore(step.table).deleteIndex(deriveIndexName(step.index))
 					break
 				case 'column.remove': {
 					const store = context.store(step.table)

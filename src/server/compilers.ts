@@ -212,16 +212,32 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			return { sql: column + ' LIKE ?', params: [encode(first)] }
 		case 'glob':
 			return { sql: column + ' GLOB ?', params: [encode(first)] }
-		case 'starts':
+		case 'starts': {
+			// Case-sensitive, exact compile (replaces the old LIKE-based one, which
+			// was ASCII-only case-INsensitive — a mismatch with the engine's
+			// case-sensitive `String.startsWith`). `substr` counts CODE POINTS, so
+			// the length is a code-point count (`Array.from`), not `.length`. An
+			// empty operand matches every text-column value (the engine: every
+			// string starts with '').
+			const text = isString(first) ? first : ''
+			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
+			const length = Array.from(text).length
 			return {
-				sql: column + " LIKE ? ESCAPE '\\'",
-				params: [(isString(first) ? escapeLike(first) : '') + '%'],
+				sql: '(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)',
+				params: [encode(first)],
 			}
-		case 'ends':
+		}
+		case 'ends': {
+			// Mirror of `starts`: `substr(<col>, -N)` (SQLite's 2-arg form counts
+			// from the right when N is negative) reads the last N code points.
+			const text = isString(first) ? first : ''
+			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
+			const length = Array.from(text).length
 			return {
-				sql: column + " LIKE ? ESCAPE '\\'",
-				params: ['%' + (isString(first) ? escapeLike(first) : '')],
+				sql: '(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)',
+				params: [encode(first)],
 			}
+		}
 		case 'any':
 			if (condition.values.length === 0) return { sql: '0', params: [] }
 			return {

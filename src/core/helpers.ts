@@ -219,9 +219,16 @@ export function globMatch(value: string, pattern: string): boolean {
  * @remarks
  * Reads the condition's column — a `FieldPath`, resolved with `resolveField` (a
  * string is one column; an array descends a nested value) — and applies the
- * operator. Range operators use {@link compareValues}; `like` / `glob` / `starts`
- * / `ends` match only strings; `any` / `none` test membership by value equality.
- * Total — a type mismatch is simply a non-match.
+ * operator. Range operators (`above` / `below` / `from` / `to` / `between`) use
+ * {@link compareValues}, the total order; the equality family (`equals` / `not`
+ * / `any` / `none`) uses {@link deepEqual} — STRUCTURAL equality, not the total
+ * order's rank-5-collapses-all-objects behavior, so `equals` on an object/array
+ * operand only matches a structurally-equal value, never every row holding any
+ * object. This is a semantics change from ranking: `deepEqual` is SameValueZero
+ * on leaves, so `NaN` now equals `NaN` under `equals` / `any` (it never matched
+ * anything under the old rank-based comparison). `like` / `glob` / `starts` /
+ * `ends` match only strings; `absent` / `present` test nullishness. Total — a
+ * type mismatch is simply a non-match.
  *
  * @param row - The row to test
  * @param condition - The condition to apply
@@ -233,9 +240,9 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 	const second = condition.values[1]
 	switch (condition.operator) {
 		case 'equals':
-			return compareValues(value, first) === 0
+			return deepEqual(value, first)
 		case 'not':
-			return compareValues(value, first) !== 0
+			return !deepEqual(value, first)
 		case 'above':
 			return compareValues(value, first) > 0
 		case 'below':
@@ -255,9 +262,9 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 		case 'ends':
 			return isString(value) && isString(first) && value.endsWith(first)
 		case 'any':
-			return condition.values.some((candidate) => compareValues(value, candidate) === 0)
+			return condition.values.some((candidate) => deepEqual(value, candidate))
 		case 'none':
-			return !condition.values.some((candidate) => compareValues(value, candidate) === 0)
+			return !condition.values.some((candidate) => deepEqual(value, candidate))
 		case 'absent':
 			return value === undefined || value === null
 		case 'present':
@@ -584,11 +591,22 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  * plan labels only — version tracking itself is deferred to persistent
  * backends.
  *
+ * A column present in BOTH schemas under the same name but with a different
+ * `type` or `nullable` throws a `MIGRATION` {@link DatabaseError} naming the
+ * table, the column, and the from→to difference — a name-only diff would
+ * otherwise silently produce NO step for the drift, and versioned
+ * reconciliation would stamp over it. There is no automatic in-place
+ * type-change step: the manual path is to add a new column, copy/convert the
+ * data at the application layer, then remove the old column — two separate
+ * plans, never a single implicit "alter" step.
+ *
  * @param deployed - The table schemas currently applied
  * @param declared - The table schemas the caller wants applied
  * @param from - The plan's source version label (defaults to `0`)
  * @param to - The plan's target version label (defaults to `1`)
  * @returns The migration plan moving `deployed` toward `declared`
+ * @throws A `MIGRATION` {@link DatabaseError} when a shared column's `type` or
+ * `nullable` differs between `deployed` and `declared`
  *
  * @example
  * ```ts
@@ -631,8 +649,25 @@ export function planMigration(
 			}
 		}
 		for (const column of table.columns) {
-			if (!beforeColumns.has(column.name)) {
+			const previous = beforeColumns.get(column.name)
+			if (previous === undefined) {
 				steps.push({ operation: 'column.add', table: table.name, column })
+				continue
+			}
+			if (previous.type !== column.type || previous.nullable !== column.nullable) {
+				throw new DatabaseError(
+					'MIGRATION',
+					`planMigration: column '${column.name}' on table '${table.name}' changed shape ` +
+						`(type ${previous.type}→${column.type}, nullable ${previous.nullable}→${column.nullable}) — ` +
+						`in-place type/nullability changes are not auto-migrated; add a new column, copy/convert ` +
+						`the data, then remove the old column`,
+					{
+						table: table.name,
+						column: column.name,
+						from: { type: previous.type, nullable: previous.nullable },
+						to: { type: column.type, nullable: column.nullable },
+					},
+				)
 			}
 		}
 
@@ -711,12 +746,14 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * default `id`, `posts` keyed by a non-id `slug`) and, calling `factory()`
  * fresh for each phase so failures stay isolated, verifies: `open`/`close`;
  * `read` of a missing key returns `undefined`; `write`/`read` round-trip with
- * copy-in/copy-out isolation (mutating the caller's row after `write`, or the
- * row `read` returns, never perturbs stored state) and upsert-overwrite;
- * `delete` returns `true` then `false`; `keys`/`scan` yield in ascending key
- * order; `clear` empties only its target table; `snapshot`'s rollback thunk
- * restores pre-snapshot state; a scoped `snapshot(['users'])` rolls back only
- * the named table, leaving a concurrent mutation to another table intact; a
+ * DEEP copy-in/copy-out isolation (mutating the caller's row — including a
+ * NESTED field — after `write`, or a row `read` returns, never perturbs
+ * stored state) and upsert-overwrite; `delete` returns `true` then `false`;
+ * `keys`/`scan` yield in ascending key order; `clear` empties only its target
+ * table; `snapshot`'s rollback thunk restores pre-snapshot state, including a
+ * NESTED field mutated in place on a read-back row between capture and
+ * restore; a scoped `snapshot(['users'])` rolls back only the named table,
+ * leaving a concurrent mutation to another table intact; a
  * non-`id` primary key (`posts.slug`) round-trips; a nested-object row
  * round-trips structurally (via {@link deepEqual}). The optional surface is
  * presence-gated: when `migrate` exists, a `column.remove` plan strips the
@@ -752,7 +789,7 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  */
 export async function* driverFindings(
 	factory: () => DriverInterface,
-): AsyncGenerator<ConformanceFinding> {
+): AsyncIterable<ConformanceFinding> {
 	// Fixed two-table schema every phase opens: `users` keyed by `id` (the
 	// default primary), `posts` keyed by a non-id `slug` — exercising both
 	// primary-key shapes in one battery.
@@ -828,32 +865,40 @@ export async function* driverFindings(
 			},
 		},
 
-		// c. write/read round-trip, copy-in/copy-out isolation, upsert-overwrite.
+		// c. write/read round-trip, copy-in/copy-out isolation (including NESTED
+		// fields, not just top-level ones), upsert-overwrite.
 		{
 			check: 'write-read',
 			run: async () => {
 				const driver = factory()
 				await driver.open(CONFORMANCE_SCHEMA)
-				const input: Row = { id: 'u1', name: 'Ada', age: 30 }
+				const input: Row = { id: 'u1', name: 'Ada', age: 30, meta: { tags: ['a'] } }
 				await driver.write('users', 'u1', input)
 				input.name = 'Mutated after write'
+				// Mutate a NESTED field of the input after write — a shallow copy-in
+				// would still share the nested object by reference.
+				if (isRecord(input.meta) && Array.isArray(input.meta.tags)) input.meta.tags.push('mutated')
 				const stored = await driver.read('users', 'u1')
-				const original = { id: 'u1', name: 'Ada', age: 30 }
+				const original = { id: 'u1', name: 'Ada', age: 30, meta: { tags: ['a'] } }
 				if (stored === undefined || !deepEqual(stored, original)) {
 					await driver.close()
 					return findingOf(
 						'copy-in',
-						'write must copy the input row rather than store it by reference',
+						'write must deep-copy the input row (including nested fields) rather than store it by reference',
 						{ table: 'users', expected: original, actual: stored },
 					)
 				}
 				stored.name = 'Mutated after read'
+				// Mutate a NESTED field of the read result — a shallow copy-out would
+				// still share the nested object with stored state.
+				if (isRecord(stored.meta) && Array.isArray(stored.meta.tags))
+					stored.meta.tags.push('mutated')
 				const reread = await driver.read('users', 'u1')
 				if (reread === undefined || !deepEqual(reread, original)) {
 					await driver.close()
 					return findingOf(
 						'copy-out',
-						'read must copy the stored row rather than return it by reference',
+						'read must deep-copy the stored row (including nested fields) rather than return it by reference',
 						{ table: 'users', expected: original, actual: reread },
 					)
 				}
@@ -995,6 +1040,42 @@ export async function* driverFindings(
 					return findingOf(
 						'snapshot-rollback-value',
 						'snapshot rollback must restore pre-snapshot row values',
+						{ table: 'users', expected: original, actual: restored },
+					)
+				}
+				return undefined
+			},
+		},
+
+		// g2. snapshot rollback survives a NESTED field mutated in place, on a
+		// row already read back, BETWEEN capture and restore — a snapshot that
+		// only clones top-level fields (or shares nested references) would
+		// restore a mutated nested value instead of the pre-snapshot one.
+		{
+			check: 'snapshot-nested',
+			run: async () => {
+				const driver = factory()
+				await driver.open(CONFORMANCE_SCHEMA)
+				const original = { id: 'u3', name: 'Nested', age: 20, meta: { tags: ['a'] } }
+				await driver.write('users', 'u3', original)
+				const rollback = await driver.snapshot()
+				const before = await driver.read('users', 'u3')
+				if (isRecord(before) && isRecord(before.meta) && Array.isArray(before.meta.tags)) {
+					before.meta.tags.push('mutated-before-restore')
+				}
+				await driver.write('users', 'u3', {
+					id: 'u3',
+					name: 'Nested',
+					age: 20,
+					meta: { tags: ['a', 'mutated-after-write'] },
+				})
+				await rollback()
+				const restored = await driver.read('users', 'u3')
+				await driver.close()
+				if (restored === undefined || !deepEqual(restored, original)) {
+					return findingOf(
+						'snapshot-nested',
+						'snapshot rollback must restore pre-snapshot nested field values, unaffected by a later in-place mutation of a read-back row',
 						{ table: 'users', expected: original, actual: restored },
 					)
 				}

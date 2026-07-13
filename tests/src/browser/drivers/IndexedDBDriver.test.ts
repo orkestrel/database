@@ -1,6 +1,6 @@
-import type { DriverInterface } from '@src/core'
+import type { DriverInterface, TableSchema } from '@src/core'
 import { applyCriteria, createDatabase, isDatabaseError } from '@src/core'
-import { createIndexedDBDriver } from '@src/browser'
+import { createIndexedDBDriver, deriveIndexName } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -106,14 +106,18 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		await driverWithIndex.write('people', 'p2', { id: 'p2', age: 41, city: 'LA' })
 
 		// Open the SAME database through the wrapper directly, declaring the same
-		// indexes so `store.index(...)` is reachable.
+		// indexes so `store.index(...)` is reachable. The compound `['city', 'age']`
+		// index is named via `deriveIndexName` — a length-prefixed encoding, NOT the
+		// naive `'city_age'` join, so it can never collide with a single-column
+		// index over a column literally named `city_age` (AGENTS/Unit 6).
+		const compoundName = deriveIndexName(['city', 'age'])
 		const wrapper = createIndexedDBDatabase({
 			name: indexed,
 			stores: {
 				people: {
 					indexes: [
 						{ name: 'age', path: 'age' },
-						{ name: 'city_age', path: ['city', 'age'] },
+						{ name: compoundName, path: ['city', 'age'] },
 					],
 				},
 			},
@@ -122,7 +126,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 
 		// NON-TAUTOLOGICAL existence proof: read the LIVE IDBObjectStore.indexNames.
 		const live = wrapper.database.transaction(['people'], 'readonly').objectStore('people')
-		expect([...live.indexNames].sort()).toEqual(['age', 'city_age'])
+		expect([...live.indexNames].sort()).toEqual(['age', compoundName].sort())
 
 		// And a real indexed READ exercises the live IDBIndex.
 		expect((await wrapper.store('people').index('age').get(41))?.id).toBe('p2')
@@ -445,5 +449,305 @@ describe('IndexedDBDriver — migrate / meta / stamp', () => {
 		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
 		await driver.write('users', 'u2', { id: 'u2' })
 		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2' })
+	})
+})
+
+describe('IndexedDBDriver — the audit reproduction (below/to over a nullable indexed column)', () => {
+	// The exact reproduction: a nullable `age` with its own secondary index, and a
+	// row ('b') where `age` is entirely ABSENT. The engine's total order ranks
+	// absent/null BELOW every number, so `below`/`to` must include 'b' — but a
+	// naive index-range read would silently drop it (no index entry exists for an
+	// absent field). `records` / `count` / `stream` must all agree with a plain
+	// engine-over-scan.
+	const SCHEMA: TableSchema = {
+		name: 'people',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'age', type: 'integer', nullable: true },
+		],
+		indexes: [['age']],
+	}
+	const ROWS = [{ id: 'a', age: 10 }, { id: 'b' }] as const
+
+	let dbName = ''
+	let repro: DriverInterface = createIndexedDBDriver('unused')
+
+	beforeEach(async () => {
+		dbName = uniqueName('taverna-idb-repro')
+		await deleteDatabase(dbName)
+		repro = createIndexedDBDriver(dbName)
+		await repro.open([SCHEMA])
+		for (const row of ROWS) await repro.write('people', row.id, { ...row })
+	})
+
+	afterEach(async () => {
+		await repro.close()
+		await deleteDatabase(dbName)
+	})
+
+	it("records: to(100) includes row 'b' (its absent age ranks below 100 under the engine's order)", async () => {
+		const rows = await repro.records?.('people', {
+			conditions: [buildCondition('age', 'to', [100])],
+		})
+		expect(rows?.map((row) => row.id).sort()).toEqual(['a', 'b'])
+	})
+
+	it("records: below(100) includes row 'b'", async () => {
+		const rows = await repro.records?.('people', {
+			conditions: [buildCondition('age', 'below', [100])],
+		})
+		expect(rows?.map((row) => row.id).sort()).toEqual(['a', 'b'])
+	})
+
+	it("count: to(100) / below(100) both count row 'b'", async () => {
+		expect(
+			await repro.count?.('people', { conditions: [buildCondition('age', 'to', [100])] }),
+		).toBe(2)
+		expect(
+			await repro.count?.('people', { conditions: [buildCondition('age', 'below', [100])] }),
+		).toBe(2)
+	})
+
+	it("stream: to(100) / below(100) both yield row 'b'", async () => {
+		const toRows =
+			repro.stream === undefined
+				? []
+				: await collectRows(
+						repro.stream('people', { conditions: [buildCondition('age', 'to', [100])] }),
+					)
+		const belowRows =
+			repro.stream === undefined
+				? []
+				: await collectRows(
+						repro.stream('people', { conditions: [buildCondition('age', 'below', [100])] }),
+					)
+		expect(toRows.map((row) => row.id).sort()).toEqual(['a', 'b'])
+		expect(belowRows.map((row) => row.id).sort()).toEqual(['a', 'b'])
+	})
+
+	it('matches a plain engine-over-scan for both operators (superset contract holds)', async () => {
+		const scanned = await collectRows(repro.scan('people'))
+		const expectedTo = applyCriteria(scanned, { conditions: [buildCondition('age', 'to', [100])] })
+		const expectedBelow = applyCriteria(scanned, {
+			conditions: [buildCondition('age', 'below', [100])],
+		})
+		const to = await repro.records?.('people', { conditions: [buildCondition('age', 'to', [100])] })
+		const below = await repro.records?.('people', {
+			conditions: [buildCondition('age', 'below', [100])],
+		})
+		expect(to?.map((row) => row.id).sort()).toEqual(expectedTo.map((row) => row.id).sort())
+		expect(below?.map((row) => row.id).sort()).toEqual(expectedBelow.map((row) => row.id).sort())
+	})
+})
+
+describe('IndexedDBDriver — reversed between bounds', () => {
+	const SCHEMA: TableSchema = {
+		name: 'people',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'age', type: 'integer', nullable: false },
+		],
+		indexes: [['age']],
+	}
+
+	let dbName = ''
+	let reversed: DriverInterface = createIndexedDBDriver('unused')
+
+	beforeEach(async () => {
+		dbName = uniqueName('taverna-idb-reversed')
+		await deleteDatabase(dbName)
+		reversed = createIndexedDBDriver(dbName)
+		await reversed.open([SCHEMA])
+		await reversed.write('people', 'a', { id: 'a', age: 10 })
+		await reversed.write('people', 'b', { id: 'b', age: 20 })
+	})
+
+	afterEach(async () => {
+		await reversed.close()
+		await deleteDatabase(dbName)
+	})
+
+	it('a reversed same-type between (id) returns empty and never throws', async () => {
+		await expect(
+			reversed.records?.('people', { conditions: [buildCondition('id', 'between', ['z', 'a'])] }),
+		).resolves.toEqual([])
+		await expect(
+			reversed.count?.('people', { conditions: [buildCondition('id', 'between', ['z', 'a'])] }),
+		).resolves.toBe(0)
+	})
+
+	it('a reversed mixed-value between (age, numeric) returns empty and never throws', async () => {
+		await expect(
+			reversed.records?.('people', { conditions: [buildCondition('age', 'between', [100, 1])] }),
+		).resolves.toEqual([])
+		await expect(
+			reversed.count?.('people', { conditions: [buildCondition('age', 'between', [100, 1])] }),
+		).resolves.toBe(0)
+	})
+
+	it('stream over a reversed between yields nothing and never throws', async () => {
+		const rows =
+			reversed.stream === undefined
+				? []
+				: await collectRows(
+						reversed.stream('people', {
+							conditions: [buildCondition('age', 'between', [100, 1])],
+						}),
+					)
+		expect(rows).toEqual([])
+	})
+})
+
+describe('IndexedDBDriver — snapshot point-in-time consistency', () => {
+	it('snapshot([]) is a no-op capture/restore (no stores named)', async () => {
+		const rollback = await driver.snapshot([])
+		await driver.write('users', 'a', { id: 'a' })
+		await rollback()
+		// Nothing was captured, so nothing is restored — the write survives.
+		expect(await driver.read('users', 'a')).toEqual({ id: 'a' })
+	})
+
+	it('a whole-store snapshot still round-trips exactly (capture now runs in ONE read transaction)', async () => {
+		await driver.write('users', 'a', { id: 'a', n: 1 })
+		await driver.write('users', 'b', { id: 'b', n: 2 })
+		const rollback = await driver.snapshot()
+		await driver.write('users', 'a', { id: 'a', n: 99 })
+		await driver.delete('users', 'b')
+		await driver.write('users', 'c', { id: 'c', n: 3 })
+		await rollback()
+		expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+		expect(await driver.read('users', 'b')).toEqual({ id: 'b', n: 2 })
+		expect(await driver.read('users', 'c')).toBeUndefined()
+	})
+})
+
+describe('IndexedDBDriver — error taxonomy mapping (integration)', () => {
+	it('a mid-upgrade UPGRADE fault surfaces as a MIGRATION DatabaseError (not a raw IndexedDBError)', async () => {
+		await driver.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+		})
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		let caught: unknown
+		try {
+			await driver.migrate?.({
+				from: 1,
+				to: 2,
+				// The SAME index again — a real native duplicate-index ConstraintError
+				// mid-upgrade, surfacing as IndexedDBError('UPGRADE', …).
+				steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+			})
+		} catch (error) {
+			caught = error
+		}
+		expect(isDatabaseError(caught)).toBe(true)
+		expect(isDatabaseError(caught) && caught.code).toBe('MIGRATION')
+	})
+
+	it('an operation after close() throws the driver-own CLOSED DatabaseError (never a raw backend error)', async () => {
+		await driver.close()
+		let caught: unknown
+		try {
+			await driver.read('users', 'u1')
+		} catch (error) {
+			caught = error
+		}
+		expect(isDatabaseError(caught)).toBe(true)
+		expect(isDatabaseError(caught) && caught.code).toBe('CLOSED')
+		// Reconnect so the shared `afterEach` can close/delete cleanly.
+		driver = createIndexedDBDriver(name)
+		await driver.open(tableSchemas('users'))
+	})
+})
+
+describe('IndexedDBDriver — reserved __meta__ table name guard', () => {
+	it('open() throws a VALIDATION DatabaseError when a declared table is named __meta__', async () => {
+		const guarded = createIndexedDBDriver(uniqueName('taverna-idb-meta-guard'))
+		let caught: unknown
+		try {
+			await guarded.open([{ name: '__meta__', primary: 'id', columns: [], indexes: [] }])
+		} catch (error) {
+			caught = error
+		}
+		expect(isDatabaseError(caught)).toBe(true)
+		expect(isDatabaseError(caught) && caught.code).toBe('VALIDATION')
+	})
+})
+
+describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compound index)', () => {
+	const SCHEMA: TableSchema = {
+		name: 'items',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'a', type: 'text', nullable: false },
+			{ name: 'b', type: 'text', nullable: false },
+			{ name: 'a_b', type: 'text', nullable: false },
+		],
+		indexes: [['a_b'], ['a', 'b']],
+	}
+
+	let dbName = ''
+	let collision: DriverInterface = createIndexedDBDriver('unused')
+
+	beforeEach(async () => {
+		dbName = uniqueName('taverna-idb-collision')
+		await deleteDatabase(dbName)
+		collision = createIndexedDBDriver(dbName)
+	})
+
+	afterEach(async () => {
+		await collision.close()
+		await deleteDatabase(dbName)
+	})
+
+	it('opens fine with both a single-column "a_b" index and a compound ["a","b"] index', async () => {
+		await expect(collision.open([SCHEMA])).resolves.toBeUndefined()
+	})
+
+	it('a pushdown on "a_b" uses the single-column index, not the compound one', async () => {
+		await collision.open([SCHEMA])
+		await collision.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'match' })
+		await collision.write('items', 'i2', { id: 'i2', a: 'match', b: 'other', a_b: 'other' })
+		const rows = await collision.records?.('items', {
+			conditions: [buildCondition('a_b', 'equals', ['match'])],
+		})
+		expect(rows?.map((row) => row.id)).toEqual(['i1'])
+	})
+
+	it('migrate can add and remove each index independently', async () => {
+		await collision.open([{ ...SCHEMA, indexes: [] }])
+		await collision.migrate?.({
+			from: 0,
+			to: 1,
+			steps: [{ operation: 'index.add', table: 'items', index: ['a_b'] }],
+		})
+		await collision.migrate?.({
+			from: 1,
+			to: 2,
+			steps: [{ operation: 'index.add', table: 'items', index: ['a', 'b'] }],
+		})
+		await collision.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'z' })
+		const bySingle = await collision.records?.('items', {
+			conditions: [buildCondition('a_b', 'equals', ['z'])],
+		})
+		expect(bySingle?.map((row) => row.id)).toEqual(['i1'])
+		await collision.migrate?.({
+			from: 2,
+			to: 3,
+			steps: [
+				{ operation: 'index.remove', table: 'items', index: ['a_b'] },
+				{ operation: 'index.remove', table: 'items', index: ['a', 'b'] },
+			],
+		})
+		// Both indexes gone — the column is no longer pushable, but the table
+		// still reads correctly via a full scan.
+		const afterRemove = await collision.records?.('items', {
+			conditions: [buildCondition('a_b', 'equals', ['z'])],
+		})
+		expect(afterRemove?.map((row) => row.id)).toEqual(['i1'])
 	})
 })

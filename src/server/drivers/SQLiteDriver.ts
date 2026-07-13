@@ -11,14 +11,25 @@ import type {
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
-import { DatabaseError, isDriverMeta } from '@src/core'
-import { createSQLiteDatabase } from '@orkestrel/sqlite'
+import type { SQLiteDriverOptions } from '../types.js'
+import {
+	applyCriteria,
+	computeAggregate,
+	DatabaseError,
+	filterRows,
+	isDriverMeta,
+	matchesCriteria,
+} from '@src/core'
+import { isString } from '@orkestrel/contract'
+import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
 import { compileCriteria } from '../compilers.js'
 import {
 	aggregateSQL,
 	decodeRow,
 	encodeRow,
 	encodeValue,
+	isExactCondition,
+	isExactCriteria,
 	quote,
 	schemaToIndexes,
 	schemaToTable,
@@ -69,31 +80,50 @@ import { META_TABLE } from '../constants.js'
  */
 export class SQLiteDriver implements DriverInterface {
 	readonly #path: string
+	readonly #options: SQLiteDriverOptions
 	#database: SQLiteDatabaseInterface | undefined
 	#schema = new Map<string, TableSchema>()
 	#transacting = false
 
-	constructor(path: string) {
+	constructor(path: string, options?: SQLiteDriverOptions) {
 		this.#path = path
+		this.#options = options ?? {}
 	}
 
 	async open(schema: readonly TableSchema[]): Promise<void> {
-		this.#database?.close()
-		const database = createSQLiteDatabase({ path: this.#path })
-		database.connect()
-		const map = new Map<string, TableSchema>()
-		for (const table of schema) {
-			map.set(table.name, table)
-			database.exec(schemaToTable(table))
-			for (const sql of schemaToIndexes(table)) database.exec(sql)
+		if (schema.some((table) => table.name === META_TABLE)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`A declared table cannot be named '${META_TABLE}' — it is reserved for driver metadata`,
+				{ table: META_TABLE },
+			)
 		}
-		database.exec(
-			'CREATE TABLE IF NOT EXISTS ' +
-				quote(META_TABLE) +
-				' ("id" INTEGER, "version" INTEGER, "schema" TEXT, PRIMARY KEY ("id"))',
-		)
-		this.#schema = map
-		this.#database = database
+		this.#guard(() => {
+			this.#database?.close()
+			const database = createSQLiteDatabase({
+				path: this.#path,
+				readonly: this.#options.readonly,
+				timeout: this.#options.timeout,
+				foreignKeys: this.#options.foreignKeys,
+			})
+			database.connect()
+			for (const [name, value] of Object.entries(this.#options.pragmas ?? {})) {
+				database.pragma(name, value)
+			}
+			const map = new Map<string, TableSchema>()
+			for (const table of schema) {
+				map.set(table.name, table)
+				database.exec(schemaToTable(table))
+				for (const sql of schemaToIndexes(table)) database.exec(sql)
+			}
+			database.exec(
+				'CREATE TABLE IF NOT EXISTS ' +
+					quote(META_TABLE) +
+					' ("id" INTEGER, "version" INTEGER, "schema" TEXT, PRIMARY KEY ("id"))',
+			)
+			this.#schema = map
+			this.#database = database
+		})
 	}
 
 	async close(): Promise<void> {
@@ -103,89 +133,128 @@ export class SQLiteDriver implements DriverInterface {
 
 	async read(table: string, key: Key): Promise<Row | undefined> {
 		const schema = this.#table(table)
-		const row = this.#require()
-			.prepare('SELECT * FROM ' + quote(table) + ' WHERE ' + quote(schema.primary) + ' = ?')
-			.get([this.#key(key, schema)])
-		return row === undefined ? undefined : decodeRow(row, schema)
+		return this.#guard(() => {
+			const row = this.#require()
+				.prepare('SELECT * FROM ' + quote(table) + ' WHERE ' + quote(schema.primary) + ' = ?')
+				.get([this.#key(key, schema)])
+			return row === undefined ? undefined : decodeRow(row, schema)
+		})
 	}
 
 	async write(table: string, key: Key, row: Row): Promise<void> {
 		const schema = this.#table(table)
-		const encoded = encodeRow({ ...row, [schema.primary]: key }, schema)
-		const names = schema.columns.map((column) => column.name)
-		const values = names.map((name) => encoded[name])
-		this.#require()
-			.prepare(
-				'INSERT OR REPLACE INTO ' +
-					quote(table) +
-					' (' +
-					names.map(quote).join(', ') +
-					') VALUES (' +
-					names.map(() => '?').join(', ') +
-					')',
-			)
-			.run(values)
+		this.#guard(() => {
+			const encoded = encodeRow({ ...row, [schema.primary]: key }, schema)
+			const names = schema.columns.map((column) => column.name)
+			const values = names.map((name) => encoded[name])
+			this.#require()
+				.prepare(
+					'INSERT OR REPLACE INTO ' +
+						quote(table) +
+						' (' +
+						names.map(quote).join(', ') +
+						') VALUES (' +
+						names.map(() => '?').join(', ') +
+						')',
+				)
+				.run(values)
+		})
 	}
 
 	async delete(table: string, key: Key): Promise<boolean> {
 		const schema = this.#table(table)
-		const result = this.#require()
-			.prepare('DELETE FROM ' + quote(table) + ' WHERE ' + quote(schema.primary) + ' = ?')
-			.run([this.#key(key, schema)])
-		return result.changes > 0
+		return this.#guard(() => {
+			const result = this.#require()
+				.prepare('DELETE FROM ' + quote(table) + ' WHERE ' + quote(schema.primary) + ' = ?')
+				.run([this.#key(key, schema)])
+			return result.changes > 0
+		})
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
 		const schema = this.#table(table)
-		const primary = quote(schema.primary)
-		// ORDER BY the primary key: the contract lists keys in key order, and SQLite
-		// returns rows in rowid (insertion) order without it.
-		const rows = this.#require()
-			.prepare('SELECT ' + primary + ' FROM ' + quote(table) + ' ORDER BY ' + primary)
-			.all()
-		const keys: Key[] = []
-		for (const row of rows) {
-			const value = row[schema.primary]
-			if (typeof value === 'string' || typeof value === 'number') keys.push(value)
-		}
-		return keys
+		return this.#guard(() => {
+			const primary = quote(schema.primary)
+			// ORDER BY the primary key: the contract lists keys in key order, and
+			// SQLite returns rows in rowid (insertion) order without it.
+			const rows = this.#require()
+				.prepare('SELECT ' + primary + ' FROM ' + quote(table) + ' ORDER BY ' + primary)
+				.all()
+			const keys: Key[] = []
+			for (const row of rows) {
+				const value = row[schema.primary]
+				if (typeof value === 'string' || typeof value === 'number') keys.push(value)
+			}
+			return keys
+		})
 	}
 
 	async *scan(table: string): AsyncIterable<Row> {
 		const schema = this.#table(table)
 		// ORDER BY the primary key so the scan yields rows in key order (the engine
-		// and cursors depend on it), not SQLite's default rowid order.
-		for (const row of this.#require()
-			.prepare('SELECT * FROM ' + quote(table) + ' ORDER BY ' + quote(schema.primary))
-			.iterate()) {
+		// and cursors depend on it), not SQLite's default rowid order. The iterator
+		// setup runs through #guard; per-row decode faults are not expected in
+		// practice and propagate as-is.
+		for (const row of this.#guard(() =>
+			this.#require()
+				.prepare('SELECT * FROM ' + quote(table) + ' ORDER BY ' + quote(schema.primary))
+				.iterate(),
+		)) {
 			yield decodeRow(row, schema)
 		}
 	}
 
 	async clear(table: string): Promise<void> {
 		this.#table(table)
-		this.#require()
-			.prepare('DELETE FROM ' + quote(table))
-			.run()
+		this.#guard(() => {
+			this.#require()
+				.prepare('DELETE FROM ' + quote(table))
+				.run()
+		})
 	}
 
+	// Doctrine (AGENTS §5, the audit's keystone fix): a Criteria whose compiled
+	// SQL is PROVABLY identical to the core engine's semantics (see
+	// `isExactCondition` / `isExactOrder` / `isExactCriteria`) runs the fast
+	// native path; otherwise this driver fetches a full scan and refines it
+	// through the SAME core engine every scan-only driver (`MemoryDriver`,
+	// `JSONDriver`) already uses — exact → native, otherwise → refine, never a
+	// silent semantics drift between backends. A native `WHERE` that is a
+	// PROVABLE SUPERSET of the engine's match set (compile natively, then
+	// engine-refine only the returned rows) is a possible future optimization,
+	// not implemented here.
 	async records(table: string, criteria: Criteria): Promise<readonly Row[]> {
 		const schema = this.#table(table)
-		const { sql, params } = compileCriteria(criteria, schema)
-		const rows = this.#require()
-			.prepare('SELECT * FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
-			.all(params)
-		return rows.map((row) => decodeRow(row, schema))
+		if (isExactCriteria(criteria, schema)) {
+			return this.#guard(() => {
+				const { sql, params } = compileCriteria(criteria, schema)
+				const rows = this.#require()
+					.prepare('SELECT * FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
+					.all(params)
+				return rows.map((row) => decodeRow(row, schema))
+			})
+		}
+		const rows: Row[] = []
+		for await (const row of this.scan(table)) rows.push(row)
+		return applyCriteria(rows, criteria)
 	}
 
 	async count(table: string, criteria: Criteria): Promise<number> {
 		const schema = this.#table(table)
-		const { sql, params } = compileCriteria(criteria, schema)
-		const row = this.#require()
-			.prepare('SELECT COUNT(*) AS count FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
-			.get(params)
-		const value = row?.count
-		return typeof value === 'number' || typeof value === 'bigint' ? Number(value) : 0
+		const conditions = criteria.conditions ?? []
+		if (conditions.every((condition) => isExactCondition(condition, schema))) {
+			return this.#guard(() => {
+				const { sql, params } = compileCriteria(criteria, schema)
+				const row = this.#require()
+					.prepare('SELECT COUNT(*) AS count FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
+					.get(params)
+				const value = row?.count
+				return typeof value === 'number' || typeof value === 'bigint' ? Number(value) : 0
+			})
+		}
+		const rows: Row[] = []
+		for await (const row of this.scan(table)) rows.push(row)
+		return filterRows(rows, conditions).length
 	}
 
 	async aggregate(
@@ -195,28 +264,75 @@ export class SQLiteDriver implements DriverInterface {
 		criteria: Criteria,
 	): Promise<number | undefined> {
 		const schema = this.#table(table)
-		const { sql, params } = compileCriteria(criteria, schema)
-		const value = this.#require()
-			.prepare(
-				'SELECT ' +
-					aggregateSQL(operation, column) +
-					' AS value FROM ' +
-					quote(table) +
-					(sql === '' ? '' : ' ' + sql),
-			)
-			.get(params)?.value
-		// Over zero matched rows SUM/AVG/MIN/MAX are SQL NULL → undefined (the engine
-		// agrees); COUNT(*) is 0. A clean numeric column coerces as the engine does.
-		return value === null || value === undefined ? undefined : Number(value)
+		const conditions = criteria.conditions ?? []
+		const conditionsExact = conditions.every((condition) => isExactCondition(condition, schema))
+		// `count` ignores `column` entirely (COUNT(*) over rows), so only the
+		// conditions need to be exact; every other aggregate coerces the column
+		// numerically (parseNumber) — only a flat, declared integer/real column
+		// is provably exact (a text/json/blob column may hold non-numeric cells
+		// the engine skips via parseNumber, which SQL's numeric aggregates do not).
+		const columnExact =
+			operation === 'count' ||
+			(isString(column) &&
+				schema.columns.some(
+					(candidate) =>
+						candidate.name === column &&
+						(candidate.type === 'integer' || candidate.type === 'real'),
+				))
+		if (conditionsExact && columnExact) {
+			return this.#guard(() => {
+				const { sql, params } = compileCriteria(criteria, schema)
+				const value = this.#require()
+					.prepare(
+						'SELECT ' +
+							aggregateSQL(operation, column) +
+							' AS value FROM ' +
+							quote(table) +
+							(sql === '' ? '' : ' ' + sql),
+					)
+					.get(params)?.value
+				// Over zero matched rows SUM/AVG/MIN/MAX are SQL NULL → undefined (the
+				// engine agrees); COUNT(*) is 0. A clean numeric column coerces as the
+				// engine does.
+				return value === null || value === undefined ? undefined : Number(value)
+			})
+		}
+		const rows: Row[] = []
+		for await (const row of this.scan(table)) rows.push(row)
+		return computeAggregate(filterRows(rows, conditions), operation, column)
 	}
 
+	// `order` is intentionally IGNORED (per DriverInterface.stream — streaming
+	// yields unsorted), so the native gate checks only `conditions`; `offset` /
+	// `limit` are always engine-identical under either path.
 	async *stream(table: string, criteria: Criteria): AsyncIterable<Row> {
 		const schema = this.#table(table)
-		const { sql, params } = compileCriteria(criteria, schema)
-		for (const row of this.#require()
-			.prepare('SELECT * FROM ' + quote(table) + (sql === '' ? '' : ' ' + sql))
-			.iterate(params)) {
-			yield decodeRow(row, schema)
+		const conditions = criteria.conditions ?? []
+		if (conditions.every((condition) => isExactCondition(condition, schema))) {
+			const compiled = compileCriteria(
+				{ conditions, limit: criteria.limit, offset: criteria.offset },
+				schema,
+			)
+			for (const row of this.#require()
+				.prepare('SELECT * FROM ' + quote(table) + (compiled.sql === '' ? '' : ' ' + compiled.sql))
+				.iterate(compiled.params)) {
+				yield decodeRow(row, schema)
+			}
+			return
+		}
+		const offset = criteria.offset ?? 0
+		const limit = criteria.limit
+		let skipped = 0
+		let yielded = 0
+		for await (const row of this.scan(table)) {
+			if (limit !== undefined && yielded >= limit) return
+			if (conditions.length > 0 && !matchesCriteria(row, conditions)) continue
+			if (skipped < offset) {
+				skipped += 1
+				continue
+			}
+			yield row
+			yielded += 1
 		}
 	}
 
@@ -231,7 +347,7 @@ export class SQLiteDriver implements DriverInterface {
 	 */
 	async transaction(): Promise<TransactionInterface> {
 		const database = this.#require()
-		database.exec('BEGIN')
+		this.#guard(() => database.exec('BEGIN'))
 		let settled = false
 		this.#transacting = true
 		return {
@@ -241,7 +357,7 @@ export class SQLiteDriver implements DriverInterface {
 				}
 				settled = true
 				this.#transacting = false
-				database.exec('COMMIT')
+				this.#guard(() => database.exec('COMMIT'))
 			},
 			rollback: async () => {
 				if (settled) {
@@ -249,7 +365,7 @@ export class SQLiteDriver implements DriverInterface {
 				}
 				settled = true
 				this.#transacting = false
-				database.exec('ROLLBACK')
+				this.#guard(() => database.exec('ROLLBACK'))
 			},
 		}
 	}
@@ -280,11 +396,13 @@ export class SQLiteDriver implements DriverInterface {
 	async migrate(plan: Migration): Promise<void> {
 		const database = this.#require()
 		const schema = new Map(this.#schema)
-		if (this.#transacting) {
-			this.#applyPlan(database, plan, schema)
-		} else {
-			database.transaction(() => this.#applyPlan(database, plan, schema))
-		}
+		this.#guard(() => {
+			if (this.#transacting) {
+				this.#applyPlan(database, plan, schema)
+			} else {
+				database.transaction(() => this.#applyPlan(database, plan, schema))
+			}
+		})
 		this.#schema = schema
 	}
 
@@ -322,13 +440,15 @@ export class SQLiteDriver implements DriverInterface {
 	 * @param meta - The {@link DriverMeta} to persist
 	 */
 	async stamp(meta: DriverMeta): Promise<void> {
-		this.#require()
-			.prepare(
-				'INSERT OR REPLACE INTO ' +
-					quote(META_TABLE) +
-					' ("id", "version", "schema") VALUES (1, ?, ?)',
-			)
-			.run([meta.version, JSON.stringify(meta.schema)])
+		this.#guard(() => {
+			this.#require()
+				.prepare(
+					'INSERT OR REPLACE INTO ' +
+						quote(META_TABLE) +
+						' ("id", "version", "schema") VALUES (1, ?, ?)',
+				)
+				.run([meta.version, JSON.stringify(meta.schema)])
+		})
 	}
 
 	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
@@ -374,6 +494,44 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	// === Private
+
+	// Run a synchronous backend interaction, mapping any `SQLiteError` (or
+	// unexpected non-`SQLiteError` throw) to a typed `DatabaseError` so a
+	// backend fault never leaks through `DriverInterface` unwrapped: a
+	// `CONSTRAINT` violation becomes `CONFLICT`; the wrapper's own `CLOSED`
+	// passes through as `CLOSED`; a `BUSY` (a locked database that outlasted
+	// the configured `timeout`) becomes a `DRIVER` error whose context marks it
+	// `retryable`; `UNKNOWN` and any non-`SQLiteError` throw become `DRIVER`.
+	// A `DatabaseError` already thrown by this driver itself (the `#require`
+	// `CLOSED` gate, `#table`'s `NOT_FOUND`, a `MIGRATION` step fault) passes
+	// through unchanged — it is never re-wrapped. The original error is kept
+	// as `context.cause` for diagnostics.
+	#guard<T>(run: () => T): T {
+		try {
+			return run()
+		} catch (error) {
+			if (error instanceof DatabaseError) throw error
+			if (isSQLiteError(error)) {
+				if (error.code === 'CONSTRAINT') {
+					throw new DatabaseError('CONFLICT', error.message, { cause: error, code: error.code })
+				}
+				if (error.code === 'CLOSED') {
+					throw new DatabaseError('CLOSED', error.message, { cause: error, code: error.code })
+				}
+				if (error.code === 'BUSY') {
+					throw new DatabaseError('DRIVER', error.message, {
+						cause: error,
+						code: error.code,
+						retryable: true,
+					})
+				}
+				throw new DatabaseError('DRIVER', error.message, { cause: error, code: error.code })
+			}
+			throw new DatabaseError('DRIVER', error instanceof Error ? error.message : String(error), {
+				cause: error,
+			})
+		}
+	}
 
 	#require(): SQLiteDatabaseInterface {
 		if (this.#database === undefined) {

@@ -1,5 +1,13 @@
 import type { TableSchema } from '@src/core'
-import { conditionRange, isKey, selectPlan } from '@src/browser'
+import { IndexedDBError } from '@orkestrel/indexeddb'
+import {
+	conditionRange,
+	deriveIndexName,
+	isKey,
+	mapIndexedDBError,
+	mapMigrationError,
+	selectPlan,
+} from '@src/browser'
 import { describe, expect, it } from 'vitest'
 import { buildCondition } from '../../setup.js'
 
@@ -305,6 +313,197 @@ describe('conditionRange', () => {
 		expect(conditionRange(buildCondition('id', 'equals', [{ nested: true }]))).toBeNull()
 		// `between` needs BOTH ends to be keys.
 		expect(conditionRange(buildCondition('id', 'between', ['a', { nested: true }]))).toBeNull()
+	})
+})
+
+describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a secondary index)', () => {
+	// A schema mirroring the audit reproduction: `age` is a NULLABLE integer with
+	// its own single-column secondary index.
+	const NULLABLE_SCHEMA: TableSchema = {
+		name: 'people',
+		primary: 'id',
+		columns: [
+			{ name: 'id', type: 'text', nullable: false },
+			{ name: 'age', type: 'integer', nullable: true },
+		],
+		indexes: [['age']],
+	}
+	const NULLABLE_INDEXES: readonly string[] = ['age']
+
+	it('below on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('age', 'below', [100])] },
+			NULLABLE_SCHEMA,
+			NULLABLE_INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('to on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
+		const plan = selectPlan(
+			{ conditions: [buildCondition('age', 'to', [100])] },
+			NULLABLE_SCHEMA,
+			NULLABLE_INDEXES,
+		)
+		expect(plan).toEqual({ index: null, range: null })
+	})
+
+	it('below/to on the PRIMARY key still pushes (a primary key is never absent/null)', () => {
+		const below = selectPlan(
+			{ conditions: [buildCondition('id', 'below', ['m'])] },
+			NULLABLE_SCHEMA,
+			NULLABLE_INDEXES,
+		)
+		expect(below.index).toBeNull()
+		expect(below.range?.upper).toBe('m')
+		const to = selectPlan(
+			{ conditions: [buildCondition('id', 'to', ['m'])] },
+			NULLABLE_SCHEMA,
+			NULLABLE_INDEXES,
+		)
+		expect(to.index).toBeNull()
+		expect(to.range?.upper).toBe('m')
+	})
+
+	it('equals/above/from/between on a SECONDARY-indexed column still push (a scalar lower bound excludes absent/null)', () => {
+		expect(
+			selectPlan(
+				{ conditions: [buildCondition('age', 'equals', [30])] },
+				NULLABLE_SCHEMA,
+				NULLABLE_INDEXES,
+			).index,
+		).toBe('age')
+		expect(
+			selectPlan(
+				{ conditions: [buildCondition('age', 'above', [30])] },
+				NULLABLE_SCHEMA,
+				NULLABLE_INDEXES,
+			).index,
+		).toBe('age')
+		expect(
+			selectPlan(
+				{ conditions: [buildCondition('age', 'from', [30])] },
+				NULLABLE_SCHEMA,
+				NULLABLE_INDEXES,
+			).index,
+		).toBe('age')
+		expect(
+			selectPlan(
+				{ conditions: [buildCondition('age', 'between', [10, 30])] },
+				NULLABLE_SCHEMA,
+				NULLABLE_INDEXES,
+			).index,
+		).toBe('age')
+	})
+
+	it('a below/to condition that cannot push is skipped in favor of a LATER qualifying condition', () => {
+		const plan = selectPlan(
+			{
+				conditions: [
+					buildCondition('age', 'below', [100]),
+					buildCondition('id', 'equals', ['u1'], 'and'),
+				],
+			},
+			NULLABLE_SCHEMA,
+			NULLABLE_INDEXES,
+		)
+		expect(plan.index).toBeNull()
+		expect(plan.range?.lower).toBe('u1')
+	})
+})
+
+describe('conditionRange — reversed between bounds', () => {
+	it('returns null for a reversed same-type pair (first > second)', () => {
+		expect(conditionRange(buildCondition('id', 'between', ['z', 'a']))).toBeNull()
+	})
+
+	it('returns null for a reversed mixed-type pair (a number above a string in rank still reverses numerically)', () => {
+		expect(conditionRange(buildCondition('age', 'between', [100, 1]))).toBeNull()
+	})
+
+	it('still returns a range for an equal pair (first === second, not reversed)', () => {
+		const same = conditionRange(buildCondition('id', 'between', ['m', 'm']))
+		expect(same?.lower).toBe('m')
+		expect(same?.upper).toBe('m')
+	})
+
+	it('still returns a range for a properly ordered pair', () => {
+		const ordered = conditionRange(buildCondition('id', 'between', ['a', 'z']))
+		expect(ordered?.lower).toBe('a')
+		expect(ordered?.upper).toBe('z')
+	})
+})
+
+describe('mapIndexedDBError / mapMigrationError', () => {
+	it('maps CONSTRAINT to CONFLICT, preserving the original error as cause', () => {
+		const source = new IndexedDBError('CONSTRAINT', 'duplicate key')
+		const mapped = mapIndexedDBError(source)
+		expect(mapped.code).toBe('CONFLICT')
+		expect(mapped.context?.cause).toBe(source)
+	})
+
+	it('maps CLOSED / NOT_OPEN / INVALID to CLOSED', () => {
+		expect(mapIndexedDBError(new IndexedDBError('CLOSED', 'x')).code).toBe('CLOSED')
+		expect(mapIndexedDBError(new IndexedDBError('NOT_OPEN', 'x')).code).toBe('CLOSED')
+		expect(mapIndexedDBError(new IndexedDBError('INVALID', 'x')).code).toBe('CLOSED')
+	})
+
+	it('maps QUOTA to DRIVER with context.code = QUOTA', () => {
+		const mapped = mapIndexedDBError(new IndexedDBError('QUOTA', 'full'))
+		expect(mapped.code).toBe('DRIVER')
+		expect(mapped.context?.code).toBe('QUOTA')
+	})
+
+	it('maps BLOCKED to DRIVER with context.code = BLOCKED and retryable = true', () => {
+		const mapped = mapIndexedDBError(new IndexedDBError('BLOCKED', 'held open'))
+		expect(mapped.code).toBe('DRIVER')
+		expect(mapped.context?.code).toBe('BLOCKED')
+		expect(mapped.context?.retryable).toBe(true)
+	})
+
+	it('maps every other code (including UPGRADE) to DRIVER outside migrate()', () => {
+		for (const code of [
+			'UPGRADE',
+			'ABORTED',
+			'NOT_FOUND',
+			'DATA',
+			'OPEN',
+			'INACTIVE',
+			'UNKNOWN',
+		] as const) {
+			expect(mapIndexedDBError(new IndexedDBError(code, 'x')).code).toBe('DRIVER')
+		}
+	})
+
+	it('mapMigrationError maps UPGRADE to MIGRATION, and defers every other code to mapIndexedDBError', () => {
+		const upgrade = mapMigrationError(new IndexedDBError('UPGRADE', 'bad plan'))
+		expect(upgrade.code).toBe('MIGRATION')
+		expect(mapMigrationError(new IndexedDBError('CONSTRAINT', 'x')).code).toBe('CONFLICT')
+		expect(mapMigrationError(new IndexedDBError('ABORTED', 'x')).code).toBe('DRIVER')
+	})
+})
+
+describe('deriveIndexName', () => {
+	it('keeps a single-column index bare (matches the column name exactly)', () => {
+		expect(deriveIndexName(['age'])).toBe('age')
+		expect(deriveIndexName(['a_b'])).toBe('a_b')
+	})
+
+	it('encodes a compound index without colliding with a single-column literal of the joined form', () => {
+		const compound = deriveIndexName(['a', 'b'])
+		expect(compound).not.toBe('a_b')
+		expect(compound).not.toBe(deriveIndexName(['a_b']))
+	})
+
+	it('is deterministic (same columns → same name every call)', () => {
+		expect(deriveIndexName(['city', 'age'])).toBe(deriveIndexName(['city', 'age']))
+	})
+
+	it('distinguishes column groups that share a joined-form collision', () => {
+		// ['a', 'bc'] and ['ab', 'c'] both join to 'a_bc'/'ab_c' differently, but a
+		// pathological pair like ['a', 'b_c'] and ['a_b', 'c'] both underscore-join
+		// to 'a_b_c' — the length-prefixed encoding must still tell them apart.
+		expect(deriveIndexName(['a', 'b_c'])).not.toBe(deriveIndexName(['a_b', 'c']))
 	})
 })
 

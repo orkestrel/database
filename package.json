@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/database",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "A typed database abstraction for the @orkestrel line — a single core engine over pluggable storage drivers. Part of the @orkestrel line.",
 	"keywords": [
 		"database",
@@ -25,6 +25,7 @@
 	"sideEffects": false,
 	"main": "./dist/src/core/index.cjs",
 	"module": "./dist/src/core/index.js",
+	"types": "./dist/src/core/index.d.ts",
 	"exports": {
 		".": {
 			"import": {

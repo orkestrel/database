@@ -627,7 +627,30 @@ export interface TableInterface<T = Row> {
 	has(keys: readonly Key[]): Promise<readonly boolean[]>
 	keys(): Promise<readonly Key[]>
 	records(criteria?: Criteria, options?: ReadOptions): Promise<readonly T[]>
+	/**
+	 * Count rows matching `criteria`'s conditions.
+	 *
+	 * @remarks
+	 * `records()` / `scan()` narrow every row through the table's contract
+	 * guard before returning it, so a non-conforming stored row (legacy data,
+	 * a row from before a migration) never appears in their results. `count`
+	 * operates on STORED rows WITHOUT that guard — it counts whatever
+	 * conditions-matches in storage, guard-conforming or not. This means
+	 * `count()` CAN exceed `(await records(criteria)).length` when storage
+	 * holds rows that no longer conform to the table's contract.
+	 */
 	count(criteria?: Criteria, options?: ReadOptions): Promise<number>
+	/**
+	 * Compute an aggregate over `column` across rows matching `criteria`'s
+	 * conditions.
+	 *
+	 * @remarks
+	 * Like {@link TableInterface.count}, `aggregate` operates on STORED rows
+	 * WITHOUT the contract guard that `records()` / `scan()` apply — a
+	 * non-conforming stored row still contributes to the aggregate (or to the
+	 * `count` operation's tally) when it matches the conditions, even though
+	 * it would never appear in `records()`'s output.
+	 */
 	aggregate(
 		operation: AggregateFunction,
 		column: FieldPath,

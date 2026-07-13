@@ -16,8 +16,12 @@ import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
  * @remarks
  * The in-between made concrete: it runs identically in a browser or on a server,
  * so it is the storage behind tests, ephemeral caches, and any code that wants
- * the database API without a persistent backend. Rows are copied in and out so a
- * caller can never mutate stored state by reference (AGENTS §11), and `snapshot`
+ * the database API without a persistent backend. Rows are DEEP-copied (via
+ * `structuredClone`) in and out — at `write`, `read`, `scan`, `stream`, and both
+ * snapshot capture and restore — so a caller mutating a nested field of an input
+ * row, a returned row, or a row mutated in place between snapshot and rollback
+ * can never perturb stored state (AGENTS §11); a shallow `{ ...row }` spread
+ * would still share nested object/array references. `snapshot`
  * clones every table to give transactions an exact rollback point. `scan` and
  * `keys` yield in key order — sorted by the core {@link compareValues} total
  * order, the same contract the SQLite (`ORDER BY`) and IndexedDB (key-ordered
@@ -39,11 +43,11 @@ export class MemoryDriver implements DriverInterface {
 
 	async read(table: string, key: Key): Promise<Row | undefined> {
 		const row = this.#store(table).get(key)
-		return row === undefined ? undefined : { ...row }
+		return row === undefined ? undefined : structuredClone(row)
 	}
 
 	async write(table: string, key: Key, row: Row): Promise<void> {
-		this.#store(table).set(key, { ...row })
+		this.#store(table).set(key, structuredClone(row))
 	}
 
 	async delete(table: string, key: Key): Promise<boolean> {
@@ -58,7 +62,7 @@ export class MemoryDriver implements DriverInterface {
 		const store = this.#store(table)
 		for (const key of this.#ordered(table)) {
 			const row = store.get(key)
-			if (row !== undefined) yield { ...row }
+			if (row !== undefined) yield structuredClone(row)
 		}
 	}
 
@@ -105,7 +109,7 @@ export class MemoryDriver implements DriverInterface {
 				skipped += 1
 				continue
 			}
-			yield { ...row }
+			yield structuredClone(row)
 			yielded += 1
 		}
 	}
@@ -131,12 +135,16 @@ export class MemoryDriver implements DriverInterface {
 			const copy = new Map<string, Map<Key, Row>>()
 			for (const [name, store] of this.#tables) {
 				const cloned = new Map<Key, Row>()
-				for (const [key, row] of store) cloned.set(key, { ...row })
+				for (const [key, row] of store) cloned.set(key, structuredClone(row))
 				copy.set(name, cloned)
 			}
 			return async () => {
 				this.#tables.clear()
-				for (const [name, store] of copy) this.#tables.set(name, store)
+				for (const [name, store] of copy) {
+					const restored = new Map<Key, Row>()
+					for (const [key, row] of store) restored.set(key, structuredClone(row))
+					this.#tables.set(name, restored)
+				}
 			}
 		}
 		const copy = new Map<string, Map<Key, Row>>()
@@ -144,11 +152,15 @@ export class MemoryDriver implements DriverInterface {
 			const store = this.#tables.get(name)
 			if (store === undefined) continue
 			const cloned = new Map<Key, Row>()
-			for (const [key, row] of store) cloned.set(key, { ...row })
+			for (const [key, row] of store) cloned.set(key, structuredClone(row))
 			copy.set(name, cloned)
 		}
 		return async () => {
-			for (const [name, store] of copy) this.#tables.set(name, store)
+			for (const [name, store] of copy) {
+				const restored = new Map<Key, Row>()
+				for (const [key, row] of store) restored.set(key, structuredClone(row))
+				this.#tables.set(name, restored)
+			}
 		}
 	}
 

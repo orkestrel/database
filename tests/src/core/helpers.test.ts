@@ -100,6 +100,44 @@ describe('matchesCondition', () => {
 		expect(matchesCondition(row, buildCondition('age', 'present', []))).toBe(true)
 		expect(matchesCondition(row, buildCondition('tag', 'present', []))).toBe(false)
 	})
+
+	it('equals/not/any/none use STRUCTURAL equality (deepEqual), not the total-order rank', () => {
+		const objRow = { info: { a: 1 }, list: [1, 2, 3] }
+		// A differing object is NOT equal — the old rank-based comparator ranked
+		// every non-scalar equal, matching ANY object.
+		expect(matchesCondition(objRow, buildCondition('info', 'equals', [{ a: 2 }]))).toBe(false)
+		// A structurally-equal object IS equal.
+		expect(matchesCondition(objRow, buildCondition('info', 'equals', [{ a: 1 }]))).toBe(true)
+		// Arrays compare by index.
+		expect(matchesCondition(objRow, buildCondition('list', 'equals', [[1, 2, 3]]))).toBe(true)
+		expect(matchesCondition(objRow, buildCondition('list', 'equals', [[1, 2, 4]]))).toBe(false)
+		// `not` is the inverse.
+		expect(matchesCondition(objRow, buildCondition('info', 'not', [{ a: 2 }]))).toBe(true)
+		expect(matchesCondition(objRow, buildCondition('info', 'not', [{ a: 1 }]))).toBe(false)
+		// `any` / `none` with structured operands.
+		expect(matchesCondition(objRow, buildCondition('info', 'any', [{ a: 9 }, { a: 1 }]))).toBe(true)
+		expect(matchesCondition(objRow, buildCondition('info', 'any', [{ a: 9 }, { a: 8 }]))).toBe(
+			false,
+		)
+		expect(matchesCondition(objRow, buildCondition('info', 'none', [{ a: 9 }, { a: 8 }]))).toBe(
+			true,
+		)
+		expect(matchesCondition(objRow, buildCondition('info', 'none', [{ a: 9 }, { a: 1 }]))).toBe(
+			false,
+		)
+	})
+
+	it('equals/any use SameValueZero via deepEqual — NaN now equals NaN', () => {
+		const nanRow = { n: Number.NaN }
+		expect(matchesCondition(nanRow, buildCondition('n', 'equals', [Number.NaN]))).toBe(true)
+		expect(matchesCondition(nanRow, buildCondition('n', 'any', [1, Number.NaN]))).toBe(true)
+		expect(matchesCondition(nanRow, buildCondition('n', 'not', [Number.NaN]))).toBe(false)
+	})
+
+	it('keeps scalar equality behavior unchanged (cross-type equals still false)', () => {
+		expect(matchesCondition(row, buildCondition('age', 'equals', ['30']))).toBe(false)
+		expect(matchesCondition(row, buildCondition('name', 'equals', ['Alice']))).toBe(true)
+	})
 })
 
 describe('likeMatch', () => {
@@ -494,6 +532,35 @@ describe('planMigration', () => {
 		})
 		const plan = planMigration([users], [users])
 		expect(plan.steps).toEqual([])
+	})
+
+	it('throws a MIGRATION DatabaseError when a shared column changes type', () => {
+		const before = schema({
+			name: 'users',
+			columns: [{ name: 'age', type: 'text', nullable: false }],
+		})
+		const after = schema({
+			name: 'users',
+			columns: [{ name: 'age', type: 'integer', nullable: false }],
+		})
+		const error = captureError(() => planMigration([before], [after]))
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+		expect(isDatabaseError(error) ? String(error.message) : '').toContain('age')
+		expect(isDatabaseError(error) ? String(error.message) : '').toContain('users')
+	})
+
+	it('throws a MIGRATION DatabaseError when a shared column changes nullability', () => {
+		const before = schema({
+			name: 'users',
+			columns: [{ name: 'age', type: 'integer', nullable: false }],
+		})
+		const after = schema({
+			name: 'users',
+			columns: [{ name: 'age', type: 'integer', nullable: true }],
+		})
+		const error = captureError(() => planMigration([before], [after]))
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
+		expect(isDatabaseError(error) ? String(error.message) : '').toContain('age')
 	})
 
 	it('defaults from to 0 and to to 1', () => {
