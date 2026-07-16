@@ -1,4 +1,4 @@
-import type { ContractShape, FieldPath } from '@orkestrel/contract'
+import type { ContractShape, FieldPath, RandomFunction } from '@orkestrel/contract'
 import type {
 	AggregateFunction,
 	ColumnType,
@@ -23,7 +23,7 @@ import {
 	parseNumber,
 	resolveField,
 } from '@orkestrel/contract'
-import { MAX_PATTERN_LENGTH } from './constants.js'
+import { MAX_PATTERN_LENGTH, UUID_BYTE_COUNT, UUID_BYTE_RANGE } from './constants.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
 
 // The query engine. Every backend's `scan` yields rows; these pure helpers do
@@ -1407,4 +1407,44 @@ export async function auditDriver(
 	const findings: ConformanceFinding[] = []
 	for await (const finding of driverFindings(factory)) findings.push(finding)
 	return findings
+}
+
+// === Identifiers
+
+/**
+ * Generate an RFC 4122 version 4 UUID from a number source — no host crypto global.
+ *
+ * @remarks
+ * Draws exactly {@link UUID_BYTE_COUNT} values from `random`, one per byte, then
+ * forces the version (`4`) and variant (`10xx`) bits. The default source is
+ * `Math.random` — a pure-ECMAScript intrinsic, so generation works on every host;
+ * pass a seeded source (`seededRandom` from `@orkestrel/contract`) and reuse it
+ * across calls for reproducible sequences in tests and fixtures — production
+ * identifiers should keep the default source, whose engine entropy is far larger
+ * than a 32-bit seed. Each byte is floored and masked, so a source straying
+ * outside `[0, 1)` (negative, `>= 1`, `NaN`, `Infinity`) can never yield a
+ * malformed UUID. Suitable as a collision-resistant record identifier — not a
+ * cryptographic token; never use one as a secret.
+ *
+ * @param random - A number source returning values in the half-open range `[0, 1)` (defaults to `Math.random`)
+ * @returns A lowercase RFC 4122 version 4 UUID
+ *
+ * @example
+ * ```ts
+ * import { generateUUID } from '@orkestrel/database'
+ * import { seededRandom } from '@orkestrel/contract'
+ *
+ * generateUUID() // e.g. '9b2f7c1e-3d4a-4f6b-8e2d-5a1c0b9f8e7d'
+ * generateUUID(seededRandom(42)) // the same UUID on every run
+ * ```
+ */
+export function generateUUID(random: RandomFunction = Math.random): string {
+	const bytes = Array.from(
+		{ length: UUID_BYTE_COUNT },
+		() => Math.floor(random() * UUID_BYTE_RANGE) & 0xff,
+	)
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+	const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0'))
+	return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`
 }

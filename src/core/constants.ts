@@ -23,3 +23,9 @@ export const DEFAULT_PRIMARY = 'id'
  * `VALIDATION` {@link DatabaseError}; the cap is generous for any legitimate search.
  */
 export const MAX_PATTERN_LENGTH = 1024
+
+/** The number of bytes encoded by an RFC 4122 UUID. */
+export const UUID_BYTE_COUNT = 16
+
+/** The number of distinct values one UUID byte may hold. */
+export const UUID_BYTE_RANGE = 256

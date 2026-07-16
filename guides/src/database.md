@@ -201,12 +201,13 @@ transform; version tracking is deferred to future persistent backends.
 
 Pure helpers behind the query engine's pattern matching.
 
-| API             | Kind     | Behavior                                                                                                                                                                                                                   |
-| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wildcardMatch` | function | Match a value against a wildcard pattern in LINEAR time (greedy two-pointer, no backtracking) — the ReDoS-safe engine; injected `any` run + `single` char + case-fold flag; throws `VALIDATION` over `MAX_PATTERN_LENGTH`. |
-| `likeMatch`     | function | Match a value against a SQL `LIKE` pattern via `wildcardMatch` (case-INSENSITIVE; `%` → any run, `_` → any char).                                                                                                          |
-| `globMatch`     | function | Match a value against a `GLOB` pattern via `wildcardMatch` (case-SENSITIVE; `*` → any run, `?` → any char).                                                                                                                |
-| `isDriverMeta`  | function | Guard a value as a well-formed `DriverMeta` (`{ version, schema }`) — the boundary check every versioning driver's `meta()` narrows a stored/deserialized record through, never `as`.                                      |
+| API             | Kind     | Behavior                                                                                                                                                                                                                                                                                      |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wildcardMatch` | function | Match a value against a wildcard pattern in LINEAR time (greedy two-pointer, no backtracking) — the ReDoS-safe engine; injected `any` run + `single` char + case-fold flag; throws `VALIDATION` over `MAX_PATTERN_LENGTH`.                                                                    |
+| `likeMatch`     | function | Match a value against a SQL `LIKE` pattern via `wildcardMatch` (case-INSENSITIVE; `%` → any run, `_` → any char).                                                                                                                                                                             |
+| `globMatch`     | function | Match a value against a `GLOB` pattern via `wildcardMatch` (case-SENSITIVE; `*` → any run, `?` → any char).                                                                                                                                                                                   |
+| `isDriverMeta`  | function | Guard a value as a well-formed `DriverMeta` (`{ version, schema }`) — the boundary check every versioning driver's `meta()` narrows a stored/deserialized record through, never `as`.                                                                                                         |
+| `generateUUID`  | function | Generate an RFC 4122 v4 UUID from a number source — environment-agnostic, mints collision-resistant record identifiers without host crypto (not a crypto-grade source, unlike the server's `node:crypto`-backed `generateKey`); deterministic with a seeded source, `Math.random` by default. |
 
 ### Constants
 
@@ -214,6 +215,8 @@ Pure helpers behind the query engine's pattern matching.
 | -------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_PRIMARY`    | const | The primary-key column assumed when a table has no `keys` override (`id`).                                                                          |
 | `MAX_PATTERN_LENGTH` | const | The longest `LIKE` / `GLOB` pattern `wildcardMatch` accepts before a `VALIDATION` throw — the ReDoS length bound (§6.5) on model-supplied criteria. |
+| `UUID_BYTE_COUNT`    | const | The number of bytes encoded by an RFC 4122 UUID (`16`).                                                                                             |
+| `UUID_BYTE_RANGE`    | const | The number of distinct values one UUID byte may hold (`256`).                                                                                       |
 
 ### Types
 

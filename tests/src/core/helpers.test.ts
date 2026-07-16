@@ -11,6 +11,7 @@ import {
 	driverFindings,
 	extractKey,
 	filterRows,
+	generateUUID,
 	globMatch,
 	isDatabaseError,
 	isDriverMeta,
@@ -36,6 +37,7 @@ import {
 	objectShape,
 	optionalShape,
 	rawShape,
+	seededRandom,
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
@@ -884,5 +886,134 @@ describe('conformDriver (fail-fast over driverFindings)', () => {
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 		expect(isDatabaseError(error) ? error.context?.check : undefined).toBe('copy-in')
+	})
+})
+
+describe('generateUUID', () => {
+	const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+	it('produces a canonical lowercase 8-4-4-4-12 hex UUID', () => {
+		const uuid = generateUUID(seededRandom(1))
+		expect(uuid).toMatch(V4)
+		expect(uuid.length).toBe(36)
+		expect(uuid[8]).toBe('-')
+		expect(uuid[13]).toBe('-')
+		expect(uuid[18]).toBe('-')
+		expect(uuid[23]).toBe('-')
+	})
+
+	it('always forces the version nibble to 4', () => {
+		for (let seed = 0; seed < 50; seed++) {
+			const uuid = generateUUID(seededRandom(seed))
+			expect(uuid[14]).toBe('4')
+		}
+	})
+
+	it('always forces the variant nibble to 8, 9, a, or b', () => {
+		for (let seed = 0; seed < 50; seed++) {
+			const uuid = generateUUID(seededRandom(seed))
+			expect(['8', '9', 'a', 'b']).toContain(uuid[19])
+		}
+	})
+
+	it('is deterministic for a given seed', () => {
+		expect(generateUUID(seededRandom(42))).toBe(generateUUID(seededRandom(42)))
+	})
+
+	it('continues one source sequence across calls, reproducibly', () => {
+		const r = seededRandom(7)
+		const a = generateUUID(r)
+		const b = generateUUID(r)
+		expect(a).not.toBe(b)
+
+		const fresh = seededRandom(7)
+		expect(generateUUID(fresh)).toBe(a)
+		expect(generateUUID(fresh)).toBe(b)
+	})
+
+	it('diverges across different seeds', () => {
+		const uuids = new Set<string>()
+		for (let seed = 1; seed <= 8; seed++) uuids.add(generateUUID(seededRandom(seed)))
+		expect(uuids.size).toBe(8)
+	})
+
+	it('draws exactly sixteen values from the source per UUID', () => {
+		const source = seededRandom(1)
+		let count = 0
+		function counting(): number {
+			count++
+			return source()
+		}
+		generateUUID(counting)
+		expect(count).toBe(16)
+		generateUUID(counting)
+		expect(count).toBe(32)
+	})
+
+	it('yields the canonical all-zero UUID from a constant-zero source', () => {
+		expect(generateUUID(() => 0)).toBe('00000000-0000-4000-8000-000000000000')
+	})
+
+	it('yields the canonical all-f UUID from a saturated source', () => {
+		expect(generateUUID(() => 0.9999999999)).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff')
+	})
+
+	it('never emits a malformed UUID from out-of-contract sources', () => {
+		const hostile = [
+			() => 1,
+			() => 2,
+			() => -0.5,
+			() => -1,
+			() => Number.NaN,
+			() => Number.POSITIVE_INFINITY,
+			() => Number.NEGATIVE_INFINITY,
+			() => Number.MAX_VALUE,
+			() => Number.MIN_VALUE,
+			() => Number.EPSILON,
+		]
+		for (const source of hostile) expect(generateUUID(source)).toMatch(V4)
+	})
+
+	it('stays well-formed for boundary seeds', () => {
+		const seeds = [0, -1, 2 ** 32 - 1, 2 ** 32, 3.7, -0]
+		for (const seed of seeds) expect(generateUUID(seededRandom(seed))).toMatch(V4)
+	})
+
+	it('produces no collisions across a large batch from one seeded source', () => {
+		const r = seededRandom(123)
+		const uuids = new Set<string>()
+		for (let i = 0; i < 10_000; i++) uuids.add(generateUUID(r))
+		expect(uuids.size).toBe(10_000)
+	})
+
+	it('produces distinct first UUIDs across many seeds', () => {
+		const uuids = new Set<string>()
+		for (let seed = 0; seed < 1000; seed++) uuids.add(generateUUID(seededRandom(seed)))
+		expect(uuids.size).toBe(1000)
+	})
+
+	it('reaches every hex digit in the free positions over many samples', () => {
+		const r = seededRandom(5)
+		const seen = new Set<string>()
+		for (let i = 0; i < 200; i++) {
+			const uuid = generateUUID(r)
+			for (let index = 0; index < uuid.length; index++) {
+				if (index === 14 || index === 19) continue
+				const char = uuid[index]
+				if (char === '-') continue
+				seen.add(char)
+			}
+		}
+		expect([...seen].sort()).toEqual('0123456789abcdef'.split(''))
+	})
+
+	it('produces a well-formed UUID from the default source', () => {
+		expect(generateUUID()).toMatch(V4)
+	})
+
+	it('produces distinct UUIDs from the default source across calls', () => {
+		const uuids = new Set<string>()
+		for (let i = 0; i < 100; i++) uuids.add(generateUUID())
+		expect(uuids.size).toBe(100)
 	})
 })
