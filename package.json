@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/database",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "A typed database abstraction for the @orkestrel line — a single core engine over pluggable storage drivers. Part of the @orkestrel line.",
 	"keywords": [
 		"database",
