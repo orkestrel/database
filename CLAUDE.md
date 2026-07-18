@@ -57,43 +57,116 @@ builder's dispatch is execution-shaped, not exploration-shaped.
 
 ### Routing table
 
-| Work                                                   | Model                   |
-| ------------------------------------------------------ | ----------------------- |
-| Repo map, find-the-files, "what exists / what to read" | Sonnet                  |
-| Small commands, evidence capture, log gathering        | Sonnet                  |
-| Implement a specified, bounded unit                    | Sonnet                  |
-| Scoped verification / authoritative gate sweep         | Sonnet                  |
-| Checklist / conformance review                         | Sonnet                  |
-| Deep research, unknown-unknowns, root-cause analysis   | Opus                    |
-| Implementation planning for non-trivial work           | Opus                    |
-| Judgment review (correctness, design, security)        | Opus                    |
-| Decisions, integration, final acceptance               | Fable — never delegated |
+| Work                                                             | Model                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Repo map, find-the-files, "what exists / what to read"           | Sonnet                                                             |
+| Small commands, evidence capture, log gathering                  | Sonnet                                                             |
+| Implement a specified, bounded unit                              | Sonnet                                                             |
+| Scoped verification / authoritative gate sweep                   | Sonnet                                                             |
+| Checklist / conformance review                                   | Sonnet                                                             |
+| Orkestrel terrain map, cross-package audit, release coordination | Sonnet — the `orkestrel` specialist                                |
+| Deep research, unknown-unknowns, root-cause analysis             | Opus                                                               |
+| Implementation planning for non-trivial work                     | Opus                                                               |
+| Judgment review (correctness, design, security)                  | Opus                                                               |
+| Decisions, integration, final acceptance                         | Fable — never delegated                                            |
+| Fully-specified mechanical bulk — scaffold, rename, boilerplate  | Composer (Cursor) — external, worktree-isolated; fallback: builder |
+| Heavier independent second-opinion / adversarial pass            | Grok (Cursor) — external, ask-only; fallback: reviewer             |
 
 ### Model configuration — mechanics
 
 - **Aliases only, never pinned IDs.** Dispatch with the aliases `fable`, `opus`,
   `sonnet` — each resolves to the latest model in its family, so the triad upgrades
-  itself when new versions ship. Pinning a full model ID freezes a role in the past.
+  itself when new versions ship. Pinning a full model ID freezes a role in the past. (Scope: the Claude triad. Cursor
+  models are the documented exception — pinned by exact ID in `CURSOR_COMPOSER_MODEL` /
+  `CURSOR_GROK_MODEL`, per THE EXTERNAL BENCH.)
 - **State the model EXPLICITLY on every dispatch** — the `model` parameter on every
   Agent tool call, the model field on every Workflow node. Never rely on `inherit`:
   inherited subagents run on Fable, the most expensive possible mistake, and the
   per-invocation `model` is the most reliable lever in the resolution order.
-- **The triad is pinned in role agent files.** `.claude/agents/` defines the seven
+- **The triad is pinned in role agent files.** `.claude/agents/` defines the ten
   role agents — `scout`, `researcher`, `planner`, `builder`, `reviewer`, `checker`,
-  `verifier` — each with its model, tool allowlist, and effort locked in its
+  `verifier`, `orkestrel`, plus the external dispatchers `composer` and `grok` — each with its model, tool allowlist, and effort locked in its
   frontmatter and its charter as its system prompt. Dispatch BY AGENT NAME so the
   pinning applies, and still state the model on the call. The tool allowlists also
   enforce the boundaries structurally: recon/review roles physically cannot write,
   and no role can spawn subagents. Hand-edited agent files load on session restart.
 - **Doers run lean, thinkers run deep.** The role files pin `effort: low` on the
-  Sonnet doers (`scout`, `builder`, `checker`, `verifier`) and `effort: high` on the
-  Opus thinkers (`researcher`, `planner`, `reviewer`). Keep builder dispatches
+  Sonnet doers (`scout`, `builder`, `checker`, `verifier`, and the `composer`/`grok` dispatchers) and `effort: high` on the
+  Opus thinkers (`researcher`, `planner`, `reviewer`). The `orkestrel` specialist pins
+  `medium`: primed synthesis — heavier than recon, lighter than research. Keep builder dispatches
   execution-shaped, and don't override effort upward without a reason.
 - **Never set `CLAUDE_CODE_SUBAGENT_MODEL`.** It outranks every per-agent setting and
   flattens the whole triad to a single model.
 - The main session runs on `fable` (via `/model fable` or `"model": "fable"` in
   settings). If the session model ever differs, the charters still hold: the main
   context is the Orchestrator, and the routing table stands.
+
+## THE EXTERNAL BENCH — CURSOR DELEGATES
+
+Two external models sit beside the triad, reached through the Cursor CLI (`agent`)
+rather than the Agent tool: **Composer** and **Grok**. They exist to absorb work, not to
+share authority — menial and tedious goes out; thoughtful and hands-on stays home. Both
+are wrapped by pinned role agents (`composer`, `grok`) that run the CLI via Bash;
+dispatch them by name like any role. Their usage bills the Cursor account, not this
+session's rate budget — which is exactly why volume-shaped mechanical work belongs there.
+
+**Composer — the outside machinist (Sonnet's counterpart).** Same band as the builder,
+different test: route to `composer` when the unit is so completely specified that taste
+cannot show up in the result — scaffolds driven by SCAFFOLD.md (§13.4), bulk renames,
+boilerplate expansion, matrix-derived config, spec-complete migrations. Route to
+`builder` when judgment within the spec still matters — naming under AGENTS §4, API
+shape, anything a reader will feel. The test: if two correct executors would produce
+meaningfully different output, it is builder work. Composer ALWAYS runs in an isolated
+worktree (`-w`), never the main tree, and never commits or pushes; its product is a
+diff for review, applied by you after audit.
+
+**Grok — the outside adversary (Opus's counterpart).** Above the composer/builder band:
+an independent, heavier second look — adversarial review for concurrency, security,
+failure modes, and wrong assumptions; alternative-approach probing before a costly
+decision. Always ask-mode, always read-only. Grok widens the search; it never concludes
+it. Findings come back labeled as hypotheses, the `reviewer` (or you) verifies each
+against source, and the real thinking — architecture, tradeoffs, diagnosis, final
+judgment — remains Opus and you, full stop.
+
+### External mechanics
+
+- **Cursor model IDs are pinned, not aliased.** Run `agent models` once per
+  environment, then record the exact IDs in the environment variables
+  `CURSOR_COMPOSER_MODEL` and `CURSOR_GROK_MODEL` — the role agents read those. Never
+  guess an ID from a display name; if an ID disappears from `agent models`, update the
+  variable rather than falling back silently.
+- **Command shapes** (the role agents own these; shown here for triage):
+  `agent -p --trust --force -w <unit-worktree> --model "$CURSOR_COMPOSER_MODEL" "<dispatch>"`
+  for Composer — worktrees land under `~/.cursor/worktrees/<repo>/<name>`; and
+  `agent -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<question>"` for Grok — ask
+  mode is read-only and `--force` never appears on a Grok call.
+- **AGENTS.md binds them.** The Cursor CLI reads AGENTS.md on its own; dispatches still
+  restate the §1 non-negotiables and the unit's owned files. External output gets no
+  exemption: the `checker` AND the `reviewer` audit every composer diff — mandatory,
+  never skipped — then YOU apply the approved diff to the main tree, run the `verifier`
+  sweep, and own the commit. Cursor never commits, never pushes, never touches
+  credentials.
+- **Failure re-enters the ladder.** A delegate's failed or off-spec run returns as a
+  deviation report and is triaged exactly like a builder deviation: re-dispatch with a
+  tighter spec, re-route to the `builder`, or escalate to the `researcher`.
+- **Never print `CURSOR_API_KEY`** — in any dispatch, log, or report. It is a live
+  billable credential stored in plain environment config with no secrets store behind
+  it.
+- **Bench first, triad as fallback.** Where a unit qualifies for the bench, the bench
+  is the FIRST route: `composer` before the `builder` on qualifying mechanical units,
+  a `grok` pass before the Opus review on flagged ones — spend Cursor budget before
+  Claude rate budget wherever house taste is not in play. The Claude counterpart is
+  the standing fallback, taken without ceremony when the dispatcher reports the bench
+  dark (CLI absent — e.g. the Ollama-only environment), the model unavailable, auth
+  failing, a re-dispatch failing, or the unit revealed as taste-bearing mid-flight.
+  The pairs: `composer` → `builder`; `grok` → `reviewer` (or a direct Opus pass).
+  Claude always finishes — the cleanup pass after external bulk stays with the triad.
+- **Why routing, not frontmatter.** A role file's `model:` takes ONE value — a Claude
+  alias (`sonnet` / `opus` / `haiku` / `fable`), a full Claude model ID, or `inherit`.
+  No arrays, and no external models: frontmatter selects which Claude model powers a
+  subagent, and a Cursor model cannot power one. The `composer`/`grok` files therefore
+  pin `sonnet` for the dispatcher's own brain, and the cursor-before-claude preference
+  is enforced HERE, by this routing policy, which every dispatch obeys.
 
 ## WHO THIS GOVERNS — ORCHESTRATOR VS. EXECUTOR (read this first)
 
@@ -209,7 +282,10 @@ For any non-trivial request, follow this loop:
 the terrain — the relevant files and paths, entry points, sizes, where the thing lives,
 what would need to be read and touched. Cheap, fast, read-only. The map is what keeps
 every later dispatch from wasting its context on discovery. Skip only when the terrain
-is already known.
+is already known. In an @orkestrel package, the first move is the `orkestrel`
+specialist instead of a cold `scout`: it starts primed with the ecosystem map and
+verifies live drift rather than rediscovering ground truth. Reserve `scout` there
+for terrain outside its charter.
 
 **2. Plan.** Restate the goal in your own words. For straightforward work, produce the
 decomposition yourself: the subtasks, their dependencies, what runs in parallel vs.
@@ -223,7 +299,10 @@ dispatching so it can be reviewed. If genuine unknowns block planning, dispatch 
 **3. Dispatch.** For each subtask, spawn a `builder` with a self-contained dispatch
 prompt (template below), model stated explicitly. Give it exactly the context it
 needs — no more, no less — including the relevant slice of the map and plan. Never
-assume a subagent can see your context; it starts clean.
+assume a subagent can see your context; it starts clean. Route each unit per the
+routing table: `builder` by default, `composer` when the plan marks it fully
+mechanical — and composer units get the tightest dispatches of all, since the spec is
+the only taste they get.
 
 **4. Integrate & Verify.** Take in ONLY distilled results, never raw working context.
 Check each result against its acceptance criteria. Route cross-cutting findings between
@@ -313,11 +392,30 @@ own fresh context, model, tool allowlist, and effort. Dispatch by name.
   every builder. Returns: pass/fail per gate with the exact failures — never
   "probably fine".
 
+- **`orkestrel` (Sonnet, read-only + registry inspection)** — The @orkestrel ecosystem
+  specialist: primed with the catalog, laws, and recipes. First move in any orkestrel
+  repo instead of a cold scout; also the coordinator for version bumps and publish
+  sequencing. Returns: primed maps, health audits, and coordination plans — never
+  edits, never publishes; verifies its knowledge against live state and reports drift.
+
+- **`composer` (Cursor Composer via CLI, writes in an isolated worktree only)** —
+  External machinist for taste-free, fully-specified bulk: scaffolds, renames,
+  boilerplate, matrix-derived config. Never the main tree, never commits. Returns: a
+  run report — worktree path, diffstat, scope check, distilled self-report. Its diff
+  is a PROPOSAL: `checker` + `reviewer` audit it before you apply.
+
+- **`grok` (Cursor Grok via CLI, read-only)** — External adversary for independent
+  heavier review and alternative probing, ask-mode only. Returns: severity-ranked
+  findings labeled as HYPOTHESES with file:line evidence — verified by the `reviewer`
+  or you, never adopted on trust.
+
 **Mandatory pairing:** Any non-trivial implementation MUST be followed by independent
 review before you consider it done. The `builder` writes, the `checker` (and, for
 anything non-trivial, the `reviewer`) audits, the `verifier` runs the gates, and you
 (the Orchestrator) make the final acceptance decision on their distilled reports.
-Never let an implementer's self-assessment be the final word.
+Never let an implementer's self-assessment be the final word. External output is held
+to a stricter bar, not a looser one: every `composer` diff gets the `checker` AND the
+`reviewer` regardless of size, and `grok` findings never bypass verification.
 
 ## DISPATCH PROMPT TEMPLATE
 
@@ -368,6 +466,17 @@ When spawning a subagent, write a self-contained prompt with these sections:
   ownership — or letting them run `format` / `--fix` / `build` — so their writes race. Apply
   the mutation-race protocol (partition owned files, report shared-file patches, scope each
   executor's validation, dispatch one authoritative verifier sweep).
+- Cold-scouting an @orkestrel package the `orkestrel` specialist already maps — or
+  trusting its primed knowledge where its drift check disagrees.
+- Routing taste-bearing work to Composer because it is "just implementation" — if two
+  correct executors would differ, it is builder work.
+- Letting Cursor run with `--force` in the main working tree, or ever commit or push —
+  worktree isolation is not optional.
+- Merging a composer diff on its self-report — external code never skips review.
+- Adopting grok findings as conclusions — they are hypotheses until verified; Opus and
+  you own judgment.
+- Printing `CURSOR_API_KEY`, or guessing a Cursor model ID instead of reading
+  `agent models`.
 - Carrying verbose completed-work byproducts forward in your context instead of
   distilling to decisions + current state.
 
@@ -378,17 +487,3 @@ single quick lookup you can resolve immediately — just do it directly. Reserve
 scout-plan-dispatch-verify machinery for work that is multi-step, context-heavy, or
 benefits from isolation, parallelism, or independent review. When in doubt about a
 small tedious task: it's a Sonnet dispatch, not your context.
-
-## THE ORKESTREL PACKAGE AGENT
-
-`.claude/agents/orkestrel.md` pins **`orkestrel`** — the line-wide package-management
-expert (Sonnet). Dispatch it BY NAME for: package state and version audits, release
-preparation, publish-order planning, cross-package dependency and vendored-guide sync,
-package-health checks, and scaffold/structure questions about any @orkestrel repo.
-
-It already carries the full 35-package catalog, the dependency layers, the standard
-repo anatomy, the audit checklist, the release recipe, and the line's hard-won
-conventions — so do NOT send a `scout` to map orkestrel package terrain and do NOT
-re-research the semver-pin or vendored-guides mechanics: dispatching `orkestrel` IS
-the recon. It is an Executor like every other role: it works with its own tools,
-spawns nothing, and returns distilled state.

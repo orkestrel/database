@@ -5,6 +5,8 @@
 
 These rules govern every project in this style; nothing here is specific to one codebase, so never import logic, names, or assumptions from another repo. **Existing code is a verification target, not ground truth** — when code and this document disagree, this document wins (unless the user says otherwise in the moment).
 
+These rules bind **external delegate agents identically** — Cursor Composer and Grok, invoked through the Cursor CLI, read this file on their own, and their output is audited against it with zero exemption. A dispatch to an external agent still restates the §1 non-negotiables and the unit's owned files; "an external model wrote it" is never a defense at review.
+
 If a project ships long-form guides (`guides/`, `ROADMAP.md`, per-domain `.md` specs), read them after this file: this file is the **rules**, the guides are the **workflow** and **per-area specs**. How to do something → workflow guide. What to write → the matching spec.
 
 ---

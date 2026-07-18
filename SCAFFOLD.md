@@ -1162,6 +1162,26 @@ scripts (`test:src:core`, `check:src:browser`, …).
       point at originating packages.
 - [ ] `git status` clean of artifacts; lockfile committed; §12 gates all green.
 
+### 13.4 Delegated scaffold — the Composer fast-path
+
+Scaffolding is the archetypal Composer unit (CLAUDE.md, THE EXTERNAL BENCH): nearly
+every artifact in §13.1/§13.2 is byte-copied or matrix-derived, so taste cannot show
+up in a correct result. The flow:
+
+1. The Orchestrator packages the dispatch: the variant row (§1.2), the exemplar repo
+   and paths, the §13.1 or §13.2 step list verbatim, the explicit owned-file set, the
+   §12 gates as acceptance criteria, and the AGENTS.md §1 non-negotiables.
+2. The `composer` delegate runs it in an isolated worktree — never the main tree.
+3. The `checker` audits the worktree diff against the §13.3 checklist; the `reviewer`
+   passes judgment. External output never skips review.
+4. The Orchestrator applies the approved diff to the main tree, dispatches the
+   `verifier` for the §12 sweep, and owns the commit.
+
+Composer never commits, never pushes, and never invents where the matrix is silent —
+silence in the spec is a deviation report, not a choice. The cleanup pass is Claude's:
+naming under AGENTS §4, guide prose (§10), `README.md`, and anything else a reader
+will feel stays with the `builder` and the reviewing models.
+
 ---
 
 ## 14. Appendix — the invariant fingerprint
