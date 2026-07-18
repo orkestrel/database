@@ -378,3 +378,17 @@ single quick lookup you can resolve immediately — just do it directly. Reserve
 scout-plan-dispatch-verify machinery for work that is multi-step, context-heavy, or
 benefits from isolation, parallelism, or independent review. When in doubt about a
 small tedious task: it's a Sonnet dispatch, not your context.
+
+## THE ORKESTREL PACKAGE AGENT
+
+`.claude/agents/orkestrel.md` pins **`orkestrel`** — the line-wide package-management
+expert (Sonnet). Dispatch it BY NAME for: package state and version audits, release
+preparation, publish-order planning, cross-package dependency and vendored-guide sync,
+package-health checks, and scaffold/structure questions about any @orkestrel repo.
+
+It already carries the full 35-package catalog, the dependency layers, the standard
+repo anatomy, the audit checklist, the release recipe, and the line's hard-won
+conventions — so do NOT send a `scout` to map orkestrel package terrain and do NOT
+re-research the semver-pin or vendored-guides mechanics: dispatching `orkestrel` IS
+the recon. It is an Executor like every other role: it works with its own tools,
+spawns nothing, and returns distilled state.
