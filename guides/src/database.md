@@ -173,6 +173,14 @@ driver never re-implements.
 | `filterRows`        | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.         |
 | `deepEqual`         | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.         |
 
+### Contracts
+
+The bridge from a table's declared columns to its compiled contract.
+
+| API                 | Kind     | Behavior                                                                                                                                                                                                                                                      |
+| ------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `columnsToContract` | function | Compile a table's `Columns` (`column → shape` map) into its typed `ContractInterface`, wrapping them in a closed `objectShape` — the typed seam `Database.table` builds on so a table's row stays `RowOf<C>` without tripping TS's instantiation-depth guard. |
+
 ### Cancellation
 
 | API          | Kind     | Behavior                                                                                                                                                                      |

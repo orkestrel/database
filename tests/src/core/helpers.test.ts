@@ -3,6 +3,7 @@ import {
 	applyCriteria,
 	auditDriver,
 	checkAbort,
+	columnsToContract,
 	compareValues,
 	computeAggregate,
 	conformDriver,
@@ -386,6 +387,27 @@ describe('shapeToColumnType', () => {
 		expect(shapeToColumnType(literalShape([1, 2]))).toBe('integer')
 		expect(shapeToColumnType(literalShape([1.5, 2]))).toBe('real')
 		expect(shapeToColumnType(literalShape([true, false]))).toBe('boolean')
+	})
+})
+
+describe('columnsToContract', () => {
+	it('compiles a column map into its four lockstep contract outputs', () => {
+		const contract = columnsToContract({ id: stringShape(), age: integerShape() })
+		// A typed row flows through the public overload — this const annotation
+		// compiles only while the row is inferred precisely (the TS2589 guard).
+		const row: { readonly id: string; readonly age: number } = { id: 'u1', age: 30 }
+		expect(contract.is(row)).toBe(true)
+		expect(contract.is({ id: 'u1' })).toBe(false)
+		expect(contract.parse({ id: 'u1', age: '30' })).toEqual({ id: 'u1', age: 30 })
+		expect(contract.schema.type).toBe('object')
+		const generated = contract.generate(seededRandom(1))
+		expect(typeof generated.id).toBe('string')
+		expect(typeof generated.age).toBe('number')
+	})
+
+	it('rejects additional properties (a closed object shape)', () => {
+		const contract = columnsToContract({ id: stringShape() })
+		expect(contract.is({ id: 'u1', extra: true })).toBe(false)
 	})
 })
 

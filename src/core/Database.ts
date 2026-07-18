@@ -18,11 +18,11 @@ import type {
 	TableSchema,
 	TablesShape,
 } from './types.js'
-import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
+import { compileSchema, objectShape } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { checkAbort, planMigration, shapeToColumnType } from './helpers.js'
+import { checkAbort, columnsToContract, planMigration, shapeToColumnType } from './helpers.js'
 import { Table } from './Table.js'
 
 /**
@@ -96,8 +96,8 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		if (this.#status === 'closed') {
 			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, { name: this.#name })
 		}
-		// A table row is always an object, so wrap its columns in an `objectShape`.
-		return this.#build(name, this.#key(name), createContract(objectShape(this.#tables[name])))
+		// A table row is always an object, so compile its columns into a typed contract.
+		return this.#build(name, this.#key(name), columnsToContract(this.#tables[name]))
 	}
 
 	import<U extends TablesShape>(tables: U, keys?: TableKeys): DatabaseInterface<U> {

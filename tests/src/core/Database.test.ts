@@ -1,10 +1,13 @@
 import type {
+	DatabaseInterface,
 	DriverInterface,
 	DriverMeta,
 	Migration,
+	TableInterface,
 	TableSchema,
 	TransactionInterface,
 } from '@src/core'
+import type { UserRow } from '../../setup.js'
 import { createDatabase, createMemoryDriver, MemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
@@ -50,6 +53,43 @@ describe('table() accessor', () => {
 		const users = db.table('users')
 		expect(users.name).toBe('users')
 		expect(users.primary).toBe('id')
+	})
+
+	// Type-level regression lock (§2 types-first): a `db.table('x')` result annotated
+	// against a concrete `TableInterface<UserRow>` — exactly what `setup.ts`'s
+	// `createConstrainedUsersDatabase` does (its `db`, inferred through
+	// `createDatabase<const T>`, only widens to `DatabaseInterface` in the returned
+	// object field; the `table('users')` call itself runs over the concrete `T`).
+	// This annotation compiles ONLY while the `TableInterface<RowOf<T[K]>>` → concrete
+	// relation stays shallow; a return of the TS2589 instantiation-depth blow-up fails
+	// `npm run check`, never silently. `db` is also handed to a `DatabaseInterface`
+	// slot to lock the open-view widening the same call site relies on.
+	it('locks the concrete-consumer annotation pattern (guards TS2589)', () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+		})
+		const users: TableInterface<UserRow> = db.table('users')
+		const view: DatabaseInterface = db
+		expect(users.name).toBe('users')
+		expect(view.name).toBe('database')
+	})
+
+	// Type-level precision lock: a concrete column map must infer its EXACT row.
+	// `TableInterface<T>` carries `T` in both co- and contravariant positions, so a
+	// clean assignment against `TableInterface<WidgetRow>` holds only when the
+	// inferred row is mutually assignable with `{ id: string; age: number }` — a
+	// widening to `Row` (or any drift) breaks it.
+	it('infers a declared table row precisely', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { widgets: { id: stringShape(), age: integerShape() } },
+		})
+		const widgets: TableInterface<{ readonly id: string; readonly age: number }> =
+			db.table('widgets')
+		await widgets.set({ id: 'w1', age: 7 })
+		const found = await widgets.get('w1')
+		expect(found?.age).toBe(7)
 	})
 })
 

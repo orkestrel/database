@@ -448,17 +448,27 @@ export type Columns = Readonly<Record<string, ContractShape>>
 export type TablesShape = Readonly<Record<string, Columns>>
 
 /**
- * The row type a table's {@link Columns} describe — `Infer` of its `objectShape`.
+ * The row type a table's {@link Columns} describe — `Infer` of the closed
+ * `objectShape` the database wraps them in.
  *
  * @remarks
  * The broad `Columns` (an open `column → shape` map, e.g. when a database is held
  * at its default type) short-circuits to {@link Row}: there is nothing concrete to
  * infer, and expanding `Infer` over the open shape would trip TS's
  * instantiation-depth guard. Concrete column maps infer their exact row.
+ *
+ * `additionalProperties: false` mirrors the shape the runtime actually builds:
+ * `objectShape(columns)` leaves its additional-properties parameter at its `false`
+ * default, so a table row is exactly the CLOSED object over `C`. Pinning it here —
+ * rather than letting `Infer` fall back to the open default — collapses the
+ * inferred row to the same canonical closed object the compiled contract enforces,
+ * which is what keeps the concrete `TableInterface<RowOf<C>>` relation shallow at
+ * each call site (an open/inferred index tail would otherwise force TS to expand
+ * the row structurally against every concrete annotation and trip TS2589).
  */
 export type RowOf<C extends Columns> = [Columns] extends [C]
 	? Row
-	: Infer<{ readonly type: 'object'; readonly properties: C }>
+	: Infer<{ readonly type: 'object'; readonly properties: C; readonly additionalProperties: false }>
 
 /**
  * Per-table primary-key column overrides — `{ [table]: column }`.
