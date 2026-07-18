@@ -1,8 +1,11 @@
 import type {
+	Columns,
 	DatabaseInterface,
 	DriverInterface,
 	DriverMeta,
 	Migration,
+	Row,
+	RowOf,
 	TableInterface,
 	TableSchema,
 	TransactionInterface,
@@ -90,6 +93,17 @@ describe('table() accessor', () => {
 		await widgets.set({ id: 'w1', age: 7 })
 		const found = await widgets.get('w1')
 		expect(found?.age).toBe(7)
+	})
+
+	// Type-level regression lock: contract 0.0.4's non-distributive `Infer` resolves
+	// the OPEN case of `RowOf<Columns>` directly to {@link Row} — mutually assignable
+	// both directions, with no `[Columns] extends [C]` short-circuit. A regression to
+	// a broader or narrower inferred shape (or a TS2589 blow-up) fails `npm run check`.
+	it('keeps RowOf<Columns> mutually assignable with Row (open case)', () => {
+		const row: Row = { id: 'u1' }
+		const asOpen: RowOf<Columns> = row
+		const asRow: Row = asOpen
+		expect(asRow).toBe(row)
 	})
 })
 

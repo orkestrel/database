@@ -85,7 +85,7 @@
 	},
 	"dependencies": {
 		"@orkestrel/abort": "^0.0.2",
-		"@orkestrel/contract": "^0.0.3",
+		"@orkestrel/contract": "^0.0.4",
 		"@orkestrel/emitter": "^0.0.2",
 		"@orkestrel/indexeddb": "^0.0.3",
 		"@orkestrel/sqlite": "^0.0.3"

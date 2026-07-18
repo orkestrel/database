@@ -1,13 +1,7 @@
-import type {
-	ContractInterface,
-	ContractShape,
-	FieldPath,
-	RandomFunction,
-} from '@orkestrel/contract'
+import type { ContractShape, FieldPath, RandomFunction } from '@orkestrel/contract'
 import type {
 	AggregateFunction,
 	ColumnType,
-	Columns,
 	ConformanceFinding,
 	Condition,
 	Criteria,
@@ -18,17 +12,14 @@ import type {
 	MigrationStep,
 	Order,
 	Row,
-	RowOf,
 	TableSchema,
 } from './types.js'
 import {
-	createContract,
 	isArray,
 	isBoolean,
 	isFiniteNumber,
 	isRecord,
 	isString,
-	objectShape,
 	parseNumber,
 	resolveField,
 } from '@orkestrel/contract'
@@ -443,44 +434,6 @@ export function extractKey(row: Row, column: string): Key | undefined {
 	if (isString(value)) return value
 	if (isFiniteNumber(value)) return value
 	return undefined
-}
-
-// === Contracts
-
-/**
- * Compile a table's {@link Columns} into its typed {@link ContractInterface} — the
- * `column → shape` map wrapped in a closed `objectShape` and handed to
- * `createContract`.
- *
- * @remarks
- * A typed seam over a deliberately untyped implementation, mirroring the reason
- * `createContract` itself keeps an untyped impl. The public overload carries the
- * precise row type ({@link RowOf}`<C>`), so `Database.table` receives a
- * `ContractInterface<RowOf<C>>` it returns verbatim — the class never has to
- * RELATE the compiled `Infer` against `RowOf` over an abstract `T[K]`, which is
- * what trips TS's instantiation-depth guard (TS2589). The implementation is typed
- * to the broad `ContractInterface<unknown>`, so its body
- * (`createContract(objectShape(columns))`) type-checks ONCE against the open
- * `Columns` rather than being re-related per concrete table. Runtime behavior is
- * identical for every caller — only the static row type differs between the
- * overloads.
- *
- * @param columns - The table's column map (`column → ContractShape`)
- * @returns The compiled contract typed by the columns' {@link RowOf}
- *
- * @example
- * ```ts
- * import { columnsToContract } from '@orkestrel/database'
- * import { integerShape, stringShape } from '@orkestrel/contract'
- *
- * const contract = columnsToContract({ id: stringShape(), age: integerShape() })
- * contract.is({ id: 'u1', age: 30 }) // true — typed as { readonly id: string; readonly age: number }
- * ```
- */
-export function columnsToContract<C extends Columns>(columns: C): ContractInterface<RowOf<C>>
-export function columnsToContract(columns: Columns): ContractInterface<unknown>
-export function columnsToContract(columns: Columns): ContractInterface<unknown> {
-	return createContract(objectShape(columns))
 }
 
 // === Schema
