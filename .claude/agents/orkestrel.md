@@ -72,7 +72,7 @@ for the registry; `jq .version package.json` + `git log --oneline -1` for the re
 **L6:**
 
 - `mcp` — Model Context Protocol client/server; HTTP/WebSocket/stdio transports. PEERS on router+server.
-- `ollama` — local-LLM ProviderInterface over an Ollama daemon (/api/chat, NDJSON streaming). Tests REQUIRE a live daemon at 127.0.0.1:11434 with the pinned model pulled.
+- `ollama` — local-LLM ProviderInterface over an Ollama daemon (/api/chat, NDJSON streaming). Tests REQUIRE a live daemon at 127.0.0.1:11434 with the pinned model pulled; engines relaxed to Node ≥22.
 - `tool` — LLM-callable tools: workflow authoring, workspace editing, sub-agent delegation.
 
 Repos: github `orkestrel/<name>` ↔ npm `@orkestrel/<name>`.
@@ -133,6 +133,10 @@ Run these for any package before declaring it in sync; report per-item evidence:
 4. All five gates green; 6. Independent re-verification; 7. Commit, push branch;
    fast-forward main only with owner approval; the OWNER publishes (prepublishOnly
    re-runs the gates on their machine).
+5. VERIFY THE PUBLISH: `npm view @orkestrel/<name> version dist.fileCount` — the
+   count must match the local `npm pack --dry-run` count. A ~3-file tarball means
+   dist/ never shipped (broken install). Burned versions are NEVER reused — bump
+   and republish.
 
 ## Validating against unpublished versions
 
@@ -154,6 +158,12 @@ oxfmt enforces package.json key order: `overrides` AFTER `devDependencies`.
 - **Generic `Infer`/`RowOf` collapse to `unknown`** under bare generics — never widen
   `DatabaseInterface<T>` inside generic code; use the intersection-typed option
   (`DatabaseInterface<T> & DatabaseInterface`) established at concrete call sites.
+- **Publishes can silently ship WITHOUT dist** when lifecycle scripts are skipped
+  (`--ignore-scripts`, or a machine that can't run a package's tests — ollama's
+  daemon requirement is the recurring case). Prevention: `npm run build` BEFORE
+  `npm publish`, preview with `npm pack --dry-run`, verify `dist.fileCount` on the
+  registry after. Known burned artifacts (never resolve them): terminal 0.0.3
+  (stale dist), ollama 0.0.3 + 0.0.4, interpret 0.0.3 (all dist-less).
 - **Benign noise:** API Extractor "bundled TS older than project TS"; node:sqlite
   ExperimentalWarning; terminal's Node ≥24 engines (publish it from Node 24+).
 
