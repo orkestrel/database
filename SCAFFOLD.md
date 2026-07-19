@@ -98,21 +98,21 @@ Three rules make this table:
 
 ## 2. Prerequisites & toolchain
 
-- **Node `>= 24`** (`package.json` `engines`). Server builds target `node24`.
+- **Node `>= 22`** (`package.json` `engines`). Server builds and CI target `node24`.
 - **npm** with a committed `package-lock.json`.
 - No global tools — everything is a devDependency.
 
-| Concern             | Tool                                                                                   | Config                                     |
-| ------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------ |
-| Type-check          | `tsc` (typescript ^6.0.3)                                                              | `tsconfig.json` + `configs/src/*`          |
-| Lint                | `oxlint` ^1.73.0                                                                       | `.oxlintrc.json`, `.oxlintignore`          |
-| Format              | `oxfmt` ^0.58.0                                                                        | `.oxfmtrc.json`, `.prettierignore`         |
-| Bundle              | `vite` ^8.1.4 (Rolldown-based)                                                         | `vite.config.ts` + `configs/src/*`         |
-| Declarations        | `vite-plugin-dts` ^5.0.3 (+ `@microsoft/api-extractor` ^7.58.9, used by `bundleTypes`) | inline in `configs/src/vite.<v>.config.ts` |
-| Test                | `vitest` ^4.1.10                                                                       | `vite.config.ts` (projects)                |
-| Browser test driver | `@vitest/browser-playwright` ^4.1.10 (Chromium) — **browser-surface repos only**       | resolved in `vite.config.ts`               |
-| Guides parity       | `@orkestrel/guide` ^0.0.1 (devDependency — every repo except `guide` itself)           | `tests/guides/src/parity.test.ts`          |
-| Types               | `@types/node` ^26.1.1                                                                  | —                                          |
+| Concern             | Tool                                                                                    | Config                                     |
+| ------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Type-check          | `tsc` (typescript ^6.0.3)                                                               | `tsconfig.json` + `configs/src/*`          |
+| Lint                | `oxlint` ^1.74.0                                                                        | `.oxlintrc.json`, `.oxlintignore`          |
+| Format              | `oxfmt` ^0.59.0                                                                         | `.oxfmtrc.json`, `.prettierignore`         |
+| Bundle              | `vite` ^8.1.5 (Rolldown-based)                                                          | `vite.config.ts` + `configs/src/*`         |
+| Declarations        | `vite-plugin-dts` ^5.0.3 (+ `@microsoft/api-extractor` ^7.58.11, used by `bundleTypes`) | inline in `configs/src/vite.<v>.config.ts` |
+| Test                | `vitest` ^4.1.10                                                                        | `vite.config.ts` (projects)                |
+| Browser test driver | `@vitest/browser-playwright` ^4.1.10 (Chromium) — **browser-surface repos only**        | resolved in `vite.config.ts`               |
+| Guides parity       | `@orkestrel/guide` ^0.0.5 (devDependency — every repo except `guide` itself)            | `tests/guides/src/parity.test.ts`          |
+| Types               | `@types/node` ^26.1.1                                                                   | —                                          |
 
 ---
 
@@ -128,7 +128,8 @@ Three rules make this table:
 | `configs/src/vite.<v>.config.ts`                                                                                 | no                                   | §7 — byte-identical per variant                                                     |
 | `.editorconfig` `.gitattributes` `.gitignore` `.oxfmtrc.json` `.oxlintrc.json` `.oxlintignore` `.prettierignore` | no                                   | §8 — byte-identical everywhere                                                      |
 | `.github/workflows/ci.yml`                                                                                       | no                                   | §11 — byte-identical everywhere                                                     |
-| `AGENTS.md`, `CLAUDE.md`, `.claude/agents/*` (7 role files)                                                      | no                                   | byte-copy from any sibling                                                          |
+| `AGENTS.md`, `CLAUDE.md`, `.claude/*` (settings.json + 10 role agents)                                           | no                                   | byte-copy from any sibling                                                          |
+| `scripts/*.sh` (`deps.sh` `cursor.sh` `ollama.sh` SessionStart hooks + `scaffold.sh` + `mirror.sh`)              | no                                   | §8/§13 — byte-copy from any sibling                                                 |
 | `LICENSE`                                                                                                        | no                                   | byte-copy (MIT, Copyright (c) 2026 Orkestrel)                                       |
 | `README.md`                                                                                                      | yes                                  | model on a sibling's (title, Install, Requirements, Usage, Guide, Package, License) |
 | `src/<v>/…`                                                                                                      | yes                                  | AGENTS.md §5–§7 (barrels, centralized files)                                        |
@@ -191,8 +192,9 @@ onto one line, while the real file keeps one entry per line):
 		"clean": "node -e \"try{require('node:fs').rmSync('dist',{recursive:true,force:true})}catch{}\"",
 		"copy": "node -e \"const fs=require('node:fs'),p=require('node:path'),a=process.argv[1],b=process.argv[2];fs.mkdirSync(p.dirname(b),{recursive:true});fs.cpSync(a,b,{force:true});console.log('Copied: '+a+' to '+b)\"",
 		"tmp:txt": "node -e \"const fs=require('node:fs'),p=require('node:path');function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=p.join(d,e.name);if(e.isDirectory()){walk(f)}else if(!e.name.endsWith('.md')&&!e.name.endsWith('.txt')){const t=f+'.txt';if(!fs.existsSync(t)){fs.renameSync(f,t)}else{console.warn('Skipping '+f+' — target exists: '+t)}}}}try{walk('tmp')}catch(e){if(e.code!=='ENOENT')throw e}\"",
+		"scaffold": "bash scripts/scaffold.sh",
 		"lint": "oxlint --config .oxlintrc.json --fix .",
-		"check": "tsc --noEmit --project tsconfig.json",
+		"check": "tsc --noEmit --project tsconfig.json && npm run check:src",
 		"check:src": "npm run check:src:core",
 		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
 		"format": "oxfmt --config .oxfmtrc.json --write .",
@@ -205,19 +207,19 @@ onto one line, while the real file keeps one entry per line):
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.1"
+		"@orkestrel/contract": "^0.0.5"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.58.9",
-		"@orkestrel/guide": "^0.0.1",
+		"@microsoft/api-extractor": "^7.58.11",
+		"@orkestrel/guide": "^0.0.5",
 		"@types/node": "^26.1.1",
-		"oxfmt": "^0.58.0",
-		"oxlint": "^1.73.0",
+		"oxfmt": "^0.59.0",
+		"oxlint": "^1.74.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.1.4",
+		"vite": "^8.1.5",
 		"vite-plugin-dts": "^5.0.3",
 		"vitest": "^4.1.10"
 	},
@@ -344,7 +346,7 @@ come from the inline plugin). Every `test:src*` script carries `--no-cache`;
 `prepublishOnly` is always exactly:
 
 ```json
-"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
+"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 ```
 
 ### 4.5 Dependencies
@@ -1090,24 +1092,29 @@ Run in this order; all green before any commit:
 ```bash
 npm run format:check   # oxfmt --check (run `npm run format` to fix)
 npm run lint:check     # oxlint, no --fix (run `npm run lint` to fix)
-npm run check          # tsc --noEmit over the root tsconfig (whole tree incl. tests/configs)
+npm run check          # tsc over root tsconfig (whole tree) + check:src, now folded in
 npm run check:src      # per-surface environment-contract typecheck (core: no DOM/Node; browser: no Node; server: no DOM)
 npm run build          # clean → build:src (core first) — vite + inline bundled types
 npm test               # test:src (all surfaces, --no-cache) && test:guides (parity)
 ```
 
-`prepublishOnly` chains exactly these six. While iterating, scope with the per-surface
+`prepublishOnly` chains these gates — `check` now folds in `check:src`, so the published chain is five links (format:check → lint:check → check → build → test). While iterating, scope with the per-surface
 scripts (`test:src:core`, `check:src:browser`, …).
 
 ---
 
 ## 13. Recipes
 
+> **Fast path (core-only):** `npm run scaffold -- <name>` (`scripts/scaffold.sh`) generates a
+> complete core-only package from templates frozen from `sse`/`timeout` (2026-07-18) — the
+> automated equivalent of §13.1 for that one variant, and its output passes all §12 gates. For
+> any other variant, added surfaces, or manual restructuring, this document is the authority.
+
 ### 13.1 New package from scratch
 
 1. Pick the variant combination; pick the exemplar repo (§1.2).
 2. Byte-copy the invariants from the exemplar at HEAD: dotfiles (§8), `ci.yml`,
-   `AGENTS.md`, `CLAUDE.md`, `.claude/`, `LICENSE`, `configs/src/*` for your surfaces,
+   `AGENTS.md`, `CLAUDE.md`, `.claude/`, `scripts/`, `LICENSE`, `configs/src/*` for your surfaces,
    `tsconfig.json` (trim `paths`), `vite.config.ts` (trim factories, fix surface doc
    comments), `tests/guides/src/parity.test.ts` (edit `SELF_SPECIFIERS`).
 3. `package.json`: copy the exemplar's; edit identity fields, `dependencies`, and the
@@ -1193,9 +1200,9 @@ For a quick drift scan across the fleet, these must hold in every repo:
 | `engines.node`                                                | `>=22`                                                             |
 | `type` / `sideEffects` / `files`                              | `module` / `false` / `["dist","README.md"]`                        |
 | `publishConfig.access`                                        | `public`                                                           |
-| typescript / vite / vitest / vite-plugin-dts / oxfmt / oxlint | `^6.0.3` / `^8.1.4` / `^4.1.10` / `^5.0.3` / `^0.58.0` / `^1.73.0` |
-| `@microsoft/api-extractor` / `@types/node`                    | `^7.58.9` / `^26.1.1`                                              |
+| typescript / vite / vitest / vite-plugin-dts / oxfmt / oxlint | `^6.0.3` / `^8.1.5` / `^4.1.10` / `^5.0.3` / `^0.59.0` / `^1.74.0` |
+| `@microsoft/api-extractor` / `@types/node`                    | `^7.58.11` / `^26.1.1`                                             |
 | server build target                                           | `node24`                                                           |
 | declaration pipeline                                          | inline `vite-plugin-dts` `bundleTypes` + d.cts copy on dual-format |
 | externals in every library build                              | `node:*`, `@orkestrel/*` (+ `@src/core` on subpath surfaces)       |
-| gate order                                                    | format:check → lint:check → check → check:src → build → test       |
+| gate order                                                    | format:check → lint:check → check (folds check:src) → build → test |

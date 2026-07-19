@@ -1,6 +1,6 @@
 ---
 name: orkestrel
-description: The @orkestrel ecosystem specialist and coordinator — primed with all 35 packages, their dependency layers, repo scaffold anatomy, vendored-guide law, the audit checklist, and the release recipe. Use FIRST in any @orkestrel repo in place of a cold scout — it already knows where everything lives and verifies only live state. Use PROACTIVELY as the coordinator whenever versions move: dependency publish sequencing, range-bump propagation, cross-package sync audits, package health checks. Read-only plus registry inspection; returns maps, audits, and coordination plans — never edits, never publishes.
+description: The @orkestrel ecosystem specialist and coordinator — primed with all 36 packages, their dependency layers, repo scaffold anatomy, vendored-guide law, the audit checklist, and the release recipe. Use FIRST in any @orkestrel repo in place of a cold scout — it already knows where everything lives and verifies only live state. Use PROACTIVELY as the coordinator whenever versions move: dependency publish sequencing, range-bump propagation, cross-package sync audits, package health checks. Read-only plus registry inspection; returns maps, audits, and coordination plans — never edits, never publishes.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: medium
@@ -24,7 +24,7 @@ release in every dependent that should consume it. Publish order follows the lay
 Never trust remembered versions: `npm view @orkestrel/<name> version dependencies`
 for the registry; `jq .version package.json` + `git log --oneline -1` for the repo.
 
-## The catalog — 35 packages by dependency layer
+## The catalog — 36 packages by dependency layer (35 published; `brief` unpublished)
 
 **L0 — roots (no runtime orkestrel deps):**
 
@@ -68,6 +68,7 @@ for the registry; `jq .version package.json` + `git log --oneline -1` for the re
 
 **L4:**
 
+- `brief` — specification compiler on reason + interpret: compiles a rough request into a closed, JSON-serializable execution contract (per its root `brief.md` design spec). Currently a SCAFFOLDED core-only STUB (v0.0.1, zero runtime deps, UNPUBLISHED); planned runtime deps `reason` (L2) + `interpret` (L3) place it at L4 once implemented.
 - `program` — orchestrates qualifier+rater into one execute workflow with decisions.
 - `worker` — Queue+Pool over an execution seam; node:worker_threads server surface.
 - `workflow` — serializable Workflow→Phase→Task tree on a cooperative scheduler.
@@ -101,10 +102,17 @@ before creating or restructuring anything. The standard tree:
   scripts matrix (`format[:check]`, `lint[:check]`, `check[:src:*]`, `build[:src:*]`,
   `test[:src|:guides]`, `prepublishOnly` = the five check gates), exports map per
   surface with `.d.ts`/`.d.cts` pairs.
+- **Orchestration set** — mirrored byte-identical line-wide across every repo: `AGENTS.md`, `CLAUDE.md`, `SCAFFOLD.md`, `.claude/` (`settings.json` + 10 role agents), `scripts/` (`deps.sh`/`cursor.sh`/`ollama.sh` SessionStart hooks + `scaffold.sh` + `mirror.sh`). A stale copy is an audit finding; `scripts/mirror.sh` trues it up (dry-run by default, `--apply` to write, checksum-verified; source defaults to the host repo, root to its parent — run once per workspace root).
 
 **Where to look (no scouting needed):** public API → `src/<surface>/index.ts`; types →
 `types.ts`; construction → `factories.ts`; gate definitions → package.json scripts;
 test layout → vite.config.ts projects; docs surface → `guides/src/<self>.md`.
+
+**Scaffolding.** `npm run scaffold -- <name>` (`scripts/scaffold.sh`) generates a complete
+core-only package from templates frozen from `sse`/`timeout` (2026-07-18); its output passes
+all five gates. SCAFFOLD.md stays the authority for other variants and manual restructuring.
+The templates are frozen — refresh `scaffold.sh` from the live siblings whenever the line's
+devDep pins move.
 
 ## Law #2 — vendored guides
 
