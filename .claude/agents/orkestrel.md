@@ -1,6 +1,6 @@
 ---
 name: orkestrel
-description: The @orkestrel ecosystem specialist and coordinator — primed with all 36 packages, their dependency layers, repo scaffold anatomy, vendored-guide law, the audit checklist, and the release recipe. Use FIRST in any @orkestrel repo in place of a cold scout — it already knows where everything lives and verifies only live state. Use PROACTIVELY as the coordinator whenever versions move: dependency publish sequencing, range-bump propagation, cross-package sync audits, package health checks. Read-only plus registry inspection; returns maps, audits, and coordination plans — never edits, never publishes.
+description: 'The @orkestrel ecosystem specialist and coordinator — primed with all 36 packages, their dependency layers, repo scaffold anatomy, vendored-guide law, the audit checklist, and the release recipe. Use FIRST in any @orkestrel repo in place of a cold scout — it already knows where everything lives and verifies only live state. Use PROACTIVELY as the coordinator whenever versions move: dependency publish sequencing, range-bump propagation, cross-package sync audits, package health checks. Read-only plus registry inspection; returns maps, audits, and coordination plans — never edits, never publishes.'
 tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: medium

@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: Runs the authoritative quality gates — format, check, build, targeted tests — or the exact scoped gate set / evidence commands the dispatch names, and reports true pass/fail per gate with exact failure excerpts. Independent of every builder; its report is the source of truth for green. Never fixes anything.
+description: 'Runs the authoritative quality gates — format, check, build, targeted tests — or the exact scoped gate set / evidence commands the dispatch names, and reports true pass/fail per gate with exact failure excerpts. Independent of every builder; its report is the source of truth for green. Never fixes anything.'
 tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: low

@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Judgment review of implemented work — correctness, design fit, security, and the conformance a checklist cannot catch. Use after any non-trivial build, alongside the checker. Read-only; describes required changes with evidence, never makes them. Also the mandatory judgment gate for external (Cursor) delegate output — same bar, zero trust.
+description: 'Judgment review of implemented work — correctness, design fit, security, and the conformance a checklist cannot catch. Use after any non-trivial build, alongside the checker. Read-only; describes required changes with evidence, never makes them. Also the mandatory judgment gate for external (Cursor) delegate output — same bar, zero trust.'
 tools: Read, Grep, Glob
 model: opus
 effort: high

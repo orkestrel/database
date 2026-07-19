@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Implementation planning for non-trivial work. Turns a goal plus the Scout map, constraints, and prior research into a decomposition with per-unit acceptance criteria, dependencies, and file-ownership partitions. Read-only; the plan is a proposal for the Orchestrator. Routes each unit to the builder or the composer delegate, and flags grok-pass candidates.
+description: 'Implementation planning for non-trivial work. Turns a goal plus the Scout map, constraints, and prior research into a decomposition with per-unit acceptance criteria, dependencies, and file-ownership partitions. Read-only; the plan is a proposal for the Orchestrator. Routes each unit to the builder or the composer delegate, and flags grok-pass candidates.'
 tools: Read, Grep, Glob
 model: opus
 effort: high

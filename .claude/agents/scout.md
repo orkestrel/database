@@ -1,6 +1,6 @@
 ---
 name: scout
-description: Fast read-only recon. Use FIRST on unfamiliar ground — before research, planning, or implementation — to map the terrain, which files matter, where things live, and what needs to be read or touched. Cheap and quick; never reads files end-to-end.
+description: 'Fast read-only recon. Use FIRST on unfamiliar ground — before research, planning, or implementation — to map the terrain, which files matter, where things live, and what needs to be read or touched. Cheap and quick; never reads files end-to-end.'
 tools: Read, Grep, Glob
 model: sonnet
 effort: low

@@ -1,6 +1,6 @@
 ---
 name: checker
-description: Mechanical conformance review — acceptance-criteria checklist, AGENTS.md letter-of-the-law (naming, placement, centralization, exports), scope honesty, and doc/source parity. Read-only, fast, evidence-first. Use on every build; pairs with the judgment reviewer.
+description: 'Mechanical conformance review — acceptance-criteria checklist, AGENTS.md letter-of-the-law (naming, placement, centralization, exports), scope honesty, and doc/source parity. Read-only, fast, evidence-first. Use on every build; pairs with the judgment reviewer.'
 tools: Read, Grep, Glob
 model: sonnet
 effort: low

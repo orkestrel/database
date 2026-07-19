@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Deep read-only investigation. Use for open-ended questions, unfamiliar subsystems, root-cause analysis of escalated deviations, external docs research, and design questions. Absorbs the heavy context and returns a distilled report — never raw dumps.
+description: 'Deep read-only investigation. Use for open-ended questions, unfamiliar subsystems, root-cause analysis of escalated deviations, external docs research, and design questions. Absorbs the heavy context and returns a distilled report — never raw dumps.'
 tools: Read, Grep, Glob, WebSearch, WebFetch
 model: opus
 effort: high
