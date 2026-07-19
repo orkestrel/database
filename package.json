@@ -61,7 +61,7 @@
 		"clean": "node -e \"try{require('node:fs').rmSync('dist',{recursive:true,force:true})}catch{}\"",
 		"copy": "node -e \"const fs=require('node:fs'),p=require('node:path'),a=process.argv[1],b=process.argv[2];fs.mkdirSync(p.dirname(b),{recursive:true});fs.cpSync(a,b,{force:true});console.log('Copied: '+a+' to '+b)\"",
 		"tmp:txt": "node -e \"const fs=require('node:fs'),p=require('node:path');function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=p.join(d,e.name);if(e.isDirectory()){walk(f)}else if(!e.name.endsWith('.md')&&!e.name.endsWith('.txt')){const t=f+'.txt';if(!fs.existsSync(t)){fs.renameSync(f,t)}else{console.warn('Skipping '+f+' — target exists: '+t)}}}}try{walk('tmp')}catch(e){if(e.code!=='ENOENT')throw e}\"",
-		"scaffold": "bash scripts/scaffold.sh",
+		"scaffold": "scaffold",
 		"lint": "oxlint --config .oxlintrc.json --fix .",
 		"check": "tsc --noEmit --project tsconfig.json && npm run check:src",
 		"check:src": "npm run check:src:core && npm run check:src:browser && npm run check:src:server",

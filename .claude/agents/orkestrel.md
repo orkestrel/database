@@ -85,8 +85,9 @@ Repos: github `orkestrel/<name>` ↔ npm `@orkestrel/<name>`.
 
 ## Repo anatomy — every repo is scaffolded identically
 
-`SCAFFOLD.md` (in every repo) is the authoritative scaffolding reference — read it
-before creating or restructuring anything. The standard tree:
+`guides/src/scaffold.md` (the `@orkestrel/scaffold` package guide, in every repo) is the
+authoritative scaffolding reference — read it before creating or restructuring anything.
+The standard tree:
 
 - `src/<surface>/` — surfaces are `core`, `browser`, and/or `server` (the variant
   matrix); each surface has `index.ts` (barrel), `types.ts` (ALL types, centralized),
@@ -95,24 +96,24 @@ before creating or restructuring anything. The standard tree:
 - `tests/src/<surface>/` — the source test suites; `tests/guides/` — guides parity.
 - `guides/README.md` + `guides/src/` — the guides (see Law #2).
 - Root: `package.json`, `tsconfig.json`, `vite.config.ts` (defines the vitest
-  projects: `src:<surface>` and `guides`), `AGENTS.md`, `CLAUDE.md`, `SCAFFOLD.md`,
+  projects: `src:<surface>` and `guides`), `AGENTS.md`, `CLAUDE.md`,
   `README.md`, LICENSE, dotfiles (`.oxfmtrc.json`, `.oxlintrc.json` — byte-identical
   across repos).
 - `package.json` uniform fields: `files: [dist, README.md]` (guides do NOT ship),
   scripts matrix (`format[:check]`, `lint[:check]`, `check[:src:*]`, `build[:src:*]`,
   `test[:src|:guides]`, `prepublishOnly` = the five check gates), exports map per
   surface with `.d.ts`/`.d.cts` pairs.
-- **Orchestration set** — mirrored byte-identical line-wide across every repo: `AGENTS.md`, `CLAUDE.md`, `SCAFFOLD.md`, `.claude/` (`settings.json` + 10 role agents), `scripts/` (`deps.sh`/`cursor.sh`/`ollama.sh` SessionStart hooks + `scaffold.sh` + `mirror.sh`). A stale copy is an audit finding; `scripts/mirror.sh` trues it up (dry-run by default, `--apply` to write, checksum-verified; source defaults to the host repo, root to its parent — run once per workspace root).
+- **Orchestration set** — mirrored byte-identical line-wide across every repo: `AGENTS.md`, `CLAUDE.md`, `.claude/` (`settings.json` + 10 role agents), `scripts/` (`deps.sh`/`cursor.sh`/`ollama.sh` SessionStart hooks). A stale copy is an audit finding; `scaffold mirror` trues it up (dry-run by default, `--apply` to write, checksum-verified; source defaults to the host repo, root to its parent — run once per workspace root).
 
 **Where to look (no scouting needed):** public API → `src/<surface>/index.ts`; types →
 `types.ts`; construction → `factories.ts`; gate definitions → package.json scripts;
 test layout → vite.config.ts projects; docs surface → `guides/src/<self>.md`.
 
-**Scaffolding.** `npm run scaffold -- <name>` (`scripts/scaffold.sh`) generates a complete
-core-only package from templates frozen from `sse`/`timeout` (2026-07-18); its output passes
-all five gates. SCAFFOLD.md stays the authority for other variants and manual restructuring.
-The templates are frozen — refresh `scaffold.sh` from the live siblings whenever the line's
-devDep pins move.
+**Scaffolding.** `scaffold new <name> --surfaces <s> --apply` (the installed `@orkestrel/scaffold`
+bin, wired in as a devDep post-publish) generates a complete core-only package from templates
+frozen from `sse`/`timeout` (2026-07-18); its output passes all five gates. `guides/src/scaffold.md`
+stays the authority for other variants and manual restructuring. The templates are frozen IN the
+package (`src/core/templates.ts`) — refresh there whenever the line's devDep pins move.
 
 ## Law #2 — vendored guides
 

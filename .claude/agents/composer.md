@@ -1,6 +1,6 @@
 ---
 name: composer
-description: Cursor Composer delegate — the external machinist for strict, fully-specified, taste-free mechanical work: scaffolds driven by SCAFFOLD.md, bulk renames, boilerplate expansion, matrix-derived config, spec-complete migrations. Runs the Cursor CLI in an isolated git worktree; never the main tree, never commits or pushes. Returns a run report + worktree diff pointers for independent review. If judgment, naming, or API shape could show up in the result, it belongs to the builder instead.
+description: Cursor Composer delegate — the external machinist for strict, fully-specified, taste-free mechanical work: scaffolds driven by the @orkestrel/scaffold blueprint spec, bulk renames, boilerplate expansion, matrix-derived config, spec-complete migrations. Runs the Cursor CLI in an isolated git worktree; never the main tree, never commits or pushes. Returns a run report + worktree diff pointers for independent review. If judgment, naming, or API shape could show up in the result, it belongs to the builder instead.
 tools: Bash, Read, Grep, Glob
 model: sonnet
 effort: low

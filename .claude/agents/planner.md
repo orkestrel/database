@@ -26,7 +26,7 @@ yourself, spawn nothing, and return only the plan.
    output, and acceptance criteria mechanical enough for the checker to test.
 5. Route every unit: `builder` by default; `composer` only when the unit is fully
    mechanical and taste-free — the spec so complete that any correct executor produces
-   the same result (scaffolds per SCAFFOLD §13.4, bulk renames, boilerplate,
+   the same result (scaffolds per the @orkestrel/scaffold blueprint spec, bulk renames, boilerplate,
    matrix-derived config). Mark units whose risk warrants a `grok` adversarial pass
    before review.
 

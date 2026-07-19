@@ -112,7 +112,7 @@ session's rate budget — which is exactly why volume-shaped mechanical work bel
 
 **Composer — the outside machinist (Sonnet's counterpart).** Same band as the builder,
 different test: route to `composer` when the unit is so completely specified that taste
-cannot show up in the result — scaffolds driven by SCAFFOLD.md (§13.4), bulk renames,
+cannot show up in the result — scaffolds driven by the @orkestrel/scaffold blueprint spec, bulk renames,
 boilerplate expansion, matrix-derived config, spec-complete migrations. Route to
 `builder` when judgment within the spec still matters — naming under AGENTS §4, API
 shape, anything a reader will feel. The test: if two correct executors would produce
