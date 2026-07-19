@@ -57,20 +57,20 @@ builder's dispatch is execution-shaped, not exploration-shaped.
 
 ### Routing table
 
-| Work                                                             | Model                                                              |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Repo map, find-the-files, "what exists / what to read"           | Sonnet                                                             |
-| Small commands, evidence capture, log gathering                  | Sonnet                                                             |
-| Implement a specified, bounded unit                              | Sonnet                                                             |
-| Scoped verification / authoritative gate sweep                   | Sonnet                                                             |
-| Checklist / conformance review                                   | Sonnet                                                             |
-| Orkestrel terrain map, cross-package audit, release coordination | Sonnet — the `orkestrel` specialist                                |
-| Deep research, unknown-unknowns, root-cause analysis             | Opus                                                               |
-| Implementation planning for non-trivial work                     | Opus                                                               |
-| Judgment review (correctness, design, security)                  | Opus                                                               |
-| Decisions, integration, final acceptance                         | Fable — never delegated                                            |
-| Fully-specified mechanical bulk — scaffold, rename, boilerplate  | Composer (Cursor) — external, worktree-isolated; fallback: builder |
-| Heavier independent second-opinion / adversarial pass            | Grok (Cursor) — external, ask-only; fallback: reviewer             |
+| Work                                                                        | Model                                                              |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Repo map, find-the-files, "what exists / what to read"                      | Sonnet                                                             |
+| Small commands, evidence capture, log gathering                             | Sonnet                                                             |
+| Implement a specified, bounded unit                                         | Sonnet                                                             |
+| Scoped verification / authoritative gate sweep                              | Sonnet                                                             |
+| Checklist / conformance review                                              | Sonnet                                                             |
+| Orkestrel terrain map, cross-package audit, release coordination            | Sonnet — the `orkestrel` specialist                                |
+| Deep research, unknown-unknowns, root-cause analysis                        | Opus                                                               |
+| Implementation planning for non-trivial work                                | Opus                                                               |
+| Judgment review (correctness, design, security)                             | Opus                                                               |
+| Decisions, integration, final acceptance                                    | Fable — never delegated                                            |
+| Very simple fully-specified mechanical bulk — scaffold, rename, boilerplate | Composer (Cursor) — external, worktree-isolated; fallback: builder |
+| Heavier independent second-opinion / adversarial pass                       | Grok (Cursor) — external, ask-only; fallback: reviewer             |
 
 ### Model configuration — mechanics
 
@@ -113,20 +113,22 @@ session's rate budget — which is exactly why volume-shaped mechanical work bel
 **Composer — the outside machinist (Sonnet's counterpart).** Same band as the builder,
 different test: route to `composer` when the unit is so completely specified that taste
 cannot show up in the result — scaffolds driven by the @orkestrel/scaffold blueprint spec, bulk renames,
-boilerplate expansion, matrix-derived config, spec-complete migrations. Route to
+boilerplate expansion, matrix-derived config, small spec-complete migrations. Route to
 `builder` when judgment within the spec still matters — naming under AGENTS §4, API
 shape, anything a reader will feel. The test: if two correct executors would produce
-meaningfully different output, it is builder work. Composer ALWAYS runs in an isolated
-worktree (`-w`), never the main tree, and never commits or pushes; its product is a
-diff for review, applied by you after audit.
+meaningfully different output, it is builder work. Composer is ONLY for VERY SIMPLE,
+SMALL, tedious, fully-specified units; a class redesign or any API-shaping change is
+NEVER composer work, no matter how detailed the spec. Composer ALWAYS runs in an
+isolated worktree (`-w`), never the main tree, and never commits or pushes; its product
+is a diff for review, applied by you after audit.
 
 **Grok — the outside adversary (Opus's counterpart).** Above the composer/builder band:
 an independent, heavier second look — adversarial review for concurrency, security,
 failure modes, and wrong assumptions; alternative-approach probing before a costly
 decision. Always ask-mode, always read-only. Grok widens the search; it never concludes
-it. Findings come back labeled as hypotheses, the `reviewer` (or you) verifies each
-against source, and the real thinking — architecture, tradeoffs, diagnosis, final
-judgment — remains Opus and you, full stop.
+it. Grok never designs and never implements. Findings come back labeled as hypotheses,
+the `reviewer` (or you) verifies each against source, and the real thinking —
+architecture, tradeoffs, diagnosis, final judgment — remains Opus and you, full stop.
 
 ### External mechanics
 
@@ -155,7 +157,9 @@ judgment — remains Opus and you, full stop.
 - **Bench first, triad as fallback.** Where a unit qualifies for the bench, the bench
   is the FIRST route: `composer` before the `builder` on qualifying mechanical units,
   a `grok` pass before the Opus review on flagged ones — spend Cursor budget before
-  Claude rate budget wherever house taste is not in play. The Claude counterpart is
+  Claude rate budget wherever house taste is not in play. Bench-first applies ONLY to
+  units already proven taste-free and mechanical; all design and any judgment-bearing
+  implementation is Claude-only, regardless of budget. The Claude counterpart is
   the standing fallback, taken without ceremony when the dispatcher reports the bench
   dark (CLI absent — e.g. the Ollama-only environment), the model unavailable, auth
   failing, a re-dispatch failing, or the unit revealed as taste-bearing mid-flight.
@@ -399,13 +403,15 @@ own fresh context, model, tool allowlist, and effort. Dispatch by name.
   edits, never publishes; verifies its knowledge against live state and reports drift.
 
 - **`composer` (Cursor Composer via CLI, writes in an isolated worktree only)** —
-  External machinist for taste-free, fully-specified bulk: scaffolds, renames,
-  boilerplate, matrix-derived config. Never the main tree, never commits. Returns: a
+  External machinist for very simple, small, tedious, taste-free, fully-specified
+  bulk: scaffolds, renames, boilerplate, matrix-derived config — never a redesign,
+  never an API-shaping change. Never the main tree, never commits. Returns: a
   run report — worktree path, diffstat, scope check, distilled self-report. Its diff
   is a PROPOSAL: `checker` + `reviewer` audit it before you apply.
 
 - **`grok` (Cursor Grok via CLI, read-only)** — External adversary for independent
-  heavier review and alternative probing, ask-mode only. Returns: severity-ranked
+  heavier review and alternative probing, ask-mode only: auditor and second opinion;
+  it never designs, never implements, never decides. Returns: severity-ranked
   findings labeled as HYPOTHESES with file:line evidence — verified by the `reviewer`
   or you, never adopted on trust.
 
