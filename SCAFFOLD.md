@@ -222,7 +222,7 @@ onto one line, while the real file keeps one entry per line):
 		"vitest": "^4.1.10"
 	},
 	"engines": {
-		"node": ">=24"
+		"node": ">=22"
 	}
 }
 ```
@@ -234,7 +234,7 @@ onto one line, while the real file keeps one entry per line):
 "type": "module",
 "sideEffects": false,
 "publishConfig": { "access": "public" },
-"engines": { "node": ">=24" },
+"engines": { "node": ">=22" },
 "license": "MIT"
 ```
 
@@ -1190,7 +1190,7 @@ For a quick drift scan across the fleet, these must hold in every repo:
 
 | Invariant                                                     | Value                                                              |
 | ------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `engines.node`                                                | `>=24`                                                             |
+| `engines.node`                                                | `>=22`                                                             |
 | `type` / `sideEffects` / `files`                              | `module` / `false` / `["dist","README.md"]`                        |
 | `publishConfig.access`                                        | `public`                                                           |
 | typescript / vite / vitest / vite-plugin-dts / oxfmt / oxlint | `^6.0.3` / `^8.1.4` / `^4.1.10` / `^5.0.3` / `^0.58.0` / `^1.73.0` |
