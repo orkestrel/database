@@ -5,16 +5,13 @@
 		"moduleResolution": "bundler",
 		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"types": ["node", "vite/client", "vitest/globals"],
-
 		"moduleDetection": "force",
 		"resolveJsonModule": true,
-
 		"strict": true,
 		"noImplicitOverride": true,
 		"noFallthroughCasesInSwitch": true,
 		"forceConsistentCasingInFileNames": true,
 		"skipLibCheck": true,
-
 		"noEmit": true,
 		"paths": {
 			"@src/core": ["./src/core/index.ts"],
