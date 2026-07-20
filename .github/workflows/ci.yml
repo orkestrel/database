@@ -1,6 +1,7 @@
 name: ci.yml
 
 on:
+  push:
   pull_request:
 
 jobs:
@@ -23,23 +24,41 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Format check
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama
+        run: |
+          sudo systemctl stop ollama
+          OLLAMA_ORIGINS="*" OLLAMA_HOST="127.0.0.1:11434" nohup ollama serve > /dev/null 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
+              echo "Ollama is ready"
+              break
+            fi
+            echo "Waiting for Ollama... ($i/30)"
+            sleep 1
+          done
+      - name: Pull models
+        run: ollama pull qwen3.5:2b-q4_K_M
+
+      - name: Check formatting
         run: npm run format:check
 
-      - name: Lint check
+      - name: Lint
         run: npm run lint:check
 
       - name: Typecheck
         run: npm run check
 
-      - name: Typecheck scoped sources
+      - name: Typecheck src
         run: npm run check:src
 
       - name: Build
         run: npm run build
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
 
       - name: Run tests
         run: npm test
