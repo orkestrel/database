@@ -928,6 +928,7 @@ Docs are not comments — they are enforced contracts.
 - **`guides/README.md` is the map** — a dual-axis index (by-concept: spec ↔ source ↔ tests ↔ showcase; and by-directory). Read it first to build a mental model.
 - **`ROADMAP.md` is the plan of record** — upcoming work as sequenced chunks, each gated green before the next; read it to see where the project is headed and why.
 - **A showcase, when present, is proof.** If the library ships a public API, the app demonstrates it in real markup; a missing demo means a missing feature, caught by parity tests.
+- Guide code fences import a package's own surface through its published specifier — `@orkestrel/<name>` for the primary/core surface, `@orkestrel/<name>/<surface>` for a secondary surface — never the in-repo `@src/*` alias, which is reserved for source and tests.
 
 ---
 
