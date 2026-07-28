@@ -78,8 +78,8 @@ export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
 			return this.#table.records({
 				conditions: this.#conditions,
 				order: this.#orders,
-				limit: this.#limit,
-				offset: this.#offset,
+				...(this.#limit !== undefined ? { limit: this.#limit } : {}),
+				...(this.#offset !== undefined ? { offset: this.#offset } : {}),
 			})
 		}
 		// With filters → fetch conditions + order, filter in memory, then page.
@@ -118,7 +118,11 @@ export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
 		// condition-matched rows (matching `all()`'s no-filter fast path).
 		if (this.#filters.length === 0) {
 			yield* this.#table.scan(
-				{ conditions: this.#conditions, limit: this.#limit, offset: this.#offset },
+				{
+					conditions: this.#conditions,
+					...(this.#limit !== undefined ? { limit: this.#limit } : {}),
+					...(this.#offset !== undefined ? { offset: this.#offset } : {}),
+				},
 				options,
 			)
 			return

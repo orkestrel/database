@@ -9,5 +9,10 @@
 		"rootDir": "../../src",
 		"outDir": "../../dist/src"
 	},
-	"include": ["../../src/server/**/*.ts"]
+	"include": [
+		"../../src/server/**/*.cts",
+		"../../src/server/**/*.mts",
+		"../../src/server/**/*.ts",
+		"../../src/server/**/*.tsx"
+	]
 }

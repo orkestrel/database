@@ -33,7 +33,7 @@ export class DatabaseError extends Error {
 		super(message)
 		this.name = 'DatabaseError'
 		this.code = code
-		this.context = context
+		if (context !== undefined) this.context = context
 	}
 }
 

@@ -526,7 +526,9 @@ describe('Table — native hook dispatch', () => {
 		expect(result).toEqual([RECORDING_ROW])
 		// And it received the FULL criteria (records must honor filter + order + page).
 		expect(recordsCalls).toHaveLength(1)
-		expect(recordsCalls[0].conditions).toHaveLength(1)
+		const [criteria] = recordsCalls
+		if (criteria === undefined) throw new Error('Expected one recorded criteria')
+		expect(criteria.conditions).toHaveLength(1)
 	})
 
 	it('count prefers the driver hook and is handed conditions only (no paging)', async () => {

@@ -284,6 +284,7 @@ export function mapMigrationError(error: IndexedDBError): DatabaseError {
  * ```
  */
 export function deriveIndexName(columns: readonly string[]): string {
-	if (columns.length === 1) return columns[0]
-	return `${columns.length}#${columns.map((column) => `${column.length}:${column}`).join('')}`
+	const [column] = columns
+	if (columns.length === 1 && column !== undefined) return column
+	return `${columns.length}#${columns.map((part) => `${part.length}:${part}`).join('')}`
 }

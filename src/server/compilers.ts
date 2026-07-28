@@ -1,5 +1,6 @@
 import type { ColumnType, Condition, Criteria, Order, TableSchema } from '@src/core'
 import type { CompiledSQL, SQLiteValue } from './types.js'
+import { DatabaseError } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { encodeValue, fieldColumn, quote } from './helpers.js'
 
@@ -19,11 +20,12 @@ import { encodeValue, fieldColumn, quote } from './helpers.js'
  * ```
  */
 export function jsonTypeColumn(path: readonly string[]): string {
-	const rest = path
-		.slice(1)
-		.map((key) => '.' + key.replaceAll("'", "''"))
-		.join('')
-	return 'json_type(' + quote(path[0]) + ", '$" + rest + "')"
+	const [column, ...nested] = path
+	if (column === undefined) {
+		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
+	}
+	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
+	return 'json_type(' + quote(column) + ", '$" + rest + "')"
 }
 
 // The `Criteria` → parameterized SQL compiler — the native-query payoff. It turns
@@ -171,8 +173,6 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 	const column = fieldColumn(condition.column)
 	const nested = !isString(condition.column)
 	const declared = isString(condition.column) ? declaredType(condition.column, schema) : undefined
-	const encode = (value: unknown): SQLiteValue =>
-		encodeValue(value, nested ? valueType(value) : (declared ?? 'json'))
 	const first = condition.values[0]
 	const second = condition.values[1]
 	const nullOperand = first === null || first === undefined
@@ -180,10 +180,14 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 	// array (a nested path) — disambiguates a present JSON `null` from an
 	// absent path under `equals` / `not` (see the truth table above).
 	const jsonType = !isString(condition.column) ? jsonTypeColumn(condition.column) : ''
+	let sql: string
+	let values: readonly unknown[]
 	switch (condition.operator) {
 		case 'equals':
 			if (nullOperand && nested) return { sql: jsonType + " = 'null'", params: [] }
-			return { sql: column + ' = ?', params: [encode(first)] }
+			sql = column + ' = ?'
+			values = [first]
+			break
 		case 'not':
 			if (nullOperand) {
 				if (nested) {
@@ -197,21 +201,37 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 				// scalar) — the engine's `not null` matches unconditionally.
 				return { sql: '1', params: [] }
 			}
-			return { sql: '(' + column + ' != ? OR ' + column + ' IS NULL)', params: [encode(first)] }
+			sql = '(' + column + ' != ? OR ' + column + ' IS NULL)'
+			values = [first]
+			break
 		case 'above':
-			return { sql: column + ' > ?', params: [encode(first)] }
+			sql = column + ' > ?'
+			values = [first]
+			break
 		case 'below':
-			return { sql: '(' + column + ' < ? OR ' + column + ' IS NULL)', params: [encode(first)] }
+			sql = '(' + column + ' < ? OR ' + column + ' IS NULL)'
+			values = [first]
+			break
 		case 'from':
-			return { sql: column + ' >= ?', params: [encode(first)] }
+			sql = column + ' >= ?'
+			values = [first]
+			break
 		case 'to':
-			return { sql: '(' + column + ' <= ? OR ' + column + ' IS NULL)', params: [encode(first)] }
+			sql = '(' + column + ' <= ? OR ' + column + ' IS NULL)'
+			values = [first]
+			break
 		case 'between':
-			return { sql: column + ' BETWEEN ? AND ?', params: [encode(first), encode(second)] }
+			sql = column + ' BETWEEN ? AND ?'
+			values = [first, second]
+			break
 		case 'like':
-			return { sql: column + ' LIKE ?', params: [encode(first)] }
+			sql = column + ' LIKE ?'
+			values = [first]
+			break
 		case 'glob':
-			return { sql: column + ' GLOB ?', params: [encode(first)] }
+			sql = column + ' GLOB ?'
+			values = [first]
+			break
 		case 'starts': {
 			// Case-sensitive, exact compile (replaces the old LIKE-based one, which
 			// was ASCII-only case-INsensitive — a mismatch with the engine's
@@ -222,10 +242,9 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			const text = isString(first) ? first : ''
 			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
 			const length = Array.from(text).length
-			return {
-				sql: '(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)',
-				params: [encode(first)],
-			}
+			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)'
+			values = [first]
+			break
 		}
 		case 'ends': {
 			// Mirror of `starts`: `substr(<col>, -N)` (SQLite's 2-arg form counts
@@ -233,34 +252,37 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			const text = isString(first) ? first : ''
 			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
 			const length = Array.from(text).length
-			return {
-				sql: '(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)',
-				params: [encode(first)],
-			}
+			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)'
+			values = [first]
+			break
 		}
 		case 'any':
 			if (condition.values.length === 0) return { sql: '0', params: [] }
-			return {
-				sql: column + ' IN (' + condition.values.map(() => '?').join(', ') + ')',
-				params: condition.values.map(encode),
-			}
+			sql = column + ' IN (' + condition.values.map(() => '?').join(', ') + ')'
+			values = condition.values
+			break
 		case 'none':
 			if (condition.values.length === 0) return { sql: '1', params: [] }
-			return {
-				sql:
-					'(' +
-					column +
-					' NOT IN (' +
-					condition.values.map(() => '?').join(', ') +
-					') OR ' +
-					column +
-					' IS NULL)',
-				params: condition.values.map(encode),
-			}
+			sql =
+				'(' +
+				column +
+				' NOT IN (' +
+				condition.values.map(() => '?').join(', ') +
+				') OR ' +
+				column +
+				' IS NULL)'
+			values = condition.values
+			break
 		case 'absent':
 			return { sql: column + ' IS NULL', params: [] }
 		case 'present':
 			return { sql: column + ' IS NOT NULL', params: [] }
+	}
+	return {
+		sql,
+		params: values.map((value) =>
+			encodeValue(value, nested ? valueType(value) : (declared ?? 'json')),
+		),
 	}
 }
 
@@ -286,13 +308,14 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
  * ```
  */
 export function compileWhere(conditions: readonly Condition[], schema: TableSchema): CompiledSQL {
-	if (conditions.length === 0) return { sql: '', params: [] }
-	const head = fragment(conditions[0], schema)
+	const [first, ...remaining] = conditions
+	if (first === undefined) return { sql: '', params: [] }
+	const head = fragment(first, schema)
 	let clause = head.sql
 	const params: SQLiteValue[] = [...head.params]
-	for (let index = 1; index < conditions.length; index += 1) {
-		const next = fragment(conditions[index], schema)
-		const operator = conditions[index].connector === 'or' ? 'OR' : 'AND'
+	for (const condition of remaining) {
+		const next = fragment(condition, schema)
+		const operator = condition.connector === 'or' ? 'OR' : 'AND'
 		clause = '(' + clause + ' ' + operator + ' ' + next.sql + ')'
 		params.push(...next.params)
 	}

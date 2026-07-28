@@ -1,4 +1,100 @@
 {
+	"$schema": "https://json.schemastore.org/claude-code-settings.json",
+	"enableAllProjectMcpServers": true,
+	"permissions": {
+		"deny": [
+			"Read(.env*)",
+			"Read(**/.env*)",
+			"Read(.npmrc)",
+			"Read(**/.npmrc)",
+			"Read(.pypirc)",
+			"Read(**/.pypirc)",
+			"Read(.netrc)",
+			"Read(**/.netrc)",
+			"Read(.git-credentials)",
+			"Read(**/.git-credentials)",
+			"Read(auth.json)",
+			"Read(**/auth.json)",
+			"Read(credentials)",
+			"Read(**/credentials)",
+			"Read(credentials.json)",
+			"Read(**/credentials.json)",
+			"Read(settings.local.json)",
+			"Read(**/settings.local.json)",
+			"Read(application_default_credentials.json)",
+			"Read(**/application_default_credentials.json)",
+			"Read(*.pem)",
+			"Read(**/*.pem)",
+			"Read(*.key)",
+			"Read(**/*.key)",
+			"Read(*.p12)",
+			"Read(**/*.p12)",
+			"Read(*.pfx)",
+			"Read(**/*.pfx)",
+			"Read(*.pkcs12)",
+			"Read(**/*.pkcs12)",
+			"Read(*.jks)",
+			"Read(**/*.jks)",
+			"Read(id_rsa)",
+			"Read(**/id_rsa)",
+			"Read(id_ed25519)",
+			"Read(**/id_ed25519)",
+			"Read(.aws/credentials)",
+			"Read(**/.aws/credentials)",
+			"Read(.ssh/**)",
+			"Read(**/.ssh/**)",
+			"Read(.aws/**)",
+			"Read(**/.aws/**)",
+			"Read(.azure/**)",
+			"Read(**/.azure/**)",
+			"Read(.kube/**)",
+			"Read(**/.kube/**)",
+			"Read(.gnupg/**)",
+			"Read(**/.gnupg/**)",
+			"Read(.docker/config.json)",
+			"Read(**/.docker/config.json)",
+			"Read(kubeconfig)",
+			"Read(**/kubeconfig)",
+			"Read(.config/gh/**)",
+			"Read(**/.config/gh/**)",
+			"Read(.config/gcloud/**)",
+			"Read(**/.config/gcloud/**)",
+			"Read(.local/share/keyrings/**)",
+			"Read(**/.local/share/keyrings/**)",
+			"Read(*service-account*.json)",
+			"Read(**/*service-account*.json)",
+			"Read(//**/.env)",
+			"Read(//**/.env.*)",
+			"Read(//**/.npmrc)",
+			"Read(//**/auth.json)",
+			"Read(//**/.pypirc)",
+			"Read(//**/.netrc)",
+			"Read(//**/.git-credentials)",
+			"Read(//**/credentials)",
+			"Read(//**/credentials.json)",
+			"Read(//**/settings.local.json)",
+			"Read(//**/application_default_credentials.json)",
+			"Read(//**/*.pem)",
+			"Read(//**/*.key)",
+			"Read(//**/*.p12)",
+			"Read(//**/*.pfx)",
+			"Read(//**/*.pkcs12)",
+			"Read(//**/*.jks)",
+			"Read(//**/id_rsa)",
+			"Read(//**/id_ed25519)",
+			"Read(//**/.ssh/**)",
+			"Read(//**/.aws/**)",
+			"Read(//**/.azure/**)",
+			"Read(//**/.kube/**)",
+			"Read(//**/.gnupg/**)",
+			"Read(//**/.docker/config.json)",
+			"Read(//**/kubeconfig)",
+			"Read(//**/.config/gh/**)",
+			"Read(//**/.config/gcloud/**)",
+			"Read(//**/.local/share/keyrings/**)",
+			"Read(//**/*service-account*.json)"
+		]
+	},
 	"hooks": {
 		"SessionStart": [
 			{
@@ -18,6 +114,22 @@
 						"type": "command",
 						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/cursor.sh",
 						"timeout": 120
+					},
+					{
+						"type": "command",
+						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/codex.sh",
+						"timeout": 120
+					}
+				]
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "git -C \"${CLAUDE_PROJECT_DIR}\" diff --check",
+						"timeout": 30
 					}
 				]
 			}

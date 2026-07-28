@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Harden Orkestrel Package'
+  short_description: 'Research, centralize, test, and harden one package'
+  default_prompt: 'Use $orkestrel-harden-package to bring this package to enterprise-grade production readiness.'

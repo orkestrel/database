@@ -337,6 +337,15 @@ describe('SQLiteDriver — native transaction', () => {
 		)
 	})
 
+	it('isolates a settled stale handle from the next active transaction', async () => {
+		const first = await runTransaction()
+		await first.commit()
+		const second = await runTransaction()
+		const stale = await first.rollback().catch((caught: unknown) => caught)
+		expect(isDatabaseError(stale) ? stale.code : 'not-database').toBe('CONFLICT')
+		await second.commit()
+	})
+
 	it('runs a real native transaction through Database.transaction (commit + rollback)', async () => {
 		// A dedicated driver + database (not the shared fixture `driver`): letting
 		// `Database` own `open()` derives the schema from `tables`, which would

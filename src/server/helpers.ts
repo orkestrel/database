@@ -10,8 +10,10 @@ import type {
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from './types.js'
+import { DatabaseError } from '@src/core'
 import { isBoolean, isFiniteNumber, isString } from '@orkestrel/contract'
 import { randomUUID } from 'node:crypto'
+import { EXACT_COLUMN_TYPES, EXACT_RANGE_COLUMN_TYPES } from './constants.js'
 
 // The server's key-minting `KeyFunction` implementation — `core` mints no keys
 // itself (AGENTS §1: cross-environment code touches no `node:*`), so a server
@@ -58,40 +60,6 @@ export function generateKey(): string {
 // not, the driver falls back to a full scan refined through the same core
 // engine every scan-only driver (`MemoryDriver`, `JSONDriver`) already uses —
 // exact → native, otherwise → refine, never a silent semantics drift.
-
-/**
- * The declared {@link ColumnType}s whose SQL EQUALITY comparisons (`equals` /
- * `not` / `any` / `none`) and `starts` / `ends` compiles are provably
- * engine-exact under declared-type trust — `text` / `integer` / `real` /
- * `boolean`; a `json` or `blob` column always refines instead.
- *
- * @remarks
- * This set governs equality and prefix/suffix matching only. RANGE
- * comparisons (`above` / `below` / `from` / `to` / `between`) and `ORDER BY`
- * are exact for `integer` / `real` / `boolean` but NOT for `text`: compiled
- * SQL orders/ranges under SQLite's default BINARY collation, which compares
- * TEXT byte-for-byte as UTF-8 — equivalent to Unicode CODE-POINT order —
- * while the core engine's `compareValues` orders JS strings with `<`, which
- * compares UTF-16 CODE-UNIT order. The two orders diverge for supplementary-
- * plane characters (code points ≥ U+10000, e.g. many emoji): a lead surrogate
- * (`\uD800`–`\uDBFF`) sorts BELOW ``–`￿` in code-unit order, while
- * its code point sorts ABOVE them. So `isExactCondition`'s range family and
- * `isExactOrder` exclude `text`, refining through the core engine instead. A
- * future opt-in "trusted collation" mode (the caller vouches the column's
- * values are BMP-only, or a custom SQLite collation matching `compareValues`
- * is registered) could restore native text ranges/ordering.
- */
-export const EXACT_COLUMN_TYPES: readonly ColumnType[] = ['text', 'integer', 'real', 'boolean']
-
-/**
- * The declared {@link ColumnType}s whose SQL RANGE comparisons
- * (`above` / `below` / `from` / `to` / `between`) and `ORDER BY` compiles are
- * provably engine-exact — `integer` / `real` / `boolean` only. `text` is
- * excluded: see {@link EXACT_COLUMN_TYPES}'s remarks for the BINARY-collation
- * (code-point) vs. JS `<` (code-unit) divergence on supplementary-plane
- * characters.
- */
-export const EXACT_RANGE_COLUMN_TYPES: readonly ColumnType[] = ['integer', 'real', 'boolean']
 
 /**
  * Whether a value's runtime type matches a column's declared exact type —
@@ -313,11 +281,12 @@ export function quote(identifier: string): string {
  */
 export function fieldColumn(path: FieldPath): string {
 	if (isString(path)) return quote(path)
-	const rest = path
-		.slice(1)
-		.map((key) => '.' + key.replaceAll("'", "''"))
-		.join('')
-	return 'json_extract(' + quote(path[0]) + ", '$" + rest + "')"
+	const [column, ...nested] = path
+	if (column === undefined) {
+		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
+	}
+	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
+	return 'json_extract(' + quote(column) + ", '$" + rest + "')"
 }
 
 /**
@@ -457,6 +426,44 @@ export function encodeRow(row: Row, schema: TableSchema): SQLiteRow {
 }
 
 /**
+ * Extract a stored row's values in a declared positional order.
+ *
+ * @remarks
+ * SQLite statements bind arrays positionally. Every requested column must be
+ * present in `row`; an incomplete backend row is a typed `DRIVER` fault carrying
+ * the table and missing column in its context.
+ *
+ * @param row - The stored SQLite row
+ * @param names - The column names in binding order
+ * @param table - The owning table name for fault context
+ * @returns The row values in the same order as `names`
+ * @throws A `DRIVER` {@link DatabaseError} when a requested column is missing
+ *
+ * @example
+ * ```ts
+ * extractValues({ id: 'u1', age: 36 }, ['age', 'id'], 'users') // [36, 'u1']
+ * ```
+ */
+export function extractValues(
+	row: SQLiteRow,
+	names: readonly string[],
+	table: string,
+): readonly SQLiteValue[] {
+	const values: SQLiteValue[] = []
+	for (const name of names) {
+		const value = row[name]
+		if (value === undefined) {
+			throw new DatabaseError('DRIVER', 'SQLite row is missing a declared column', {
+				table,
+				column: name,
+			})
+		}
+		values.push(value)
+	}
+	return values
+}
+
+/**
  * Decode a stored {@link SQLiteRow} back to a {@link Row} by its table's schema.
  *
  * @remarks
@@ -479,7 +486,9 @@ export function encodeRow(row: Row, schema: TableSchema): SQLiteRow {
 export function decodeRow(row: SQLiteRow, schema: TableSchema): Row {
 	const result: Row = {}
 	for (const column of schema.columns) {
-		const decoded = decodeValue(row[column.name], column.type)
+		const value = row[column.name]
+		if (value === undefined) continue
+		const decoded = decodeValue(value, column.type)
 		if (decoded !== undefined) result[column.name] = decoded
 	}
 	return result

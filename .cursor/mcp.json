@@ -1,0 +1,12 @@
+{
+	"mcpServers": {
+		"codex": {
+			"command": "codex",
+			"args": ["mcp-server"]
+		},
+		"claude": {
+			"command": "claude",
+			"args": ["mcp", "serve"]
+		}
+	}
+}

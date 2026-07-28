@@ -12,6 +12,7 @@ import {
 	applyCriteria,
 	compareValues,
 	DatabaseError,
+	deepEqual,
 	extractKey,
 	isDriverMeta,
 	matchesCriteria,
@@ -287,7 +288,15 @@ export class IndexedDBDriver implements DriverInterface {
 							const store = transaction.store(name)
 							await store.clear()
 							for (let index = 0; index < snapshot.keys.length; index += 1) {
-								await store.set(snapshot.rows[index], snapshot.keys[index])
+								const row = snapshot.rows[index]
+								const key = snapshot.keys[index]
+								if (row === undefined || key === undefined) {
+									throw new DatabaseError('DRIVER', 'IndexedDB snapshot entry is incomplete', {
+										table: name,
+										index,
+									})
+								}
+								await store.set(row, key)
 							}
 						}
 					})
@@ -380,7 +389,7 @@ export class IndexedDBDriver implements DriverInterface {
 				name: this.#name,
 				version: version + 1,
 				stores: this.#stores(schema),
-				upgrade: (context) => this.#upgrade(context, plan.steps),
+				upgrade: this.#upgrade.bind(this, plan.steps),
 			})
 			await database.connect()
 			// Only on success: adopt the connection AND commit the local map.
@@ -431,10 +440,13 @@ export class IndexedDBDriver implements DriverInterface {
 		const stores: Record<string, StoreDefinition> = { [META_STORE]: {} }
 		for (const table of schema.values()) {
 			stores[table.name] = {
-				indexes: table.indexes.map((columns) => ({
-					name: deriveIndexName(columns),
-					path: columns.length === 1 ? columns[0] : [...columns],
-				})),
+				indexes: table.indexes.map((columns) => {
+					const [column] = columns
+					return {
+						name: deriveIndexName(columns),
+						path: columns.length === 1 && column !== undefined ? column : [...columns],
+					}
+				}),
 			}
 		}
 		return stores
@@ -484,11 +496,6 @@ export class IndexedDBDriver implements DriverInterface {
 	// of the real database. The caller commits the map into `#schema` only after
 	// the upgrade connects successfully.
 	#applySteps(schema: Map<string, TableSchema>, steps: readonly MigrationStep[]): void {
-		// Deep-equal two index-column-group arrays (order-sensitive: an index over
-		// `[a, b]` is not the same index as `[b, a]`) — mirrors planMigration's own
-		// local `sameIndex` (src/core/helpers.ts).
-		const sameIndex = (left: readonly string[], right: readonly string[]): boolean =>
-			left.length === right.length && left.every((column, position) => column === right[position])
 		for (const step of steps) {
 			switch (step.operation) {
 				case 'table.add':
@@ -529,7 +536,7 @@ export class IndexedDBDriver implements DriverInterface {
 					if (table !== undefined) {
 						schema.set(step.table, {
 							...table,
-							indexes: table.indexes.filter((index) => !sameIndex(index, step.index)),
+							indexes: table.indexes.filter((index) => !deepEqual(index, step.index)),
 						})
 					}
 					break
@@ -544,7 +551,7 @@ export class IndexedDBDriver implements DriverInterface {
 	// it walks a live cursor and rewrites each row through the core
 	// `migrateRows`, updating in place — the only IDB-await-only work permitted
 	// inside an upgrade transaction.
-	async #upgrade(context: IndexedDBUpgradeContext, steps: readonly MigrationStep[]): Promise<void> {
+	async #upgrade(steps: readonly MigrationStep[], context: IndexedDBUpgradeContext): Promise<void> {
 		for (const step of steps) {
 			switch (step.operation) {
 				case 'table.remove':
@@ -552,7 +559,8 @@ export class IndexedDBDriver implements DriverInterface {
 					break
 				case 'index.add': {
 					const name = deriveIndexName(step.index)
-					const path = step.index.length === 1 ? step.index[0] : [...step.index]
+					const [column] = step.index
+					const path = step.index.length === 1 && column !== undefined ? column : [...step.index]
 					context.transaction.objectStore(step.table).createIndex(name, path)
 					break
 				}
@@ -564,6 +572,11 @@ export class IndexedDBDriver implements DriverInterface {
 					let cursor = await store.cursor()
 					while (cursor !== null) {
 						const [migrated] = migrateRows([cursor.value], [step])
+						if (migrated === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+								table: step.table,
+							})
+						}
 						await cursor.update(migrated)
 						cursor = await cursor.continue()
 					}

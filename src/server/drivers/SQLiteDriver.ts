@@ -28,6 +28,7 @@ import {
 	decodeRow,
 	encodeRow,
 	encodeValue,
+	extractValues,
 	isExactCondition,
 	isExactCriteria,
 	quote,
@@ -90,7 +91,7 @@ export class SQLiteDriver implements DriverInterface {
 	readonly #options: SQLiteDriverOptions
 	#database: SQLiteDatabaseInterface | undefined
 	#schema = new Map<string, TableSchema>()
-	#transacting = false
+	#transaction: object | undefined
 
 	constructor(path: string, options?: SQLiteDriverOptions) {
 		this.#path = path
@@ -109,9 +110,11 @@ export class SQLiteDriver implements DriverInterface {
 			this.#database?.close()
 			const database = createSQLiteDatabase({
 				path: this.#path,
-				readonly: this.#options.readonly,
-				timeout: this.#options.timeout,
-				foreignKeys: this.#options.foreignKeys,
+				...(this.#options.readonly !== undefined ? { readonly: this.#options.readonly } : {}),
+				...(this.#options.timeout !== undefined ? { timeout: this.#options.timeout } : {}),
+				...(this.#options.foreignKeys !== undefined
+					? { foreignKeys: this.#options.foreignKeys }
+					: {}),
 			})
 			database.connect()
 			for (const [name, value] of Object.entries(this.#options.pragmas ?? {})) {
@@ -153,7 +156,7 @@ export class SQLiteDriver implements DriverInterface {
 		this.#guard(() => {
 			const encoded = encodeRow({ ...row, [schema.primary]: key }, schema)
 			const names = schema.columns.map((column) => column.name)
-			const values = names.map((name) => encoded[name])
+			const values = extractValues(encoded, names, table)
 			this.#require()
 				.prepare(
 					'INSERT OR REPLACE INTO ' +
@@ -327,7 +330,11 @@ export class SQLiteDriver implements DriverInterface {
 		const conditions = criteria.conditions ?? []
 		if (conditions.every((condition) => isExactCondition(condition, schema))) {
 			const compiled = compileCriteria(
-				{ conditions, limit: criteria.limit, offset: criteria.offset },
+				{
+					conditions,
+					...(criteria.limit !== undefined ? { limit: criteria.limit } : {}),
+					...(criteria.offset !== undefined ? { offset: criteria.offset } : {}),
+				},
 				schema,
 			)
 			for (const row of this.#require()
@@ -365,25 +372,11 @@ export class SQLiteDriver implements DriverInterface {
 	async transaction(): Promise<TransactionInterface> {
 		const database = this.#require()
 		this.#guard(() => database.exec('BEGIN'))
-		let settled = false
-		this.#transacting = true
+		const token = {}
+		this.#transaction = token
 		return {
-			commit: async () => {
-				if (settled) {
-					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
-				}
-				settled = true
-				this.#transacting = false
-				this.#guard(() => database.exec('COMMIT'))
-			},
-			rollback: async () => {
-				if (settled) {
-					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
-				}
-				settled = true
-				this.#transacting = false
-				this.#guard(() => database.exec('ROLLBACK'))
-			},
+			commit: this.#commit.bind(this, token, database),
+			rollback: this.#rollback.bind(this, token, database),
 		}
 	}
 
@@ -414,7 +407,7 @@ export class SQLiteDriver implements DriverInterface {
 		const database = this.#require()
 		const schema = new Map(this.#schema)
 		this.#guard(() => {
-			if (this.#transacting) {
+			if (this.#transaction !== undefined) {
 				this.#applyPlan(database, plan, schema)
 			} else {
 				database.transaction(() => this.#applyPlan(database, plan, schema))
@@ -504,7 +497,7 @@ export class SQLiteDriver implements DriverInterface {
 							')',
 					)
 					for (const row of snapshot.rows) {
-						statement.run(snapshot.names.map((column) => row[column]))
+						statement.run(extractValues(row, snapshot.names, name))
 					}
 				}
 			})
@@ -512,6 +505,22 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	// === Private
+
+	async #commit(token: object, database: SQLiteDatabaseInterface): Promise<void> {
+		if (this.#transaction !== token) {
+			throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+		}
+		this.#transaction = undefined
+		this.#guard(() => database.exec('COMMIT'))
+	}
+
+	async #rollback(token: object, database: SQLiteDatabaseInterface): Promise<void> {
+		if (this.#transaction !== token) {
+			throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+		}
+		this.#transaction = undefined
+		this.#guard(() => database.exec('ROLLBACK'))
+	}
 
 	// Run a synchronous backend interaction, mapping any `SQLiteError` (or
 	// unexpected non-`SQLiteError` throw) to a typed `DatabaseError` so a

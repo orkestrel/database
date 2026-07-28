@@ -9,7 +9,7 @@
 Create a cancellation handle, hand its `signal` to cancellable work, and `abort()` to cancel:
 
 ```ts
-import { createAbort } from '@src/core'
+import { createAbort } from '@orkestrel/abort'
 
 const abort = createAbort({ id: 'fetch-user' })
 const response = await fetch(url, { signal: abort.signal })
@@ -75,7 +75,7 @@ These invariants hold across `src/core` ↔ `abort.md`:
 ### Create and abort
 
 ```ts
-import { createAbort } from '@src/core'
+import { createAbort } from '@orkestrel/abort'
 
 const abort = createAbort()
 const stream = openStream({ signal: abort.signal })
@@ -88,7 +88,7 @@ abort.abort('user navigated away') // signal.reason carries the value
 A child handle linked to a parent `signal` fires when the parent aborts — one cancellation cascades to every linked handle, without manual listener wiring.
 
 ```ts
-import { createAbort } from '@src/core'
+import { createAbort } from '@orkestrel/abort'
 
 const parent = createAbort({ id: 'request' })
 const child = createAbort({ id: 'sub-task', signal: parent.signal })
@@ -102,7 +102,7 @@ parent.abort() // child.aborted is now true; child.signal has fired
 The cleanest bound is to thread `signal` straight into work that already accepts one — then a single `abort()` cancels the whole chain natively, no race to write:
 
 ```ts
-import { createAbort } from '@src/core'
+import { createAbort } from '@orkestrel/abort'
 
 const abort = createAbort()
 const rows = await query(sql, { signal: abort.signal }) // cancels at the source on abort
@@ -111,7 +111,7 @@ const rows = await query(sql, { signal: abort.signal }) // cancels at the source
 When the work does NOT take a signal, race it against the abort. The native `signal.reason` is what `abort(reason)` stored (or the default `AbortError`), so reject with it directly:
 
 ```ts
-import { createAbort } from '@src/core'
+import { createAbort } from '@orkestrel/abort'
 
 async function run<T>(work: Promise<T>, abort = createAbort()): Promise<T> {
 	const cancelled = new Promise<never>((_, reject) =>

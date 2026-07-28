@@ -58,6 +58,7 @@ export class JSONDriver implements DriverInterface {
 	// (on commit) instead of N (see transaction @remarks). Cleared by
 	// commit/rollback, which is also how double-settle is detected.
 	#deferring = false
+	#transaction: object | undefined
 
 	constructor(path: string) {
 		this.#path = path
@@ -139,26 +140,12 @@ export class JSONDriver implements DriverInterface {
 			throw new DatabaseError('CONFLICT', 'A transaction is already active on this driver', {})
 		}
 		const rollback = await this.#memory.snapshot()
+		const token = {}
 		this.#deferring = true
-		let settled = false
+		this.#transaction = token
 		return {
-			commit: async () => {
-				if (settled) {
-					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
-				}
-				settled = true
-				this.#deferring = false
-				await this.#flush()
-			},
-			rollback: async () => {
-				if (settled) {
-					throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
-				}
-				settled = true
-				await rollback()
-				this.#deferring = false
-				await this.#flush()
-			},
+			commit: this.#commit.bind(this, token),
+			rollback: this.#rollback.bind(this, token, rollback),
 		}
 	}
 
@@ -226,6 +213,25 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	// === Private
+
+	async #commit(token: object): Promise<void> {
+		if (this.#transaction !== token) {
+			throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+		}
+		this.#transaction = undefined
+		this.#deferring = false
+		await this.#flush()
+	}
+
+	async #rollback(token: object, rollback: () => Promise<void>): Promise<void> {
+		if (this.#transaction !== token) {
+			throw new DatabaseError('CONFLICT', 'Transaction already settled', {})
+		}
+		this.#transaction = undefined
+		await rollback()
+		this.#deferring = false
+		await this.#flush()
+	}
 
 	// Load the file into memory; a missing / corrupt / wrong-shaped file starts
 	// empty (never throws). Each entry is narrowed via isRecord and its key recovered

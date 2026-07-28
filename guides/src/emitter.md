@@ -9,7 +9,7 @@
 Create a standalone emitter, subscribe, and fire events synchronously:
 
 ```ts
-import { createEmitter } from '@src/core'
+import { createEmitter } from '@orkestrel/emitter'
 
 // The event map names each event and the argument tuple its listeners receive.
 // Declare it as a `type` alias (§4.5 — `EventMap` is a `type` kind), never as
@@ -101,7 +101,7 @@ Deliberately out of scope (a documented divergence from the scsr precursor, kept
 ### Standalone emitter
 
 ```ts
-import { createEmitter } from '@src/core'
+import { createEmitter } from '@orkestrel/emitter'
 
 type DownloadEventMap = {
 	chunk: readonly [bytes: number]
@@ -125,7 +125,7 @@ import {
 	type EmitterErrorHandler,
 	type EmitterHooks,
 	type EmitterInterface,
-} from '@src/core'
+} from '@orkestrel/emitter'
 
 type CounterEventMap = {
 	tick: readonly [count: number]
@@ -176,7 +176,7 @@ counter.emitter.on('tick', (count) => render(count))
 `off` removes a specific listener, `count` reports how many are live (per-event or total), and `clear` drops listeners (per-event or all) without destroying the emitter:
 
 ```ts
-import { createEmitter } from '@src/core'
+import { createEmitter } from '@orkestrel/emitter'
 
 type FeedEventMap = {
 	post: readonly [id: string]

@@ -10,40 +10,28 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.12.0', '26']
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-
-      - name: Start Ollama
-        run: |
-          sudo systemctl stop ollama
-          OLLAMA_ORIGINS="*" OLLAMA_HOST="127.0.0.1:11434" nohup ollama serve > /dev/null 2>&1 &
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
-              echo "Ollama is ready"
-              break
-            fi
-            echo "Waiting for Ollama... ($i/30)"
-            sleep 1
-          done
-      - name: Pull models
-        run: ollama pull qwen3.5:2b-q4_K_M
+        run: npx --no-install playwright install --with-deps chromium
 
       - name: Check formatting
         run: npm run format:check
@@ -53,9 +41,6 @@ jobs:
 
       - name: Typecheck
         run: npm run check
-
-      - name: Typecheck src
-        run: npm run check:src
 
       - name: Build
         run: npm run build

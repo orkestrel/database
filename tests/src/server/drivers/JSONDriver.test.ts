@@ -398,6 +398,15 @@ describe('JSONDriver — transaction', () => {
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
 	})
 
+	it('isolates a settled stale handle from the next active transaction', async () => {
+		const first = await driver.transaction()
+		await first.commit()
+		const second = await driver.transaction()
+		const stale = await first.rollback().catch((caught: unknown) => caught)
+		expect(isDatabaseError(stale) ? stale.code : 'not-database').toBe('CONFLICT')
+		await second.commit()
+	})
+
 	it('resumes normal per-mutation flushing after a transaction settles', async () => {
 		const handle = await driver.transaction()
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })

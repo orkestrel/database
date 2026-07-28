@@ -5,7 +5,7 @@
 ## Surface
 
 ```ts
-import { createIndexedDBDatabase, range } from '@src/browser'
+import { createIndexedDBDatabase, range } from '@orkestrel/indexeddb'
 
 // A store keyed by `id`, with one secondary index on `age`. `version: 1` creates
 // the schema on first open; omit `version` for auto-managed mode (see below).
@@ -203,7 +203,7 @@ These invariants hold across `src/browser/indexeddb` ↔ `indexeddb.md`:
 ### Feature-detecting before opening a database
 
 ```ts
-import { createIndexedDBDatabase, isIndexedDBSupported } from '@src/browser'
+import { createIndexedDBDatabase, isIndexedDBSupported } from '@orkestrel/indexeddb'
 
 if (isIndexedDBSupported()) {
 	const db = createIndexedDBDatabase({ name: 'app', version: 1, stores: { users: { path: 'id' } } })
@@ -281,7 +281,7 @@ import {
 	readRecord,
 	readRecords,
 	wrapError,
-} from '@src/browser'
+} from '@orkestrel/indexeddb'
 
 await db.read('users', async (tx) => {
 	const native = tx.store('users').store
@@ -300,7 +300,7 @@ wrapError(null) // the same DOMException → IndexedDBError mapping every bridge
 ### Branching on a typed fault
 
 ```ts
-import { IndexedDBError } from '@src/browser'
+import { IndexedDBError } from '@orkestrel/indexeddb'
 
 // Insert if new, fall back to upsert on a duplicate-key collision.
 try {
@@ -317,7 +317,7 @@ Every native `DOMException` crosses the request boundary as an `IndexedDBError` 
 ### Narrowing a caught value with `isIndexedDBError`
 
 ```ts
-import { isIndexedDBError } from '@src/browser'
+import { isIndexedDBError } from '@orkestrel/indexeddb'
 
 try {
 	await db.store('users').resolve('ghost')
@@ -335,7 +335,7 @@ try {
 > `upgrade` may return `void` or a `Promise<void>` — an async `upgrade` can `await` the IDB requests it issues through `context.store(...)`, subject to the same rule. A rejection aborts the versionchange transaction and rejects the pending `connect()` with a typed `IndexedDBError` (code `UPGRADE`) rather than an unhandled rejection.
 
 ```ts
-import { createIndexedDBDatabase } from '@src/browser'
+import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 
 const db = createIndexedDBDatabase({
 	name: 'app',

@@ -5,7 +5,7 @@
 ## Surface
 
 ```ts
-import { createSQLiteDatabase } from '@src/server'
+import { createSQLiteDatabase } from '@orkestrel/sqlite'
 
 const db = createSQLiteDatabase({ path: ':memory:' }) // omit `path` for the same in-memory default
 db.connect() // open the handle (lazy + idempotent); calls before this throw a CLOSED SQLiteError
@@ -113,7 +113,7 @@ These invariants hold across `src/server/sqlite` ↔ `sqlite.md`:
 ### Connect, exec, and round-trip a row
 
 ```ts
-import { createSQLiteDatabase } from '@src/server'
+import { createSQLiteDatabase } from '@orkestrel/sqlite'
 
 const db = createSQLiteDatabase() // path defaults to ':memory:'
 db.connect()
@@ -173,7 +173,7 @@ if (!db.transacting) db.begin()
 ### Branching on a typed fault
 
 ```ts
-import { createSQLiteDatabase, isSQLiteError } from '@src/server'
+import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
 
 try {
 	db.prepare('INSERT INTO users VALUES (?, ?, ?)').run(['u1', 'Dup', 30]) // 'u1' already exists
@@ -230,7 +230,7 @@ const exact = createSQLiteDatabase({ bigints: true })
 ### Retrying on BUSY
 
 ```ts
-import { isSQLiteError } from '@src/server'
+import { isSQLiteError } from '@orkestrel/sqlite'
 
 try {
 	db.prepare('INSERT INTO t VALUES (?)').run([1]) // another connection holds the lock
@@ -244,7 +244,7 @@ try {
 ### The boundary helpers directly
 
 ```ts
-import { bindParameters, wrapError } from '@src/server'
+import { bindParameters, wrapError } from '@orkestrel/sqlite'
 
 bindParameters(['u1', 'Ada']) // → { positional: ['u1', 'Ada'] }
 bindParameters({ id: 'u1' }) // → { named: { id: 'u1' } }

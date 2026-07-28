@@ -1,4 +1,5 @@
 import type { TableSchema } from '@src/core'
+import { isDatabaseError } from '@src/core'
 import {
 	aggregateSQL,
 	columnSQL,
@@ -6,6 +7,7 @@ import {
 	decodeValue,
 	encodeRow,
 	encodeValue,
+	extractValues,
 	fieldColumn,
 	indexName,
 	isExactCondition,
@@ -178,6 +180,26 @@ describe('encodeRow / decodeRow — over a schema', () => {
 	it('round-trips a row through encode then decode', () => {
 		const row = { id: 'u1', name: 'Ada', age: 36, active: true, meta: { tags: ['x'] } }
 		expect(decodeRow(encodeRow(row, SCHEMA), SCHEMA)).toEqual(row)
+	})
+})
+
+describe('extractValues', () => {
+	it('returns values in the requested binding order', () => {
+		expect(extractValues({ id: 'u1', age: 36 }, ['age', 'id'], 'users')).toEqual([36, 'u1'])
+	})
+
+	it('throws a DRIVER error naming an absent declared column', () => {
+		let caught: unknown
+		try {
+			extractValues({ id: 'u1' }, ['id', 'name'], 'users')
+		} catch (error) {
+			caught = error
+		}
+		expect(isDatabaseError(caught) ? caught.code : 'not-database').toBe('DRIVER')
+		expect(isDatabaseError(caught) ? caught.context : undefined).toEqual({
+			table: 'users',
+			column: 'name',
+		})
 	})
 })
 

@@ -5,6 +5,7 @@ import type {
 	DatabaseInterface,
 	DatabaseOptions,
 	DatabaseStatus,
+	Columns,
 	DriverInterface,
 	DriverMeta,
 	KeyFunction,
@@ -77,7 +78,10 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		this.#name = options.name ?? 'database'
 		this.#generate = options.key
 		this.#version = options.version
-		this.#emitter = new Emitter<DatabaseEventMap>({ on: options.on, error: options.error })
+		this.#emitter = new Emitter<DatabaseEventMap>({
+			...(options.on !== undefined ? { on: options.on } : {}),
+			...(options.error !== undefined ? { error: options.error } : {}),
+		})
 	}
 
 	get emitter(): EmitterInterface<DatabaseEventMap> {
@@ -99,7 +103,8 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		// A table row is always an object, so compile its columns into a typed contract.
 		// Contract 0.0.4's non-distributive inference resolves the open columns union
 		// directly, so no seam is needed to relate the compiled contract to RowOf.
-		return this.#build(name, this.#key(name), createContract(objectShape(this.#tables[name])))
+		const columns = this.#columns(name)
+		return this.#build(name, this.#key(name), createContract(objectShape(columns)))
 	}
 
 	import<U extends TablesShape>(tables: U, keys?: TableKeys): DatabaseInterface<U> {
@@ -109,7 +114,7 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 	export(): Readonly<Record<string, TableExport>> {
 		const result: Record<string, TableExport> = {}
 		for (const name of Object.keys(this.#tables)) {
-			const columns = this.#tables[name]
+			const columns = this.#columns(name)
 			// `compileSchema` (not `createContract`) emits the JSON Schema without
 			// instantiating `Infer` over the broad shape — which would trip TS's
 			// instantiation-depth guard here, where the columns are the open union.
@@ -259,16 +264,25 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		return this.#keys[name] ?? DEFAULT_PRIMARY
 	}
 
+	#columns<K extends keyof T & string>(name: K): T[K]
+	#columns(name: string): Columns
+	#columns(name: string): Columns {
+		const columns = this.#tables[name]
+		if (columns === undefined) {
+			throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
+		}
+		return columns
+	}
+
 	// Derive each table's backend-agnostic TableSchema from its contract columns,
 	// primary key, and declared indexes — what every driver's `open` receives.
 	#schema(): readonly TableSchema[] {
 		return Object.keys(this.#tables).map((name) => {
-			const columns = this.#tables[name]
+			const columns = this.#columns(name)
 			return {
 				name,
 				primary: this.#key(name),
-				columns: Object.keys(columns).map((column) => {
-					const shape = columns[column]
+				columns: Object.entries(columns).map(([column, shape]) => {
 					return {
 						name: column,
 						type: shapeToColumnType(shape),

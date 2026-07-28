@@ -37,7 +37,12 @@ export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
 		if (this.#closed) return
 		this.#index += 1
 		while (this.#index < this.#keys.length) {
-			const row = await this.#table.get(this.#keys[this.#index])
+			const key = this.#keys[this.#index]
+			if (key === undefined) {
+				this.#index += 1
+				continue
+			}
+			const row = await this.#table.get(key)
 			if (row !== undefined) {
 				this.#value = row
 				return
@@ -50,13 +55,16 @@ export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
 	async update(changes: Partial<T>): Promise<void> {
 		if (this.#closed || this.#value === undefined) return
 		const key = this.#keys[this.#index]
+		if (key === undefined) return
 		await this.#table.update(key, changes)
 		this.#value = await this.#table.get(key)
 	}
 
 	async remove(): Promise<void> {
 		if (this.#closed || this.#value === undefined) return
-		await this.#table.remove(this.#keys[this.#index])
+		const key = this.#keys[this.#index]
+		if (key === undefined) return
+		await this.#table.remove(key)
 		this.#value = undefined
 	}
 

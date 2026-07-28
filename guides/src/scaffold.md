@@ -1,79 +1,88 @@
 # Scaffold
 
-> A synchronous, deterministic **package-blueprint compiler** for the `@orkestrel` line:
-> a closed, JSON-serializable **`Blueprint`** (name, surfaces, dependencies, overrides…)
-> is compiled into a **`Plan`** — an ordered list of **`Artifact`**s, each carrying an
-> `origin` that says whether its content was host-copied, template-filled, or computed —
-> and every downstream product (the files on disk, a review document, an audit of an
-> existing package, a dry-run summary) is **projected** from that one `Plan`, never
-> authored separately.
+> A deterministic workspace-blueprint compiler: a closed, JSON-serializable `Blueprint` compiles
+> into a `Plan` of ordered `Artifact`s, and every downstream product — the files on disk, a review
+> document, an audit of an existing package, a freshness report — is projected from that one plan
+> rather than authored separately.
 >
-> FORWARD: a `Blueprint` is **drafted** into artifacts — the per-surface variant matrix as
-> data (`SURFACE_MATRIX`) selects the `exports` map, the per-surface configs, and the test
-> projects; caller **`overrides`** layer over the shipped defaults — the fail-closed
-> **gate** validates the name, surfaces, and dependencies, and a passing plan is **pinned**
-> (`trace` + `hash` derived from content, never authored).
+> The core face is pure and synchronous: no `node:*`, no clocks, no randomness, no I/O. A plan's
+> `trace` and `hash` derive from its own content. The server face owns the only two impure
+> entities — `Materializer`, which writes a plan to disk behind an explicit call, and `Sync`,
+> which reads upstream guides and registry versions over HTTPS. The `scaffold` executable is a
+> thin command-line shell around both.
 >
-> REVERSE: `planToReview` / `planToSummary` render the plan for humans; `diffPlan` audits
-> it against a target's current content and returns **drift findings as data**; the server
-> surface's `Materializer` is the impure WRITE step.
+> Every discriminant names its own axis. `origin` says how an artifact's content is produced,
+> `group` says which artifact group it belongs to, `environment` says which environment owns it,
+> `category` says what a declared member is, `drift` says how a target compares to its plan,
+> `freshness` says how a mirror compares to upstream, `stage` says which pipeline phase ran, and
+> `code` says which coded failure was raised.
 >
-> LIVE: the server surface's `Sync` entity fetches each declared dependency's guide and
-> registry version from upstream — reporting freshness, refreshing mirrors under an explicit
-> apply — the ONLY part of the system that touches the network.
->
-> This module runs no `git`, invokes no `npm`, and embeds no LLM; its only network access is
-> the server `Sync` entity's read-only fetch of upstream guides and registry versions. The
-> core is pure (no `node:*`, no clocks, no randomness — `trace` and `hash` derive from
-> content alone), and writing lives behind an explicit apply on the server surface. A
-> blueprint that fails the gate yields a visible INCOMPLETE `Scaffolding` carrying the
-> questions — a half-formed package is worse than a question, so the gate fails closed rather
-> than emitting.
-> Every discriminant names its axis, never `kind` / `type` (AGENTS §4.4): `origin` splits
-> how an artifact's content is produced, `group` splits the artifact groups, `surface`
-> splits the environment faces, `category` splits declared members, `drift` splits audit
-> verdicts, `freshness` splits sync currency, `stage` splits the pipeline phases, `code`
-> splits coded errors. Source: [`src/core`](../../src/core) + [`src/server`](../../src/server)
->
-> - the [`src/bin`](../../src/bin) CLI. The core surfaces through `@src/core`, the materializer
->   and sync through `@src/server`; the bin is an executable, not a barrel.
+> Source: [`src/core`](../../src/core) and [`src/server`](../../src/server), with
+> [`src/bin`](../../src/bin) as an executable build target. Core exports through
+> `@orkestrel/scaffold`; the materializer and sync export through `@orkestrel/scaffold/server`.
 
-The problem this module solves: standing up (or auditing) an `@orkestrel` package is a
-mechanical projection of the line's conventions onto a name — the exports map for the
-variant, the per-surface build configs, the barrels, the guide stubs, the parity harness —
-and this package IS that projection: creation and repair through the bin's `new` / `pull` /
-`audit` / `repair` verbs, and fleet-wide propagation through the bin's `fleet` verb.
-Rendered defaults ship as **versioned package data** — frozen `TemplateDefinition`s filled
-by `@orkestrel/template`'s pure engine — so a convention change is a version bump here, not
-a hand-edit in every repo. The module is deliberately **mechanism, never policy** (AGENTS
-§21): the judgment calls (the name, the description, the keywords, which surfaces, which
-dependencies, any template override) belong to the caller — a human, or an agent following
-a `/scaffold` command — while this module supplies the closed vocabularies, the variant
-matrix as data, the exact-record validation, the fail-closed gate, the deterministic pin,
-and the lossless projections. Separating the WHAT (the `Blueprint`) from the HOW (the
-`Plan` and its writes) is the whole design: because the plan and the audit are pure data,
-the same engine that _creates_ a package can **audit** an existing one (`diffPlan` against
-its current content — the per-file conformance checklist, now returned as
-findings) and **repair** only what drifted. Scaffold is the line's conformance engine, not
-merely its generator. And because the vendored dependency mirrors and pinned ranges
-themselves drift as upstream moves, the server `Sync` entity is the freshness arm — it
-fetches each declared `@orkestrel` dependency's guide and registry version from upstream and
-reports (or, under an explicit apply, refreshes) what has fallen behind.
+Standing up — or auditing — a workspace in this style is a mechanical projection of a fixed set of
+conventions onto a name: the exports map for the selected src environments, the per-environment build
+configuration, the barrels, the test projects, the guide stubs, the parity harness. This package is
+that projection, expressed as data. Rendered defaults ship as versioned package data (frozen
+`TemplateDefinition` values filled by a pure fill engine), so a convention change is a version bump
+here rather than a hand edit in every workspace.
 
-The compiler's core stands on four runtime dependencies — `@orkestrel/contract` (the shape
-DSL behind the `Blueprint` / `Plan` contracts), `@orkestrel/emitter` (the observation
-side-channels), `@orkestrel/markdown` (the AST + `renderMarkdown` the guide-table emitter
-rides), and `@orkestrel/template` (whose pure `fillTemplate` LEAF carries the rendered
-defaults, with NO `TemplateManager` inside the compiler — the core stays pure and
-stateless). The bin adds two more, consumed ONLY at the executable: `@orkestrel/terminal`
-(interactive blueprint prompts) and `@orkestrel/console` (the reporter + spinner). Because
-`@orkestrel/terminal` is an L3 package, `@orkestrel/scaffold` sits at **L4** in the line's
-dependency layering.
+The module is mechanism, never product policy. The judgment calls — the name, the description, the
+keywords, which src and app environments, which dependencies, any artifact override —
+belong to the caller. What this module supplies is the closed vocabularies, the variant matrix as
+data, exact-record validation, a fail-closed gate, a deterministic pin, and lossless projections.
+
+Separating the _what_ (the `Blueprint`) from the _how_ (the `Plan` and its writes) is the whole
+design. Because the plan and the audit are pure data, the same engine that creates a workspace can
+audit an existing one — `diffPlan` against its current bytes — and repair only what drifted. And
+because vendored dependency mirrors and pinned ranges themselves fall behind as upstream moves,
+`Sync` reports (and, under an explicit apply, refreshes) what has aged.
+
+## Faces and dependency direction
+
+The package has three code faces. Generated workspaces use the separate `Environment` vocabulary
+(`core`, `browser`, `server`) to identify an environment selected on the `src` or `app` axis; the
+three faces below are this package's own.
+
+- **core** — [`src/core`](../../src/core), published as `@orkestrel/scaffold`. Pure, synchronous,
+  host-independent. Compiling, validating, diffing, projecting, and every rendered default.
+- **server** — [`src/server`](../../src/server), published as `@orkestrel/scaffold/server`. Node
+  only. Filesystem writes (`Materializer`), upstream fetches (`Sync`), the write-transaction
+  machinery, and the host-staging primitive.
+- **bin** — [`src/bin`](../../src/bin), built to the `scaffold` executable. Not a barrel and not
+  published as a module: it exports nothing to consumers, so it carries no guide parity of its own
+  and is documented here in prose.
+
+Core imports neither of the others. Server imports core. The bin imports both. The same direction
+is what a generated workspace is held to, and the compiled workspace makes it enforceable rather
+than aspirational:
+
+- `src/core` and `app/core` are host-independent — no DOM, no `node:*`, no stylesheet imports.
+- `src/browser` and `app/browser` may import their own core plus browser libraries; they may never
+  reach a Node builtin or a `/server` subpath.
+- `src/server` and `app/server` may import their own core plus server libraries; they may never
+  reach Vue, a `/browser` subpath, or a stylesheet.
+- Published `src/*` may never import private `app/*`.
+- `app/browser` reaches server behavior only through shared `app/core` contracts and transports,
+  never through a server implementation import.
+
+A generated `app/server` owns strict `APP_HOST`, `APP_PORT`, and `APP_START_TIMEOUT` parsing, a
+repeat-safe HTTP lifecycle, bounded connection behavior, and process signal cleanup. Its exported
+`reportApplicationServerError` handler writes only a stable configuration, lifecycle, or unknown
+failure code; process-owned diagnostics never serialize a rejected value, nested cause, stack, or
+other error context.
+
+Every environment barrel is an export-star barrel: `index.ts` contains only `export * from './x.js'`
+rows and nothing else. Named, default, namespace, and type-only barrel rows are absent by design,
+so a star-export collision is a naming failure to fix at the owner rather than something to paper
+over with a selective row. Both of this package's own barrels follow that rule, and every generated
+barrel is emitted the same way.
 
 ## Surface
 
-Compile a `Blueprint` into a `Scaffolding`, then project the `Plan` it carries — the whole
-core path is pure and synchronous; writing lives on the server surface:
+Compile a blueprint into a `Scaffolding`, then project the `Plan` it carries. The whole core path
+is pure and synchronous; writing lives on the server face.
 
 ```ts
 import { blueprint, createCompiler, dependency, planToReview } from '@orkestrel/scaffold'
@@ -82,16 +91,16 @@ const compiler = createCompiler()
 
 const scaffolding = compiler.compile(
 	blueprint('router', {
-		description: 'A tiny hash-router. Part of the @orkestrel line.',
-		keywords: ['router', 'hash', 'spa'],
-		surfaces: ['core', 'browser', 'server'],
-		dependencies: [dependency('@orkestrel/contract', '^0.0.5')],
+		description: 'A tiny hash router.',
+		keywords: ['router', 'hash'],
+		src: ['core', 'browser', 'server'],
+		dependencies: [dependency('@orkestrel/contract', '^0.0.7')],
 	}),
 )
 
 scaffolding.complete // true — the gate passed
 if (scaffolding.plan) {
-	scaffolding.plan.artifacts.length // every file the package needs, ordered
+	scaffolding.plan.artifacts.length // every file the workspace needs, ordered
 	planToReview(scaffolding.plan) // the copy-ready dry-run review document
 }
 
@@ -99,152 +108,1827 @@ compiler.emitter.on('block', (questions) => questions.length)
 compiler.destroy()
 ```
 
-`compile()` is genuinely SYNCHRONOUS and runs the fixed three-stage pipeline
-`[draft, gate, pin]`; a failing gate yields a visible INCOMPLETE `Scaffolding` (`plan`
-absent, `questions` populated) rather than throwing. Compilation, review, summary, and
-audit are ALL pure — no clocks, no randomness, no `node:*`, no I/O. The package has THREE
-faces: the pure **core** (`@orkestrel/scaffold`), the server face
-(`@orkestrel/scaffold/server`) — the impure `Materializer` writes and the `Sync` fetches —
-and the **bin** CLI (`src/bin/scaffold.ts`, the `scaffold` executable). The Surface below
-documents the two LIBRARY faces, marked **(server)** where server-only; the bin is an
-EXECUTABLE, not a barrel — it exports NO public members, so `SURFACES` stays closed at three
-(`Surface` names the SCAFFOLDED package's environment faces, unrelated to scaffold's own
-three code faces). The core and the `Materializer` are deterministic and synchronous; the
-bin AND the server `Sync` entity are legitimately Promise-based — the bin's interactive
-prompt flow (`@orkestrel/terminal`) and `Sync`'s upstream fetches are async orchestration
-AROUND the synchronous `compile` / write, never inside them.
-
-### Types
-
-| Type                    | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Surface`               | type      | `'core' \| 'browser' \| 'server'` — the environment surface an artifact or member belongs to (the SCAFFOLDED package's faces, not scaffold's own).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Origin`                | type      | `'host' \| 'template' \| 'computed'` — how an `Artifact`'s content is produced: `host` byte-copied from the vendored data root, `template` filled from a frozen `TemplateDefinition` by `@orkestrel/template`'s pure fill engine, `computed` derived by the core's manifest/exports combination logic; the axis that decides whether it carries `source` (host) or `content` (template / computed).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `Group`                 | type      | `'manifest' \| 'configs' \| 'source' \| 'tests' \| 'guides' \| 'docs' \| 'orchestration'` — the closed artifact-group vocabulary a plan selects over.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `Category`              | type      | `'type' \| 'constant' \| 'factory' \| 'entity'` — what a declared `Member` IS in the scaffolded surface.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `CatalogEntry`          | interface | `{ name, version, description }` — one fleet package's catalog row; `description` is the flattened text of that package's guide's FIRST blockquote, `''` when the guide is missing, unreadable, or carries no blockquote.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `Drift`                 | type      | `'aligned' \| 'stale' \| 'missing' \| 'foreign'` — one `Finding`'s verdict against the target's current content.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `Freshness`             | type      | `'current' \| 'behind' \| 'missing' \| 'failed'` — one `GuideSync` / `VersionSync`'s currency against upstream (`missing` = an upstream `404`, `failed` = a transport fault).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `CompileStage`          | type      | `'draft' \| 'gate' \| 'pin'` — the three fixed pipeline phases, in order.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `ScaffoldErrorCode`     | type      | `'INVALID' \| 'BLOCKED' \| 'DESTROYED' \| 'TARGET' \| 'WRITE' \| 'FETCH'` — coded `ScaffoldError` reasons.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `Dependency`            | interface | `{ name, range, optional? }` — one runtime `@orkestrel/*` dependency; drives its `package.json` entry, the build externals, and its `guides/src/<dep>.md` mirror — byte-correct for a dep this package vendors (contract / emitter / markdown / template / terminal / console / guide), a `host`-origin POINTER the caller syncs otherwise. `optional` is meaningful only when the `Dependency` appears in a `Blueprint`'s `peers` — `true` emits a `peerDependenciesMeta` `{ optional: true }` entry alongside it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `Override`              | interface | `{ path, content }` — one caller template override; `content` REPLACES the rendered artifact at `path`, never partially merges. An override whose `path` matches no planned artifact, or targets a `host`-origin path, is a BLOCKING question — never a silent add.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `Blueprint`             | interface | `{ name, description, keywords, surfaces, dependencies, peers, extras, version, engines, overrides, engine }` — the closed, JSON-serializable package spec. `peers` are runtime `@orkestrel/*` peers emitted as `peerDependencies` (an `optional` peer also gets a `peerDependenciesMeta` entry); `extras` are package-specific `devDependencies` merged into the generated uniform baseline (extras win on a name collision) — the middleware pattern of shipping `@orkestrel/{database,router,server}` for its tests. `engine` is a STRUCTURAL flag, `true` only for a repo that ships its own `src/bin` — never derived by name — and applies the self-hosting tax only when set: a `bin` field + array `sideEffects` on the manifest, the `scaffold` script invoking `dist/bin/scaffold.js` directly, the `check:src:bin` / `test:src:bin` / `build:src:bin` / `build:host` scripts, the `srcBin` vite project, and omission of the `@orkestrel/scaffold` self-devDep (an engine repo never depends on itself). |
-| `Member`                | interface | `{ name, category, summary, surface }` — one declared public export of the scaffolded package; derived by `blueprintToMembers`, never authored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `Artifact`              | interface | `{ path, group, origin, surface?, content?, source? }` — one file in a `Plan`; `content` present for `template` / `computed`, `source` (a host-relative path) for `host`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `Plan`                  | interface | `{ blueprint, groups, artifacts, trace?, hash? }` — the compiled, ordered artifact list plus the selection it covers; `trace` / `hash` filled by the pin.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `Finding`               | interface | `{ path, group, drift }` — one audit drift result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `Audit`                 | interface | `{ findings, clean, complete, questions, drifted, missing, foreign }` — the whole diff of a plan against a target's content; a `Compiler.audit` over a gate-failing blueprint sets `complete: false` with the gate's `questions` and zero findings, while `diffPlan` over an existing plan is always `complete: true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `Question`              | interface | `{ field, text, blocking, candidates? }` — one validation issue; `blocking: true` fails the gate closed, `false` is an advisory that rides a complete result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `Validation`            | interface | `{ valid, questions, warnings }` — the semantic pass over a blueprint; returns, never throws.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `GuideSync`             | interface | `{ name, path, content, freshness, note? }` — one dependency guide fetched from upstream (`content`) at its `path`, plus its `freshness` verdict against the caller-supplied reference (see `guides`). `note` carries the failure/anomaly CAUSE (an `HTTP <status>`, a transport message, a redirect-blocked or oversized-body notice) on any non-`current` outcome that has one — absent on `current` and `behind`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `VersionSync`           | interface | `{ name, range, latest, freshness, note? }` — one dependency's declared `range` against the registry `latest`, plus its `freshness` verdict. `note` carries the failure/anomaly CAUSE — see `GuideSync.note`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `SyncReport`            | interface | `{ target, guides, versions, clean, failed }` — the whole outcome of a `Sync.pull`: the fetched `guides` + `versions`, `clean` (no drift AND no failures), and the `failed` count.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PlanSummary`           | interface | `{ name, surfaces, groups, artifacts, host, template, computed }` — the dry-run tally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `CompileRecord`         | interface | `{ stage, input, output, failed, error? }` — a structured input/output snapshot of one pipeline phase.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `CompileFailure`        | interface | `{ stage, code, message }` — a visible marker for a stage that failed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `Scaffolding`           | interface | `{ blueprint, plan?, questions, stages, failures, complete, digest }` — the full, replayable outcome of one `compile()` call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `PlanRecord`            | interface | `{ id, plan, version, hash }` — a versioned, content-hashed `Plan` inside a `PlanManager`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `MaterializeResult`     | interface | `{ target, written, copied, skipped, removed }` — the outcome of one materialization **(server)**; `removed` lists paths a `prune` deleted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `ManifestEntry`         | interface | `{ storage, destination, executable }` — one entry of the vendored `host/manifest.json` **(server)**; `storage` is the un-dotted vendored path, `destination` the destination-relative path a caller-supplied artifact `source` resolves against, `executable` a post-copy `chmod` bit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `CompilerEventMap`      | type      | `Compiler`'s push observation surface (AGENTS §13) — `compile(scaffolding)` · `audit(audit)` · `block(questions)` · `error(error)` · `destroy()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `CompilerOptions`       | interface | `{ on?, error? }` — input to `createCompiler`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `CompilerInterface`     | interface | The compilation orchestrator contract — `emitter` + `compile` / `audit` / `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `PlanManagerEventMap`   | type      | `PlanManager`'s push observation surface — `add(id)` · `remove(id)` · `destroy()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `PlanManagerOptions`    | interface | `{ plans?, on?, error? }` — input to `createPlanManager`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `PlanManagerInterface`  | interface | The plan registry contract (AGENTS §9) — `emitter` / `size` + `has` / `plan` / `plans` / `add` / `remove` / `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `MaterializerEventMap`  | type      | `Materializer`'s push observation surface **(server)** — `copy(path)` · `write(path)` · `remove(path)` · `done(result)` · `error(error)` · `destroy()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `MaterializerOptions`   | interface | `{ host?, on?, error? }` — input to `createMaterializer` **(server)**; `host` is the vendored-data root host-origin artifacts are copied FROM, defaulting to the PACKAGE's own vendored `dist/host` — resolved from the installed module's own location via a file URL, never `process.cwd()` — so a caller-supplied `host` (a sibling repo, for `mirror`) maps 1:1 onto the same host-relative paths.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `MaterializerInterface` | interface | The materialization contract **(server)** — `emitter` + `materialize` / `repair` / `prune` / `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `SyncEventMap`          | type      | `Sync`'s push observation surface **(server)** — `guide(name)` · `version(name)` · `package(name, note)` · `write(path)` · `done(report)` · `error(error)` · `destroy()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `SyncOptions`           | interface | `{ on?, error?, guides?, registry?, concurrency?, retries?, strict?, limit? }` — input to `createSync` **(server)**; the endpoint bases + branch are INJECTABLE (`guides.base` default `raw.githubusercontent.com`, `guides.branch` default `main`, `registry.base` default `registry.npmjs.org`, `guides.timeout` / `registry.timeout` default 10s — `registry.base` also anchors `catalog()`'s org package-list + packument fetches), `concurrency` default 6, `retries` default 0, `strict` default false, `limit` (max response body bytes; declared `Content-Length` or streamed total, whichever trips first — an overflow is a transport fault) default 5,242,880 (5 MiB). Every fetch is UNAUTHENTICATED — no token option exists; every fleet repo is public.                                                                                                                                                                                                                                              |
-| `SyncInterface`         | interface | The upstream-synchronization contract **(server)** — `emitter` + `guides` / `versions` / `catalog` / `pull` / `write` / `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-
-The `Blueprint` and the `Plan` are the two closed contracts — every field is a `string`,
-`readonly` array, or record, so both round-trip JSON and both cross a tool / RPC boundary
-unchanged. `Artifact` is discriminated by `origin`: a `host` artifact names a `source` (the
-host-relative path the server byte-copies from the vendored data root) and carries NO
-`content` (the pure core never reads host bytes); a `template` artifact carries `content`
-FILLED from a frozen `TemplateDefinition` by `@orkestrel/template`'s pure `fillTemplate`
-engine (`missing: 'error'` — an unresolved token fails loud, never silently blanks); a
-`computed` artifact carries `content` DERIVED by the core's own manifest/exports combination logic
-(the `exports` map, the entry re-pointing). The token-collision boundary is a HARD rule:
-only genuinely templated PROSE artifacts (the README, the guide stubs, file headers) pass
-through the fill engine; a STRUCTURAL file (a JSON or TS config, anything that could
-legitimately contain a literal `{{…}}`) is ALWAYS `computed`, never `template`, so a stray
-`{{` in a tsconfig can never be mistaken for a placeholder. That single `origin` axis is
-what keeps the core pure while still describing files it cannot itself read.
-
-### Constants
-
-| API                       | Kind  | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SURFACES`                | const | The three `Surface` values, frozen — compose with `literalOf(...)` / `parseEnum(...)`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `ORIGINS`                 | const | The three `Origin` values, frozen.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GROUPS`                  | const | The seven `Group` values, frozen — the artifact-group selection vocabulary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `CATEGORIES`              | const | The four `Category` values, frozen.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `FRESHNESS`               | const | The four `Freshness` values, frozen — the currency axis `Sync` reports on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `COMPILE_STAGES`          | const | `['draft', 'gate', 'pin']`, frozen — the pipeline phases in order.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `SURFACE_MATRIX`          | const | The per-surface variant matrix as data: per `Surface`, its `configs/src` files, Vitest project label, `exports` subpath, and build formats — the per-surface layer `blueprintToPlan` reads BENEATH the manifest and exports combination rules it applies on top.                                                                                                                                                                                                                                                                                                                            |
-| `HOST_PATHS`              | const | The byte-copied host artifact paths (`AGENTS.md`, `CLAUDE.md`, `LICENSE`, `.claude`, `scripts/deps.sh`, `scripts/cursor.sh`, `scripts/ollama.sh` — the SessionStart hooks, orchestration-grouped — `guides/src/guide.md` — the line-wide dev-tooling guide — and `guides/src/scaffold.md` — the scaffold engine's own self-guide, both guides-grouped — `.editorconfig`, `.gitattributes`, `.gitignore`, `.oxfmtrc.json`, `.oxlintrc.json`, `.oxlintignore`, `.prettierignore`, `.github/workflows/ci.yml`), frozen — the shared artifacts every `@orkestrel` repo's vendored host carries. |
-| `SCAFFOLD_RANGE`          | const | `'^0.0.2'` — the exact devDependency range a scaffolded package's `package.json` pins `@orkestrel/scaffold` at.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `NAME_PATTERN`            | const | The `/^[a-z][a-z0-9-]*$/` package-name RegExp, closed vocabulary as data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `DEPENDENCY_NAME_PATTERN` | const | The `/^@orkestrel\/[a-z][a-z0-9-]*$/` dependency-name RegExp — every `Dependency.name` must be `@orkestrel`-scoped and NAME_PATTERN-shaped after the scope, closing the traversal vector a hand-built `../`-laced name would open through the pointer-artifact and `Sync.write` path derivation.                                                                                                                                                                                                                                                                                            |
-| `EXTRA_NAME_PATTERN`      | const | The `extras` dependency-name RegExp — an optional single `@scope/` prefix, then lowercase letters/digits/hyphens/dots/underscores (never leading). Broader than `DEPENDENCY_NAME_PATTERN` on purpose: `extras` names are `devDependencies`-content only, never path-derived, so any valid npm package name (not just `@orkestrel/*`) is accepted while staying structurally traversal-closed.                                                                                                                                                                                               |
-| `DEFAULT_VERSION`         | const | `'0.0.1'` — the starting version the `blueprint` builder fills.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `DEFAULT_ENGINES`         | const | `'>=22'` — the `engines.node` range the `blueprint` builder fills.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `COMPILER_ID`             | const | `'compiler'` — the default id for a `Compiler` orchestrator.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `JSON_PRINT_WIDTH`        | const | `100` — the fleet's `.oxfmtrc.json` `printWidth`, `formatJson`'s array-collapse threshold.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `JSON_TAB_WIDTH`          | const | `2` — the fleet's `.oxfmtrc.json` `tabWidth`, the column width `formatJson` counts each rendered tab as.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `TEMPLATES`               | const | The shipped, versioned `TemplateDefinition` data every `template`-origin artifact fills against (README, the own-guide stub, the guides index, the per-surface source stubs, the shared test recorder plus `parityTest` — the frozen `tests/guides/src/parity.test.ts` body — and `setupServer` / `setupBrowser`, the per-surface test-setup stubs) — placeholders documented per entry, frozen.                                                                                                                                                                                            |
+An application-only blueprint uses an empty published set and an independent app set:
 
 ```ts
-import {
-	CATEGORIES,
-	DEPENDENCY_NAME_PATTERN,
-	EXTRA_NAME_PATTERN,
-	FRESHNESS,
-	GROUPS,
-	HOST_PATHS,
-	NAME_PATTERN,
-	ORIGINS,
-	SCAFFOLD_RANGE,
-	SURFACES,
-	TEMPLATES,
-} from '@orkestrel/scaffold'
+import { blueprint, blueprintToPlan } from '@orkestrel/scaffold'
 
-SURFACES // ['core', 'browser', 'server']
-ORIGINS // ['host', 'template', 'computed']
-GROUPS // ['manifest', 'configs', 'source', 'tests', 'guides', 'docs', 'orchestration']
-CATEGORIES // ['type', 'constant', 'factory', 'entity']
-FRESHNESS // ['current', 'behind', 'missing', 'failed']
-SCAFFOLD_RANGE // '^0.0.2' — the pinned devDependency range for @orkestrel/scaffold
-NAME_PATTERN.test('router') // true
-NAME_PATTERN.test('Router') // false — the package-name law rejects a leading capital
-DEPENDENCY_NAME_PATTERN.test('@orkestrel/contract') // true
-DEPENDENCY_NAME_PATTERN.test('@orkestrel/../etc') // false — closes the traversal vector
-EXTRA_NAME_PATTERN.test('zod') // true — extras accept any valid npm package name
-EXTRA_NAME_PATTERN.test('@types/node') // true
-EXTRA_NAME_PATTERN.test('../etc') // false — still structurally traversal-closed
-HOST_PATHS.includes('scripts/deps.sh') // true — orchestration-grouped host artifact
-HOST_PATHS.includes('src/core/index.ts') // false — the host set covers shared artifacts, not source
-TEMPLATES.entity.placeholders // [{ name: 'pascal', … }] — the entity stub's one token
+const workspace = blueprint('console', {
+	src: [],
+	app: ['core', 'browser', 'server'],
+})
+
+const plan = blueprintToPlan(workspace)
+plan.artifacts.some((artifact) => artifact.path === 'app/browser/index.html') // true
+plan.artifacts.some((artifact) => artifact.path === 'app/server/main.ts') // true
 ```
 
-A closed-set field that does not fit a listed value is a signal the request is mis-scoped,
-not licence to invent a value — the exact-record validators below reject an off-vocabulary
-literal, and the shapers compile the same tuples into the JSON Schema `enum`s, so the
-vocabulary cannot drift between the guard, the parser, and the schema.
+### Types — core
+
+From [`types.ts`](../../src/core/types.ts).
+
+| Name                   | Kind      |
+| ---------------------- | --------- |
+| `Environment`          | type      |
+| `BuildFormat`          | type      |
+| `SrcDefinition`        | interface |
+| `AppDefinition`        | interface |
+| `ViteMachinery`        | interface |
+| `Origin`               | type      |
+| `Group`                | type      |
+| `Category`             | type      |
+| `CatalogEntry`         | interface |
+| `Drift`                | type      |
+| `Freshness`            | type      |
+| `CompileStage`         | type      |
+| `ScaffoldErrorCode`    | type      |
+| `Dependency`           | interface |
+| `Override`             | interface |
+| `Blueprint`            | interface |
+| `Member`               | interface |
+| `ArtifactBase`         | interface |
+| `HostArtifact`         | interface |
+| `ContentArtifact`      | interface |
+| `Artifact`             | type      |
+| `Snapshot`             | type      |
+| `Plan`                 | interface |
+| `Finding`              | interface |
+| `Audit`                | interface |
+| `Question`             | interface |
+| `Validation`           | interface |
+| `GuideSync`            | interface |
+| `VersionSync`          | interface |
+| `SyncReport`           | interface |
+| `PlanSummary`          | interface |
+| `CompileRecord`        | interface |
+| `CompileFailure`       | interface |
+| `Scaffolding`          | interface |
+| `PlanRecord`           | interface |
+| `CompilerEventMap`     | type      |
+| `CompilerOptions`      | interface |
+| `CompilerInterface`    | interface |
+| `PlanManagerEventMap`  | type      |
+| `PlanManagerOptions`   | interface |
+| `PlanManagerInterface` | interface |
+
+The closed vocabularies are small and total. `Environment` is `'core' | 'browser' | 'server'`.
+`BuildFormat` is `'es' | 'cjs'`. `Origin` is `'host' | 'template' | 'computed'`. `Group` is
+`'manifest' | 'configs' | 'source' | 'tests' | 'guides' | 'docs' | 'orchestration'`. `Category` is
+`'type' | 'alias' | 'constant' | 'factory' | 'entity' | 'parser' | 'guard' | 'handler' | 'error'`.
+`Drift` is `'aligned' | 'stale' | 'missing' | 'foreign'`. `Freshness` is
+`'current' | 'behind' | 'missing' | 'failed'`, where `missing` is an upstream `404` and `failed` is
+a transport fault. `CompileStage` is `'draft' | 'gate' | 'pin'`, in that order. `ScaffoldErrorCode`
+is `'INVALID' | 'BLOCKED' | 'DESTROYED' | 'TARGET' | 'WRITE' | 'FETCH'`.
+
+`SrcDefinition` and `AppDefinition` are the per-environment matrix rows: the configuration files an
+environment contributes, its test-project label, and — on the `src` axis — its `exports` subpath
+and build formats, or — on the `app` axis — its optional runtime entry.
+
+`ViteMachinery` names the three host-specific pipelines a workspace's generated `vite.config.ts` may
+carry: `browser` for the CSS pipeline and the Playwright-backed browser test project, `vue` for the
+single-file-component, HTML, and development-server machinery an application browser environment
+needs, and `output` for build-output containment. It never selects a boundary guarantee — those ship
+in every shape, as the compilers section sets out.
+
+`Blueprint` is the closed input spec:
+
+```ts
+interface Blueprint {
+	readonly name: string
+	readonly description?: string
+	readonly keywords: readonly string[]
+	readonly src: readonly Environment[]
+	readonly app: readonly Environment[]
+	readonly dependencies: readonly Dependency[]
+	readonly peers: readonly Dependency[]
+	readonly extras: readonly Dependency[]
+	readonly version: string
+	readonly engines: string
+	readonly overrides: readonly Override[]
+	readonly engine: boolean
+}
+```
+
+`src` selects published library environments under `src`; `app` selects private runtime environments under
+`app`. The two axes are independent, so library-only, application-only, and mixed workspaces are
+all first class. `dependencies` and `peers` are runtime `@orkestrel/*` packages — a peer flagged
+`optional` also gets a `peerDependenciesMeta` entry. `extras` are package-specific development
+dependencies merged over the generated baseline, and may carry any valid npm package name. `engine`
+is structural, never inferred from a name: it is `true` only for a workspace that ships its own
+`src/bin`, and it alone turns on the self-hosting extras (a `bin` field, the `scaffold` script
+pointed at the built executable, the bin check, test, and build scripts, `build:host`, and the
+`src:bin` test project).
+
+`Override` replaces a rendered artifact's content at a path, never partially merges it. `Member` is
+one declared public export of the scaffolded workspace, derived rather than authored.
+
+`Artifact` is origin-discriminated. `ArtifactBase` carries `path`, `group`, and an optional
+`environment`. A `HostArtifact` has `origin: 'host'`, an optional `source` (defaulting to `path`), and
+an optional `hex` of exact lowercase bytes; it never carries `content`. A `ContentArtifact` has
+`origin: 'template' | 'computed'` and always carries `content`; it never carries `hex` or `source`.
+`Snapshot` is `Readonly<Record<string, string>>` — exact lowercase hexadecimal target bytes keyed
+by artifact-relative path.
+
+`Plan` carries the originating `blueprint`, the `groups` it covers, the ordered `artifacts`, and the
+`trace` and `hash` the pin fills. The trace names both independent axes as `src:<selection>` and
+`app:<selection>`, using `none` when one axis is empty, so app-only and mixed plans stay
+self-describing. `PlanSummary` is the dry-run tally by origin and carries both selections. `Finding` is one
+drift verdict with an optional bounded `observed` byte hex for a stale destination, and `Audit` is
+the whole diff plus its `clean` and `complete` flags, `questions`, and `drifted` / `missing` /
+`foreign` counts. `Question` is one validation issue; `blocking: true` fails the gate closed while
+`false` rides a complete result as an advisory. `Validation` is the semantic pass result and never
+throws.
+
+`Scaffolding` is the replayable outcome of one compile: the `blueprint`, the `plan` when complete,
+the accumulated `questions`, one `CompileRecord` per stage, any `CompileFailure` markers, the
+`complete` flag, and the content `digest`. `PlanRecord` is a versioned, content-hashed plan inside a
+`PlanManager`.
+
+`GuideSync`, `VersionSync`, and `SyncReport` are the freshness shapes. `GuideSync` carries the
+fetched `content`, its `freshness`, an optional `note` explaining a non-clean outcome, and an
+optional `baseline` — the SHA-256 of the observed local mirror, or the literal `absent`, present
+only on target-aware pulls. `VersionSync` compares a declared `range` to the registry `latest`.
+`SyncReport` is `clean` only when nothing drifted and nothing failed. `CatalogEntry` is one fleet
+package row; its `description` is the flattened text of that package's own guide's first
+blockquote, and the empty string when that guide is missing, unreadable, or carries no blockquote.
+
+`CompilerEventMap`, `CompilerOptions`, and `CompilerInterface` are the compiler triad;
+`PlanManagerEventMap`, `PlanManagerOptions`, and `PlanManagerInterface` are the registry triad.
+Both options records take `on` initial listeners and an `error` listener-failure handler, and
+`PlanManagerOptions` additionally seeds `plans`.
+
+### Types — server
+
+From [`types.ts`](../../src/server/types.ts).
+
+| Name                    | Kind      |
+| ----------------------- | --------- |
+| `MaterializeResult`     | interface |
+| `MaterializerEventMap`  | type      |
+| `MaterializerOptions`   | interface |
+| `ManifestEntry`         | interface |
+| `HostManifest`          | interface |
+| `WriteExpectation`      | interface |
+| `WritePrecondition`     | interface |
+| `WriteAnchor`           | interface |
+| `WriteDirectoryResult`  | interface |
+| `SyncAllowance`         | type      |
+| `CatalogAllowance`      | type      |
+| `SyncBase`              | type      |
+| `SyncBranch`            | type      |
+| `GuideWrite`            | interface |
+| `MaterializerInterface` | interface |
+| `SyncEventMap`          | type      |
+| `SyncOptions`           | interface |
+| `SyncInterface`         | interface |
+
+`MaterializeResult` reports the `target` plus the `written`, `copied`, `skipped`, and `removed`
+paths of one call. `MaterializerOptions` accepts a `host` root override plus emitter `on` hooks and
+an `error` handler; the default host is this package's own vendored data root, resolved from the
+installed module's own location rather than the caller's working directory. A caller-supplied host
+pointing at a raw repository root — one with no `manifest.json` beside it — maps artifact paths 1:1
+instead of through the manifest.
+
+`ManifestEntry` is one vendored-host file record — its un-dotted `storage` name, its `destination`
+relative to a target, and an `executable` bit. `HostManifest` pairs the sorted file `entries` with
+the complete sorted directory `roots` inventory, so a destructive consumer can tell a
+declared-empty root from a truncated manifest.
+
+The write-transaction shapes are the fail-closed mutation vocabulary. `WriteExpectation` is one
+destination snapshot captured before mutation (`absent`, `file`, or `directory`, with device,
+inode, modification time, size, and digest where they apply). `WritePrecondition` is the narrower
+caller-observed state a transaction must still match. `WriteAnchor` is a physical directory
+identity, and `WriteDirectoryResult` pairs the final anchor with the subset a call created.
+`GuideWrite` pairs one validated guide update with its contained destination. `SyncAllowance` and
+`CatalogAllowance` are one-cell `Float64Array` allowances: the former shares a byte budget across
+concurrent network readers, while the latter shares one entry budget across every fleet root and
+child visited by a catalog operation. `SyncBase` and `SyncBranch` are normalized strings returned
+only by their corresponding boundary parsers.
+
+`SyncOptions` groups the injectable endpoints under the entity they configure — `guides` with
+`base`, `branch`, and `timeout`; `registry` with `base` and `timeout` — alongside `concurrency`,
+`retries`, `strict`, `limit`, `items`, `budget`, and the emitter `on` and `error` keys.
+
+### Constants — core
+
+From [`constants.ts`](../../src/core/constants.ts).
+
+| Name                              | Kind  |
+| --------------------------------- | ----- |
+| `ENVIRONMENTS`                    | const |
+| `ORIGINS`                         | const |
+| `GROUPS`                          | const |
+| `CATEGORIES`                      | const |
+| `FRESHNESS`                       | const |
+| `COMPILE_STAGES`                  | const |
+| `SRC_MATRIX`                      | const |
+| `APP_MATRIX`                      | const |
+| `HOST_PATHS`                      | const |
+| `NAME_PATTERN`                    | const |
+| `MAX_NAME_LENGTH`                 | const |
+| `MAX_DEPENDENCY_NAME_LENGTH`      | const |
+| `MAX_PATH_LENGTH`                 | const |
+| `CONTROL_CHARACTER_PATTERN`       | const |
+| `INVALID_PATH_CHARACTER_PATTERN`  | const |
+| `MAX_RANGE_LENGTH`                | const |
+| `MAX_COLLECTION_ITEMS`            | const |
+| `MAX_DATA_GRAPH_NODES`            | const |
+| `MAX_DATA_GRAPH_KEYS`             | const |
+| `VERSION_PATTERN`                 | const |
+| `ORKESTREL_RANGE_PATTERN`         | const |
+| `EXTRA_RANGE_PATTERN`             | const |
+| `ENGINES_PATTERN`                 | const |
+| `MINIMUM_NODE_VERSION`            | const |
+| `EXPORT_KEYWORD`                  | const |
+| `CONST_KEYWORD`                   | const |
+| `IMPORT_KEYWORD`                  | const |
+| `FUNCTION_KEYWORD`                | const |
+| `HEX_PATTERN`                     | const |
+| `MAX_ARTIFACT_BYTES`              | const |
+| `MAX_TOTAL_ARTIFACT_BYTES`        | const |
+| `MAX_SERIALIZED_INPUT_BYTES`      | const |
+| `MAX_MANIFEST_BYTES`              | const |
+| `MAX_ARTIFACT_HEX_LENGTH`         | const |
+| `SYNC_BASELINE_PATTERN`           | const |
+| `DEPENDENCY_NAME_PATTERN`         | const |
+| `EXTRA_NAME_PATTERN`              | const |
+| `DEFAULT_VERSION`                 | const |
+| `DEFAULT_ENGINES`                 | const |
+| `SCAFFOLD_RANGE`                  | const |
+| `BASE_DEV_DEPENDENCIES`           | const |
+| `SOURCE_BROWSER_DEV_DEPENDENCIES` | const |
+| `APP_BROWSER_DEV_DEPENDENCIES`    | const |
+| `CHECKOUT_ACTION_SHA`             | const |
+| `SETUP_NODE_ACTION_SHA`           | const |
+| `COMPILER_ID`                     | const |
+| `TYPESCRIPT_EXTENSIONS`           | const |
+| `JSON_PRINT_WIDTH`                | const |
+| `JSON_TAB_WIDTH`                  | const |
+
+`ENVIRONMENTS`, `ORIGINS`, `GROUPS`, `CATEGORIES`, `FRESHNESS`, and `COMPILE_STAGES` are the frozen
+value lists behind their literal unions. `SRC_MATRIX` is the `src` environment matrix as
+data — each environment's `configs/src` files, test-project label, `exports` subpath, and build
+formats. `APP_MATRIX` is its application sibling, adding the runtime entry where an environment produces
+one (`app/browser/index.html`, `app/server/main.ts`). `HOST_PATHS` is the ordered list of
+byte-copied host artifacts, and it is the staging manifest rather than the per-plan carried set:
+`stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
+for that one workspace.
+
+The bounds are public because they are part of the contract, not implementation trivia.
+`MAX_ARTIFACT_BYTES` caps one artifact at 5 MiB and `MAX_TOTAL_ARTIFACT_BYTES` caps one blueprint,
+plan, audit, or report at 100 MiB in aggregate. `MAX_SERIALIZED_INPUT_BYTES` is four times that
+aggregate ceiling so serialized hexadecimal records have a bounded envelope before JSON parsing,
+and `MAX_MANIFEST_BYTES` caps every package or host manifest at 1 MiB.
+`MAX_ARTIFACT_HEX_LENGTH` is the hexadecimal form of the per-artifact bound.
+`MAX_COLLECTION_ITEMS` bounds one public collection at 1,000 entries.
+`MAX_DATA_GRAPH_NODES` and `MAX_DATA_GRAPH_KEYS` cap recursive ownership inspection even when an
+adversarial proxy produces a fresh identity at every step.
+`MAX_NAME_LENGTH` is 203 so the published scoped name fits npm's 214-character limit, which
+`MAX_DEPENDENCY_NAME_LENGTH` records directly. `MAX_PATH_LENGTH` and `MAX_RANGE_LENGTH` bound
+serialized path and range tokens.
+
+The patterns are the shape laws. `NAME_PATTERN` is the lowercase, letter-first workspace name.
+`DEPENDENCY_NAME_PATTERN` closes `dependencies` and `peers` to `@orkestrel/<name>` — a name-shaped
+law at the gate, because those are the only names that ever feed a derived `guides/src/<name>.md`
+path. `EXTRA_NAME_PATTERN` is deliberately broader (any valid npm package name, scoped or not),
+because `extras` names are manifest content and never feed a path. `VERSION_PATTERN` is exact
+three-component semver; `ORKESTREL_RANGE_PATTERN` is the caret-pinned pre-1.0 range;
+`EXTRA_RANGE_PATTERN` is the registry-only semver subset; `ENGINES_PATTERN` is the minimum-Node
+form. `HEX_PATTERN` requires whole lowercase byte pairs, and `SYNC_BASELINE_PATTERN` accepts either
+`absent` or an exact SHA-256 digest. `CONTROL_CHARACTER_PATTERN` and
+`INVALID_PATH_CHARACTER_PATTERN` reject control characters and non-portable path characters.
+
+`MINIMUM_NODE_VERSION` is `22.12.0`, `DEFAULT_ENGINES` derives from it, and `DEFAULT_VERSION` is
+`0.0.1`. `BASE_DEV_DEPENDENCIES` is the host-neutral tooling baseline every generated workspace
+gets; `SOURCE_BROWSER_DEV_DEPENDENCIES` adds the real browser providers a published browser environment
+needs, and `APP_BROWSER_DEV_DEPENDENCIES` extends that with the Vue toolchain a private browser
+application needs. `SCAFFOLD_RANGE` is the range generated workspaces pin this package at.
+`CHECKOUT_ACTION_SHA` and `SETUP_NODE_ACTION_SHA` pin the two official CI actions to immutable
+commits. `TYPESCRIPT_EXTENSIONS` is the module extension set every generated scoped check covers.
+`JSON_PRINT_WIDTH` and `JSON_TAB_WIDTH` mirror the formatter configuration, so computed JSON is
+format-stable by construction. `EXPORT_KEYWORD`, `CONST_KEYWORD`, `IMPORT_KEYWORD`, and
+`FUNCTION_KEYWORD` keep declaration tokens out of rendered template literals, so a line-based
+parity scan reading this package's own source never mistakes emitted file text for a real export.
+`COMPILER_ID` is the default orchestrator id.
+
+### Constants — server
+
+From [`constants.ts`](../../src/server/constants.ts).
+
+| Name                             | Kind  |
+| -------------------------------- | ----- |
+| `PRUNE_DIRECTORIES`              | const |
+| `HOST_MANIFEST_PATH`             | const |
+| `SENSITIVE_HOST_PATH_PATTERN`    | const |
+| `RESERVED_TARGET_PATH_PATTERN`   | const |
+| `MAX_CATALOG_DESCRIPTION_LENGTH` | const |
+| `MAX_GUIDE_BYTES`                | const |
+| `MAX_HOST_ENTRIES`               | const |
+| `MAX_HOST_DEPTH`                 | const |
+| `MAX_FILESYSTEM_DEPTH`           | const |
+| `MAX_PATH_SEGMENT_BYTES`         | const |
+| `RESERVED_PATH_SEGMENT_PATTERN`  | const |
+| `MAX_SYNC_CONCURRENCY`           | const |
+| `DEFAULT_SYNC_CONCURRENCY`       | const |
+| `MAX_SYNC_RETRIES`               | const |
+| `MAX_SYNC_TIMEOUT`               | const |
+| `DEFAULT_SYNC_TIMEOUT`           | const |
+| `MAX_SYNC_LIMIT`                 | const |
+| `DEFAULT_SYNC_LIMIT`             | const |
+| `DEFAULT_SYNC_ITEMS`             | const |
+| `MAX_SYNC_ITEMS`                 | const |
+| `DEFAULT_SYNC_BUDGET`            | const |
+| `MAX_SYNC_BUDGET`                | const |
+| `MAX_SYNC_BASE_LENGTH`           | const |
+| `MAX_SYNC_BRANCH_LENGTH`         | const |
+| `WRITE_DIGEST_PATTERN`           | const |
+| `SYNC_BRANCH_PATTERN`            | const |
+
+`PRUNE_DIRECTORIES` is the closed set of prune-owned directories — `.claude/agents`,
+`.codex/agents`, and `scripts`. Nothing outside those roots is ever a deletion candidate, which is
+why project-owned skills under `.agents/skills` and `.claude/skills` are structurally safe.
+`HOST_MANIFEST_PATH` is the reserved `manifest.json` written at the root of every staged host.
+`SENSITIVE_HOST_PATH_PATTERN` rejects credential-like, key-store, certificate-key, and
+local-configuration paths at the staging boundary. `RESERVED_TARGET_PATH_PATTERN` protects `.git`
+and every descendant from materialization, including when a hand-built plan targets a directory
+that is otherwise vacant. `RESERVED_PATH_SEGMENT_PATTERN` rejects Windows device names even when
+they carry an extension. `MAX_HOST_ENTRIES` and `MAX_HOST_DEPTH` bound vendored-host walks;
+`MAX_FILESYSTEM_DEPTH` and `MAX_PATH_SEGMENT_BYTES` bound caller-supplied filesystem paths before
+traversal. `MAX_GUIDE_BYTES` limits a catalog guide to the per-artifact ceiling before Markdown
+parsing.
+
+The `Sync` bounds come in matched default and maximum pairs: `concurrency` defaults to 6 and is
+capped at 64, `timeout` defaults to 10 seconds and is capped at 5 minutes, `retries` is capped at
+5, the per-response byte `limit` defaults to and is capped at the 5 MiB artifact limit, `items`
+defaults to 256 and is capped at 1,000, and the cumulative `budget` defaults to 16 MiB and is
+capped at 100 MiB. Endpoint bases and branch names are additionally bounded by
+`MAX_SYNC_BASE_LENGTH` and `MAX_SYNC_BRANCH_LENGTH`. `WRITE_DIGEST_PATTERN` is the exact SHA-256
+form a write precondition accepts; `SYNC_BRANCH_PATTERN` is the initial safe-character law for the
+upstream guide URL boundary, followed by Git-ref structural checks in `parseSyncBranch`.
+`MAX_CATALOG_DESCRIPTION_LENGTH` bounds a normalized catalog description at 500 characters.
+
+### Templates
+
+From [`templates.ts`](../../src/core/templates.ts).
+
+| Name        | Kind  |
+| ----------- | ----- |
+| `TEMPLATES` | const |
+
+`TEMPLATES` is the shipped, versioned `TemplateDefinition` data behind every `template`-origin
+artifact. Only genuinely templated prose and source live here — starter README and guide text,
+source stubs, application stubs, test stubs. Every structural file (`package.json`, the tsconfigs,
+the build configuration) is `computed` instead, so a literal `{{…}}` inside a configuration can
+never be mistaken for a placeholder. Changing a convention is a version bump of this package rather
+than a hand edit of a generated workspace's copy.
 
 ### Errors
 
-| API               | Kind     | Summary                                             |
-| ----------------- | -------- | --------------------------------------------------- |
-| `ScaffoldError`   | class    | Carries a `ScaffoldErrorCode` + optional `context`. |
-| `isScaffoldError` | function | Narrow a caught value to a `ScaffoldError`.         |
+From [`errors.ts`](../../src/core/errors.ts).
+
+| Name              | Kind     |
+| ----------------- | -------- |
+| `ScaffoldError`   | class    |
+| `isScaffoldError` | function |
+
+`ScaffoldError` carries a machine-readable `code` and an optional `context`, and `isScaffoldError`
+is its total narrowing guard for a `catch`. Throwing is reserved for caller misuse:
+`createBlueprint` on off-contract data throws `INVALID`; any method called after `destroy()` throws
+`DESTROYED`; on the server face a non-vacant materialize target throws `TARGET` and a failed write
+throws `WRITE`; a strict-mode upstream failure throws `FETCH`. A failing gate is deliberately _not_
+an error — it fails closed into an incomplete `Scaffolding` whose `failures` carry a `BLOCKED`
+marker.
+
+### Validators — core
+
+From [`validators.ts`](../../src/core/validators.ts).
+
+| Name                      | Kind     |
+| ------------------------- | -------- |
+| `isDependency`            | const    |
+| `isOverride`              | const    |
+| `hasValidOverrideBytes`   | function |
+| `isWorkspaceName`         | function |
+| `hasOnlyDataProperties`   | function |
+| `isDenseDataArray`        | function |
+| `isEmitterErrorHandler`   | function |
+| `isCompilerEventHooks`    | function |
+| `isPlanManagerEventHooks` | function |
+| `hasBlueprintEnvironment` | function |
+| `hasValidBlueprintBytes`  | function |
+| `isBlueprint`             | const    |
+| `isMember`                | const    |
+| `hasValidArtifactHex`     | function |
+| `hasValidArtifactBytes`   | function |
+| `hasValidPlanHex`         | function |
+| `hasValidPlanBytes`       | function |
+| `hasValidAuditBytes`      | function |
+| `hasValidSnapshotBytes`   | function |
+| `isArtifact`              | const    |
+| `isPlan`                  | const    |
+| `validatePlan`            | function |
+| `hasValidSyncReportBytes` | function |
+| `isSyncReport`            | const    |
+
+The seven `is*` constants are total guards compiled from their shapes and refined by the `has*`
+predicates beside them. A guard never throws — adversarial input, hostile prototypes, deep nesting,
+and cycles all return `false`. The refinements are exported separately because they carry real
+laws: `hasBlueprintEnvironment` requires at least one selected environment across the two axes;
+`hasValidArtifactHex` applies the lowercase byte-pair law; and the `*Bytes` predicates apply the
+per-item and aggregate byte limits to overrides, blueprints, artifacts, plans, audits, snapshots,
+and sync reports. `isWorkspaceName` is the bounded bare-name guard used wherever a manifest name is
+read back. `hasOnlyDataProperties` and `isDenseDataArray` are core guards because every environment
+uses the same accessor-free graph and dense-array boundary. `isEmitterErrorHandler`,
+`isCompilerEventHooks`, and `isPlanManagerEventHooks` validate callable observation seams before
+entity allocation.
+
+`validatePlan` is the pre-mutation gate: it runs the semantic pass over the plan's own blueprint and
+then checks every override against the exact artifact set the plan would write. An override whose
+`path` matches no planned artifact, targets a `host`-origin artifact, or targets the
+blueprint-owned `package.json` publication boundary is a blocking question rather than a silent
+no-op. An override that clears all three lands a `warnings` entry naming the path it replaces — the
+declaration is accepted, and it is never accepted silently.
+
+### Validators — server
+
+From [`validators.ts`](../../src/server/validators.ts).
+
+| Name                       | Kind     |
+| -------------------------- | -------- |
+| `isPortablePath`           | function |
+| `isFilesystemPath`         | function |
+| `isTerminalText`           | function |
+| `isDependencyData`         | function |
+| `isSensitiveHostPath`      | function |
+| `isReservedTargetPath`     | function |
+| `isCatalogAllowance`       | function |
+| `isCatalogDescription`     | function |
+| `isMissingPathError`       | function |
+| `isWritePrecondition`      | function |
+| `isManifestEntry`          | function |
+| `isHostManifest`           | function |
+| `isSyncEventHooks`         | function |
+| `isMaterializerEventHooks` | function |
+
+`isPortablePath` is the law every write and read is held to: a non-empty relative POSIX path, under
+the length bound, free of control characters and non-portable characters, with no empty, `.`, `..`,
+trailing-dot, trailing-space, or reserved-device segment. `isFilesystemPath` is the looser bound for
+a host path a caller supplies, and `isTerminalText` is the bound for anything rendered into a
+terminal or a JSON diagnostic. `isDependencyData` combines the data-only reflection with the core
+dependency guard. `isReservedTargetPath` identifies preserved `.git` metadata, while
+`isCatalogAllowance` bounds the single fleet counter at `MAX_HOST_ENTRIES` before directory
+traversal and reads the typed array's intrinsic backing buffer, rejecting shared storage even when a
+caller shadows the public `buffer` property.
+
+`hasOnlyDataProperties` and `isDenseDataArray` exist because a boundary that copies a caller's graph
+must never invoke a caller-defined accessor: the first walks a record or array graph and rejects any
+non-data property within the public node/key budgets, while the second rejects a sparse,
+symbol-bearing, or method-bearing array. Together they make a structured clone of an untrusted
+input safe without admitting unbounded traversal. `isWritePrecondition`, `isManifestEntry`, and
+`isHostManifest` are the exact-shape guards for the mutation and vendored-host records, and
+`isSyncEventHooks`, `isMaterializerEventHooks`, and `isEmitterErrorHandler` reject an options object
+carrying an unknown or non-callable hook. `isMissingPathError` narrows a caught filesystem error to
+exactly `ENOENT`, so an absent path is never conflated with a permission failure.
+
+### Parsers — core
+
+From [`parsers.ts`](../../src/core/parsers.ts).
+
+| Name                      | Kind     |
+| ------------------------- | -------- |
+| `parseBoundedJSON`        | function |
+| `parseCompilerOptions`    | function |
+| `parseBlueprint`          | function |
+| `parsePlan`               | function |
+| `parsePlanIds`            | function |
+| `parsePlanManagerOptions` | function |
+| `parseSyncReport`         | function |
+
+`parseBoundedJSON` measures serialized UTF-8 bytes before allocating a parsed graph, applies a
+caller-supplied `@orkestrel/contract` guard, and returns `undefined` for an invalid budget,
+oversized or malformed JSON, or an off-contract result. The three domain parsers are the coercing
+counterparts of their guards. Given a value they return it when the guard accepts it; given a string
+they pass through the shared serialized-input ceiling before JSON parsing. A guard-valid value
+round-trips unchanged, and malformed or off-contract input returns `undefined` rather than throwing.
+`parsePlanIds` snapshots a bounded dense unique string array entirely through own data descriptors;
+it never invokes a caller's iterator, accessor, symbol member, or sparse index.
+`parseCompilerOptions` accepts only own `on` and `error` data properties and copies the compiler's
+declared listener hooks before its emitter is allocated.
+`parsePlanManagerOptions` performs the same fail-closed work for constructor options: it accepts
+only own `plans`, `on`, and `error` data properties, bounds and snapshots seed plans without calling
+their iterator, and copies only the three declared listener hooks.
+
+### Cloners — core
+
+From [`cloners.ts`](../../src/core/cloners.ts).
+
+| Name           | Kind     |
+| -------------- | -------- |
+| `snapshotPlan` | function |
+
+`snapshotPlan` validates a data-only plan, detaches it through its canonical JSON representation,
+and recursively freezes the entire owned graph. A `PlanManager` therefore never aliases a caller's
+blueprint, artifacts, arrays, or returned record.
+
+### Parsers — server
+
+From [`parsers.ts`](../../src/server/parsers.ts).
+
+| Name                       | Kind     |
+| -------------------------- | -------- |
+| `parseSyncDependencies`    | function |
+| `parseFilesystemPaths`     | function |
+| `parsePortablePaths`       | function |
+| `parseWritePreconditions`  | function |
+| `parseSyncBase`            | function |
+| `parseSyncCurrent`         | function |
+| `parseSyncBranch`          | function |
+| `parseMaterializerOptions` | function |
+| `parseSyncOptions`         | function |
+
+These are the boundary coercers that run before any resource is allocated or any request is issued.
+`parseMaterializerOptions` and `parseSyncOptions` reject an unknown key, an accessor-backed
+property, or a malformed nested endpoint group, then compile the remainder through the shared
+contract. `parseSyncBase` rejects an overlong token before URL allocation, then normalizes an
+endpoint to an absolute `https:` origin — plain `http:` is accepted only for loopback — and rejects
+embedded credentials, a query, or a fragment. `parseSyncBranch` implements the Git ref-name safety
+subset used in raw-guide URLs: it rejects overlong values, empty or dot-leading components, `..`,
+`@{`, the single `@`, trailing dots, and `.lock` suffixes without regard to case.
+`parseSyncCurrent` snapshots only the declared guide references, enforcing both the per-file and
+cumulative byte allowance. The three array parsers return frozen copies read through property
+descriptors, so a caller-supplied array can never smuggle in a getter.
+
+### Shapers — core
+
+From [`shapers.ts`](../../src/core/shapers.ts).
+
+| Name              | Kind     |
+| ----------------- | -------- |
+| `dependencyShape` | function |
+| `overrideShape`   | function |
+| `blueprintShape`  | function |
+| `memberShape`     | function |
+| `artifactShape`   | function |
+| `planShape`       | function |
+| `syncReportShape` | function |
+
+Each returns a fresh declarative contract shape that compiles into a guard, a parser, a schema, and
+a seeded generator. The shapes stay structural on purpose: `blueprintShape` declares `name` as a
+plain bounded string rather than a pattern so the generator stays satisfiable, and the
+`NAME_PATTERN` law lives in the semantic pass instead. Likewise `artifactShape` splits on `origin` —
+host artifacts may carry `source` and `hex`, content artifacts require `content` — while the
+lowercase byte-pair law stays a semantic refinement.
+
+### Shapers — server
+
+From [`shapers.ts`](../../src/server/shapers.ts).
+
+| Name                       | Kind     |
+| -------------------------- | -------- |
+| `syncGuideOptionsShape`    | function |
+| `syncRegistryOptionsShape` | function |
+| `syncOptionsShape`         | function |
+| `materializerOptionsShape` | function |
+
+The closed data-only option shapes. Every numeric option is an integer shape bounded by its own
+maximum constant, so an out-of-range `concurrency`, `retries`, `limit`, `items`, `budget`, or
+`timeout` fails at the boundary rather than deep inside a request loop.
+
+### Contracts — server
+
+From [`contracts.ts`](../../src/server/contracts.ts).
+
+| Name                          | Kind  |
+| ----------------------------- | ----- |
+| `syncOptionsContract`         | const |
+| `materializerOptionsContract` | const |
+
+The compiled, closed data-only option contracts the two server parsers run their inputs through.
+
+### Helpers — core
+
+From [`helpers.ts`](../../src/core/helpers.ts).
+
+| Name                        | Kind     |
+| --------------------------- | -------- |
+| `dependency`                | function |
+| `ownDataValue`              | function |
+| `override`                  | function |
+| `member`                    | function |
+| `blueprint`                 | function |
+| `pascalCase`                | function |
+| `escapeHtmlText`            | function |
+| `serializeTypeScriptString` | function |
+| `blueprintToMembers`        | function |
+| `catalogNames`              | function |
+| `alignTable`                | function |
+| `splitTableRow`             | function |
+| `padCell`                   | function |
+| `delimiterCell`             | function |
+| `planToSummary`             | function |
+| `planToReview`              | function |
+| `auditToReview`             | function |
+| `isBehind`                  | function |
+| `syncToReview`              | function |
+| `catalogToBlock`            | function |
+| `inferGroup`                | function |
+| `diffPlan`                  | function |
+| `bytesToHex`                | function |
+| `contentCodePoint`          | function |
+| `contentToBytes`            | function |
+| `contentByteLength`         | function |
+| `contentToHex`              | function |
+| `snapshotOf`                | function |
+| `selectHostPaths`           | function |
+| `findPathConflict`          | function |
+| `findFileConflict`          | function |
+| `validateDependencyArray`   | function |
+| `validateBlueprint`         | function |
+| `manifestToDependencies`    | function |
+| `manifestToName`            | function |
+| `rangeToFreshness`          | function |
+| `computeHash`               | function |
+| `stableStringify`           | function |
+| `planPayload`               | function |
+| `computeColumnWidth`        | function |
+| `renderArray`               | function |
+| `renderObject`              | function |
+| `renderValue`               | function |
+| `formatJson`                | function |
+| `pinPlan`                   | function |
+
+`dependency`, `override`, `member`, and `blueprint` are the builders. `ownDataValue` reads only an
+own data descriptor, so parsed JSON cannot acquire manifest fields through a polluted prototype
+and accessors are never invoked. Each builder omits an absent optional
+field entirely rather than writing `undefined`, so a built value round-trips its own exact-record
+guard. `blueprint` fills the defaults: `version` and `engines` from their constants, `src` to
+`['core']`, and every other collection to empty. `pascalCase` derives the entity name from a
+lowercase-hyphen package name, and `blueprintToMembers` derives the declared public `Member[]` — a
+full entity, options type, interface, and factory per published environment, plus the exact declaration
+inventory each selected application environment contributes.
+
+`escapeHtmlText` and `serializeTypeScriptString` are the two escaping leaves used when a
+caller-supplied name reaches generated HTML or generated TypeScript source; the latter preserves
+every UTF-16 code unit, escaping lone surrogates and line separators.
+
+`alignTable` builds a formatter-width-aligned GFM table by rendering a real table node and then
+re-padding both the cells and the delimiter row to per-column codepoint width. `splitTableRow`,
+`padCell`, and `delimiterCell` are its exported leaves — the row splitter honours an escaped pipe
+as literal text rather than a column boundary, and `padCell` measures codepoints so a surrogate
+pair counts once. `catalogNames` is the mirror-image reader: it extracts `@orkestrel/<name>` package
+names from a catalog table by a pure line scan, and returns `[]` rather than throwing when the text
+has no rows.
+
+`planToSummary`, `planToReview`, `auditToReview`, `syncToReview`, and `catalogToBlock` are the
+lossless projections. The review documents are copy-ready markdown; `auditToReview` groups findings
+by drift, elides the aligned ones, and rejects an unsafe finding path outright. `catalogToBlock`
+deduplicates by name, sorts by code unit, prefixes a standing trust notice, and emits only the
+`Package` and `Version` columns — network-controlled descriptions are deliberately omitted, because
+that block enters agent instruction context. `isBehind` is the shared freshness predicate both
+report projections count with.
+
+`diffPlan` is the audit engine, and `inferGroup` classifies a target file the plan does not own.
+`snapshotOf`, `contentToHex`, `contentToBytes`, `contentByteLength`, `contentCodePoint`, and
+`bytesToHex` are the host-independent byte leaves that make exact comparison possible without a
+host encoder or buffer; an unpaired surrogate encodes as `U+FFFD` rather than throwing.
+`selectHostPaths` is the one-owner filter plan assembly applies before it carries anything: it
+returns the host paths in input order minus `guides/src/<name>.md`, so a workspace never plans a
+vendored mirror of the guide it writes itself. `findPathConflict` finds the first exact or
+case-insensitive collision in a path list, and `findFileConflict` additionally rejects a file that
+would sit inside another planned path — the loud backstop behind that selection.
+
+`validateBlueprint` and `validateDependencyArray` are the semantic pass. The array validator is
+pure — it returns its questions and the set of names it saw, so the caller can apply the
+cross-array overlap rules on top. `manifestToDependencies` reads a manifest's `dependencies`,
+`devDependencies`, and `peerDependencies` in that order, keeps only own data sections and scoped
+names, deduplicates, and never throws. `manifestToName` is its self-reading sibling over the same
+text: the manifest's own string `name`, or `undefined` when the text is oversized, malformed,
+rootless, or nameless — the projection that lets a target recognize itself in its own declared
+dependencies. `rangeToFreshness` applies the exact-pin comparison; the `missing` and `failed`
+verdicts come from the fetch layer, never from this pure comparison.
+
+`computeHash` is a deterministic FNV-1a digest and `stableStringify` a key-order-independent
+canonical serialization, so two logically equal blueprints hash identically. `planPayload`
+serializes exactly the blueprint, groups, and artifacts that establish plan identity, and `pinPlan`
+hashes that payload while filling an explicit `src:<selection> · app:<selection>` trace (`none`
+marks an empty axis). `PlanManager` compares the canonical payload whenever an
+id is already registered: an identical plan is idempotent, while a distinct payload with the same
+32-bit digest fails closed with `ScaffoldError('INVALID', 'Plan hash collision')`.
+`formatJson` and its leaves — `renderValue`,
+`renderArray`, `renderObject`, and `computeColumnWidth` — emit JSON that matches the fleet
+formatter byte for byte, collapsing a short array onto one line and breaking a long one, so
+computed configuration JSON is format-stable by construction.
+
+### Helpers — server
+
+From [`helpers.ts`](../../src/server/helpers.ts).
+
+| Name                       | Kind     |
+| -------------------------- | -------- |
+| `isRealDirectory`          | function |
+| `digestFile`               | function |
+| `digestHex`                | function |
+| `digestText`               | function |
+| `guideStub`                | function |
+| `packageShortName`         | function |
+| `readGuideReferences`      | function |
+| `syncReportOf`             | function |
+| `hostRoot`                 | function |
+| `resolveRealPath`          | function |
+| `resolveContainedPath`     | function |
+| `resolvePhysicalPath`      | function |
+| `validateWriteAnchor`      | function |
+| `createWriteDirectory`     | function |
+| `validateWriteDirectories` | function |
+| `validateWriteTarget`      | function |
+| `discardWriteTransaction`  | function |
+| `commitWriteTransaction`   | function |
+| `resolveGuideWrites`       | function |
+| `restoreFiles`             | function |
+| `replaceDirectory`         | function |
+| `selectOrkestrelEntries`   | function |
+| `deriveBlueprint`          | function |
+| `isVacant`                 | function |
+| `readTarget`               | function |
+| `readManifest`             | function |
+| `readHostManifest`         | function |
+| `readFileHex`              | function |
+| `readFileText`             | function |
+| `listFiles`                | function |
+| `listDirectories`          | function |
+| `storagePath`              | function |
+| `stageHost`                | function |
+| `locateHostSource`         | function |
+| `remapArtifactPath`        | function |
+| `hydratePlan`              | function |
+| `vendoredPruneSet`         | function |
+| `pruneTargets`             | function |
+| `consumeCatalogAllowance`  | function |
+| `discoverPackages`         | function |
+| `guideToDescription`       | function |
+| `catalogPackages`          | function |
+
+`hostRoot` resolves this module's own installed package root — the nearest ancestor of its own file
+holding a `package.json` — and returns its vendored `dist/host` directory. Walking up from the
+module rather than from the working directory is what makes the default host correct once installed:
+the package ships its vendored data with itself.
+
+`resolveRealPath`, `resolveContainedPath`, and `resolvePhysicalPath` are the containment ladder.
+The first resolves the deepest existing ancestor through symlinks with bounded iterative traversal;
+the second rejects any candidate that escapes its root after that resolution; the third additionally
+requires every existing ancestor between the root and the destination to be a real, unlinked
+directory. All three reject malformed paths before filesystem access. Containment is therefore
+realpath-aware rather than merely lexical, so a symlinked subdirectory planted inside an otherwise
+legitimate root cannot smuggle a write or a read outside it.
+
+`digestFile`, `digestHex`, and `digestText` are the three SHA-256 leaves. The file digest is
+bounded-memory and revalidates device, inode, size, and modification time before and after reading,
+so a file swapped mid-read is a failure rather than a silent wrong digest. `readFileHex` and
+`readFileText` read one contained file under the same revalidation, and the text reader decodes
+strictly, rejecting invalid UTF-8. Manifest reads stop at `MAX_MANIFEST_BYTES`; catalog guide reads
+stop at `MAX_GUIDE_BYTES`. `listFiles` and `listDirectories` walk a real, unlinked root under the
+entry and depth bounds, returning sorted POSIX-relative paths and `[]` for an absent root.
+`isRealDirectory` is the physical-directory predicate they all lean on.
+
+The write-transaction helpers are the fail-closed mutation path. `createWriteDirectory` establishes
+a directory one segment at a time behind captured identities; `validateWriteAnchor`,
+`validateWriteDirectories`, and `validateWriteTarget` revalidate those identities before each step;
+`commitWriteTransaction` promotes a complete staged set and rolls every earlier destination back
+when a later promotion fails; `discardWriteTransaction` removes the private residue of an
+uncommitted or already-committed transaction; `restoreFiles` returns quarantined files to their
+original paths in reverse order; and `replaceDirectory` atomically swaps a completed staging
+directory for its target, preserving a recoverable backup. `resolveGuideWrites` is the sync-side
+preflight: it resolves every behind-guide destination, enforces the canonical
+`guides/src/<short>.md` path for its dependency name, rejects collisions, and rejects a destination
+that is not a plain physical file — all before any mutation.
+
+`isVacant` is the green-field target law: a path is vacant when it is absent, empty, or contains
+nothing but a real `.git` directory. `readTarget` reads a target's current bytes at a set of paths
+into an exact-byte snapshot, mapping a directly requested directory to the empty string and
+omitting an absent path entirely. `readManifest` reads `package.json` text, and
+`selectOrkestrelEntries` filters a manifest field to its scoped name-and-range entries.
+
+`deriveBlueprint` is the faithful inverse an audit needs: it reconstructs a blueprint from an
+existing workspace so a mature package is diffed against its own would-be scaffold rather than a
+dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`;
+`engine` is `true` only when `src/bin/` exists; dependencies and peers come from the manifest's
+scoped entries, with an optional peer recovered from `peerDependenciesMeta`; and `extras` is every
+development dependency minus the generated baseline and minus anything already declared as a
+dependency or peer, so a hand-added development dependency round-trips and stays audit-clean.
+Derivation yields no `overrides`: they are caller-time inputs, not repository state. A computed
+artifact that must differ reveals a gap in the canon; the blueprint grows an axis for that
+distinction rather than the repository forking the file.
+
+`storagePath`, `stageHost`, `readHostManifest`, `locateHostSource`, `remapArtifactPath`, and
+`hydratePlan` are the vendored-host path. `storagePath` maps a repo-relative path to its un-dotted
+storage name, `stageHost` copies the vendored set into an output directory behind a full preflight
+and an atomic swap, and `readHostManifest` reads and validates the resulting `manifest.json`,
+returning `undefined` when a host has none — the raw-repository-root fallback that maps sources 1:1.
+`locateHostSource` resolves one source to its storage file, `remapArtifactPath` maps a manifest
+destination back onto an artifact's target prefix, and `hydratePlan` rehydrates a plan's host
+artifacts with their exact bytes, expanding a directory-shaped host artifact into one artifact per
+file.
+
+`vendoredPruneSet` establishes the allowlist for one prune directory and fails closed rather than
+returning an unestablished empty set — a missing host root, or a host with neither a manifest nor
+that directory, is a coded failure, while a host that genuinely vendors nothing there remains a
+valid empty allowlist. `pruneTargets` is the single source of truth for prune drift: it lists the
+paths under a target's prune directories that the allowlist does not declare, and it never deletes
+anything.
+
+`consumeCatalogAllowance` decrements the single shared entry allowance and throws `TARGET` before an
+over-budget traversal continues. `discoverPackages` requires a real, unlinked root and lists its
+immediate child directories whose bounded manifest names a scoped package, skipping anything else
+silently. A control-bearing child directory fails closed before its manifest is read and the
+untrusted name is never reflected in the diagnostic. `catalogPackages` applies one allowance across
+every root and directory rather than
+resetting a per-root budget, then draws each description from the first paragraph of the first
+blockquote of that package's own bounded guide via `guideToDescription`; a missing guide, an
+unreadable or oversized one, or one with no blockquote yields an empty description rather than an
+error.
+
+`packageShortName` strips the canonical scope, `guideStub` renders the pointer written when a
+dependency guide is not vendored yet, `readGuideReferences` reads a target's existing local mirrors
+so a pull's verdicts are target-relative, and `syncReportOf` assembles one report from already
+ordered guide and version outcomes.
+
+### Compilers — core
+
+From [`compilers.ts`](../../src/core/compilers.ts).
+
+| Name                    | Kind     |
+| ----------------------- | -------- |
+| `hostGroup`             | function |
+| `fillArtifact`          | function |
+| `srcVariant`            | function |
+| `entryFields`           | function |
+| `dualCondition`         | function |
+| `exportsMap`            | function |
+| `compareCodeUnit`       | function |
+| `devDependenciesFor`    | function |
+| `packageManifest`       | function |
+| `rootTsconfig`          | function |
+| `viteMachinery`         | function |
+| `viteHeader`            | function |
+| `policyViteProject`     | function |
+| `singleSrcViteConfig`   | function |
+| `rootViteConfig`        | function |
+| `applicationViteConfig` | function |
+| `coreTsconfig`          | function |
+| `coreViteConfig`        | function |
+| `srcTsconfig`           | function |
+| `srcViteConfig`         | function |
+| `appTsconfig`           | function |
+| `appViteConfig`         | function |
+| `ciWorkflow`            | function |
+| `configArtifacts`       | function |
+| `sourceArtifacts`       | function |
+| `applicationArtifacts`  | function |
+| `paritySpecifiers`      | function |
+| `testArtifacts`         | function |
+| `guideMemberTable`      | function |
+| `guideUsage`            | function |
+| `guideMethods`          | function |
+| `guideTests`            | function |
+| `guideArtifacts`        | function |
+| `applyOverrides`        | function |
+| `blueprintToPlan`       | function |
+
+`blueprintToPlan` is the whole pure compilation: draft each selected group's artifacts, append the
+host set, apply overrides, and pin. Everything above it is an exported leaf of that drafting, each
+independently callable and independently tested.
+
+`srcVariant` classifies an `src` environment selection into its manifest variant — one environment, or
+several. `entryFields`, `dualCondition`, and `exportsMap` build the manifest entry fields and the
+`exports` map from that variant; a browser-only package exports a single module condition, while
+core and server src get dual import and require conditions with matching declaration files.
+`devDependenciesFor` merges a blueprint's extras over the shared baseline, extras winning a name
+collision, sorted by `compareCodeUnit` so ordering is stable across locales. `packageManifest`
+assembles the whole file — name, publication mode, files, scripts, dependencies, peers and their
+optional metadata, and engines.
+
+`rootTsconfig` emits the root compiler options and one path alias per declared environment;
+`coreTsconfig`, `srcTsconfig`, and `appTsconfig` emit the scoped configurations that remove the
+wrong host's globals from each environment. A core scope is the interesting one: `lib` is
+`["ESNext", "WebWorker"]` and `types` stays `[]`, which declares the WHATWG surface that is
+identical across Node, browsers, and workers — `fetch` and its request/response/header types,
+streams, `URL`, `AbortController`, the text encoders, `crypto`, timers, `console`, `DOMException`,
+`structuredClone` — while leaving `document`, `window`, and every `node:*` type unresolvable. That
+is one declaration set for a host-independent module, not a host. `viteHeader` renders the shared
+header — the alias block
+derived from the tsconfig paths, plus the environment-boundary plugin — and `viteMachinery` is the
+one place the header's axes are derived, read by `rootViteConfig`, `singleSrcViteConfig`,
+`applicationViteConfig`, and `configArtifacts` alike so no caller can invent a fourth answer.
+
+**The boundary guarantees do not vary by blueprint.** Every generated `vite.config.ts` — a
+`core`-only library, an application of `app/core` alone, or the full six-environment workspace —
+emits `environmentBoundary`, its `resolveId` / `load` / `buildEnd` walks, the module-graph AST audit
+(`environmentAssetSources`, `parseSync`, `Visitor`), and stylesheet rejection (`isStylesheetPath`
+plus its `environmentPathError` / `environmentSourceError` clauses). Those enforce owner-independent
+laws: core stays host-independent whatever else the workspace declares, a server module never
+imports a stylesheet, and a `@vite-ignore` dynamic import — which `resolveId` never sees and the
+module graph never records — has no other enforcement point in workspace-owned source. Dependency
+and toolchain modules are outside that ownership boundary. Only host-specific pipelines vary,
+along the three `ViteMachinery` axes:
+
+| Machinery                                                         | Emitted when                         |
+| ----------------------------------------------------------------- | ------------------------------------ |
+| CSS pipeline (`ENVIRONMENT_CSS`, `preprocessCSS`, `isCSSRequest`) | a `src` or `app` browser environment |
+| Playwright provider and `hasChromium`                             | a `src` or `app` browser environment |
+| Vue plugin, HTML boundary, browser development server             | an `app` browser environment         |
+| Output containment (`outputBoundary`, `enforceOutputPath`)        | anything the workspace builds        |
+
+An application of `app/core` alone is the sole shape that builds nothing, so it is the sole shape
+without output containment — and it still carries every boundary guarantee above.
+
+`coreViteConfig`, `srcViteConfig`, and `appViteConfig` emit the thin per-target wrappers;
+`rootViteConfig`, `singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for
+a library-only, single non-core `src` environment, and application-bearing workspace respectively;
+`policyViteProject` emits the dedicated Node-only repository-policy test project.
+
+`configArtifacts`, `sourceArtifacts`, `applicationArtifacts`, `testArtifacts`, and `guideArtifacts`
+are the per-group drafters. `paritySpecifiers` computes the self-specifier and module map the
+generated parity suite resolves fence imports through. `guideMemberTable`, `guideUsage`,
+`guideMethods`, and `guideTests` render the generated guide's member tables, usage examples, method
+contract, and test inventory. `fillArtifact` fills one template entry into a `template`-origin
+artifact with missing placeholders treated as an error, and `hostGroup` resolves which group a
+byte-copied host path belongs to. `applyOverrides` replaces a matching artifact's content in place
+and deliberately leaves an unmatched, host-owned, or `package.json` override unapplied, because the
+gate reports it as a blocking question. `ciWorkflow` renders the generated workflow.
+
+### Factories
+
+From [`factories.ts`](../../src/core/factories.ts) and
+[`factories.ts`](../../src/server/factories.ts).
+
+| Name                 | Kind     |
+| -------------------- | -------- |
+| `createCompiler`     | function |
+| `createPlanManager`  | function |
+| `createBlueprint`    | function |
+| `createMaterializer` | function |
+| `createSync`         | function |
+
+`createBlueprint` is the validating constructor: it fills the builder defaults and then checks both
+the exact-record shape and the semantic pass, throwing `INVALID` when either fails. The other four
+construct their entities from their options records.
+
+### `Compiler`
+
+The compilation orchestrator, from [`Compiler.ts`](../../src/core/Compiler.ts). It runs the fixed
+three-stage `draft → gate → pin` pipeline over a blueprint and owns a typed emitter whose event map
+is `compile`, `audit`, `block`, `error`, and `destroy`. Both public methods are genuinely
+synchronous and pure. `compile` emits `compile` only for a complete compilation and `block` for a
+gated one; `audit` emits `block` when gated and then always emits `audit`, never `compile`. After
+`destroy()` every method other than the getter and `destroy` itself throws `DESTROYED`, and teardown
+is idempotent with the emitter destroyed last.
+
+### `PlanManager`
+
+The versioned, content-hashed plan registry, from
+[`PlanManager.ts`](../../src/core/PlanManager.ts). Its event map is `add`, `remove`, and `destroy`.
+Construction parses its exact options before allocating the emitter. `add` re-pins an immutable,
+detached plan snapshot and mints the record id from that content hash, so re-adding an unchanged plan
+resolves to the same frozen record, a changed plan mints a fresh id, and a distinct canonical payload
+with a colliding digest throws `INVALID` before mutation or emission. `remove` follows the
+batch-overload convention with the array overload declared first. Its list form is all-or-nothing:
+if any listed id is unregistered the collection is untouched and `false` is returned; on success all
+selected records are removed before the first stable-order event, so synchronous listeners observe
+the committed state and cannot create reentrant duplicate removals. After `destroy()` every method
+other than the getters and `destroy` throws `DESTROYED`.
+
+### `Materializer`
+
+The materialization entity, from [`Materializer.ts`](../../src/server/Materializer.ts) — the only
+filesystem writer in the package. Its event map is `copy`, `write`, `remove`, `done`, `error`, and
+`destroy`. Every call preflights completely before mutating: a structural plan match, the semantic
+and contextual validation result, portable-path checks on every artifact path and source, collision
+detection, destination-shape checks, and realpath-anchored containment against both the target and
+the host root. Only then does staging begin, inside a private same-volume write transaction that is
+promoted atomically and rolled back on any failure. After `destroy()` every method throws
+`DESTROYED`.
+
+### `Sync`
+
+The upstream-synchronization entity, from [`Sync.ts`](../../src/server/Sync.ts) — the only network
+reader in the package. Its event map is `guide`, `version`, `package`, `write`, `done`, `error`, and
+`destroy`. Every request runs under a per-request abort timeout and a bounded worker pool rather
+than an unbounded parallel await, follows no redirects, sends no credentials, and reads its response
+body incrementally against both the per-response limit and a shared cumulative allowance. The
+default posture collects failures into the result as `missing` or `failed` verdicts; `strict` mode
+turns those into a thrown `FETCH` naming the failing URL. `destroy()` aborts every in-flight request
+and is idempotent, and every method afterwards throws `DESTROYED`.
+
+### `WriteTransaction`
+
+The nominal, same-volume write-transaction state, from
+[`WriteTransaction.ts`](../../src/server/WriteTransaction.ts). It is constructed only through its
+static `create`, which derives every filesystem path from a target plus portable relative paths — a
+caller can neither supply a deletion root nor mutate the captured arrays. Creation snapshots every
+destination into a frozen `WriteExpectation`, verifies any supplied preconditions against what is
+actually on disk, captures the parent anchor identity, and creates private staging and backup
+directories with restrictive permissions. Its readonly getters — `target`, `root`, `stage`,
+`backup`, `expectations`, `parents`, `directories`, `anchor`, and `existing` — are the only way to
+observe it; every operation over it lives in the exported transaction helpers.
+
+## Methods
+
+The public methods of each behavioral interface, one table per type.
+
+#### `CompilerInterface`
+
+| Method    | Returns       |
+| --------- | ------------- |
+| `compile` | `Scaffolding` |
+| `audit`   | `Audit`       |
+| `destroy` | `void`        |
+
+`compile(blueprint, groups?)` runs the pipeline and returns a complete or visibly incomplete
+`Scaffolding`; the optional group selection scopes the plan to those artifact groups.
+`audit(blueprint, current, groups?)` compiles and then diffs the resulting plan against the
+caller-supplied current content; a gated blueprint returns `complete: false` with the gate's
+blocking questions and zero findings, and a complete one carries the gate's advisories on that same
+`questions` field. `destroy()` is idempotent teardown. The interface also exposes the readonly
+`emitter`.
+
+#### `PlanManagerInterface`
+
+| Method    | Returns                   |
+| --------- | ------------------------- |
+| `has`     | `boolean`                 |
+| `plan`    | `PlanRecord \| undefined` |
+| `plans`   | `readonly PlanRecord[]`   |
+| `add`     | `PlanRecord`              |
+| `remove`  | `boolean \| void`         |
+| `destroy` | `void`                    |
+
+`has(id)` tests registration. `plan(id)` is the singular accessor and returns `undefined` for an
+unregistered id; `plans()` is the plural accessor and returns a snapshot array. `add(plan)`
+registers or re-registers one plan. `remove()` removes every plan and returns `void`; `remove(id)`
+removes one and returns whether it existed; `remove(ids)` is all-or-nothing over a list. The
+interface also exposes the readonly `emitter` and `size` properties.
+
+#### `MaterializerInterface`
+
+| Method        | Returns             |
+| ------------- | ------------------- |
+| `materialize` | `MaterializeResult` |
+| `repair`      | `MaterializeResult` |
+| `prune`       | `MaterializeResult` |
+| `destroy`     | `void`              |
+
+`materialize(plan, target)` is green-field: it refuses any target `isVacant` rejects, then copies
+each host artifact and writes each template and computed artifact. `repair(plan, audit, target)` is
+into-existing: it skips the vacancy check, re-verifies that the target still matches the audit
+preview, and writes only the missing and stale artifacts that audit names, leaving aligned ones
+untouched and reporting them as `skipped`. `prune(target, expected)` deletes exactly the unexpected
+files the vendored host no longer declares under the prune directories, and only after the observed
+bytes still match the `expected` snapshot it was previewed with. `destroy()` is idempotent teardown.
+The interface also exposes the readonly `emitter`.
+
+#### `SyncInterface`
+
+| Method     | Returns                            |
+| ---------- | ---------------------------------- |
+| `guides`   | `Promise<readonly GuideSync[]>`    |
+| `versions` | `Promise<readonly VersionSync[]>`  |
+| `catalog`  | `Promise<readonly CatalogEntry[]>` |
+| `pull`     | `Promise<SyncReport>`              |
+| `write`    | `Promise<readonly string[]>`       |
+| `destroy`  | `void`                             |
+
+`guides(deps, current?)` fetches each dependency's upstream guide. The optional `current` map is
+keyed by dependency name: with it, a fetched guide byte-equal to its entry verdicts `current` and
+anything else verdicts `behind`; without it, every successful fetch verdicts `behind`, because no
+reference means it needs syncing. `versions(deps)` compares each declared range to the registry
+latest. `catalog()` enumerates the fleet from the registry's exact organization package list — an
+unreachable or malformed list is always a coded failure, since without it there is no catalog — then
+degrades gracefully per package. `pull(target, dependencies?)` builds the reference map from the
+target's own mirrors, so its verdicts are target-relative, and rejects a selection the target does
+not declare. `write(report, target)` commits only the `behind` guides. `destroy()` aborts every
+in-flight request. The interface also exposes the readonly `emitter`.
+
+## The compile pipeline
+
+`compile` runs three stages in fixed order and records each as a `CompileRecord` carrying its input,
+its output, whether it failed, and any error text.
+
+1. **draft** — `blueprintToPlan` selects the covered groups, drafts each group's artifacts, carries
+   the selected host set — every vendored host path except the workspace's own guide — applies
+   overrides, and pins the draft. A throw here records a `draft` failure coded
+   `INVALID`, emits `error`, marks the remaining two stages skipped, and returns incomplete.
+2. **gate** — `validatePlan` runs the semantic pass over the blueprint and checks every override
+   against the drafted artifact set. Blocking questions fail the stage; an accepted override and a
+   dependency outside the vendored guide set each contribute a non-blocking advisory question
+   instead.
+3. **pin** — a host-origin pointer artifact is appended for each non-vendored dependency, and
+   `pinPlan` fills `trace` and `hash` from the plan's own content.
+
+The gate fails closed. A blueprint that fails validation, or that carries an override matching no
+planned artifact or targeting a host-origin path, yields a visible incomplete `Scaffolding` — `plan`
+absent, `questions` populated, a `BLOCKED` failure marker recorded — rather than throwing and rather
+than emitting a half-formed workspace. A half-formed workspace is worse than a question.
+
+`validateBlueprint` is the semantic law in one place. It checks the name against `NAME_PATTERN` and
+the length bound, the version and engines patterns, and that the declared engines floor is not below
+the supported Node minimum. It requires at least one selected environment across the two axes, keeps
+both axes on-vocabulary with no repeats, and blocks the one combination that has no defined
+configuration class: `browser` plus `server` without `core` in the same axis. It validates each
+dependency array
+for a well-formed name and range with no duplicates — scoped names for `dependencies` and `peers`,
+any valid npm name for `extras` — and blocks a name declared in two of the three arrays. It bounds
+the description and every override by the per-item and aggregate byte limits, and blocks a repeated
+or empty override path.
+
+Because `pinPlan` derives `hash` from a canonical, key-order-independent serialization of the
+blueprint, groups, and artifacts, two logically equal blueprints built in different field orders
+produce the same digest — and a `PlanManager` id is that digest.
+
+## Origin and ownership
+
+`origin` is the ownership axis, and it decides everything downstream: how an artifact is produced,
+how it is audited, and whether it may ever be overwritten.
+
+- **`host`** — byte-copied from the vendored data root. These are the shared files a whole fleet
+  keeps identical: the root instruction documents and licence, the agent, rule, and skill
+  directories, the session scripts, the repository coding-law policy module, the byte-identical root
+  dotfiles, and the two line guide mirrors a workspace carries for contracts other than its own.
+  `HOST_PATHS` is the exact vendored list; what a given plan carries is `selectHostPaths` of it.
+- **`template`** — filled from a frozen template definition by a pure fill engine. These are
+  starter files: source stubs, test stubs, the starter guide, the README.
+- **`computed`** — derived by this package's own combination logic. These are the structural files:
+  the manifest, the tsconfigs, the build configuration, the generated CI workflow.
+
+Audit semantics follow directly from that.
+
+- A **template** artifact is birth-only and audit-exempt. It is always reported `aligned`, whatever
+  the target holds. Starter files are written once and are legitimately outgrown — real code
+  replaces the stub, a hand-authored guide replaces the scaffold prose, an entity gets renamed.
+  Comparing a mature workspace against its birth stub is a category error, and it would make any
+  unscoped repair a data-loss hazard. Template findings therefore never contribute to the drifted,
+  missing, or clean tallies.
+- A **computed** artifact is content-aware canon: `missing`, `aligned`, or `stale`, and it gates the
+  audit like any other drift.
+- A **host** artifact is audited by presence alone — `missing` or `aligned`, never `stale` — unless
+  it has been hydrated with its real host bytes, in which case it is content-compared exactly like a
+  computed artifact and can be `stale`. Hydration also expands a directory-shaped host artifact into
+  one artifact per file, so agent configuration and skills are audited file by file.
+- A target file the plan does not own is `foreign`, and `inferGroup` classifies it by its leading
+  path segment.
+
+The same ownership boundary is what makes mutation safe. **`repair` and `fleet` mutate host-origin
+artifacts only.** Both scope the compiled plan to host origin before hydrating, diffing, or applying
+anything, so a mature workspace's hand-written source, tests, guides, and manifest are never
+overwritten with a stub. A consequence worth stating plainly: the generated
+`.github/workflows/ci.yml` is a **computed** artifact, so **user-owned CI is never repaired**. Once
+a workspace has its own workflow, that copy stands, and any change to it is an ordinary edit in that
+workspace. Audit still compares it because computed artifacts are content-aware canon. A legitimate
+difference that the blueprint cannot express is a canon gap: add the missing blueprint axis rather
+than forking the computed file in one repository.
+
+Overrides respect the same boundary from the other direction. `applyOverrides` never replaces a
+host-origin artifact and never replaces `package.json`; the gate turns either attempt — and an
+override matching no planned artifact at all — into a blocking question rather than a silent no-op.
+What survives those three refusals is applied and announced: the gate carries a non-blocking
+advisory naming each replaced path, and that advisory rides the `Scaffolding` and the `Audit` all
+the way through the library result.
+
+Guide mirrors are the one place ownership is conditional, and the law is one owner per guide path.
+**A workspace mirrors every line guide except its own.** When the name matches — the guide package
+on `guides/src/guide.md`, this package on `guides/src/scaffold.md` — the workspace itself is the
+owner, keeping that path as its **template**-origin starter guide, and `selectHostPaths` drops the
+vendored mirror so the path is contributed exactly once. For every other contract the mirror is the
+owner: a dependency this package vendors a byte-identical mirror for gets a real host-origin copy of
+`guides/src/<short>.md`, contributed once whether it arrives through the host set or through the
+dependency, so a package depending on `@orkestrel/guide` plans one `guides/src/guide.md` rather than
+two. Any other dependency gets a host-origin _pointer_ artifact plus a non-blocking question, never
+a fabricated mirror; on materialization that pointer degrades to a short stub, and `scaffold pull`
+fetches the real thing. That degrade is scoped exactly to guide pointers: any other missing manifest
+entry means a corrupt or truncated vendored manifest, and fails closed. Selection is the law and
+`findFileConflict` is its backstop: two artifacts at one path refuse the plan rather than racing to
+be the last writer.
+
+## Audit, repair, and prune
+
+An audit is a pure function of a plan and a snapshot, so the same engine that creates a workspace
+checks one. `readTarget` supplies the snapshot as exact bytes; `diffPlan` returns findings as data;
+`auditToReview` renders them for a human. Nothing in that path writes.
+
+`repair` turns those findings back into the narrowest possible write. It re-reads the target,
+re-diffs it, and refuses to proceed if the findings changed since the preview it was given — a
+target that moved under the caller is a `TARGET` failure, not a race to win. It then derives a write
+precondition per artifact from the audit itself: a `missing` finding requires the destination to
+still be absent, a `stale` finding requires it to still carry exactly the bytes that were observed.
+Those preconditions are checked again inside the write transaction before any promotion.
+
+`prune` is the deletion arm, and it is deliberately narrow. Its candidate set comes from
+`pruneTargets`, which is also what the executable's audit and preview read, so what is reported and
+what is deleted cannot diverge. Only the three prune directories are in scope; the allowlist must be
+positively established from the vendored host, or the call fails closed rather than treating an
+unresolved host as "vendors nothing" and proposing to delete everything. Each candidate is verified
+as a plain physical file whose bytes still match the preview, moved into a private quarantine rather
+than unlinked, re-verified after the move, and only then reported as removed — with a full restore
+attempt if any candidate fails mid-way.
+
+## Upstream sync, pull, and catalog
+
+`Sync` is the only network reader, and its posture is conservative by construction.
+
+Every request is unauthenticated: no token, no authorization header, anywhere. Every fleet
+repository is public, so plain reachability is the only signal, and a guide `404` degrades
+gracefully instead of needing credentials. Redirects are never followed — a 3xx, or the opaque
+response a manual redirect policy produces, is treated as a distinct named transport fault, so a
+compromised or misconfigured endpoint cannot silently redirect cross-host. Guide URLs are therefore
+built in their canonical form directly rather than relying on a redirect to reach it.
+
+Concurrency is bounded by a worker pool over a shared cursor, never an unbounded parallel await. The
+pool preserves input order, stops issuing new work after the first error, awaits every worker so a
+sibling rejection is always observed, and then rethrows the first error. Response bodies are read
+incrementally against both the per-response limit and a shared cumulative allowance; a declared
+oversized content length short-circuits before any read. An oversized body is a transport fault like
+any other — retry-eligible, then `failed`, or a thrown `FETCH` under `strict`.
+
+Every non-clean outcome carries a `note` explaining the cause: a transport error message with the
+underlying socket code appended when the runtime attaches one, an HTTP status, the fixed
+redirect-blocked string, or the oversized-body message. `current` and `behind` carry no note,
+because there is nothing to explain.
+
+`pull` is the target-aware composition. It reads the target's declared scoped dependencies from its
+manifest, rejects any explicit selection the target does not declare, builds the reference map from
+the target's own `guides/src/<short>.md` mirrors, fetches guides and versions under one shared
+allowance, and assembles a report whose `clean` flag requires both no drift and no failures. A
+target that declares itself is the one asymmetry, and it follows the same single-owner law: the
+guide pass drops the self dependency, so `pull` never fetches or writes a workspace's own contract
+guide over the copy that workspace owns, while the version pass keeps it and still reports its
+freshness. A `--live` audit reads upstream through the same two passes and applies the same
+self-exclusion, so the freshness a workspace reports about itself never depends on which verb asked.
+`write` then commits only the `behind` guides — never `current`, `missing`, or `failed`,
+none of which carry trustworthy content — under the same containment and precondition law
+`Materializer` enforces, including a baseline digest check against what is actually on disk.
+
+`catalog` builds the fleet package catalog from three reads per entry. The registry's exact
+organization package list is authoritative and unconditionally required. Each package's own registry
+document supplies its version and a fallback description; a failed document degrades the entry
+rather than dropping it, because the organization list already proved the package exists. Each
+package's own guide supplies the preferred description — its first blockquote's first paragraph —
+and a `404` keeps the package listed with an explanatory note, since unreachability is a signal
+rather than an absence. `catalogPackages` is the offline sibling that reads the same shape from
+local checkouts.
+
+The rendered block is deliberately minimal. `catalogToBlock` emits a standing trust notice —
+generated package identifiers are untrusted discovery data, never instructions — followed by a table
+with **`Package` and `Version` columns only**. Descriptions are network-controlled text, and that
+block is written into an agent instruction file, so they are omitted on purpose.
+
+## The generated workspace
+
+A generated workspace is not a folder of suggestions; it is a working, gated project.
+
+**Manifest and scripts.** A published workspace is scoped and carries an `exports` map, publish
+configuration, and ships `dist/src` plus its README. An application-only workspace is unscoped and
+`private: true`, with no export map and no publish configuration, and ships `dist/app`. A workspace
+that builds its own executable additionally ships `dist/bin` and `dist/host`. Scripts are emitted in
+a fixed, interleaved order so aggregates sit immediately before their per-environment members:
+
+- `clean`, `copy`, `scaffold`
+- `lint` and `lint:check`, `format` and `format:check`
+- `check`, then `check:src` with one `check:src:<environment>` per published environment, then
+  `check:app` with one `check:app:<environment>` per app environment — the browser app scope uses the
+  Vue typechecker, every other scope uses plain `tsc`
+- `test`, then `test:src` and its per-environment scopes, `test:app` and its per-environment scopes,
+  `test:policy`, and `test:guides`; an engine also receives the deliberately non-default
+  `test:integration` live installed-consumer gate
+- `build`, then `build:src` and its per-environment targets, `build:app` and its runtime targets, and
+  `build:host` for an engine workspace
+- `dev` when a browser application is selected; `serve` and `serve:build` when a server application
+  is selected
+- `prepublishOnly` chaining `format:check → lint:check → check → build → test`, followed by the
+  live generated-consumer integration gate for the scaffold engine itself
+
+**Environment isolation.** Scoped TypeScript projects remove the wrong host's globals from each
+environment: core scopes carry the WHATWG web-interop surface and no host at all — no DOM, no Node,
+no `vite/client`; browser scopes carry DOM and no Node; server scopes carry Node and no DOM. The
+worker-only globals the `WebWorker` declarations would otherwise admit — `name`, `onrtctransform`,
+`close`, `postMessage`, `dispatchEvent`, `location`, `onerror`, `onlanguagechange`, `onoffline`,
+`ononline`, `onrejectionhandled`, `onunhandledrejection`, `self`, `importScripts`, `fonts`, `caches`,
+`crossOriginIsolated`, `indexedDB`, `isSecureContext`, `origin`, `scheduler`, `createImageBitmap`,
+`reportError`, `cancelAnimationFrame`, `requestAnimationFrame`, `onmessage`, `onmessageerror`,
+`addEventListener`, and `removeEventListener` — are fenced out of `src/core` and `app/core` sources
+by the policy suite, so the declarations widen what a host-independent module may call without
+widening where it may run. On every TypeScript bump, derive this list from the module-scope
+global-object `declare var` and `declare function` declarations in the installed
+`lib.webworker.d.ts`, then subtract values supplied by `lib.esnext*` or current Node globals. Lint
+restricts declared package, alias, and conventional relative imports in the same directions.
+Neither replaces the other, and neither replaces the build.
+
+**The generated build boundary.** The emitted configuration carries an environment-boundary plugin
+that resolves the real module graph rather than re-implementing a parser. **TypeScript and
+JavaScript references are read through Vite's own Oxc/Rolldown AST**; **Vue single-file components
+are read through the official SFC compiler**, block by block, including `src`-referenced blocks;
+**CSS dependencies are parsed by Vite's bundled Lightning CSS analyzer**; and **HTML attributes,
+entities, candidate lists, and metadata use Vite's own HTML parser callbacks**. The plugin runs at
+resolve and transform time, checks the finished module graph at build end, rescans every emitted
+JavaScript chunk's remaining dynamic imports after optimization and tree-shaking, and audits every
+emitted asset's physical source path. Source-level asset URLs are checked before Vite transforms
+them, so generated runtime `new URL(...)` expressions are not mistaken for caller input. HTML
+`vite-ignore` tokens are reversibly encoded as an HTML character reference before Vite parses the
+document, so the attribute cannot opt an element out of Vite's normal HTML graph while the same
+text inside a resource URL still decodes to its original filename before resolution. Existing
+equivalent character references are shifted before encoding and unshifted afterward, which keeps
+comments, text, raw blocks, attributes, adjacent tokens, casing, and user-authored entity spelling
+byte-stable. The trusted preparation hook owns the final pre-parse phase; inline proxy code is
+restored before module analysis, and the first normal post-parse hook restores the original HTML
+spelling. The browser entry begins with a generated, byte-stable security prologue: the doctype,
+document and head opening, and a `Content-Security-Policy` meta element are one required prefix.
+Preparation rejects a missing, moved, or changed prologue before Vite parses the document, and the
+final trusted post-hook verifies that Vite retained the policy. CRLF and LF files are both accepted;
+the prologue's markup and ordering are otherwise exact. Vite's `%ENV%` HTML substitution is rejected
+before parsing because Vite performs that expansion after every plugin pre-hook, where it could
+otherwise create a late control attribute. The guard walks the exact left-to-right `%(\S+?)%`
+tokens Vite recognizes instead of performing a substring search, and each preparation plugin owns
+the resolved environment/definition keys for its configuration, so one build cannot contaminate
+another and overlapping percent text remains ordinary text. Read environment values from the
+application's module graph through `import.meta.env` instead.
+Asset URLs that force `?inline` are rejected before Vite can read them outside that auditable output
+graph. Dynamic imports must use a static quoted string or expression-free template string; even
+`/* @vite-ignore */` static values repeat the same environment and containment checks inside the
+transform boundary, including inline HTML proxy modules. The transform, load, resolution, emitted
+asset, and finished-module-graph passes apply that law only to workspace-owned `src/*` and `app/*`
+modules. Resolved ids under any `node_modules` segment, Vite/Vitest virtual ids, and tooling client
+injections remain owned by their toolchain and are exempt.
+
+Browser application scripts are modules. Vite's parsed HTML asset callback rejects a classic
+external `<script src>` before resolution and directs the author to `type="module"`. A module
+script URL must be a non-empty local Vite-graph URL: schemes, protocol-relative URLs, data URLs,
+fragments, surrounding URL whitespace, and ASCII C0 controls or DEL are rejected rather than left
+as unaudited browser loads. This is deliberately broader than the URL parser's edge stripping.
+Numeric
+HTML character references and semicolon-terminated named references are rejected before resolution,
+so neither control references nor entity-built scheme characters can bypass the boundary. Vite can
+begin resolving an entity-decoded module URL before its parsed per-asset callback runs; that earlier
+path remains Vite-owned and passes through the environment resolver, which rejects the same full
+ASCII control range and every non-Node URL scheme before loading or output. No second HTML parser or global
+reference rewrite is involved, so comments, text, non-script attributes, and entity-spelled asset
+filenames retain Vite's native parsing and resolution behavior.
+The resolver leaves NUL-prefixed and `virtual:` Rolldown/Vite module IDs, tooling client injections,
+and every resolved `node_modules` module to the tool that owns that namespace; author module and
+asset URLs are extracted and validated before they reach those resolver exceptions.
+SVG script `href` and `xlink:href` attributes are parsed too and rejected as classic script loads.
+Inline module scripts enter Vite's HTML proxy graph and receive the same Oxc boundary analysis as
+module files. Classic inline scripts cannot enter that graph, so the required security prologue places
+`Content-Security-Policy` before every author-controlled document token with `script-src 'self'`
+and `script-src-attr 'none'`: inline classic code and inline event handlers cannot execute, while
+Vite's same-origin external module entry remains usable. `appBrowser()` accepts no configuration
+arguments. The returned Vite configuration is one closed trusted unit: its Vue and boundary
+plugins, CSS analyzer, dependency optimizer, environment, builder, output pipeline, and HTML asset
+callbacks cannot be extended or replaced through the factory. This deliberately excludes arbitrary
+Vite, Rolldown, esbuild, PostCSS, worker, environment, builder, externalization, output-injection,
+and URL-rewrite hooks that could mutate a dependency, worker graph, bundle, or final asset after
+the boundary has inspected it. The computed root Vite configuration is trusted generated code:
+wrapping, mutating, or replacing the object returned by `appBrowser()` is outside the factory
+contract and is reported as computed-artifact drift by `scaffold audit`. The output-boundary plugin
+still rejects public directories, browser asset inlining, and output path overrides in a
+post-factory composition as defense in depth; that narrow check is not a general extension seam.
+
+The browser development server applies the same trust boundary before Vite's internal middleware.
+Its explicit filesystem allowlist contains only browser/core source roots, browser tests, their
+exact setup files, and installed dependencies. The pre-internal middleware decodes direct,
+alias-shaped, and `/@fs/` requests, resolves existing targets through their physical paths, and
+returns a path-free 403 response unless the target remains in one of those roots. It also rejects
+an allowed root whose physical identity escapes the workspace, so neither a nested symlink nor a
+linked root can expose `app/server`, `src/server`, repository metadata, or unrelated files.
+
+What it allows is deliberately real-world:
+
+- safe stylesheet `@import`s and `url()` assets;
+- HTML-referenced assets, including candidate lists, inline style blocks, and inline module scripts;
+- static `new URL('./asset', import.meta.url)` asset references;
+- static-string dynamic imports whose decoded source passes the same environment and containment law.
+
+What it rejects is equally deliberate:
+
+- a published `src/*` module reaching into private `app/*`;
+- a core module reaching a stylesheet, a browser module, a server module, a Node builtin, or a
+  browser or server package subpath;
+- a browser module reaching a Node builtin or a server subpath;
+- a server module reaching a stylesheet, Vue, or a browser subpath;
+- a workspace-relative import that resolves outside the workspace;
+- an HTML reference carrying `vite-ignore` that violates the same environment or containment law
+  as an ordinary reference, a Vite `%ENV%` HTML substitution, a classic external script, or a
+  computed dynamic import in the module graph that would bypass graph resolution;
+- a computed or expression-bearing `new URL` asset source that could escape at runtime;
+- malformed URI encoding, encoded traversal segments, or a local `file:` URL outside the owning
+  environment/package root; file schemes are matched case-insensitively and converted to physical
+  paths before containment.
+
+Unsupported stylesheet `@import` or `url()` syntax is an error rather than a silently skipped
+dependency. **`publicDir` is disabled on every generated build target**: an asset that is not
+reachable through the module graph is not silently copied past the boundary. The output plugin
+fails during configuration when a caller attempts to enable `publicDir`; browser builds likewise
+reject a nonzero `assetsInlineLimit`, keeping asset bytes external and visible to output auditing
+before any output directory mutation. A caller-supplied Rolldown `output.dir` or `output.file` is
+also rejected during configuration; the exact generated `build.outDir` is the sole write root.
+
+**The policy suite.** [`tests/setupPolicy.ts`](../../tests/setupPolicy.ts) is a narrow structural
+policy pass built on the official TypeScript compiler. It exists for exactly the laws a linter
+cannot express — that a centralized module exports every top-level declaration it holds, that
+implementation files hold one class and no stray module-scope declaration, that no function is
+declared inside another function outside a directly-passed callback, that interface properties are
+readonly, that privacy is a runtime `#` field rather than a TypeScript modifier, that a barrel
+re-exports only through `export *`, that a core source never names a worker-only global the
+`WebWorker` declarations expose, and that a computed dynamic import cannot smuggle a
+cross-environment dependency past the declared import rules. Vue components are inspected for the
+same evasions. It is a complement to lint and typecheck, never a second type system, and it is not a
+general-purpose source analyzer. Generated workspaces receive the same exported policy module as a
+host-origin file and run it as a dedicated Node-only `policy` test project over
+`tests/policy.test.ts`.
+
+**Real browser capability.** Browser test projects are gated on the real executable: the generated
+configuration and the generated policy test both probe `existsSync(chromium.executablePath())`. A
+browser suite runs when a real Chromium is installed and is skipped honestly when it is not, rather
+than being faked. The gate is applied at registration, not only inside the project: without a
+Chromium the browser project is left out of the emitted `projects` list entirely, so the runner
+never has to reconcile a registered project whose include set resolves to nothing, and one printed
+warning names every omitted project label. A machine with a browser runs the browser suite; a
+machine without one runs the remaining projects and says so.
+
+**Continuous integration.** The generated workflow runs on push and pull request, on
+`ubuntu-latest`, with read-only contents permission, a 60-minute timeout, and a matrix that **tests
+Node `22.12.0` and `26`** with fail-fast disabled. Checkout and Node setup are pinned to immutable
+action commits, and checkout does not persist credentials. Dependencies install with
+`npm ci --ignore-scripts`; Chromium is installed only when the workspace selects a browser environment
+or builds its own executable. The gates then run in order: `format:check`, `lint:check`, `check`,
+`build`, `test`; engine workspaces then run the separate live installed-consumer integration gate.
+
+**Agent orchestration files.** The session hooks in the generated `.claude/settings.json` run the
+dependency, model, and external-tool readiness scripts at session start. The **`Stop` hook runs only
+`git diff --check`** — a whitespace and conflict-marker check over the working tree, nothing more.
+Bash invocation and sensitive reads are controlled by the **settings permission list, not by a guard
+script**: every Bash command requires explicit approval, including commands Claude Code otherwise
+classifies as read-only. Read-only reviewer, checker, and ecosystem roles carry no Bash tool; the
+orchestrator supplies their diff and status evidence. Bridge, writer, and verifier roles request
+approval when their bounded shell work is needed. Read patterns covering environment files,
+package-manager credentials, credential stores, private keys, key stores, SSH, cloud credentials,
+container configuration, `.kube`, kubeconfig, and service-account JSON are denied. There is no
+guard script in the vendored set, and none is expected.
+
+The generated `.codex/config.toml` and `.codex/agents/` mirror the same bounded research, design,
+implementation, checking, and review roles for Codex. Codex has no repository settings/hook file:
+each Codex agent's declared `sandbox_mode` is its mechanical permission floor, while the shared
+`AGENTS.md`, rules, and skills provide the same writing and acceptance contract to both providers.
+
+## The `scaffold` executable
+
+The bin is a thin command-line shell over the two library faces. It exports nothing, so it carries
+no module API of its own. Six verbs:
+
+| Verb      | Purpose                                                  |
+| --------- | -------------------------------------------------------- |
+| `new`     | scaffold a workspace into `./<name>`                     |
+| `pull`    | refresh vendored guides and versions, report drift       |
+| `audit`   | whole-plan conformance report                            |
+| `repair`  | restore the shared host-owned set                        |
+| `fleet`   | audit or repair every workspace under the cwd's children |
+| `catalog` | regenerate the fleet package-catalog table               |
+
+**Environment selection.** `new` takes `--src a,b` for published library environments and
+`--app a,b` for private application environments. They are independent: `--src core,server` builds a library,
+`--app core,browser,server` builds an application, and passing both builds a mixed workspace. Each
+accepts any subset of `core`, `browser`, and `server`, and the gate rejects the one combination that
+has no defined configuration class. `--deps x,y` adds runtime dependencies and requires each flag
+token to use its full valid package name; only the interactive dependency prompt expands an
+Orkestrel short name. Other npm packages are not a creation-time flag — add them to the generated
+manifest's development dependencies afterwards, and they round-trip through `deriveBlueprint`'s
+extras so the workspace stays audit-clean.
+
+**Other flags.** `--target <path>` selects the directory a verb operates on. `--from <path>` is
+repeatable and points at a local template or catalog source instead of the bundled one.
+On `pull`, `--deps x,y` limits refresh to those declared Orkestrel dependencies; without it, every
+declared dependency mirror is considered.
+`--groups a,b` scopes an audit to artifact groups. `--live` adds an upstream freshness check to an
+audit. `--strict` makes a pull throw on a network fault. `--offline` restricts a catalog to local
+sources. `--prune` opts a repair or fleet run into deleting unexpected files under the three prune
+directories. `--json` emits one machine-readable value. `--apply` writes, `--yes` skips the
+confirmation, and `-h` or `--help` prints usage.
+
+**Safety model.** Every verb is a dry run by default. On a terminal a write asks for confirmation
+first, defaulting to no; in a script, `--apply` writes and `--yes` skips the question. Every write is
+confined to the working directory, so the instruction is to change into it first rather than to pass
+a root. `repair` asks a second, separately defaulted question before deleting anything, and a
+non-interactive session without `--apply` or `--yes` skips pruning rather than guessing. `fleet`
+operates on the immediate children of the working directory and never on the directory itself, and
+it has no root flag at all — `repair` is the single-workspace tool.
+
+Both `repair` and `fleet` are scoped to host-origin artifacts, and the executable states that scope
+in its own output: starter and generated files are never touched.
+
+**Catalog markers.** `catalog` rewrites the block between `<!-- catalog:start -->` and
+`<!-- catalog:end -->` in `.claude/agents/orkestrel.md`. **Ambiguous markers fail before any
+mutation**: the file must contain exactly one ordered pair. A missing marker, a reversed pair, or a
+repeated marker of either kind is a coded `TARGET` failure raised before the file is touched, and
+the run reports the drift and any row-count shrink rather than rewriting a file it cannot bound.
+
+**Certificates.** **When the running Node release exposes the system-CA APIs**, the executable
+merges the operating system trust store into the default certificates, so fetches behind a
+TLS-inspecting proxy behave like other tooling instead of failing against the bundled list alone.
+The check is a feature detection: **earlier supported Node 22 releases simply use Node's default
+roots**. It only ever adds trusted issuers — nothing disables verification — and a failure is a
+silent no-op rather than a crash. Custom PEMs are added through the standard environment variable.
+
+**Exit codes.** `0` is clean or successful, `1` is drift or failure, `2` is a usage error. An audit
+exits non-zero on any drift, foreign files included, which makes it usable directly as a CI gate. A
+pull exits non-zero on any drift or failure whether or not `--strict` was passed; `--strict`
+additionally throws on a network fault. Every unknown verb is a usage error and gets a nearest-match
+suggestion when one is sufficiently close.
+
+## Package contents
+
+The published package is `@orkestrel/scaffold`. Its entry points are the core barrel at `.` and the
+server barrel at `./server`, both with dual import and require conditions and matching declaration
+files, plus `./package.json`. The `scaffold` binary maps to the built executable.
+
+The published file set is exactly `dist/src`, `dist/bin`, `dist/host`, and `README.md`. `dist/host`
+is the vendored data root: the byte-preserved host files plus the `manifest.json` recording their
+storage names, destinations, and executable bits. Storage names are un-dotted, because a leading dot
+does not survive packaging intact; the manifest is what maps a storage name back to its real
+destination. That is also why the default host is resolved from the installed module's own
+location — the package carries its host data with itself, and a caller-supplied raw repository root
+is the explicit alternative, mapping sources 1:1 with no manifest indirection.
+
+Six runtime dependencies, all scoped: the contract toolkit behind the shape, guard, parser, and
+safe-attempt primitives; the emitter behind every entity's observation channel; the markdown AST and
+renderer behind the table and blockquote work; the template engine behind every template-origin
+artifact; and, consumed only at the executable boundary, the terminal prompt toolkit and the console
+reporter. The core face uses the first four and stays pure; the server face adds only `node:*`
+builtins. Development dependencies are the shared tooling baseline plus the guide-parity toolkit
+that drives [`parity.test.ts`](../../tests/guides/src/parity.test.ts). The engines floor is Node
+`>=22.12.0`, and the build emits ES and CJS for both library faces plus an ES executable.
+
+## Patterns
+
+### Authoring and validating a blueprint
 
 ```ts
-import { isScaffoldError, ScaffoldError } from '@orkestrel/scaffold'
+import {
+	blueprint,
+	blueprintToMembers,
+	createBlueprint,
+	dependency,
+	hasBlueprintEnvironment,
+	hasValidBlueprintBytes,
+	hasValidOverrideBytes,
+	isWorkspaceName,
+	member,
+	override,
+	pascalCase,
+	validateBlueprint,
+	validateDependencyArray,
+} from '@orkestrel/scaffold'
+
+const spec = blueprint('router', {
+	src: ['core', 'browser'],
+	dependencies: [dependency('@orkestrel/contract', '^0.0.7')],
+	peers: [dependency('@orkestrel/server', '^0.0.3', true)],
+	overrides: [override('README.md', '# router\n')],
+})
+
+pascalCase('my-router') // 'MyRouter'
+isWorkspaceName('router') // true
+hasBlueprintEnvironment(spec) // true
+hasValidBlueprintBytes(spec) // true
+hasValidOverrideBytes(override('README.md', '# router\n')) // true
+validateDependencyArray('dependencies', spec.dependencies).questions // []
+validateBlueprint(spec).valid // true
+blueprintToMembers(spec)[0] // { name: 'Router', category: 'entity', … }
+member('RouterOptions', 'type', 'Options for creating a Router.')
+
+// The validating constructor throws instead of returning questions.
+createBlueprint({ name: 'router', src: ['core'] })
+```
+
+### Compiling, gating, and pinning
+
+```ts
+import {
+	applyOverrides,
+	blueprint,
+	blueprintToPlan,
+	computeHash,
+	createCompiler,
+	hasValidArtifactBytes,
+	hasValidArtifactHex,
+	hasValidPlanBytes,
+	hasValidPlanHex,
+	pinPlan,
+	planPayload,
+	stableStringify,
+	validatePlan,
+} from '@orkestrel/scaffold'
+
+const compiler = createCompiler()
+const spec = blueprint('router', { src: ['core'] })
+
+const scaffolding = compiler.compile(spec)
+scaffolding.stages.map((record) => record.stage) // ['draft', 'gate', 'pin']
+
+const audit = compiler.audit(spec, {})
+audit.missing // every artifact — nothing exists at the target yet
+
+const plan = pinPlan(blueprintToPlan(spec, ['manifest', 'configs']))
+validatePlan(plan).valid // true
+plan.trace?.includes('src:core · app:none') // true
+planPayload(plan) === planPayload({ ...plan, trace: 'ignored by identity' }) // true
+hasValidPlanHex(plan) // true
+hasValidPlanBytes(plan) // true
+plan.artifacts.every(hasValidArtifactHex) // true
+plan.artifacts.every(hasValidArtifactBytes) // true
+computeHash(stableStringify(plan.blueprint)) === computeHash(stableStringify(spec)) // true
+applyOverrides(plan.artifacts, spec.overrides).length // unchanged when nothing matches
+
+compiler.destroy()
+```
+
+### Registering plans by content hash
+
+```ts
+import { blueprint, blueprintToPlan, createPlanManager } from '@orkestrel/scaffold'
+
+const plans = createPlanManager()
+const record = plans.add(blueprintToPlan(blueprint('router', { src: ['core'] })))
+
+record.id === record.hash // true — the id is minted from content
+record.version // 1
+plans.has(record.id) // true
+plans.plan(record.id) // the record
+plans.plans().length // 1
+plans.remove([record.id]) // true — all-or-nothing over a list
+plans.remove() // removes everything
+plans.destroy()
+```
+
+### Projecting a plan, an audit, and a report
+
+```ts
+import type { Audit, Plan, SyncReport } from '@orkestrel/scaffold'
+import {
+	alignTable,
+	auditToReview,
+	catalogNames,
+	catalogToBlock,
+	delimiterCell,
+	guideMemberTable,
+	padCell,
+	planToReview,
+	planToSummary,
+	splitTableRow,
+	syncToReview,
+} from '@orkestrel/scaffold'
+
+declare const plan: Plan
+declare const audit: Audit
+declare const report: SyncReport
+
+alignTable(['API', 'Kind'], [['`createRouter`', 'function']])
+splitTableRow('| a | b |') // ['a', 'b']
+padCell('ab', 5) // 'ab   '
+delimiterCell('left', 5) // ':----'
+
+catalogToBlock([{ name: '@orkestrel/router', version: '0.0.5', description: '' }])
+catalogNames('| @orkestrel/router | 0.0.5 |') // ['@orkestrel/router']
+
+planToSummary(plan).artifacts // the artifact count
+planToReview(plan) // the copy-ready dry-run review document
+auditToReview(audit) // findings grouped by drift, aligned entries elided
+syncToReview(report) // guides and versions, each in its own table
+guideMemberTable('entity', [])
+```
+
+### Exact bytes, snapshots, and drift
+
+```ts
+import type { Plan } from '@orkestrel/scaffold'
+import {
+	bytesToHex,
+	contentByteLength,
+	contentCodePoint,
+	contentToBytes,
+	contentToHex,
+	diffPlan,
+	findFileConflict,
+	findPathConflict,
+	hasValidAuditBytes,
+	hasValidSnapshotBytes,
+	inferGroup,
+	snapshotOf,
+} from '@orkestrel/scaffold'
+
+declare const plan: Plan
+
+contentCodePoint('a', 0) // 97
+contentByteLength('ab') // 2
+bytesToHex(contentToBytes('ab')) === contentToHex('ab') // true
+
+const current = snapshotOf({ 'package.json': '{}\n' })
+hasValidSnapshotBytes(current) // true
+
+const audit = diffPlan(plan, current)
+hasValidAuditBytes(audit) // true
+inferGroup('src/core/index.ts') // 'source'
+
+findPathConflict(['a/b.ts', 'A/B.ts']) // the first case-insensitive collision
+findFileConflict(['a', 'a/b.ts']) // a file nested inside another planned path
+```
+
+### Format-stable JSON and generated text
+
+```ts
+import {
+	compareCodeUnit,
+	computeColumnWidth,
+	escapeHtmlText,
+	formatJson,
+	renderArray,
+	renderObject,
+	renderValue,
+	serializeTypeScriptString,
+} from '@orkestrel/scaffold'
+
+formatJson({ lib: ['ESNext', 'DOM'] }) // '{\n\t"lib": ["ESNext", "DOM"]\n}\n'
+renderValue('ESNext', '', '', '') // '"ESNext"'
+renderArray(['ESNext', 'DOM'], '', '', '') // '["ESNext", "DOM"]'
+renderObject({ lib: ['ESNext'] }, '') // '{\n\t"lib": ["ESNext"]\n}'
+computeColumnWidth('\t"a"') // 3
+
+escapeHtmlText('<app & "team">') // '&lt;app &amp; &quot;team&quot;&gt;'
+serializeTypeScriptString("app's") // "'app\\'s'"
+const sorted = ['b', 'a'].sort(compareCodeUnit) // ['a', 'b']
+```
+
+### Shapes, guards, and parsers
+
+```ts
+import {
+	artifactShape,
+	blueprintShape,
+	dependencyShape,
+	hasValidSyncReportBytes,
+	isArtifact,
+	isBlueprint,
+	isCompilerEventHooks,
+	isDependency,
+	isMember,
+	isOverride,
+	isPlan,
+	isPlanManagerEventHooks,
+	isScaffoldError,
+	isSyncReport,
+	memberShape,
+	overrideShape,
+	ownDataValue,
+	parseBoundedJSON,
+	parseCompilerOptions,
+	parseBlueprint,
+	parsePlan,
+	parsePlanIds,
+	parsePlanManagerOptions,
+	parseSyncReport,
+	planShape,
+	ScaffoldError,
+	snapshotPlan,
+	syncReportShape,
+} from '@orkestrel/scaffold'
+
+declare const value: unknown
+
+dependencyShape()
+overrideShape()
+blueprintShape()
+memberShape()
+artifactShape()
+planShape()
+syncReportShape()
+
+isDependency({ name: '@orkestrel/contract', range: '^0.0.7' }) // true
+isOverride({ path: 'README.md', content: '# router\n' }) // true
+isMember({ name: 'Router', category: 'entity', summary: 'The Router entity.', environment: 'core' })
+isArtifact({ path: 'README.md', group: 'docs', origin: 'template', content: '# router\n' })
+ownDataValue({ name: 'router' }, 'name') // 'router'
+
+parseBoundedJSON('"ready"', (candidate): candidate is string => typeof candidate === 'string', 7)
+parseCompilerOptions({ on: { destroy: () => undefined } })
+parseBlueprint('{"not":"a blueprint"}') // undefined — never throws
+parsePlan(undefined) // undefined
+parsePlanIds(['first', 'second']) // frozen owned ids
+parsePlanManagerOptions({ plans: [] }) // exact owned constructor options
+parseSyncReport('{}') // undefined
+const parsedPlan = parsePlan(value)
+if (parsedPlan !== undefined) Object.isFrozen(snapshotPlan(parsedPlan).blueprint)
+
+if (isBlueprint(value)) value.src
+if (isPlan(value)) value.artifacts
+isCompilerEventHooks({ compile: () => undefined }) // true
+isPlanManagerEventHooks({ add: (id) => id.length > 0 }) // true
+if (isSyncReport(value)) hasValidSyncReportBytes(value)
 
 try {
 	throw new ScaffoldError('INVALID', 'Blueprint failed the exact-record contract')
@@ -253,1938 +1937,405 @@ try {
 }
 ```
 
-Throws are reserved for caller misuse (AGENTS §12): `createBlueprint` on off-contract data
-throws `INVALID`, any method after `destroy()` throws `DESTROYED`, and on the server surface
-a non-vacant target throws `TARGET` while a failed write throws `WRITE`. A failing gate is
-NOT an error — it fails closed into an incomplete `Scaffolding` whose `failures` carry a
-`BLOCKED` marker, mirroring the brief compiler's visible-incomplete outcome. `FETCH` is
-server/bin-only: the `Sync` entity throws it ONLY under `strict` mode when an upstream fetch
-fails (or on wrap-level misuse), naming the failing URL in `context`; in the default COLLECT
-mode a per-dependency `404` becomes `freshness: 'missing'` and any transport error / other
-non-2xx becomes `freshness: 'failed'`, captured on the `SyncReport` rather than thrown.
-
-### Validators
-
-Total guards (AGENTS §14) COMPILED from the shapers below via the contract package's
-`createContract` — one shape declaration is the single source, so `isBlueprint`,
-`parseBlueprint`, and the JSON Schema can never drift. Adversarial input (junk, cycles,
-hostile prototypes) returns `false`, never throws. Every record guard is EXACT: an extra
-key fails, which is why the builders below omit absent optional keys.
-
-| API            | Kind  | Narrows to                                                                                                                                        |
-| -------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isDependency` | const | `Dependency` — `name` a non-empty string, `range` a non-empty string, `optional` (when present) a boolean.                                        |
-| `isOverride`   | const | `Override` — `path` / `content` non-empty strings.                                                                                                |
-| `isBlueprint`  | const | `Blueprint` — `surfaces` on-vocabulary and non-empty; `name` a non-empty string (the `NAME_PATTERN` law is the semantic pass's, not the guard's). |
-| `isMember`     | const | `Member` — `category` an on-vocabulary `Category`, `surface` an on-vocabulary `Surface`.                                                          |
-| `isArtifact`   | const | `Artifact` — `group` / `origin` on-vocabulary; `content` xor `source` per `origin`.                                                               |
-| `isPlan`       | const | `Plan` — the whole exact-record contract, section guards composed.                                                                                |
-| `isSyncReport` | const | `SyncReport` — the whole exact-record sync contract, `guide` / `version` sections composed.                                                       |
+### Drafting artifacts group by group
 
 ```ts
 import {
+	applicationArtifacts,
 	blueprint,
-	isBlueprint,
-	isDependency,
-	isPlan,
-	validateBlueprint,
-} from '@orkestrel/scaffold'
-
-isDependency({ name: '@orkestrel/contract', range: '^0.0.5' }) // true
-isBlueprint({ name: 'router', surfaces: ['core'] }) // false — sections missing (exact record)
-
-// NAME_PATTERN is the semantic pass's job, not the shape's — so the guard passes an
-// off-pattern name and validateBlueprint is what rejects it:
-const offPattern = blueprint('Router', { surfaces: ['core'] }) // a complete spec; name off NAME_PATTERN
-isBlueprint(offPattern) // true — the shape polices STRUCTURE only
-validateBlueprint(offPattern).valid // false — the semantic pass owns the NAME_PATTERN law
-
-isPlan({ blueprint: {}, groups: [], artifacts: [] }) // false — blueprint off-contract
-```
-
-### Parsers
-
-The coercing counterparts of the guards, COMPILED from the same shapes through the contract
-package's `createContract` — a guard-valid value round-trips unchanged, an off-contract
-value returns `undefined`, and neither ever throws (AGENTS §14). This is the parse-then-trust
-boundary for a stored plan, a tool argument, or an agent's emission.
-
-| API               | Kind  | Returns                                                          |
-| ----------------- | ----- | ---------------------------------------------------------------- |
-| `parseBlueprint`  | const | a `Blueprint` from `unknown` / a JSON string, else `undefined`.  |
-| `parsePlan`       | const | a `Plan` from `unknown` / a JSON string, else `undefined`.       |
-| `parseSyncReport` | const | a `SyncReport` from `unknown` / a JSON string, else `undefined`. |
-
-```ts
-import { blueprint, isBlueprint, parseBlueprint } from '@orkestrel/scaffold'
-
-const json = JSON.stringify(blueprint('router', { surfaces: ['core'] })) // a complete, on-contract spec
-const parsed = parseBlueprint(json) // Blueprint | undefined
-parsed && isBlueprint(parsed) // true — a non-undefined parse always satisfies the guard
-parseBlueprint('{"name":"router"}') // undefined — sections missing (exact record), never throws
-```
-
-### Shapers
-
-The `Blueprint` and `Plan` contracts declared ONCE as contract `ContractShape` values
-(AGENTS §14 heavy machinery, earned here: validation, the JSON Schema a tool boundary needs,
-and seeded test blueprints must stay in lockstep). Each shaper is a function returning a
-fresh shape value; `blueprintShape()` / `planShape()` compose the section shapes, and the
-module's own validators and parsers are compiled from them at the barrel.
-
-| API               | Kind     | Builds…                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dependencyShape` | function | the `Dependency` object shape.                                                                                                                                                                                                                                                                                                                                    |
-| `overrideShape`   | function | the `Override` object shape.                                                                                                                                                                                                                                                                                                                                      |
-| `blueprintShape`  | function | the `Blueprint` object shape — `surfaces` a `literalShape(SURFACES)` array with `min: 1`; `peers` / `extras` are `dependencyShape()` arrays alongside `dependencies`; `name` a plain `min: 1` string, NOT pattern-constrained, so `generate` stays satisfiable (the `NAME_PATTERN` law, and the cross-array uniqueness/overlap rules, live in the semantic pass). |
-| `memberShape`     | function | the `Member` object shape — `category` / `surface` literal shapes.                                                                                                                                                                                                                                                                                                |
-| `artifactShape`   | function | the `Artifact` object shape — `origin` a `literalShape(ORIGINS)`; `content` / `source` optional.                                                                                                                                                                                                                                                                  |
-| `planShape`       | function | the whole `Plan` object shape, section shapes composed; `trace` / `hash` optional.                                                                                                                                                                                                                                                                                |
-| `syncReportShape` | function | the `SyncReport` object shape — `guide` + `version` array sub-shapes (each with a `literalShape(FRESHNESS)`) composed; `isSyncReport` / `parseSyncReport` compile from it.                                                                                                                                                                                        |
-
-```ts
-import {
-	artifactShape,
-	blueprintShape,
-	dependencyShape,
-	memberShape,
-	overrideShape,
-	planShape,
-	syncReportShape,
-} from '@orkestrel/scaffold'
-import { createContract, schemaToParameters, seededRandom } from '@orkestrel/contract'
-
-const contract = createContract(blueprintShape())
-contract.schema // the full JSON Schema — hand to a tool boundary via schemaToParameters
-contract.generate(seededRandom(42)) // a reproducible, on-contract seed blueprint for tests
-schemaToParameters(contract.schema) // the open tool-parameters record, no `as` anywhere
-
-// The section shapes `blueprintShape` / `planShape` compose — each is a fresh, independent
-// `ContractShape` value, usable on its own contract:
-createContract(dependencyShape()).schema // the `Dependency` section schema alone
-createContract(overrideShape()).schema // the `Override` section schema alone
-createContract(memberShape()).schema // the `Member` section schema alone
-createContract(artifactShape()).schema // the `Artifact` section schema alone
-createContract(planShape()).schema // the whole `Plan` schema, section shapes composed
-createContract(syncReportShape()).schema // the `SyncReport` schema — the compiled `isSyncReport` source
-```
-
-### Builders
-
-Lowercase value builders — every builder returns a fresh object and OMITS absent optional
-keys entirely, so its output round-trips the exact-record validators above.
-
-| API          | Kind     | Builds…                                                                                                                                                                                                                                     |
-| ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dependency` | function | a `Dependency` from name / range / optional `optional` flag (omitted entirely when absent).                                                                                                                                                 |
-| `override`   | function | an `Override` from path / content.                                                                                                                                                                                                          |
-| `member`     | function | a `Member` from name / category / summary / surface (`surface` defaults `'core'`).                                                                                                                                                          |
-| `blueprint`  | function | a `Blueprint` from a name + a partial of the rest — `version` / `engines` default (`DEFAULT_VERSION` / `DEFAULT_ENGINES`), `surfaces` defaults `['core']`, and `keywords` / `dependencies` / `peers` / `extras` / `overrides` default `[]`. |
-
-```ts
-import { blueprint, dependency, override } from '@orkestrel/scaffold'
-
-const spec = blueprint('router', {
-	description: 'A tiny hash-router. Part of the @orkestrel line.',
-	keywords: ['router', 'hash'],
-	surfaces: ['core', 'browser'],
-	dependencies: [dependency('@orkestrel/contract', '^0.0.5')],
-	overrides: [override('README.md', '# @orkestrel/router\n\nHand-written readme.\n')],
-})
-spec.version // '0.0.1' — the builder default
-spec.engines // '>=22' — the builder default
-```
-
-### Compilers
-
-Pure, exported leaves of `blueprintToPlan`'s pipeline (AGENTS §5 no-nested-functions law) —
-one function per drafting concern, each independently unit-tested; `blueprintToPlan` (below,
-Helpers) is the sole orchestrator that calls them in sequence, never the sole holder of the
-logic itself.
-
-| API                       | Kind     | Contract                                                                                                                                                                                                                                                       |
-| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hostGroup`               | function | Resolve the `Group` a byte-copied `HOST_PATHS` entry belongs to (docs / orchestration / guides / configs fallback).                                                                                                                                            |
-| `fillArtifact`            | function | Fill one `TEMPLATES` entry into a `template`-origin `Artifact`, optionally tagged with the owning `Surface`.                                                                                                                                                   |
-| `surfaceVariant`          | function | Classify a blueprint's surfaces into the manifest/exports variant class — the sole declared `Surface`, or `'multi'` when two or more are declared.                                                                                                             |
-| `entryFields`             | function | Build the `package.json` `main` / `module` / optional top-level `types` fields for a declared `Surface[]`.                                                                                                                                                     |
-| `dualCondition`           | function | Build one dual-format (`import` + `require`) `exports` condition block for an extensionless dist path.                                                                                                                                                         |
-| `exportsMap`              | function | Build the `package.json` `exports` map for a declared `Surface[]`.                                                                                                                                                                                             |
-| `compareCodeUnit`         | function | A code-unit (not locale-sensitive) string comparator — matches the `keywords` sort and keeps ordering stable across locales/environments.                                                                                                                      |
-| `devDependenciesFor`      | function | Merge a blueprint's `extras` (code-unit sorted) over the shared devDependency baseline, extras winning on a name collision.                                                                                                                                    |
-| `packageManifest`         | function | Compute the `package.json` artifact's `content`, applying the manifest/exports combination rules over a blueprint's surfaces.                                                                                                                                  |
-| `rootTsconfig`            | function | The root `tsconfig.json` — one `@src/<surface>` path alias per declared surface, in declared order.                                                                                                                                                            |
-| `viteHeader`              | function | The rendered import/`resolve` header block every `rootViteConfig` shape prefixes — the Playwright import lines + `createBrowserProvider` present only when `needsPlaywright`.                                                                                  |
-| `singleSurfaceViteConfig` | function | The root `vite.config.ts` body for a single non-`core` surface — the surface's own `viteHeader` (Playwright only when the surface is `browser`) prefixes the factory that IS the base (Shape 3 of `rootViteConfig`).                                           |
-| `rootViteConfig`          | function | The root `vite.config.ts` — three grounded shapes chosen by a blueprint's `surfaces` (core-only, multi-surface, single non-`core` surface).                                                                                                                    |
-| `coreTsconfig`            | function | `configs/src/tsconfig.core.json` — the unchanged core shape.                                                                                                                                                                                                   |
-| `coreViteConfig`          | function | `configs/src/vite.core.config.ts` — inlines its own `build.lib` / `rollupOptions`.                                                                                                                                                                             |
-| `surfaceTsconfig`         | function | `configs/src/tsconfig.<browser\|server>.json` — `rootDir`/`outDir` point at the whole `src`/`dist/src` tree.                                                                                                                                                   |
-| `surfaceViteConfig`       | function | `configs/src/vite.<browser\|server>.config.ts` — a thin `dts`-only wrapper anchored on the root `srcBrowser` / `srcServer` export.                                                                                                                             |
-| `configArtifacts`         | function | Draft the `configs` group's `computed` artifacts — the root `tsconfig.json` / `vite.config.ts` plus each declared surface's `configs/src/*` pair.                                                                                                              |
-| `sourceArtifacts`         | function | Draft the `source` group's `template` artifacts — one full `{types, <Pascal>, factories, index}` stub set per declared surface.                                                                                                                                |
-| `paritySpecifiers`        | function | Build the computed `SELF_SPECIFIERS` / `SPECIFIER_MODULES` / `exportsFor` block the `parityTest` template's `{{specifiers}}` placeholder fills — one shape for every surface count.                                                                            |
-| `testArtifacts`           | function | Draft the `tests` group's `template` artifacts — shared recorder setup, conditional per-surface environment setup, per-surface entity/factory test stubs, and the guides-parity drop-in.                                                                       |
-| `guideMemberTable`        | function | Build an `alignTable` markdown table over a member category's rows, deduped by name — one row per declared member across all its surfaces.                                                                                                                     |
-| `guideArtifacts`          | function | Draft the `guides` group's artifacts — the package's own filled guide stub, the guides index, and any vendored dependency guide mirrors (the seven grounded `@orkestrel/*` names).                                                                             |
-| `applyOverrides`          | function | Apply a blueprint's `overrides` over a drafted artifact list — an override REPLACES the matching artifact's `content` in place; a non-matching or `host`-origin-targeting override is left unapplied here (the gate stage surfaces it as a blocking question). |
-
-```ts
-import { fillArtifact, hostGroup } from '@orkestrel/scaffold'
-
-hostGroup('AGENTS.md') // 'docs'
-hostGroup('.claude') // 'orchestration'
-fillArtifact('README.md', 'docs', 'readme', { name: 'router', pascal: 'Router' })
-// { path: 'README.md', group: 'docs', origin: 'template', content: '# router\n…' }
-```
-
-```ts
-import {
-	compareCodeUnit,
+	blueprintToMembers,
+	ciWorkflow,
+	configArtifacts,
 	devDependenciesFor,
 	dualCondition,
 	entryFields,
 	exportsMap,
-	surfaceVariant,
+	fillArtifact,
+	guideArtifacts,
+	guideMethods,
+	guideTests,
+	guideUsage,
+	hostGroup,
+	packageManifest,
+	paritySpecifiers,
+	selectHostPaths,
+	sourceArtifacts,
+	srcVariant,
+	testArtifacts,
 } from '@orkestrel/scaffold'
 
-surfaceVariant(['core', 'server']) // 'multi'
+const spec = blueprint('router', { src: ['core'], app: ['core', 'server'] })
+const members = blueprintToMembers(spec)
+
+hostGroup('AGENTS.md') // 'docs'
+selectHostPaths(['guides/src/router.md', 'LICENSE'], spec.name) // ['LICENSE'] — never its own guide
+srcVariant(['core', 'server']) // 'multi'
 entryFields(['browser']).main // './dist/src/browser/index.js'
-dualCondition('./dist/src/core/index') // { import: {…}, require: {…} }
-exportsMap(['core'])['.'] // dual import/require condition block
-devDependenciesFor([])['typescript'] // '^6.0.3'
-;[...['b', 'a']].sort(compareCodeUnit) // ['a', 'b']
+dualCondition('./dist/src/core/index')
+exportsMap(['core'])['.']
+devDependenciesFor(spec.extras).typescript
+packageManifest(spec) // the whole manifest, newline-terminated
+
+configArtifacts(spec).length
+sourceArtifacts(spec, 'Router').length
+applicationArtifacts(spec).length
+testArtifacts(spec, 'Router').length
+guideArtifacts(spec, 'Router', members).length
+paritySpecifiers(spec).includes('SELF_SPECIFIERS') // true
+guideUsage(spec, 'Router')
+guideMethods(spec)
+guideTests(spec, 'Router')
+ciWorkflow(spec).includes("node: ['22.12.0', '26']") // true
+
+fillArtifact('README.md', 'docs', 'readme', {
+	name: 'router',
+	title: '@orkestrel/router',
+	description: 'A tiny hash router.',
+	install: '',
+	usage: '',
+})
 ```
 
-```ts
-import { applyOverrides, override } from '@orkestrel/scaffold'
-
-applyOverrides(
-	[{ path: 'README.md', group: 'docs', origin: 'template', content: '# old' }],
-	[override('README.md', '# custom')],
-)[0].content // '# custom'
-```
-
-### Helpers
-
-Pure, exported utility functions (AGENTS §4.3) — the referentially-transparent leaves
-behind the `Compiler`, the `Sync` entity, and the projection surface. Projections use the
-`{noun}To{Noun}` idiom (AGENTS §4.6.1): each consumes a WHOLE and returns a derived view of it.
-
-| API                       | Kind     | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `blueprintToMembers`      | function | Derive the declared public `Member[]` from a blueprint (name → Pascal → the canonical inventory per surface) — the SINGLE source both the source stubs and the guide Surface tables read. The skeleton vocabulary is deliberately the four `Category` buckets (`type` / `constant` / `factory` / `entity`); standalone helpers, validators, and shapers are hand-authored in implementation, not scaffolded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `blueprintToPlan`         | function | The full pure compilation, orchestrating the Compilers section's exported stages in sequence (never nesting them): draft the artifacts — `packageManifest` (the manifest and exports combination rules; multi-surface OMITS the top-level `package.json` `types`; a single-variant server-/browser-only retargets its lone surface to the `.` root, `main` / `module` re-pointed), `configArtifacts`, `sourceArtifacts`, `testArtifacts`, `guideArtifacts` OVER the per-surface `SURFACE_MATRIX` rows, plus `hostGroup`-classified `HOST_PATHS` and `applyOverrides` — then `pinPlan`; the computed `package.json` also emits `peerDependencies` / `peerDependenciesMeta` for `peers` (an `optional` peer gains a meta entry), merges `extras` into the generated `devDependencies` baseline (an extra's range wins on a name collision), and merges every peer into `devDependencies` at its peer range too (a peer is ALSO dev-installed — grounded against the live @orkestrel/middleware and @orkestrel/mcp exemplars — so `deriveBlueprint`'s reverse read never loses it), plus a `"scaffold": "scaffold"` script and a `'@orkestrel/scaffold': SCAFFOLD_RANGE` devDependency, so every scaffolded package ships already wired for its own future `repair` / `audit`; optionally scoped to a `Group[]` selection (default: all groups).                                       |
-| `pinPlan`                 | function | Return a fresh `Plan` with `trace` (the one-line derivation summary) and `hash` (a canonical structural digest, via `computeHash` over `stableStringify`) filled — deterministic, no timestamps, no run-specific data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `computeHash`             | function | Compute a canonical FNV-1a digest (32-bit offset basis/prime, `Math.imul` wraparound multiply) of a text string as an 8-hex-digit zero-padded string — deterministic, no clocks or randomness.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `stableStringify`         | function | Serialize a value to a canonical, key-order-INDEPENDENT JSON-like string — object keys code-unit sorted, array order preserved — so two logically-equal blueprints built in a different field order still hash identically once fed through `computeHash`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `formatJson`              | function | Serialize a value to newline-terminated JSON that matches the fleet's own `oxfmt` output byte-for-byte — objects one key per line, arrays collapsed onto one line when the rendered width (each tab counted as `JSON_TAB_WIDTH` columns) fits `JSON_PRINT_WIDTH`, one item per line otherwise. `rootTsconfig` / `coreTsconfig` / `surfaceTsconfig` render their computed configs through it instead of `JSON.stringify(…, '\t')` (which always breaks arrays one item per line) so `oxfmt --check` never has anything left to rewrite.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `renderValue`             | function | `formatJson`'s per-value dispatch — arrays via `renderArray`, plain objects via `renderObject`, everything else via `JSON.stringify`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `renderArray`             | function | Render a JSON array through `formatJson`'s inline-or-broken rule — inline when the rendered width (via `computeColumnWidth`) fits `JSON_PRINT_WIDTH`, one item per line otherwise; mutually recursive with `renderValue`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `renderObject`            | function | Render a JSON object through `formatJson`'s one-key-per-line rule; mutually recursive with `renderValue`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `computeColumnWidth`      | function | Measure a rendered fragment's column width against `JSON_PRINT_WIDTH`, counting each literal tab as `JSON_TAB_WIDTH` columns and every other character as one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `validateBlueprint`       | function | The semantic pass over a blueprint — name against `NAME_PATTERN` (and a 203-char bound, so the published `@orkestrel/<name>` fits npm's 214-character cap), non-empty on-vocabulary `surfaces` with no repeats (a single surface — `core`-only, `server`-only, `browser`-only — is fully first-class, no `core` required), the ONE exemplar-less combination — `browser`+`server` declared together with no `core` — is blocking ("The browser+server combination without core has no defined configuration class — declare core alongside them, or declare a single surface"; closes the silent surface-drop `rootViteConfig`'s dispatch would otherwise produce), well-formed `dependencies` / `peers` / `extras` via `validateDependencyArray` (non-empty name/range, no duplicate names within an array, and no name overlap ACROSS the three arrays — a name in both `dependencies` and `peers`, or an `extras` name repeating either, is blocking; `dependencies`/`peers` names are `DEPENDENCY_NAME_PATTERN`-shaped — closed to `@orkestrel/*`, since only those two arrays are path-derived — while `extras` names are `EXTRA_NAME_PATTERN`-shaped, broader, since `extras` is `devDependencies`-content only), `version` shaped `\d+.\d+.\d+`, `engines` shaped `>=\d+`, no duplicate override paths, and no empty override content. Returns a `Validation`, never throws. |
-| `validateDependencyArray` | function | Validate one dependency-shaped array under the name/range/duplicate rules — pure, returns `{ questions, seen }` rather than mutating a closed-over array, so `validateBlueprint` can apply the cross-array (`dependencies` / `peers` / `extras`) overlap rules over the returned `seen` sets.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `manifestToDependencies`  | function | Parse a `package.json` text into `readonly Dependency[]`, keeping the `DEPENDENCY_NAME_PATTERN` entries across `dependencies` / `devDependencies` / `peerDependencies` (all three, deduplicated) — pure, never throws.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `isRecord`                | function | Narrow an unknown value to a plain (non-null, non-array) JSON object.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `rangeToFreshness`        | function | Compare a declared `range` to the registry `latest`: `'current'` iff the range's `^0.0.N` exact pin equals `latest`, else `'behind'` (the `0.0.x` exact-pin law); the `missing` / `failed` verdicts come from the fetch layer, not this pure comparison.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `diffPlan`                | function | The AUDIT projection: diff a plan's artifacts against a caller-supplied `Readonly<Record<string, string>>` of the target's current content, returning an `Audit` of drift findings — pure, no I/O. Per-origin semantics: `host` stays presence-only (`missing`/`aligned`) unless hydrated with real bytes, then content-compared and can be `stale`; `computed` is always content-aware canon (`missing`/`aligned`/`stale`), gating the audit; `template` is BIRTH-ONLY and AUDIT-EXEMPT — always `aligned` regardless of presence or content, since starter files are written once by `materialize` and are legitimately outgrown, the build/parity gates police their substance, and content-comparing them would make an unscoped repair a data-loss footgun. A target file the plan does not own is `foreign`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `inferGroup`              | function | Infer a foreign path's `Group` from its leading path segment — ordered prefix match (`src/`, `tests/`, `guides/`, `docs/`, `configs/`, `.github/` / `scripts/` as `orchestration`, then the two manifest file names), falling back to `configs`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `planToReview`            | function | Project a `Plan` into a copy-ready markdown review document — the artifact table by group, the members table, the summary; the diff-first dry run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `auditToReview`           | function | Project an `Audit` into a markdown drift report — findings grouped by `drift`, aligned entries elided; what `repair` will touch.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `syncToReview`            | function | Project a `SyncReport` into a markdown freshness report via `alignTable` — the sibling of `auditToReview`, guides + versions grouped by `freshness`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `isBehind`                | function | Test whether a `Freshness` verdict counts toward "behind" — `true` iff `freshness` is `'behind'`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `planToSummary`           | function | Project a `Plan` into a `PlanSummary` — the artifact tally by `origin`, the surfaces, and the covered groups.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `pascalCase`              | function | Derive the PascalCase entity name from a lowercase-hyphen package name (`'my-router'` → `'MyRouter'`) — hyphens are word breaks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `alignTable`              | function | Build a formatter-width-aligned GFM table string from header + row cell strings (+ optional `readonly TableAlign[]`) — the guide Surface-table emitter.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `catalogNames`            | function | Extract the `@orkestrel/<name>` names from a catalog markdown block/table (the `orkestrel.md` embedded shape), in row order — pure, `[]` when none. The single source both `runCatalog`'s shrink-count and the interactive `new` deps prompt's catalog resolution read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `splitTableRow`           | function | Split one rendered GFM table row into its trimmed cell strings, splitting on an UNESCAPED `\|` (a `\\\|` is a literal pipe inside a cell, not a column boundary).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `padCell`                 | function | Right-pad a cell to a codepoint width, oxfmt-style — measured via `Array.from` so a surrogate pair or wide codepoint counts once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `delimiterCell`           | function | Build one delimiter-row cell for a GFM table column per its `TableAlign` (`left` / `right` / `center` / `none`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `catalogToBlock`          | function | Project a `CatalogEntry[]` into a markdown table via `alignTable` — deduplicated by `name` (a repeated name's LAST entry wins), code-unit sorted; an empty `description` renders `—` (an em dash). The block the `catalog` bin verb splices between `.claude/agents/orkestrel.md`'s markers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+### Emitting the generated build and check configuration
 
 ```ts
 import {
-	alignTable,
-	blueprintToMembers,
-	blueprintToPlan,
-	catalogToBlock,
-	diffPlan,
+	appTsconfig,
+	appViteConfig,
+	applicationViteConfig,
+	coreTsconfig,
+	coreViteConfig,
+	policyViteProject,
+	rootTsconfig,
+	rootViteConfig,
+	singleSrcViteConfig,
+	srcTsconfig,
+	srcViteConfig,
+	viteHeader,
+	viteMachinery,
+} from '@orkestrel/scaffold'
+
+rootTsconfig(['core'], ['core', 'server'])
+coreTsconfig()
+srcTsconfig('server')
+appTsconfig('browser', true)
+
+viteMachinery(['core']) // { browser: false, vue: false, output: true }
+viteMachinery([], ['core', 'browser']) // { browser: true, vue: true, output: true }
+viteHeader(viteMachinery([], ['core', 'browser'])) // the shared header, with browser and Vue support
+coreViteConfig()
+srcViteConfig('browser')
+appViteConfig('server')
+policyViteProject()
+
+rootViteConfig(['core', 'server'])
+singleSrcViteConfig('server').includes('srcServer') // true
+applicationViteConfig([], ['core', 'server']).includes('appServer') // true
+```
+
+### Reading declared dependencies and comparing freshness
+
+```ts
+import {
+	isBehind,
 	manifestToDependencies,
-	pascalCase,
-	planToReview,
-	planToSummary,
+	manifestToName,
 	rangeToFreshness,
-	validateBlueprint,
 } from '@orkestrel/scaffold'
-
-const plan = blueprintToPlan(spec)
-plan.hash // '7b1c9e04' — canonical FNV-1a digest of the plan's content, stable across runs
-plan.trace // 'router · core+browser · groups:7 · artifacts:21' — derived, never authored
-
-pascalCase('my-router') // 'MyRouter' — hyphens are word breaks
-blueprintToMembers(spec) // [{ name: 'RouterOptions', category: 'type', surface: 'core' }, …]
-planToSummary(plan) // { name: 'router', artifacts: 21, host: 12, template: 6, computed: 3, … }
-planToReview(plan) // '# Scaffolding router\n## Artifacts\n| Path | Group | Origin |\n…'
-validateBlueprint(spec) // { valid: true, questions: [], warnings: [] }
-
-const current = { 'package.json': '{ "name": "@orkestrel/router" }' }
-diffPlan(plan, current) // { findings: [...], clean: false, complete: true, drifted: 1, missing: 20, foreign: 0 }
-
-manifestToDependencies('{"dependencies":{"@orkestrel/contract":"^0.0.5"}}') // [{ name: '@orkestrel/contract', range: '^0.0.5' }]
-rangeToFreshness('^0.0.5', '0.0.5') // 'current' — pinned to latest
-rangeToFreshness('^0.0.5', '0.0.7') // 'behind' — a newer patch is published
-
-catalogToBlock([
-	{ name: '@orkestrel/router', version: '0.0.5', description: 'A tiny hash-router.' },
-	{ name: '@orkestrel/contract', version: '0.0.5', description: '' },
-]) // '| Package             | Version | Description         |\n| … |\n| @orkestrel/contract | 0.0.5   | —                   |\n…' — empty description renders as an em dash
-
-alignTable(['API', 'Kind'], [['`createRouter`', 'function']]) // '| API           | Kind     |\n| … |'
-```
-
-```ts
-import { computeHash, stableStringify, validateDependencyArray } from '@orkestrel/scaffold'
-
-computeHash('hello-world') // '428d118e' — same input, same digest, every run
-stableStringify({ b: 1, a: 2 }) // '{"a":2,"b":1}' — key order independent
-computeHash(stableStringify({ b: 1, a: 2 })) === computeHash(stableStringify({ a: 2, b: 1 })) // true
-
-validateDependencyArray('dependencies', [{ name: '', range: '^1' }])
-// { questions: [{ field: 'dependencies', text: 'A dependency name must not be empty', … }], seen: Set(0) {} }
-```
-
-```ts
 import {
-	computeColumnWidth,
-	formatJson,
-	renderArray,
-	renderObject,
-	renderValue,
-} from '@orkestrel/scaffold'
+	guideStub,
+	packageShortName,
+	readGuideReferences,
+	syncReportOf,
+} from '@orkestrel/scaffold/server'
 
-formatJson({ lib: ['ESNext', 'DOM'] }) // '{\n\t"lib": ["ESNext", "DOM"]\n}\n' — a thin orchestrator
-renderValue({ lib: ['ESNext'] }, '', '', '') // '{\n\t"lib": ["ESNext"]\n}' — dispatches to renderObject
-renderObject({ lib: ['ESNext'] }, '') // '{\n\t"lib": ["ESNext"]\n}' — one key per line
-renderArray(['ESNext', 'DOM'], '', '', '') // '["ESNext", "DOM"]' — inline when it fits JSON_PRINT_WIDTH
-computeColumnWidth('\t"a"') // 3 — one tab counted as JSON_TAB_WIDTH, plus two characters
+manifestToDependencies('{"dependencies":{"@orkestrel/contract":"^0.0.7"}}')
+manifestToName('{"name":"@orkestrel/router"}') // '@orkestrel/router' — the target's own name
+rangeToFreshness('^0.0.7', '0.0.7') // 'current'
+isBehind(rangeToFreshness('^0.0.7', '0.0.9')) // true
+
+packageShortName('@orkestrel/contract') // 'contract'
+guideStub('guides/src/contract.md') // the local pointer content
+readGuideReferences('./packages/router', [{ name: '@orkestrel/contract', range: '^0.0.7' }])
+syncReportOf('./packages/router', [], []) // { clean: true, failed: 0, … }
 ```
 
-`alignTable` builds a markdown `TableNode` (each cell's string parsed with `parseInline`)
-and serializes it through `@orkestrel/markdown`'s `renderMarkdown`, which contributes the
-STRUCTURE — `\|`-escaping any literal pipe inside a cell and emitting the alignment delimiter
-row — at a flat 1-space cell padding. `alignTable` then re-pads BOTH the cells AND the
-delimiter row to per-column codepoint width; that re-pad is the whole capability, matching
-oxfmt's markdown re-padding so a generated guide passes `format:check` without a formatter
-run — codepoint-aware re-padding so a CJK or other wide cell keeps every column aligned,
-typed and tested. The `\|`-escape is load-bearing: an unescaped
-pipe in a cell would
-split it into two columns and silently corrupt the table. Its optional `readonly
-TableAlign[]` is the `@orkestrel/markdown` alignment type, imported at the call site, never
-re-exported here (AGENTS §6).
-
-### Factories
-
-| API                  | Kind     | Builds…                                                                                                                                                                          |
-| -------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createCompiler`     | function | A `CompilerInterface` — the compilation orchestrator, seeded from `CompilerOptions`.                                                                                             |
-| `createPlanManager`  | function | A working `PlanManagerInterface`.                                                                                                                                                |
-| `createBlueprint`    | function | Validate and return a `Blueprint` from plain data — throws `ScaffoldError('INVALID', …)` on failure (structure AND the semantic pass, so an off-`NAME_PATTERN` name throws too). |
-| `createMaterializer` | function | A `MaterializerInterface` **(server)** — the materialization entity, seeded from `MaterializerOptions`.                                                                          |
-| `createSync`         | function | A `SyncInterface` **(server)** — the upstream-synchronization entity, seeded from `SyncOptions`.                                                                                 |
+### Materializing, repairing, and pruning a target
 
 ```ts
-import { createBlueprint, createCompiler, createPlanManager } from '@orkestrel/scaffold'
-
-const compiler = createCompiler() // owns a typed emitter, no sub-engines
-compiler.destroy()
-
-const plans = createPlanManager()
-plans.size // 0
-plans.destroy()
-
-createBlueprint({ name: 'Router', surfaces: [] }) // throws ScaffoldError('INVALID', …)
-```
-
-### Entities
-
-| API            | Kind  | Summary                                                                                                                                                                                                            |
-| -------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Compiler`     | class | The compilation orchestrator — runs the three-stage pipeline and the audit projection, owns a typed emitter.                                                                                                       |
-| `PlanManager`  | class | The self-owning, versioned/hashed plan registry (AGENTS §9) — record ids default to each plan's own content hash.                                                                                                  |
-| `Materializer` | class | The materialization entity **(server)** — the impure WRITE surface; writes a plan (green-field) or repairs drift (into-existing).                                                                                  |
-| `Sync`         | class | The upstream-synchronization entity **(server)** — the impure FETCH sibling of `Materializer`; fetches dependency guides + registry versions, refreshes vendored mirrors under the containment law. Promise-based. |
-
-The server surface also ships nineteen helpers and its factories:
-
-| API                      | Kind     | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isVacant`               | function | **(server)** Whether a target path is absent, empty, or contains nothing but a `.git` directory — the green-field target law.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `readTarget`             | function | **(server)** Read a target's current content at a set of relative paths into a `Record<string, string>` — the I/O that feeds the pure `diffPlan`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `readManifest`           | function | **(server)** Read `target/package.json` text; an absent manifest throws `ScaffoldError('TARGET', …)` — the read that feeds `manifestToDependencies`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `locateHostSource`       | function | **(server)** Resolve the absolute host-storage path for a host-origin artifact's `source`, manifest-aware — `join(host, source)` when `manifest` is `undefined` (no vendored staging indirection), else the SINGLE matching entry's `storage` path, or `undefined` when zero or more than one entry matches `destination`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `hydratePlan`            | function | **(server)** Fill a `host`-origin artifact's `content` from the resolved `host` root (manifest-aware, via `locateHostSource`) so `diffPlan` can content-compare it — a `host` file's drift becomes `'stale'`-detectable rather than presence-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `discoverPackages`       | function | **(server)** List a root's immediate child directories whose `package.json` name starts `@orkestrel/`, as absolute paths, code-unit sorted — the fleet-discovery primitive `fleet` walks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `hostRoot`               | function | **(server)** Resolve THIS module's own installed package root (walking up from `import.meta.url`, never `process.cwd()`) and return its vendored `dist/host` path — the single source of truth for the default `Materializer` / bin host; throws `ScaffoldError('TARGET', …)` when no ancestor holds a `package.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `selectOrkestrelEntries` | function | **(server)** Filter a manifest record's entries down to `@orkestrel/`-prefixed keys with string values — the shared `dependencies` / `peerDependencies` reader `deriveBlueprint` uses for those two fields (and for computing the `peers ∩ dependencies` exclusion set); `[]` when `value` is not a plain object.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `deriveBlueprint`        | function | **(server)** Reconstruct a `Blueprint` from an EXISTING repo at `target` — `name` strips the `@orkestrel/` prefix, `surfaces` is read off which `src/<surface>/` directories exist, `dependencies` / `peers` come from `manifest.dependencies` / `manifest.peerDependencies` via `selectOrkestrelEntries` (a `peerDependenciesMeta`-flagged peer carries `optional: true`), `extras` is EVERY entry of `manifest.devDependencies` — not only `@orkestrel/`-prefixed ones, so an external extra (e.g. `zod`) round-trips too — EXCLUDING the generated devDependency baseline (`devDependenciesFor([])`'s keys, read from that SAME source of truth rather than a duplicated literal, which already covers `@orkestrel/guide` / `@orkestrel/scaffold`) and any name also present in `dependencies` / `peerDependencies`, and `overrides` is always `[]`; throws a coded `TARGET` failure on an unreadable/non-`@orkestrel` manifest or no surface directory. |
-| `isManifestEntry`        | function | **(server)** Whether `value` is a well-formed `host/manifest.json` entry — a string `storage`, a string `destination`, and a boolean `executable`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `readHostManifest`       | function | **(server)** Read and validate a vendored host root's `manifest.json`, when present — returns its `readonly ManifestEntry[]`, or `undefined` when `host` has no `manifest.json` (the raw-root 1:1 fallback); throws `ScaffoldError('TARGET', …)` when the file exists but is unreadable, invalid JSON, or not an array of `ManifestEntry`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `listFiles`              | function | **(server)** Recursively list a directory's files as root-relative, posix-style paths — `[]` when the directory is absent; the walk `Materializer.prune` uses to enumerate a vendored/target directory's current files.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `PRUNE_DIRECTORIES`      | const    | **(server)** `['.claude/agents', 'scripts']`, frozen — the prune-owned directories: the ONLY directories `pruneTargets` scans and `Materializer.prune` deletes under; a file anywhere else is never prune's business.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `vendoredPruneSet`       | function | **(server)** The vendored allowlist for ONE prune directory — the destination-relative paths under `directory` (a `PRUNE_DIRECTORIES` entry) that `host` declares and `pruneTargets` must NOT report: read from `manifest.json` `destination`s when the host carries one, else listed straight off `host/<directory>`. FAIL CLOSED: the vendored source must be POSITIVELY established before ANY allowlist (even an empty one) returns — a missing `host` root, or no `manifest.json` AND no `host/<directory>`, throws `ScaffoldError('TARGET', …)`, so an unresolved host never reads as "vendors nothing"; a host that EXISTS and vendors zero files in `directory` remains a valid empty allowlist.                                                                                                                                                                                                                                                    |
-| `pruneTargets`           | function | **(server)** List the repo-relative POSIX paths under `target`'s prune directories (`.claude/agents`, `scripts`) that the vendored `host` allowlist does NOT declare — THE single source of truth for prune drift, consumed by both `Materializer.prune` (which deletes exactly these paths) and the bin's audit/preview UX (which shows them honestly instead of a structurally-always-zero foreign count). Pure read — never deletes anything; `[]` when a prune directory is absent under `target`, or when none of its files are unexpected. Throws `ScaffoldError('TARGET', …)` when `host` cannot positively establish a vendored allowlist for a prune directory that DOES exist under `target` (fail-closed — an unresolved host never reads as "vendors nothing").                                                                                                                                                                                 |
-| `isRecord`               | function | **(server)** Whether `value` is a plain object — not `null`, not an array — narrowing to `Record<string, unknown>`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `catalogPackages`        | function | **(server)** Build the fleet package catalog — one `CatalogEntry` per `@orkestrel/*` package discovered under each root (`discoverPackages`), its `description` the flattened text of the first paragraph of the guide's opening blockquote (parsed via `@orkestrel/markdown`'s `parseDocument` + `walkNodes`), `''` when the guide is missing/unreadable/blockquote-less/paragraph-less; merged across roots (a later root wins on a repeated name), code-unit sorted. An unreadable ROOT propagates whatever `discoverPackages` throws, unwrapped.                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `storagePath`            | function | **(server)** Map a repo-relative path to its vendored-host STAGING path — a leading-dot TOP-LEVEL FILE maps to `dotfiles/<name-without-dot>`, a leading-dot DIRECTORY segment loses its dot wherever it appears, an undotted path is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `stageHost`              | function | **(server)** The BUILD-time staging primitive the `build:host` npm script calls directly (replacing a standalone build script) — wipes `out`, byte-copies (`copyFileSync`) every file under each `paths` entry (default `HOST_PATHS`) into `<out>/<storagePath(path)>`, deriving each entry's `executable` flag from the `.sh` suffix on `destination` (deterministic on every build platform — Windows `stat` carries no execute bit; all vendored executables are shell scripts by construction), and writes `<out>/manifest.json` (entries code-unit sorted by `destination`, tab-indented, trailing newline); throws `ScaffoldError('TARGET', …)` naming a missing source path, or naming BOTH colliding destinations on a `storagePath` collision (checked BEFORE the manifest is written). Returns the written entries.                                                                                                                               |
-
-```ts
-import { createMaterializer, isVacant } from '@orkestrel/scaffold/server'
-
-const target = './packages/router'
-isVacant(target) // true — absent, empty, or nothing but a .git dir
-
-const materializer = createMaterializer()
-const result = materializer.materialize(plan, target) // writes every artifact; throws TARGET if not vacant
-result.written // ['package.json', 'tsconfig.json', 'src/core/index.ts', …] — rendered files
-result.copied // ['AGENTS.md', 'LICENSE', '.claude/settings.json', …] — host-origin byte copies
-materializer.destroy()
-```
-
-```ts
-import { diffPlan } from '@orkestrel/scaffold'
-import { discoverPackages, hydratePlan, readTarget } from '@orkestrel/scaffold/server'
-
-// hydratePlan: content-compare a host-origin artifact instead of presence-only.
-const hydrated = hydratePlan(plan, './packages/router') // fills each `host` artifact's `content`
-const audit = diffPlan(
-	hydrated,
-	readTarget(
-		'./packages/router',
-		hydrated.artifacts.map((artifact) => artifact.path),
-	),
-)
-audit.findings.filter((finding) => finding.drift === 'stale') // now catches drifted host files too
-
-// discoverPackages: the fleet-walk `fleet` runs per-repo.
-discoverPackages('/repos') // ['/repos/contract', '/repos/scaffold', …] — @orkestrel/* children, sorted
-```
-
-```ts
-import { hostRoot } from '@orkestrel/scaffold/server'
-
-hostRoot() // '/…/node_modules/@orkestrel/scaffold/dist/host' — the package's own vendored data root
-```
-
-```ts
-import { deriveBlueprint } from '@orkestrel/scaffold/server'
-
-const spec = deriveBlueprint('./packages/router')
-spec.surfaces // ['core', 'browser', 'server'] — read off the live src/<surface>/ directories
-spec.peers // e.g. [{ name: '@orkestrel/database', range: '^0.0.5', optional: true }]
-spec.overrides // [] — derivation cannot know a caller's template-override intent
-```
-
-```ts
-import { hostRoot, isRecord, listFiles, readHostManifest } from '@orkestrel/scaffold/server'
+import { blueprint, blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
+import {
+	createMaterializer,
+	hostRoot,
+	hydratePlan,
+	isVacant,
+	locateHostSource,
+	readHostManifest,
+	readManifest,
+	readTarget,
+	remapArtifactPath,
+	stageHost,
+	storagePath,
+} from '@orkestrel/scaffold/server'
 
 const host = hostRoot()
-const manifest = readHostManifest(host) // readonly ManifestEntry[] | undefined
-listFiles(`${host}/.claude/agents`) // ['scout.md', 'builder.md', …] — root-relative, posix-style
+readHostManifest(host) // the vendored manifest, or undefined for a raw root
+storagePath('.claude/agents/reviewer.md') // 'claude/agents/reviewer.md'
+locateHostSource(undefined, 'package.json', host)
 
-isRecord({ a: 1 }) // true
-isRecord(null) // false
+const plan = hydratePlan(blueprintToPlan(blueprint('router', { src: ['core'] })), host)
+remapArtifactPath(
+	{ path: '.claude/agents', group: 'orchestration', origin: 'host' },
+	'.claude/agents',
+)
+
+const materializer = createMaterializer()
+isVacant('./packages/router-new') // true — absent, empty, or only a .git dir
+materializer.materialize(plan, './packages/router-new')
+
+readManifest('./packages/router')
+const current = readTarget(
+	'./packages/router',
+	plan.artifacts.map((artifact) => artifact.path),
+)
+materializer.repair(plan, diffPlan(plan, current), './packages/router')
+materializer.prune('./packages/router', {})
+materializer.destroy()
+
+stageHost(process.cwd(), 'dist/host').length // the number of files staged
 ```
+
+### Pulling guides and versions
+
+```ts
+import { createSync } from '@orkestrel/scaffold/server'
+
+const sync = createSync({ concurrency: 4, retries: 1 })
+
+const report = await sync.pull('.')
+if (report.failed === 0) await sync.write(report, '.')
+
+const deps = [{ name: '@orkestrel/contract', range: '^0.0.7' }]
+await sync.guides(deps)
+await sync.versions(deps)
+await sync.catalog()
+
+sync.destroy()
+```
+
+### Fleet discovery, prune scanning, and the local catalog
 
 ```ts
 import {
-	PRUNE_DIRECTORIES,
-	hostRoot,
+	catalogPackages,
+	consumeCatalogAllowance,
+	deriveBlueprint,
+	discoverPackages,
+	guideToDescription,
+	isRealDirectory,
+	listDirectories,
+	listFiles,
 	pruneTargets,
+	selectOrkestrelEntries,
 	vendoredPruneSet,
 } from '@orkestrel/scaffold/server'
 
-// pruneTargets: the single source of truth Materializer.prune consumes — a pure
-// read, never a deletion; [] when the target carries no unexpected files.
-pruneTargets('./packages/router', hostRoot()) // ['.claude/agents/rogue.md']
+const catalogAllowance = new Float64Array([2])
+consumeCatalogAllowance(catalogAllowance, './packages') // one aggregate slot remains
+discoverPackages('./packages') // every scoped workspace directly under the root
+deriveBlueprint('./packages/router') // the faithful inverse an audit diffs against
+selectOrkestrelEntries({ '@orkestrel/contract': '^0.0.7', vite: '^8.1.5' })
 
-PRUNE_DIRECTORIES // ['.claude/agents', 'scripts'] — the only directories prune ever touches
+isRealDirectory('./packages/router')
+listFiles('./packages/router/.claude/agents')
+listDirectories('./packages/router/.claude')
 
-// vendoredPruneSet: one prune directory's allowlist — fail-closed when the
-// vendored source cannot be positively established.
-vendoredPruneSet(hostRoot(), 'scripts') // Set { 'scripts/deps.sh', 'scripts/cursor.sh', 'scripts/ollama.sh' }
+vendoredPruneSet('./dist/host', '.claude/agents')
+pruneTargets('./packages/router', './dist/host') // never deletes; reports only
+
+guideToDescription('> A tiny hash router.\n>\n> More detail.') // 'A tiny hash router.'
+catalogPackages(['./packages'], 4_096)
 ```
 
-```ts
-import { stageHost, storagePath } from '@orkestrel/scaffold/server'
-
-storagePath('.gitignore') // 'dotfiles/gitignore'
-storagePath('.claude/agents/scout.md') // 'claude/agents/scout.md'
-
-// The `build:host` script line staging THIS package's own vendored set into dist/host:
-const entries = stageHost(process.cwd(), 'dist/host')
-entries.length // number of files staged
-```
-
-```ts
-import { catalogPackages } from '@orkestrel/scaffold/server'
-import { catalogToBlock } from '@orkestrel/scaffold'
-
-const entries = catalogPackages(['/repos'])
-entries[0] // { name: '@orkestrel/contract', version: '0.0.5', description: '…' }
-catalogToBlock(entries) // the markdown table `scaffold catalog` splices into orkestrel.md
-```
+### The write-transaction boundary
 
 ```ts
 import {
-	isManifestEntry,
-	locateHostSource,
-	selectOrkestrelEntries,
+	commitWriteTransaction,
+	createWriteDirectory,
+	digestFile,
+	digestHex,
+	digestText,
+	discardWriteTransaction,
+	readFileHex,
+	readFileText,
+	replaceDirectory,
+	resolveContainedPath,
+	resolveGuideWrites,
+	resolvePhysicalPath,
+	resolveRealPath,
+	restoreFiles,
+	validateWriteAnchor,
+	validateWriteDirectories,
+	validateWriteTarget,
+	WriteTransaction,
 } from '@orkestrel/scaffold/server'
 
-selectOrkestrelEntries({ '@orkestrel/core': '^1.0.0', lodash: '^4.0.0' })
-// [['@orkestrel/core', '^1.0.0']]
+resolveRealPath('./packages/router/src')
+resolveContainedPath('./packages/router', 'src/core/index.ts', 'TARGET', 'target')
+const full = resolvePhysicalPath('./packages/router', 'package.json', 'TARGET', 'target')
+
+digestText(readFileText('./packages/router', 'package.json', 'TARGET', 'target')) ===
+	digestFile(full)
+digestHex(readFileHex('./packages/router', 'package.json', 'TARGET', 'target'))
+
+const transaction = WriteTransaction.create('./packages/router', ['package.json'])
+validateWriteAnchor(transaction.anchor, 'anchor')
+validateWriteDirectories(transaction)
+validateWriteTarget(transaction, undefined)
+createWriteDirectory(transaction.stage, 'staging')
 
-isManifestEntry({ storage: 'gitignore', destination: '.gitignore', executable: false }) // true
-isManifestEntry({ storage: 'gitignore', destination: '.gitignore' }) // false — missing `executable`
-
-locateHostSource(undefined, 'package.json', './dist/host') // './dist/host/package.json'
-locateHostSource(
-	[{ storage: 'pkg.tmpl', destination: 'package.json', executable: false }],
-	'package.json',
-	'./dist/host',
-) // './dist/host/pkg.tmpl'
-```
-
-````
-
-## Methods
-
-The public methods of each behavioral interface — one table per type, keyed by its
-backticked name, every call-signature member listed (the `readonly` data members —
-`emitter` on `Compiler`; `emitter` / `size` on `PlanManager`; `emitter` on `Materializer`
-and `Sync` — stay in the Surface rows above). Each implementing class exposes exactly its
-interface's methods, so this doubles as the per-instance method surface (AGENTS §22). The
-bin (`src/bin/scaffold.ts`) is a thin procedural entrypoint — it implements NO behavioral
-interface and carries no Methods table (it exports no public members, and §22 parity
-excludes `src/bin`).
-
-#### `CompilerInterface`
-
-`compile` and `audit` are genuinely SYNCHRONOUS and pure — the compiler holds no I/O. After
-`destroy()` every method except the getter and `destroy` itself throws
-`ScaffoldError('DESTROYED', …)`; `destroy()` is idempotent and tears the emitter down LAST.
-
-| Method    | Returns       | Behavior                                                                                                                                                                                                                                                                                           |
-| --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `compile` | `Scaffolding` | Run the three-stage pipeline over a `Blueprint` (optionally scoped to a `Group[]` selection), returning a complete or visible-incomplete result.                                                                                                                                                   |
-| `audit`   | `Audit`       | Compile the blueprint (optionally group-scoped), then diff the plan against the caller-supplied current target content — drift findings as data, no I/O. A gate-failing blueprint returns an `Audit` with `complete: false`, the gate's blocking `questions`, and ZERO findings — no plan to diff. |
-| `destroy` | `void`        | Idempotent teardown — emits `destroy`, then destroys the emitter LAST.                                                                                                                                                                                                                             |
-
-A groups-scoped `Scaffolding`'s `plan`, materialized into a VACANT target, writes only THOSE
-groups' artifacts — a deliberate partial tree, not a complete package. Full package creation
-uses the unscoped `compile` (no `groups` argument); `repair` — which reads an existing target's
-`Audit` rather than assuming vacancy — is the primary scoped consumer.
-
-```ts
-import { blueprint, createCompiler } from '@orkestrel/scaffold'
-
-const compiler = createCompiler()
-const spec = blueprint('timeout', {
-	description: 'A typed timeout. Part of the @orkestrel line.',
-	surfaces: ['core'],
-})
-
-const scaffolding = compiler.compile(spec)
-scaffolding.stages.map((record) => record.stage) // ['draft', 'gate', 'pin']
-scaffolding.complete // true
-scaffolding.plan?.hash // pinned
-
-const audit = compiler.audit(spec, { 'package.json': '{ "name": "@orkestrel/timeout" }' })
-audit.clean // false — the current target is nearly empty
-audit.missing // 19 — everything but package.json is absent
-compiler.destroy()
-````
-
-#### `PlanManagerInterface`
-
-The self-owning, ordered registry over plans (AGENTS §9). `add` re-pins the plan and mints
-each record's `id` FROM its content `hash` — the hash IS the identity, so distinct content
-always mints a fresh record at `version: 1`; re-adding a plan whose content is unchanged
-resolves to the SAME id and returns the existing record untouched, `version` never
-incrementing. The array overload of `remove` is declared FIRST (AGENTS §9.2) so an id list
-resolves to the batch form. A call after `destroy()` throws `ScaffoldError('DESTROYED', …)`.
-
-| Method    | Returns                   | Behavior                                                                                              |
-| --------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `has`     | `boolean`                 | Whether a plan with the given id is registered.                                                       |
-| `plan`    | `PlanRecord \| undefined` | Look up ONE registered plan record by id (AGENTS §9.1 singular accessor).                             |
-| `plans`   | `readonly PlanRecord[]`   | List ALL registered plan records (AGENTS §9.1 plural accessor).                                       |
-| `add`     | `PlanRecord`              | Register (or re-register) one plan; emits `add`.                                                      |
-| `remove`  | `boolean` (or `void`)     | Remove LISTED plans by id, ONE plan by id, or ALL plans (AGENTS §9.2); emits `remove` per removed id. |
-| `destroy` | `void`                    | Idempotent teardown — clears the collection, emits `destroy`, then destroys the emitter LAST.         |
-
-```ts
-import { blueprint, blueprintToPlan, createPlanManager } from '@orkestrel/scaffold'
-
-const plans = createPlanManager()
-const record = plans.add(blueprintToPlan(blueprint('budget', { surfaces: ['core'] })))
-record.id === record.hash // true — id minted from content, deterministic
-record.version // 1
-plans.has(record.id) // true
-plans.plan(record.id) // the PlanRecord, or undefined
-plans.plans() // every registered record
-plans.remove(record.id) // true
-plans.destroy()
-```
-
-#### `MaterializerInterface`
-
-**(server surface.)** The impure WRITE entity — `node:fs` writes behind an explicit call.
-`materialize` is green-field: it refuses any target `isVacant` rejects
-(throwing `ScaffoldError('TARGET', …)`), then byte-copies each `host` artifact from the
-`host` root and writes each `template` / `computed` artifact's rendered `content`, failing
-fast on any write error (`WRITE`). `repair` is into-existing: it skips the vacancy check and
-writes ONLY the `missing` / `stale` artifacts an `Audit` names. `prune` is the DELETION
-counterpart: it removes `foreign` (target-only) files an `Audit` names, but ONLY under the
-two directories the fleet trues wholesale (`.claude/agents/` and `scripts/`) — a `foreign`
-file elsewhere is left untouched, never guessed at. After `destroy()` every method throws
-`DESTROYED`; teardown is idempotent, emitter last.
-
-A dependency's `guides/src/<dep>.md` is the ONE write-side degrade: it materializes as a
-short one-line stub at `new`-time (the vendored host never carries other packages' guides),
-and `scaffold pull` later replaces that stub with the real fetched guide. Any OTHER host
-artifact missing from the vendored manifest is a hard `TARGET` failure, never a stub — a
-non-guide zero-match manifest lookup means a corrupted or truncated `manifest.json`, not a
-legitimate degrade.
-
-| Method        | Returns             | Behavior                                                                                                                                                                                 |
-| ------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `materialize` | `MaterializeResult` | Write a whole plan into a VACANT target — host copies + rendered writes; throws `TARGET` if the target is non-empty beyond `.git`.                                                       |
-| `repair`      | `MaterializeResult` | Write ONLY the artifacts an `Audit` marks `missing` / `stale`, into an EXISTING target — the drift-repair path, no vacancy check.                                                        |
-| `prune`       | `MaterializeResult` | Delete the target-only files under `.claude/agents/` or `scripts/` that the vendored host set does not carry — the bounded-deletion counterpart to `repair`; takes only the target path. |
-| `destroy`     | `void`              | Idempotent teardown — emits `destroy`, then destroys the emitter LAST.                                                                                                                   |
-
-```ts
-import { blueprint, blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
-import { createMaterializer, readTarget } from '@orkestrel/scaffold/server'
-
-const plan = blueprintToPlan(blueprint('budget', { surfaces: ['core'] }))
-const materializer = createMaterializer()
-
-// Green-field: write everything into a fresh, vacant directory.
-materializer.materialize(plan, './packages/budget-new')
-
-// Repair: audit an existing package, then write back only what drifted.
-const audit = diffPlan(
-	plan,
-	readTarget(
-		'./packages/budget',
-		plan.artifacts.map((a) => a.path),
-	),
-)
-materializer.repair(plan, audit, './packages/budget')
-
-// prune: delete only foreign files under the two bounded directories.
-const pruned = materializer.prune('./packages/budget') // deletes .claude/agents/ + scripts/ foreigns only
-pruned.removed // ['scripts/legacy-hook.sh'] — a foreign file elsewhere is left untouched
-materializer.destroy()
-```
-
-#### `SyncInterface`
-
-**(server surface.)** The impure FETCH sibling of `Materializer` — Promise-based,
-network-only. Every method reads upstream over HTTPS with a 10-second per-request timeout
-(`AbortSignal.timeout`) and bounded `concurrency` (default 6, never an unbounded
-`Promise.all`); the default COLLECT posture captures each dependency's `freshness` (`404` →
-`missing`, transport / non-2xx → `failed`) into the report, while `strict` mode instead
-throws `ScaffoldError('FETCH', …)` naming the failing URL. `pull` and `write` are the two
-halves of a sync — `pull` reads and reports (NO writes), `write` commits the fetched guides
-under the containment law. Every non-`current` `GuideSync` / `VersionSync` that has a
-discoverable cause carries it in `note` — the last attempt's transport error (with an
-`ECONNREFUSED`-style code appended when the runtime attaches one), an `HTTP <status>`, the
-fixed redirect-blocked string, or the oversized-body message — so a `failed` entry is never a
-bare unexplained verdict (an `ETIMEDOUT` behind a corporate proxy reads identically to any
-other transport fault). Guide URLs are built in the CANONICAL
-`<base>/orkestrel/<short>/refs/heads/<branch>/guides/src/<short>.md` form directly (never the
-legacy `/orkestrel/<short>/<branch>/…` shorthand raw.githubusercontent.com now 301-redirects
-from) — `redirect: 'manual'` (A1) stays a deliberate security posture, so the fix is building
-the redirect-free URL, never relaxing that policy. Every fetch is UNAUTHENTICATED — no token,
-no `Authorization` header, anywhere; every fleet repo is public, so reachability alone is the
-signal. After `destroy()` every method throws `DESTROYED`; teardown is idempotent, emitter last.
-
-| Method     | Returns                            | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `guides`   | `Promise<readonly GuideSync[]>`    | Fetch each named dependency's guide from the branch HEAD and verdict its `freshness` against an OPTIONAL `current` reference — a caller-supplied `Readonly<Record<string, string>>` of local-mirror content keyed by dependency name (the caller-supplied-reference pattern `diffPlan` uses for target content). WITH the map: a fetched guide byte-equal to its entry is `current`, differing or absent-from-map is `behind`. WITHOUT the map: a successful fetch is ALWAYS `behind` (no reference means it needs syncing). An HTTP `404` is `missing`, a transport fault `failed`, either way. Emits `guide` per resolution.                                                                                                                     |
-| `versions` | `Promise<readonly VersionSync[]>`  | Fetch each named dependency's registry `latest` and compare it to the declared `range` via `rangeToFreshness`; emits `version` per resolution.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `catalog`  | `Promise<readonly CatalogEntry[]>` | The registry-AUTHORITATIVE fleet catalog: enumerates every `@orkestrel/*` name from the org's exact package list (`-/org/orkestrel/package` — never a fuzzy search), then per name fetches its packument (`version` + a registry-path `description` fallback) and its guide (the PREFERRED `description`, its first blockquote's first paragraph). A packument failure keeps the entry degraded (`version: ''`) rather than dropping it; a guide `404` likewise STAYS LISTED (public repos make unreachability a readiness signal, not an absence) with a note like `guide unreachable (HTTP 404 — repo private or guide missing?)`. Sorted code-unit by `name`; emits `package(name, note)` per entry (`note` empty when both fetches succeeded). |
-| `pull`     | `Promise<SyncReport>`              | Read `target/package.json` (`readManifest`), resolve its declared `@orkestrel` deps (`manifestToDependencies`), READ the target's existing `guides/src/<short>.md` mirrors into the `current` reference map (absent files simply omitted), then fetch guides (WITH that map) + versions and return a `SyncReport` — so `pull`'s `GuideSync` freshness is genuinely target-relative. NO writes; emits `done`.                                                                                                                                                                                                                                                                                                                                       |
-| `write`    | `Promise<readonly string[]>`       | Write a report's fetched guides into `target/guides/src` under the containment law (filenames derived from `DEPENDENCY_NAME_PATTERN`-validated names, never a traversal); returns the written paths and emits `write` per file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `destroy`  | `void`                             | Idempotent teardown — emits `destroy`, then destroys the emitter LAST.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-
-```ts
-import { createSync } from '@orkestrel/scaffold/server'
-
-const sync = createSync() // defaults: raw.githubusercontent.com, branch main, registry.npmjs.org
-const report = await sync.pull('.') // reads ./package.json, fetches guides + versions, NO writes
-report.clean // false — a mirror or a range fell behind
-report.guides.filter((guide) => guide.freshness === 'behind') // stale vendored mirrors
-report.versions.filter((version) => version.freshness === 'behind') // out-of-date ranges
-
-const written = await sync.write(report, '.') // commit the refreshed guides under guides/src
-
-const catalog = await sync.catalog() // the registry-authoritative fleet catalog
-catalog.length // every published @orkestrel/* package
-sync.destroy()
-```
-
-## Contract
-
-These invariants hold across `src/core` + `src/server` ↔ `scaffold.md`:
-
-1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `const` / `interface` / `type`
-   row in the `## Surface` tables is a real export of the scaffold library source (core or
-   server), and every such export appears as a Surface row — exhaustive, both directions
-   (AGENTS §22). The scan covers `src/core` + `src/server` ONLY; `src/bin` is EXCLUDED — the
-   bin is an executable with no public exports. Adding, renaming, or removing a library
-   export breaks the parity gate until the doc is reconciled.
-2. **Deterministic, synchronous, immutable — in the core and the `Materializer` (§11).** Same
-   `Blueprint` + same `Group` selection → the same `Scaffolding`, every time — no clocks, no
-   randomness, no I/O in the core, nothing async. `pinPlan`'s `trace` and `hash` derive from
-   the plan's CONTENT alone (paths, origins, sources, and rendered content — everything the
-   blueprint fully determines), and the `PlanManager` mints record ids from that hash, so
-   re-adding an unchanged plan is a version no-op. The **bin** AND the server `Sync` entity
-   are legitimately Promise-based — the bin's prompt flow and `Sync`'s upstream fetches
-   orchestrate AROUND the synchronous `compile` / write, never inside them; the core and the
-   `Materializer` stay synchronous. No input is ever mutated; every builder, projection, and
-   pipeline stage returns a fresh value.
-3. **Three origins, one token boundary.** An `Artifact`'s `origin` is exhaustive and
-   load-bearing: `host` artifacts byte-copy from the vendored data root (server-only I/O, no
-   inline `content`); `template` artifacts fill a frozen `TemplateDefinition` through
-   `@orkestrel/template`'s pure `fillTemplate` with `missing: 'error'` (an unresolved token
-   fails LOUD, never silently blanks); `computed` artifacts derive from the core's own
-   manifest/exports combination logic. Only genuinely templated PROSE artifacts fill; every
-   STRUCTURAL (JSON / TS) file is `computed`, so a literal `{{…}}` in a config is never
-   mistaken for a placeholder. There is NO `TemplateManager` inside the compiler — the core
-   uses only the template package's fill LEAF and stays pure and stateless.
-4. **Fail closed at the gate.** A non-empty set of BLOCKING questions (a bad name, empty or
-   off-vocabulary `surfaces`, a malformed dependency, an override that matches no planned
-   artifact or targets a `host`-origin path) yields `complete: false`, an ABSENT `plan`, the
-   `questions` on `Scaffolding.questions`, and a `CompileFailure` coded `BLOCKED` — never a
-   throw, never a half-formed plan. A NON-blocking question (e.g. a non-vendored dependency's
-   mirror pointer) rides a COMPLETE result as an advisory. Emitting a partly-valid package
-   skeleton is worse than returning the question that blocks it.
-5. **One plan, many projections; projections never add.** `planToReview`, `planToSummary`,
-   `diffPlan`, `auditToReview`, and (on the server) `materialize` are pure views over the
-   pinned plan — the review renders exactly the plan's artifacts, the summary counts exactly
-   them, and materialization writes exactly them. `diffPlan`'s audit compares per-origin: a
-   `host` artifact by presence (or content once hydrated), a `computed` artifact by content
-   always, and a `template` artifact NEVER — birth-only starter files (source/test stubs,
-   starter guides, README) are written once by `materialize` and are legitimately outgrown, so
-   they always report `aligned` regardless of the target's presence or bytes; the build and
-   parity gates police their substance instead. Nothing downstream is authored separately, so
-   the files on disk, the review, the audit, and the summary cannot disagree with the plan or
-   one another.
-6. **The variant matrix is data (§21).** A blueprint's `surfaces` mints EVERY live variant
-   class the line carries: core-only, core+server, core+browser+server, server-only,
-   browser-only, core+browser — driving the `package.json` `exports` shape, the per-surface
-   `configs/src` files, the Vitest projects, the per-surface `src/<surface>/*` and
-   `tests/src/<surface>/*` source/test artifacts, and the conditional test-setup consequences
-   (`tests/setupServer.ts` IFF a `server` surface, `tests/setupBrowser.ts` IFF a `browser`
-   surface — `@vitest/browser-playwright` itself ships in the generated `devDependencies`
-   baseline UNCONDITIONALLY, grounded against the live exemplars rather than gated on a
-   browser surface). `SURFACE_MATRIX` is the per-surface layer; ABOVE it `blueprintToPlan`
-   applies the manifest and exports COMBINATION rules — a multi-surface package OMITS the
-   top-level `types` field, a single-variant (server-only / browser-only) retargets its lone
-   surface to the `.` root with `main` / `module` re-pointed (browser-only using flat ESM
-   conditions). Adding a surface changes the PLAN, not the compiler; every variant, including
-   the core-only single path, is one row of a table.
-7. **Mechanism, never policy + scoped mirrors (§21).** The module decides NOTHING about a
-   package's identity: the caller owns `name` / `description` / `keywords` / `dependencies`
-   and any template `overrides`; the compiler owns the rendering, the closed vocabularies,
-   the gate, the pin, and the projections. An absent override means the canonical shipped
-   default; a present override REPLACES the rendered artifact at its `path`, never partially
-   merges. Dependency guide mirrors scope by the vendored-guides law (Law #2 — one vendored
-   copy per runtime dependency): THIS repo vendors all six runtime deps' guides (contract /
-   emitter / markdown / template / terminal / console) plus `guide.md` alongside its own —
-   seven mirror files. A scaffolded package's `Dependency` therefore gets a BYTE-CORRECT
-   OFFLINE mirror only when scaffold vendors that dep's guide (the seven above); any OTHER
-   `@orkestrel` dependency yields NO fabricated mirror — the plan emits a `host`-origin
-   POINTER artifact, surfaced as a NON-blocking Question. Those shipped mirrors are the
-   OFFLINE BASELINE — correct for offline creation; the server `Sync` entity is the FRESHNESS
-   path for ANY declared `@orkestrel` dependency (vendored or not), fetching the current guide
-   and range from upstream and superseding the baseline when the network is available.
-8. **Diff-first, write-last.** `compile`, `audit`, `blueprintToPlan`, `diffPlan`,
-   `planToReview`, `planToSummary`, and `Sync.pull` are report-only; the ONLY writing acts in
-   the package are the server surface's `materialize` / `repair` / `prune` / `Sync.write`,
-   each gated behind an explicit call (and the bin's `--apply` / `--prune`, or an accepted
-   terminal confirm). The fleet flow (`scaffold fleet`) is the same shape one level up:
-   `discoverPackages` finds the repos, `hydratePlan` + `diffPlan` reports drift per repo, and
-   only a confirmed write (or `--apply`) writes. The dry-run review is the default posture
-   everywhere — you always see the plan (or the drift, or the freshness) before a byte is
-   written.
-9. **Guard totality and single-source parity (§14).** Every validator is a total `Guard` —
-   adversarial input returns `false`, never throws. `isBlueprint` / `isPlan` / `isSyncReport`
-   / the section guards are COMPILED from `blueprintShape()` / `planShape()` /
-   `syncReportShape()` through the contract package's `createContract`, so the guard, the
-   parser, the JSON Schema, and the seeded generator are lockstep by construction — an
-   off-vocabulary literal, a missing section, or an extra key fails all four identically.
-   `NAME_PATTERN` is deliberately NOT a shape refinement (contract's `compileGenerator` throws
-   on a pattern-constrained string it cannot sample), so `generate` stays satisfiable; the
-   name law lives in the SEMANTIC pass (`validateBlueprint`, the gate, and `createBlueprint`),
-   not the compiled contract.
-10. **Coded errors (§12).** Every throw out of this module is a `ScaffoldError` with a
-    machine-readable code (`INVALID` / `DESTROYED` from the core, `TARGET` / `WRITE` / `FETCH`
-    from the server) and a `context` carrying the offending path, field, or URL; `BLOCKED` is
-    a contained failure marker on a `Scaffolding`, never thrown, and in `Sync`'s default
-    collect mode a fetch fault is a captured `freshness`, not a throw. `catch` blocks narrow
-    with `isScaffoldError`, never `as`.
-11. **Observation is a pure side-channel (§13).** The `Compiler` owns a typed emitter
-    (`CompilerEventMap` — `compile` / `audit` / `block` / `error` / `destroy`); the
-    `PlanManager`, the server `Materializer`, and the server `Sync` own their own. Every event
-    is emitted directly and synchronously, AFTER the outcome it reports; only complete
-    `compile()` calls emit `compile`, and a gated one emits `block` instead. `audit()` emits
-    `audit` after its outcome and NEVER `compile`; a gated `audit()` emits `block` then
-    `audit`. A stage throw inside `compile` / `audit` is CONTAINED as a `CompileFailure` on the
-    result AND emitted on the domain `error` event for observability. Listener isolation is the
-    emitter's own — a throwing listener routes to the `error` OPTION handler, never onto the
-    domain `error` event. `destroy()` is idempotent and tears the emitter down LAST.
-12. **Network is server/bin-only.** ONLY the server `Sync` entity touches the network — the
-    core, the `Compiler`, the `Materializer`, every projection, and every guard are
-    network-free. `Sync` fetches over HTTPS with a per-request 10-second timeout
-    (`AbortSignal.timeout`), no retries by default (opt in via `retries`), bounded concurrency
-    (default 6, never an unbounded `Promise.all`), and TLS / proxy configured through the
-    ENVIRONMENT (never a verification bypass); it reads guides from `raw.githubusercontent.com`
-    and versions from `registry.npmjs.org` (both `base`s injectable). A failed fetch is EITHER
-    a thrown `ScaffoldError('FETCH', …)` naming the URL (under `strict`) OR a captured
-    `freshness: 'failed'` (the default collect mode) — never an unhandled rejection.
-13. **DOC ↔ SOURCE method bijection.** Every behavioral interface's `## Methods` table lists
-    exactly its public methods (call-signature members) — exhaustive, both directions — and
-    each implementing class exposes the same public methods, no more (AGENTS §22). The bin
-    implements no interface and is excluded, as in invariant 1.
-
-This package is the line's sole scaffolding and fleet-conformance tool: it renders the
-whole per-surface variant matrix from versioned `TemplateDefinition` data and trues the
-fleet through `scaffold fleet`, so a convention change is a version bump here rather than
-a hand-edit in every repo's copy. Every repo's shared artifacts flow from its vendored host.
-
-Deliberately absent: any **git** operation (no `git init` / `git clone` — the caller prepares
-the vacant target, and the package stops at the file boundary), any **npm** INVOCATION (no
-`npm install`, no lockfile generation — the caller runs the gates; the `Sync` entity's read
-of registry version METADATA is an HTTPS GET, not an npm invocation), any **LLM** (the
-authoring judgment is the caller's, per invariant 7), a foreign template ecosystem (the
-module renders only the `@orkestrel` line's own conventions, versioned in this package),
-asynchronous compilation, and plan persistence (`JSON.stringify(plan)` out, `parsePlan` back
-in). Three sibling engines were considered and REJECTED, each for a concrete reason:
-**`@orkestrel/reason`** — the gate is regex / set-membership / path-matching checks a reason
-`Check`'s comparisons cannot express, and facet deduction already IS `SURFACE_MATRIX` plus the
-manifest/exports combination rules, so there is no inference gap for a reasoner to fill;
-**`@orkestrel/interpret`** — there is no natural-language input to interpret and no
-`ReasonResult` to render; and **`@orkestrel/relation`** — a plan's artifacts are one ORDERED
-list, fully served by the guards, `diffPlan`, and the summary, so no graph layer is needed
-(revisit only if cross-artifact dependency edges ever earn their keep).
-
-## Patterns
-
-### Compiling a package with full variant control
-
-The forward path end to end: blueprint → draft → gate → pin → materialize. The
-`SURFACE_MATRIX` selects the `exports` shape, the per-surface configs, and the test projects
-from the declared `surfaces`, so one call scaffolds any variant.
-
-```ts
-import { blueprint, createCompiler, dependency } from '@orkestrel/scaffold'
-import { createMaterializer } from '@orkestrel/scaffold/server'
-
-const compiler = createCompiler()
-const scaffolding = compiler.compile(
-	blueprint('database', {
-		description: 'A minimal-interface data layer. Part of the @orkestrel line.',
-		keywords: ['database', 'storage', 'query'],
-		surfaces: ['core', 'browser', 'server'], // the full three-surface variant
-		dependencies: [dependency('@orkestrel/contract', '^0.0.5')],
-	}),
-)
-
-scaffolding.complete // true
-scaffolding.plan?.groups // ['manifest', 'configs', 'source', 'tests', 'guides', 'docs', 'orchestration']
-
-if (scaffolding.plan) {
-	const materializer = createMaterializer()
-	materializer.materialize(scaffolding.plan, './packages/database') // green-field, vacant target
-	materializer.destroy()
-}
-compiler.destroy()
-```
-
-### Selecting artifact groups — partial generation
-
-`compile`'s optional `Group[]` scopes the plan to a subset — regenerate just the configs and
-guides after a convention bump, leaving hand-written source untouched.
-
-```ts
-import { blueprint, createCompiler } from '@orkestrel/scaffold'
-
-const compiler = createCompiler()
-const spec = blueprint('sqlite', { surfaces: ['server'] })
-
-const scaffolding = compiler.compile(spec, ['configs', 'guides']) // only these two groups
-scaffolding.plan?.artifacts.every(
-	(artifact) => artifact.group === 'configs' || artifact.group === 'guides',
-) // true
-compiler.destroy()
-```
-
-### Failing closed — the blocking path
-
-An off-`NAME_PATTERN` name (or an override that matches nothing, or one targeting a host path)
-is a BLOCKING question: the gate stops, no plan is pinned, and the `Scaffolding` carries the
-question — the caller fixes it and re-compiles. No half-formed package ever leaves the
-pipeline.
-
-```ts
-import { blueprint, createCompiler } from '@orkestrel/scaffold'
-
-const compiler = createCompiler()
-const scaffolding = compiler.compile(blueprint('My-Router', { surfaces: ['core'] }))
-
-scaffolding.complete // false — the gate failed closed
-scaffolding.plan // undefined — nothing to project, deliberately
-scaffolding.questions // [{ field: 'name', text: 'Name must match ^[a-z][a-z0-9-]*$', blocking: true }]
-scaffolding.failures // [{ stage: 'gate', code: 'BLOCKED', message: '1 blocking question' }]
-compiler.emitter.on('block', (questions) => questions.length) // fires instead of `compile`
-compiler.destroy()
-```
-
-### Auditing an existing package — the conformance engine
-
-The audit is pure core: the server reads the target's current content (`readTarget`), the
-core diffs it against the plan (`diffPlan`), and the drift comes back as data — the
-per-file conformance checklist, mechanized. No byte is written.
-
-```ts
-import { auditToReview, blueprint, blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
-import { readTarget } from '@orkestrel/scaffold/server'
-
-const plan = blueprintToPlan(blueprint('abort', { surfaces: ['core'] }))
-const current = readTarget(
-	'./packages/abort',
-	plan.artifacts.map((artifact) => artifact.path),
-)
-
-const audit = diffPlan(plan, current)
-audit.clean // false — the repo drifted from the line's conventions
-audit.findings.filter((finding) => finding.drift === 'stale') // e.g. [{ path: '.oxfmtrc.json', … }]
-auditToReview(audit) // '# Drift — abort\n## Stale\n| Path | Group |\n…'
-```
-
-`diffPlan` compares per origin, not uniformly across the whole plan. A `computed` artifact
-whose rendered content the target does not match is `stale`; one the target lacks is
-`missing` — the generated configs/manifest are content-aware canon, and gate the audit. A
-`template` artifact is BIRTH-ONLY and AUDIT-EXEMPT: it always reports `aligned`, whatever the
-target holds or lacks. Starter files — source/test stubs, starter guides, README — are
-written ONCE by `materialize` and are legitimately outgrown (real code replaces the stub, a
-hand-authored guide replaces the scaffold prose); content- or presence-comparing a mature
-package against its birth stub is a category error the build and parity gates already police,
-and it would make an unscoped `repair` a data-loss footgun (a stub overwrite clobbering real
-code). A target file the plan does not own is `foreign`. A `host`-origin artifact carries no
-`content` on a RAW plan (the pure core never read the canonical host bytes), so an
-un-hydrated audit sees it by PRESENCE only — `missing` or `aligned`, never `stale`; running
-the server's `hydratePlan` first fills each `host` artifact's `content` from the resolved
-host root, so the SAME `diffPlan` becomes content-aware and a drifted host file surfaces as
-`stale` too. A
-directory-shaped host artifact (`.claude`) has no single storage file for `hydratePlan` to
-read, so it stays presence-only regardless — a KNOWN, documented boundary, not a promise:
-`pruneTargets` separately covers UNEXPECTED files under it (the prune allowlist scan), but a
-byte-modified file that IS on the allowlist inside `.claude` is not detected by either path.
-
-### Repairing drift — write only what changed
-
-Repair chains the audit into the server surface: `materialize` refuses a non-vacant target,
-so repairing an EXISTING package goes through `repair`, which writes only the `missing` /
-`stale` artifacts the audit named.
-
-```ts
-import { blueprint, blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
-import { createMaterializer, readTarget } from '@orkestrel/scaffold/server'
-
-const plan = blueprintToPlan(blueprint('abort', { surfaces: ['core'] }))
-const audit = diffPlan(
-	plan,
-	readTarget(
-		'./packages/abort',
-		plan.artifacts.map((a) => a.path),
-	),
-)
-
-const materializer = createMaterializer()
-const result = materializer.repair(plan, audit, './packages/abort') // only the drifted files
-result.written // ['.oxfmtrc.json', 'configs/src/tsconfig.core.json'] — nothing aligned is touched
-materializer.destroy()
-```
-
-### Layering template overrides
-
-Mechanism-never-policy in practice: the package renders the canonical defaults; a caller who
-needs a bespoke file supplies an `override` whose `content` replaces the rendered artifact at
-that path. An absent override means the default — the caller opts into exactly the files they
-want to own. An override that matches NO planned artifact, or that targets a `host`-origin
-path (host bytes are governed by the mirror, not per-package overrides), is a BLOCKING
-question — a typo'd path fails the gate closed rather than silently adding a stray file.
-
-```ts
-import { blueprint, blueprintToPlan, override } from '@orkestrel/scaffold'
-
-const readme = '# @orkestrel/router\n\nA hash-router with a hand-written readme.\n'
-const plan = blueprintToPlan(
-	blueprint('router', { surfaces: ['core'], overrides: [override('README.md', readme)] }),
-)
-plan.artifacts.find((artifact) => artifact.path === 'README.md')?.content === readme // true
-```
-
-### Serving blueprints at a tool boundary
-
-The shape DSL payoff: the SAME declaration that compiled the guard serves the tool schema and
-the test data — an MCP tool that accepts blueprints cannot drift from the validator that
-checks them, and the plan it returns is JSON all the way down.
-
-```ts
-import { blueprintShape, blueprintToPlan, parseBlueprint } from '@orkestrel/scaffold'
-import { createContract, schemaToParameters, seededRandom } from '@orkestrel/contract'
-
-const contract = createContract(blueprintShape())
-
-const tool = {
-	name: 'scaffold_package',
-	description: 'Compile an @orkestrel package blueprint into a plan.',
-	parameters: schemaToParameters(contract.schema), // the JSON Schema, no `as` anywhere
-}
-
-// In the handler: the string boundary is parseBlueprint; the payload is then trusted typed data.
-function handle(argument: string): string {
-	const incoming = parseBlueprint(argument)
-	return incoming ? blueprintToPlan(incoming).hash : 'Rejected: not a valid blueprint.'
-}
-
-contract.generate(seededRandom(7)) // a reproducible on-contract blueprint — the test fixture, for free
-```
-
-### Targeted sync in an existing repo
-
-`Sync.pull` reads the target's `package.json`, resolves its declared `@orkestrel`
-dependencies, and fetches each one's upstream guide and registry version — reporting freshness
-as data, writing nothing. `syncToReview` renders it; only an explicit `write` (the bin's
-`--apply`) commits the refreshed mirrors. To scope to a dependency SUBSET, resolve with
-`manifestToDependencies` and call `guides(deps)` / `versions(deps)` directly.
-
-```ts
-import { syncToReview } from '@orkestrel/scaffold'
-import { createSync } from '@orkestrel/scaffold/server'
-
-const sync = createSync({ concurrency: 6 })
-const report = await sync.pull('.') // all declared @orkestrel deps
-syncToReview(report) // '# Sync — 2 behind\n## Guides\n| Name | Freshness |\n…'
-report.guides.filter((guide) => guide.freshness !== 'current') // the stale / missing mirrors
-
-if (report.failed === 0) await sync.write(report, '.') // refresh the vendored mirrors under guides/src
-sync.destroy()
-```
-
-### Auditing with live drift
-
-`scaffold audit` is a WHOLE-PLAN conformance report — host AND generated artifacts alike, unlike
-`repair`'s host-only scope — layering TWO drift sources: the structural `diffPlan` (the plan vs
-the target on disk) and — under `--live` — the `Sync` freshness pass (each dependency's guide vs
-upstream HEAD, each range vs the registry latest). Any drift is a nonzero exit, so it doubles as
-a CI conformance gate. `audit` NEVER writes.
-
-```ts
-import { blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
-import { createSync, readTarget } from '@orkestrel/scaffold/server'
-
-const plan = blueprintToPlan(spec) // `spec` — the blueprint reconstructed for this repo
-const structural = diffPlan(
-	plan,
-	readTarget(
-		'.',
-		plan.artifacts.map((artifact) => artifact.path),
-	),
-)
-
-// --live: `pull` reads the target's own guides/src mirrors into the reference map ITSELF, so
-// its GuideSync freshness is genuinely target-relative (a target-free `guides(deps)` with no
-// reference would instead read every fetched guide as 'behind').
-const sync = createSync()
-const report = await sync.pull('.')
-sync.destroy()
-
-const drifted =
-	!structural.clean ||
-	report.guides.some((guide) => guide.freshness !== 'current') ||
-	report.versions.some((version) => version.freshness !== 'current')
-process.exitCode = drifted ? 1 : 0 // ANY drift fails the CI gate
-```
-
-### Offline and failure posture
-
-`Sync` is built for an enterprise network. Each request carries a 10-second
-`AbortSignal.timeout`, there are no retries by default (opt in with `retries`), concurrency is
-bounded (default 6, never an unbounded `Promise.all`), and TLS / proxy come from the
-environment (never a verification bypass). The DEFAULT posture is COLLECT-and-report: a
-per-dependency failure becomes a captured `freshness` (`404` → `missing`, transport →
-`failed`) on the `SyncReport`, so one unreachable dep never sinks the whole run. `strict` flips
-a failure into a thrown `ScaffoldError('FETCH', …)` that names the URL — for a CI gate that
-must go red on any network fault.
-
-```ts
-import { isScaffoldError } from '@orkestrel/scaffold'
-import { createSync } from '@orkestrel/scaffold/server'
-
-// Collect mode (default): partial failure is DATA, not a throw.
-const collect = createSync({ registry: { base: 'https://registry.example.internal' } })
-const report = await collect.pull('.')
-report.failed // 1 — one dep's registry was unreachable; the rest resolved
-report.versions.find((version) => version.freshness === 'failed') // the captured failure
-collect.destroy()
-
-// Strict mode: any fetch fault throws, naming the URL — the CI-gate posture.
-const strict = createSync({ strict: true, retries: 2 })
 try {
-	await strict.pull('.')
-} catch (error) {
-	if (isScaffoldError(error)) error.code // 'FETCH'
+	commitWriteTransaction(transaction, ['package.json'])
+} catch {
+	restoreFiles(transaction, ['package.json'])
+	discardWriteTransaction(transaction)
 }
-strict.destroy()
+
+replaceDirectory('./staged', './target', './backup')
+resolveGuideWrites([], './packages/router') // preflighted destinations, before any write
 ```
 
-### The `scaffold` bin — six subcommands, one build target
-
-The CLI is its OWN build target — `src/bin/scaffold.ts`, an executable, not a barrel. It
-opens with a `#!/usr/bin/env node` shebang, strips a single leading literal `--` off `argv`
-(npm's passthrough residue, mangled by PowerShell on Windows — `npm run scaffold -- new x`
-still parses as `new x`), parses the remainder with `node:util`'s `parseArgs` (no foreign arg
-parser), widens Node's trusted-issuer set to the OS certificate store via
-`trustSystemCertificates` (feature-detected, try/catch no-op, never touching
-`rejectUnauthorized` — so `fetch` survives a corporate TLS-inspecting proxy the way npm
-and browsers already do), and dispatches on SIX subcommands: **`new`** creates a package
-(resolving any `--deps` — `@orkestrel/*` runtime deps, landing in `Blueprint.dependencies`
-— to the registry `latest` → `^latest` ranges, fetching their guides into the plan; a
-range-less `--deps` name the registry could not resolve (`freshness` `'missing'`/`'failed'`,
-or an empty `latest` — `createSync()` is non-strict here, it never throws on its own) is a
-hard failure BEFORE any write, rather than silently landing an unwritable `"^"` range in
-`package.json` with exit `0` (U12c FIX 1); on a real terminal, `--deps`'s free-text prompt
-is an interactive question (Q1) taking `@orkestrel` SHORT names (`contract, emitter`; a bare
-token normalizes to `@orkestrel/<token>`, an already-prefixed one passes through unchanged)
-and validates each against the vendored `@orkestrel` catalog embedded in
-`.claude/agents/orkestrel.md` (re-asking, with a nearest-match suggestion, on an unresolved
-token — degrading to shape-only `DEPENDENCY_NAME_PATTERN` validation with a one-line note
-when the vendored catalog itself cannot be resolved) — TTY-only, `--deps` works identically
-off a terminal or under `--json`. Other npm packages are NOT a `new`-time concept — hand-add
-them to the generated `package.json`'s `devDependencies` after scaffolding;
-`deriveBlueprint`'s `extras` round-trip (below) recompiles them back into the plan on the
-next `audit`/`repair`/`pull`, so a hand-added `devDependencies` entry stays audit-clean
-without the CLI ever collecting it), **`pull`**
-refreshes an existing repo's vendored dependency mirrors and
-reports range drift, **`audit`** / **`repair`** / **`fleet`** all reconstruct the target's
-`Blueprint` with `deriveBlueprint` (never a hand-built stand-in) before compiling — **`audit`**
-runs the structural conformance check — hydration-aware, so host drift is content-detectable,
-not presence-only — (plus, under `--live`, guide-vs-HEAD and range-vs-latest freshness), and
-NOW MERGES the prune scan (`pruneTargets`) into its report: an unexpected file under
-`.claude/agents/` or `scripts/` is a real `foreign` row, its count included under `--json`,
-and it counts as drift like any other finding — `audit` exits `1` on a foreign file exactly as
-it does on a `missing` / `stale` one, so an unaudited stray file in a fleet repo is never
-invisible to the CI gate. `audit` accepts an optional `--groups a,b` to restrict the compiled plan to the listed `Group`s
-(validated against `GROUPS`; an unrecognized name is a USAGE error — exit `2`, not a coded
-failure) — default absent compiles the FULL plan, unchanged; **`repair`** is the HOST-RESTORATION tool, full
-stop — after compiling, it filters the plan to `origin === 'host'` artifacts ONLY (including
-`.github/workflows/ci.yml` — single-target explicit intent keeps full HOST scope, unlike
-`fleet`) BEFORE hydrate/diff/apply, so a mature repo's hand-written `src` / `tests` / `guides`
-/ `package.json` is NEVER overwritten with a generated stub — writes a SINGLE target's
-missing + stale HOST artifacts and, behind a SECOND confirm (or `--prune`), deletes
-target-only files under `.claude/agents/` and `scripts/` ONLY — the preview (and `fleet`'s
-equivalent preview) LISTS the exact paths `pruneTargets` found rather than a bare count, the
-confirm states the TRUE count derived from that same list, and a count of `0` prints
-"no unexpected files to delete" and skips the prune question entirely (there is nothing to
-ask about) — `--prune` reaches this scan/preview/confirm/deletion flow whenever there is prune
-work to do, REGARDLESS of whether the host itself audits clean: a clean-host repo with a
-planted foreign file still gets pruned; only a clean host WITH nothing to prune skips straight
-to the "nothing to write" verdict. **`repair` WITHOUT `--prune` reports and restores template-owned (host-origin)
-files only** — its own audit is the raw `diffPlan` over the host-scoped plan, so it never
-reports (or acts on) unexpected files at all, an asymmetry with `audit`'s merged, honest
-foreign-aware report that is defensible (repair's scope is host-restoration, not deletion) but
-worth naming explicitly: run `audit` for the honest whole-picture report including unexpected
-files, and `repair --prune` to actually delete them. And **`fleet`** is the fleet
-verb: it walks the CURRENT WORKING DIRECTORY's IMMEDIATE CHILDREN via `discoverPackages`
-(never the cwd itself, and there is NO `--root` flag at all — the cd-model IS the interface:
-the caller `cd`s into the folder that CONTAINS the checkouts first, exactly as `repair` is the
-one-repo counterpart) → per-repo host-origin audit/repair, printing a per-repo AND total drift
-table and exiting nonzero on residual drift — fleet-wide writes EXCLUDE
-`.github/workflows/ci.yml` from their scope (repo-flavored CI genuinely diverges across two
-live repos in the fleet; a fleet write must never clobber that divergence), while
-single-target `repair` keeps FULL host scope, including `ci.yml`, since it operates on one
-repo the caller is intentionally editing. **`new`** / **`audit`** / **`repair`** / **`fleet`**
-default their read-only source to the resolved `hostRoot()` (the package's own vendored
-`dist/host`) and accept a repeatable `--from` to override it (a sibling repo's checkout, for
-fleet-wide mirroring; `--from` is UNCONFINED — a read-only source sits outside the
-write-destination containment law below) — the DEFAULT host degrades silently to
-presence-only auditing when it cannot resolve (dev ergonomics), but an EXPLICITLY-passed
-`--from` that fails to resolve to usable data is a coded `TARGET` failure on `audit` /
-`repair` / `fleet`, never a silent downgrade, since the caller named that source on purpose.
-**`catalog`** is the sixth: its default source is the npm REGISTRY (`Sync.catalog()`), the
-AUTHORITATIVE package list, sourced UNAUTHENTICATED (every fleet repo is public); the SAME
-repeatable `--from` (unified — the prior separate `--host` name and catalog-only `--root` name
-are BOTH gone) ADDS local-only discoveries the registry doesn't know about yet (registry wins
-overlapping `version`, the local guide's description wins overlapping `description` when a
-`--from` root carries one — it may be ahead of GitHub); `--offline` skips the registry/GitHub
-entirely and sources `--from`(s) only (default `[process.cwd()]`) — the prior, fully-local
-behavior, now opt-in rather than the silent default (a single stale `--from` can no longer
-quietly shrink the catalog to whatever that one root sees). The merged/local entries are
-spliced (via the pure core's `catalogToBlock`) into the fleet package catalog table embedded
-in `<target>/.claude/agents/orkestrel.md` between its `<!-- catalog:start -->` /
-`<!-- catalog:end -->` markers — a `target` missing those markers is a coded `TARGET` failure,
-never a silent skip — and a SHRINK WARNING prints (dry-run and write alike) whenever the new
-table has fewer rows than the one currently embedded, so an accidental catalog shrink is
-never silent either. The TERMINAL preview (`catalogTable`, printed before the apply prompt)
-lists Package + Version only, one line per package — descriptions can run long and would wrap
-each preview row across the terminal, so they stay out of the preview and appear only in the
-written `orkestrel.md` table and in `--json`'s entries. It narrates through `@orkestrel/console` and
-prompts interactively through `@orkestrel/terminal`'s `createTerminal` when a required argument
-is absent, but ONLY on a real TTY (§ non-TTY ceiling below); a piped run instead falls back to
-its flags, or fails a coded USAGE error naming which flag to pass.
-
-An unknown verb (`scaffold sync`, `scaffold mirror`, or any typo) resolves through the
-did-you-mean helper — `sync` and `mirror` are the two RENAMED former verbs and print an
-EXPLICIT redirect (`'sync' has been renamed — use 'scaffold pull'`,
-`'mirror' has been renamed — use 'scaffold fleet'`) rather than a fuzzy guess; every other
-unrecognized verb still gets the nearest-match suggestion. Either way it is a USAGE error —
-exit `2`.
-
-Dry-run is the default posture everywhere. On a real terminal, every WRITE verb PREVIEWS its
-plan (or drift, or freshness) and then ASKS — one confirm question, default **No**; `repair`'s
-(and `fleet`'s) prune deletion sits behind a SECOND default-**No** question, asked only once
-the first write is accepted and ONLY when `pruneTargets` found at least one unexpected file
-(a `0` count skips the question — nothing to ask about, see the prune-UX paragraph above).
-
-`audit` NEVER writes — not even under `--apply` or `--yes` — full stop. Those two flags gate
-ONLY the plain-old `resolveApply` write-confirm every OTHER verb reads; `audit` never calls it
-for itself, so passing them to `audit` changes nothing about `audit`'s own read-only pass.
-What `audit` DOES offer, purely as an INTERACTIVE convenience, is a repair HANDOFF — a confirm
-question asking whether to launch a real `repair` run on the audited target — and that handoff
-is gated STRICTLY on the session being a real TTY. `--apply` / `--yes` are NOT handoff consent:
-on a non-TTY session (any piped/CI run, `--json` or not) the handoff is never even offered,
-regardless of which flags were passed — the flags that DO reach the handoff are the ones
-`audit` forwards to the `repair` run it launches AFTER the human accepts the question, exactly
-as if `repair` had been invoked directly. The handoff is offered when there is host/template-
-origin (shared-file) drift, OR when there are unexpected (foreign) files AND `--prune` was
-passed (a repair without `--prune` cannot delete a foreign file, so offering the handoff for
-foreign-only drift without `--prune` would be a dead end that still exits `1`) — its question
-names exactly what will happen (`N template-owned files have drift`, plus `and M unexpected
-files will be deleted` only when `--prune` is active and there are foreign files to delete),
-never promising a deletion it will not perform. When foreign files exist but the handoff can't
-help them (no `--prune`, or no handoff offered at all — e.g. non-TTY, or no owned drift and no
-`--prune`), `audit` instead prints a plain hint pointing at `scaffold repair --prune`.
-Generated-file-only drift never offers a handoff either way — `repair` cannot fix it, so
-`audit` prints a plain note that those files are generated instead. After an ACCEPTED handoff,
-`audit` re-diffs the FULL plan (not just the host-scoped slice `repair` wrote) and exits `1` if
-ANY drift remains — e.g. the generated-file drift `repair` structurally cannot touch — so a
-green handoff always means the WHOLE target is clean, never just the host-owned slice. A
-`ctrl-c` at any prompt prints `cancelled — nothing written` and exits `1` — an interrupted run
-is never mistaken for a clean one. `--yes` pre-answers every OTHER verb's write/prune prompts
-affirmatively, so a scripted run never blocks on a TTY that will never come; `--apply` goes
-further for those verbs, skipping the ask ENTIRELY and writing unasked, on a terminal or off
-one alike.
-
-**The non-TTY prompt ceiling.** A non-interactive session (piped stdin, CI, any non-TTY) issues
-AT MOST ONE prompt EVER — the single write confirm above. Any SECOND question a verb would
-otherwise ask on a terminal (the prune confirm) instead resolves straight to its safe default
-(never prune) and prints a one-line explanation of why it was skipped, rather than blocking on
-input that will never arrive; `audit`'s repair-handoff question is not a "second prompt" that
-degrades this way — it is TTY-ONLY from the start (see above), so a non-TTY `audit` never asks
-it at all, degrading straight to the plain hint/note instead. A REQUIRED input missing on a
-non-TTY session (e.g. `new` with no name and no `--surfaces`) is a USAGE error — exit `2` —
-naming the flag to pass, directing the human to either run the verb bare on a real terminal or
-supply the flag; it is never silently defaulted. Full multi-prompt guidance (the name prompt,
-the surfaces checkbox, the write confirm, the prune confirm, the handoff offer) is TTY-ONLY — a
-non-TTY session never sees more than the one write confirm, and `--json` (which never prompts
-at all, TTY or not) is the strictest case of this ceiling.
-
-`--json` emits EXACTLY ONE JSON value per verb on stdout — the same serializable contract each
-verb already returns (`SyncReport` for `pull`, `Audit` for `audit` / `repair` — now including
-the merged foreign-file data, plus a `live` field mirroring the freshness verdict when `--live`
-was passed to `audit` — `{ entries, drift, shrink? }` for `catalog`, a fleet drift array for
-`fleet`) — with NO prose alongside it, and implies non-interactive (no prompt, ever, under
-`--json`; combine with `--apply` to also write). EVERY path emits exactly one JSON value under
-`--json` — including an unknown-verb usage error and any otherwise-unexpected failure — as a
-single error envelope (`{ error: { code, message } }`) whose `code` carries the real
-`ScaffoldError` code (or `USAGE` for a bad flag / unknown verb), never a bare stderr line that
-breaks the "exactly one JSON value" contract. Every
-write destination (`new`'s resolved target, `--target` on `pull` / `audit` / `repair` /
-`catalog`, and `fleet`'s cwd-relative per-repo targets) is confined to the current working
-directory — equal to it or nested beneath — so the CLI is safe to run as a global command
-anywhere; a read-only source (`--from`) is EXEMPT from that containment law, and an escaping
-destination is a coded `INVALID` failure, never a silent clamp. Exit codes are UNIFORM across
-every verb — `0` clean, `1` drift or failure (including a cancelled prompt), `2` usage — and
-`pull`'s prior posture of exiting `0` on an unresolved failure outside `--strict` is GONE: any
-drift or failure now exits `1` regardless of `--strict` (`--strict` still additionally THROWS
-`ScaffoldError('FETCH', …)` on a network fault, rather than merely exiting nonzero).
+### Server boundary parsing and guards
 
 ```ts
-// The `#!/usr/bin/env node` shebang is re-emitted by the build's `output.banner`, not source.
-import { parseArgs } from 'node:util'
+import { hasOnlyDataProperties, isDenseDataArray, isEmitterErrorHandler } from '@orkestrel/scaffold'
 import {
-	blueprint,
-	blueprintToPlan,
-	createCompiler,
-	dependency,
-	diffPlan,
-	planToReview,
-	planToSummary,
-	SURFACES,
-	syncToReview,
-} from '@src/core'
-import {
-	createMaterializer,
-	createSync,
-	deriveBlueprint,
-	discoverPackages,
-	hostRoot,
-	hydratePlan,
-	pruneTargets,
-	readTarget,
-} from '@src/server'
-import { createReporter, createSpinner } from '@orkestrel/console'
-import { createServerSink } from '@orkestrel/console/server'
-import { createTerminal } from '@orkestrel/terminal/server'
+	isCatalogAllowance,
+	isCatalogDescription,
+	isDependencyData,
+	isFilesystemPath,
+	isHostManifest,
+	isManifestEntry,
+	isMaterializerEventHooks,
+	isMissingPathError,
+	isPortablePath,
+	isReservedTargetPath,
+	isSensitiveHostPath,
+	isSyncEventHooks,
+	isTerminalText,
+	isWritePrecondition,
+	materializerOptionsContract,
+	materializerOptionsShape,
+	parseFilesystemPaths,
+	parseMaterializerOptions,
+	parsePortablePaths,
+	parseSyncBase,
+	parseSyncBranch,
+	parseSyncCurrent,
+	parseSyncDependencies,
+	parseSyncOptions,
+	parseWritePreconditions,
+	syncGuideOptionsShape,
+	syncOptionsContract,
+	syncOptionsShape,
+	syncRegistryOptionsShape,
+} from '@orkestrel/scaffold/server'
 
-const { values, positionals } = parseArgs({
-	allowPositionals: true,
-	options: {
-		surfaces: { type: 'string' },
-		deps: { type: 'string' },
-		target: { type: 'string' },
-		from: { type: 'string', multiple: true },
-		apply: { type: 'boolean', default: false },
-		yes: { type: 'boolean', default: false },
-		json: { type: 'boolean', default: false },
-		strict: { type: 'boolean', default: false },
-		live: { type: 'boolean', default: false },
-		prune: { type: 'boolean', default: false },
-		offline: { type: 'boolean', default: false },
-		groups: { type: 'string' },
-	},
-})
+declare const caught: unknown
 
-const sink = createServerSink()
-const reporter = createReporter({ sink, width: sink.columns })
-const [command] = positionals // 'new' | 'pull' | 'audit' | 'repair' | 'fleet' | 'catalog'
-const target = values.target ?? '.'
-const from = values.from ?? []
-const host = from[0] ?? hostRoot() // default: the package's own vendored dist/host
-const materializerOptions = from[0] ? { host: from[0] } : {}
-const terminal = createTerminal()
+syncGuideOptionsShape()
+syncRegistryOptionsShape()
+syncOptionsShape()
+materializerOptionsShape()
+syncOptionsContract.parse({ concurrency: 4 })
+materializerOptionsContract.parse({ host: './dist/host' })
 
-// Every write verb shares this: --apply skips the ask entirely; --json NEVER prompts and
-// NEVER writes on its own (json without --apply is always a pure dry-run, regardless of
-// --yes — json + apply is the only way to write under --json); --yes auto-answers yes on
-// a non-json run; otherwise only a real terminal ever asks (a non-TTY session here is the
-// ONE prompt the non-TTY ceiling allows).
-async function confirmWrite(message: string): Promise<boolean> {
-	if (values.apply) return true
-	if (values.json) return false
-	if (values.yes) return true
-	try {
-		return await terminal.confirm({ message, default: false })
-	} catch {
-		reporter.status('error', 'cancelled — nothing written')
-		process.exit(1)
-	}
-}
+parseSyncOptions({ guides: { branch: 'main' }, registry: { timeout: 5_000 } })
+parseMaterializerOptions({ host: './dist/host' })
+parseSyncBase('registry.npmjs.org') // 'https://registry.npmjs.org'
+parseSyncBranch('main')
+parseSyncCurrent({ '@orkestrel/contract': '# contract\n' }, ['@orkestrel/contract'], 16_777_216)
+parseSyncDependencies([{ name: '@orkestrel/contract', range: '^0.0.7' }], false)
+parsePortablePaths(['src/core/index.ts'], 1_000)
+parseFilesystemPaths(['./packages'], 1_000)
+parseWritePreconditions([{ path: 'package.json', shape: 'absent' }], 1_000)
 
-// The SECOND, prune-only confirm — never bundled into confirmWrite's question, and only
-// ever asked once (the non-TTY ceiling: a second question off a real terminal instead
-// resolves to its safe default with a printed explanation, never a second prompt).
-async function confirmPrune(target: string, message: string): Promise<readonly string[]> {
-	const found = pruneTargets(target, host) // the exact paths the preview already listed
-	if (found.length === 0) return [] // "no unexpected files to delete" — no question asked
-	if (values.apply || values.prune) return found
-	if (values.json || values.yes) return values.yes ? found : []
-	if (!terminal.isTTY) {
-		reporter.status('info', 'non-TTY: skipping the second prune question — defaulting to No')
-		return []
-	}
-	return (await confirmWrite(message)) ? found : []
-}
-
-// --json emits exactly one JSON value (the verb's own serializable contract), no prose.
-function emit(value: unknown, prose: () => void): void {
-	if (values.json) reporter.line(JSON.stringify(value))
-	else prose()
-}
-
-if (command === 'pull') {
-	const sync = createSync({ strict: values.strict })
-	const report = await sync.pull(target)
-	emit(report, () => reporter.line(syncToReview(report)))
-	if (!report.clean && (await confirmWrite('Write refreshed guide mirrors?'))) {
-		await sync.write(report, target)
-	}
-	sync.destroy()
-	process.exit(report.clean ? 0 : 1) // uniform: any drift/failure is nonzero, --strict or not
-} else if (command === 'audit') {
-	// deriveBlueprint reconstructs the target's spec from its own package.json + src/<surface>/ dirs.
-	const plan = hydratePlan(blueprintToPlan(deriveBlueprint(target)), host)
-	const audit = diffPlan(
-		plan,
-		readTarget(
-			target,
-			plan.artifacts.map((a) => a.path),
-		),
-	)
-	// The prune scan MERGES into the audit report: `pruneTargets`'s count becomes `audit.foreign`
-	// (a real finding, not a structurally-always-zero placeholder), counted toward drift — audit
-	// exits 1 on a foreign file exactly like a missing/stale one — and carried under --json.
-	const foreignPaths = pruneTargets(target, host)
-	const merged = {
-		...audit,
-		foreign: foreignPaths.length,
-		clean: audit.clean && foreignPaths.length === 0,
-	}
-	emit(merged, () => reporter.line(planToReview(plan)))
-	// The handoff is a TTY-ONLY interactive convenience — `values.apply` / `values.yes` are
-	// NEVER handoff consent (audit itself never writes on their account; they only gate the
-	// SEPARATE `repair` run launched below). It is offered when there is host/template-origin
-	// drift, OR foreign files AND `--prune` was passed (a repair without `--prune` cannot
-	// delete a foreign file, so offering the handoff for foreign-only drift without `--prune`
-	// would be a dead end). Generated-only drift never offers a handoff either way.
-	const originOf = new Map(plan.artifacts.map((a) => [a.path, a.origin]))
-	const drifted = audit.findings.filter((f) => f.drift !== 'aligned')
-	const ownedDrift = drifted.some((f) => originOf.get(f.path) === 'host')
-	const generatedDrift = drifted.some((f) => originOf.get(f.path) !== 'host')
-	const offerHandoff = terminal.isTTY && (ownedDrift || (foreignPaths.length > 0 && values.prune))
-	let handoffAccepted = false
-	if (offerHandoff) {
-		handoffAccepted = await terminal.confirm({ message: 'Hand off to repair?', default: false })
-		if (handoffAccepted) {
-			reporter.status('info', `run: scaffold repair --target ${target}`)
-			// After an ACCEPTED handoff, re-diff the FULL plan (not just repair's host-scoped
-			// slice) so a "clean" handoff always means the whole target, not just the host set.
-		}
-	}
-	if (!handoffAccepted && !values.json) {
-		if (foreignPaths.length > 0 && !values.prune) {
-			reporter.status(
-				'info',
-				"unexpected files found — run 'scaffold repair --prune' to delete them",
-			)
-		}
-		if (generatedDrift) {
-			reporter.status(
-				'info',
-				'generated-file drift found — these files are generated, not hand-repaired',
-			)
-		}
-	}
-	process.exit(merged.clean ? 0 : 1) // ANY drift — including a foreign file — fails the CI gate
-} else if (command === 'repair') {
-	// `scaffold repair` — single target, dry-run default, HOST-ORIGIN scope ONLY
-	// (ci.yml included — full HOST scope, unlike fleet's ci.yml exclusion), so
-	// hand-written src/tests/guides/package.json are never overwritten.
-	const compiled = blueprintToPlan(deriveBlueprint(target))
-	const scopedToHost = {
-		...compiled,
-		artifacts: compiled.artifacts.filter((a) => a.origin === 'host'),
-	}
-	const plan = hydratePlan(scopedToHost, host)
-	const audit = diffPlan(
-		plan,
-		readTarget(
-			target,
-			plan.artifacts.map((a) => a.path),
-		),
-	)
-	emit(audit, () => reporter.line(planToReview(plan)))
-	const materializer = createMaterializer(materializerOptions)
-	const wrote = !audit.clean && (await confirmWrite('Write missing/stale host files?'))
-	if (wrote) materializer.repair(plan, audit, target)
-	// pruning sits behind its OWN second confirm, only once the first write is accepted — and
-	// the preview above already LISTED the exact paths `pruneTargets` found (never a bare
-	// count); a count of 0 skips this question entirely (nothing to ask about).
-	if (wrote) {
-		const foreignPaths = pruneTargets(target, host)
-		const pruneNow = await confirmPrune(
-			target,
-			`Also prune ${foreignPaths.length} foreign file(s)?`,
-		)
-		if (pruneNow.length > 0) materializer.prune(target) // .claude/agents/ + scripts/ foreigns ONLY
-	}
-	materializer.destroy()
-	process.exit(!audit.clean && !wrote ? 1 : 0)
-} else if (command === 'fleet') {
-	// `scaffold fleet` — the CURRENT WORKING DIRECTORY's IMMEDIATE CHILDREN only, never the
-	// cwd itself: the cd-model IS the interface, no --root flag exists — the caller cd's into
-	// the folder that CONTAINS the checkouts first; `repair` is the one-repo counterpart.
-	const materializer = createMaterializer(materializerOptions)
-	let totalDrift = 0
-	const rows: Array<readonly [string, number]> = []
-	for (const repoTarget of discoverPackages('.')) {
-		const repoPlan = blueprintToPlan(deriveBlueprint(repoTarget))
-		const scoped = {
-			...repoPlan,
-			artifacts: repoPlan.artifacts.filter((a) => a.path !== '.github/workflows/ci.yml'),
-		}
-		const hydrated = hydratePlan(scoped, host)
-		const audit = diffPlan(
-			hydrated,
-			readTarget(
-				repoTarget,
-				hydrated.artifacts.map((a) => a.path),
-			),
-		)
-		if (!audit.clean) {
-			totalDrift += audit.drifted + audit.missing
-			if (await confirmWrite(`Write drift for ${repoTarget}?`)) {
-				materializer.repair(hydrated, audit, repoTarget)
-			}
-		}
-		rows.push([repoTarget, audit.drifted + audit.missing])
-	}
-	materializer.destroy()
-	emit(
-		rows.map(([repo, drift]) => ({ repo, drift })),
-		() =>
-			reporter.table({
-				columns: [{ label: 'Repo' }, { label: 'Drift', align: 'right' }],
-				rows: rows.map(([repo, drift]) => [repo, String(drift)]),
-			}),
-	)
-	process.exit(totalDrift > 0 ? 1 : 0)
-} else if (command === 'catalog') {
-	// --from ADDS local-only discoveries to the registry-authoritative default; --offline
-	// sources --from(s) only (default [cwd]); merged/local entries splice via catalogToBlock
-	// into <target>/.claude/agents/orkestrel.md between its markers, shrink-warning either way.
-	// --json's value is `{ entries, drift, shrink? }` — NEVER a bare `CatalogEntry[]`, so a
-	// consumer can read the drift verdict and any shrink warning without re-deriving them.
-	// (Illustrative — see catalogToBlock / Sync.catalog in the Surface above.)
-	process.exit(0)
-} else {
-	// `scaffold new <name>` — creation.
-	const name =
-		positionals[1] ??
-		(await terminal.input({ message: 'Package name', validate: { pattern: '^[a-z][a-z0-9-]*$' } }))
-	const picked =
-		values.surfaces?.split(',') ??
-		(await terminal.checkbox({ message: 'Surfaces', choices: [...SURFACES], min: 1 }))
-	const surfaces = SURFACES.filter((surface) => picked.includes(surface)) // narrow to Surface[], no `as`
-
-	// --deps (@orkestrel/* runtime deps) resolves an absent range through the registry —
-	// ranges pin ^latest; its guides additionally fetch into the plan. On a real terminal,
-	// this prompt becomes an interactive question instead — @orkestrel short names,
-	// catalog-validated — illustrated in prose above, omitted here for brevity. Other npm
-	// packages are hand-added to `package.json`'s `devDependencies` AFTER scaffolding —
-	// `deriveBlueprint`'s `extras` round-trip (below) picks them back up on the next
-	// `audit`/`repair`/`pull`, so `new` never collects them itself.
-	const sync = createSync()
-	const versions = await sync.versions(
-		(values.deps?.split(',') ?? []).map((depName) => dependency(depName, '*')),
-	)
-	sync.destroy()
-	const deps = versions.map((version) => dependency(version.name, `^${version.latest}`))
-
-	const compiler = createCompiler()
-	const scaffolding = compiler.compile(blueprint(name, { surfaces, dependencies: deps }))
-	if (!scaffolding.plan) {
-		reporter.status('error', scaffolding.questions.map((question) => question.text).join('; '))
-		compiler.destroy()
-		process.exit(2) // usage: an off-contract name/surfaces is caller error, not drift
-	}
-	emit(scaffolding.plan, () => {
-		reporter.section('Plan')
-		reporter.line(planToReview(scaffolding.plan)) // dry-run default: show the review
-		const summary = planToSummary(scaffolding.plan)
-		reporter.table({
-			columns: [{ label: 'Origin' }, { label: 'Count', align: 'right' }],
-			rows: [
-				['host', String(summary.host)],
-				['template', String(summary.template)],
-				['computed', String(summary.computed)],
-			],
-		})
-	})
-	if (await confirmWrite('Write the package to disk?')) {
-		const spinner = createSpinner({ message: 'materializing', sink })
-		spinner.start()
-		const materializer = createMaterializer()
-		const result = materializer.materialize(scaffolding.plan, values.target ?? `./${name}`)
-		materializer.destroy()
-		spinner.success(`wrote ${result.written.length + result.copied.length} files`)
-	}
-	compiler.destroy()
-	process.exit(0)
-}
+isPortablePath('src/core/index.ts') // true
+isFilesystemPath('./packages/router') // true
+isTerminalText('router') // true
+isDependencyData({ name: '@orkestrel/contract', range: '^0.0.7' }) // true
+isSensitiveHostPath('.env.local') // true
+isReservedTargetPath('.git/config') // true
+isCatalogAllowance(new Float64Array([1])) // true
+isCatalogDescription('A tiny hash router.') // true
+hasOnlyDataProperties({ a: 1 }) // true
+isDenseDataArray(['a'], 10, isPortablePath) // true
+isWritePrecondition({ path: 'package.json', shape: 'absent' }) // true
+isManifestEntry({ storage: 'AGENTS.md', destination: 'AGENTS.md', executable: false }) // true
+isHostManifest({ entries: [], roots: [] }) // true
+isSyncEventHooks({ done: () => undefined }) // true
+isMaterializerEventHooks({ done: () => undefined }) // true
+isEmitterErrorHandler(() => undefined) // true
+isMissingPathError(caught) // true only for an ENOENT error
 ```
-
-The build wiring follows the §7 two-file wrapper pattern: `configs/src/tsconfig.bin.json`
-sets `types: ["node"]` and uses the `rootDir` trick (the broad `../../src` root with a scoped
-`include: ["../../src/bin/**/*.ts"]`) so the bin can type-check against `@src/core` source;
-`configs/src/vite.bin.config.ts` is a lib build with `entry` → `dist/bin/scaffold.js`,
-`formats: ['es']`, externals `node:*` / `@orkestrel/*` / `@src/*`, an `output.banner`
-re-emitting the `#!/usr/bin/env node` shebang, and NO dts plugin (an executable ships no
-declarations). `package.json` declares `"bin": { "scaffold": "./dist/bin/scaffold.js" }`, and
-`build:src` chains the bin build LAST (after core and server) so the executable links against
-fresh sibling builds. Invocation follows the tool's life: `npm run scaffold` pre-publish (the
-repo's own script), `npx @orkestrel/scaffold` post-publish, and `node_modules/.bin/scaffold`
-once it is a devDependency of a consumer.
-
-```sh
-# new — create a package (dry-run previews; on a terminal it then asks, default No; --apply
-# writes unasked); --deps is @orkestrel/* runtime deps (dependencies). Other npm packages are
-# NOT a new-time flag — hand-add them to the generated package.json's devDependencies after
-# scaffolding; audit/repair/pull recompile them back into the plan (deriveBlueprint's extras
-# round-trip), so a hand-added devDependency stays audit-clean:
-npx @orkestrel/scaffold new router --surfaces core,browser,server
-npx @orkestrel/scaffold new router --deps @orkestrel/contract --apply --target ./packages/router
-
-# pull — refresh vendored dep mirrors + report range drift (any drift/failure exits 1,
-# --strict or not; --strict additionally THROWS on a network fault):
-npx @orkestrel/scaffold pull --target . --apply
-npx @orkestrel/scaffold pull --deps @orkestrel/contract,@orkestrel/emitter --strict --json
-
-# audit — structural conformance (now merging the prune scan: a stray file under
-# .claude/agents/ or scripts/ is a real foreign finding, counted as drift), +live freshness;
-# nonzero on ANY drift, foreign files included (the CI gate); offers a repair handoff on a
-# terminal whenever host-origin drift OR a foreign file is found (never for generated-only
-# drift, which gets a plain note instead); --json emits exactly one Audit value, its `foreign`
-# count now real and a `live` field present when --live ran:
-npx @orkestrel/scaffold audit --live
-npx @orkestrel/scaffold audit --json
-
-# repair — single target, dry-run default; on a terminal it asks before writing (--apply
-# skips the ask), then a SECOND default-No question (or --prune) before deleting
-# target-only files under .claude/agents/ and scripts/ ONLY:
-npx @orkestrel/scaffold repair --target . --apply --prune
-npx @orkestrel/scaffold repair --target . --from ../contract # audit against a sibling's host
-
-# fleet — the CURRENT WORKING DIRECTORY's IMMEDIATE CHILDREN (never the cwd itself) then
-# per-repo host-origin audit/repair; dry-run default, confirms per repo on a terminal
-# (--apply writes unasked), nonzero on residual drift; excludes
-# .github/workflows/ci.yml (repo-flavored — use `repair --apply` per repo for that one
-# file); NO --root flag at all — cd into the folder that CONTAINS your checkouts first
-# (repair is the single-repo tool: run it from inside one repo instead):
-cd ~/repos && npx @orkestrel/scaffold fleet
-cd ~/repos && npx @orkestrel/scaffold fleet --apply --json
-
-# catalog — regenerate the fleet package catalog embedded in orkestrel.md between its
-# markers; the npm registry is authoritative by default (unauthenticated), --from ADDS
-# local-only discoveries (repeatable — the SAME flag the read-only-source verbs use,
-# replacing the old --host and catalog's old --root), --offline sources --from(s) only,
-# dry-run reports drift (nonzero) plus any shrink warning, --apply writes:
-npx @orkestrel/scaffold catalog --target . --apply
-npx @orkestrel/scaffold catalog --from ~/repos --from ~/other-repos --target . --apply
-npx @orkestrel/scaffold catalog --offline --from ~/repos --target . --apply
-
-# unknown verb — the two RENAMED former names redirect explicitly rather than a fuzzy guess;
-# any other typo still gets the nearest-match suggestion. Either way: usage error, exit 2.
-npx @orkestrel/scaffold sync    # 'sync' has been renamed — use 'scaffold pull'
-npx @orkestrel/scaffold mirror  # 'mirror' has been renamed — use 'scaffold fleet'
-```
-
-### Fleet wiring
-
-The rendered defaults ship as **versioned package data**: each is a frozen
-`TemplateDefinition` (a `name`, a `content` string with `{{token}}` placeholders, and its
-`placeholders`) filled by `@orkestrel/template`'s pure `fillTemplate` with `missing: 'error'`
-— NOT bespoke string interpolation, and NOT a `TemplateManager` (the compiler carries no
-sub-engine). The byte-copied governance files (`HOST_PATHS`) ship VENDORED inside the
-published tarball at `dist/host/` (staged there by the build's `build:host` step, alongside a
-`dist/host/manifest.json` recording each entry's storage name, destination, and executable
-bit), which the server's `Materializer` copies from its `host` root — the package's OWN
-vendored copy by default, or an explicit `--from` sibling for fleet-wide mirroring. There is
-ONE versioned source of truth, and `npm update @orkestrel/scaffold` propagates a convention
-change to every consumer.
-
-This package is the line's sole scaffolding and fleet-conformance spec, and this guide is its
-sole living document — the variant matrix, the per-file inventory, the exports shapes, the
-config wrappers, and the audit checklist all live here, projected from the same `Plan` the
-compiler emits. Every repo in the fleet carries `@orkestrel/scaffold` as a devDependency
-(pinned at `SCAFFOLD_RANGE`, joining `@orkestrel/guide` as line-wide dev tooling) and a
-`"scaffold": "scaffold"` script against the installed bin. Fleet-truing runs as
-`scaffold fleet` — either from the package's own vendored `dist/host` (the common case) or
-from an explicit `--from` sibling repo — trueing every repo's shared artifacts across the
-workspace; `repair` and `audit` operate per repo. `.github/workflows/ci.yml` is the one
-fleet exception: two repos carry repo-flavored CI, so `fleet` never writes it — a
-single-target `repair --apply` does, per repo, for that one file.
-
-### Practices
-
-- **Dry-run first, always** — `compile` / `blueprintToPlan` / `planToReview` and `Sync.pull` /
-  `syncToReview` are report-only; read the plan (or the audit, or the freshness) before ever
-  writing. Writing is opt-in (the server's `materialize` / `repair` / `Sync.write`, the bin's
-  `--apply`).
-- **One blueprint, one package** — a compound request (two packages) is two `compile` calls,
-  not one blueprint with a wider `surfaces` list; `surfaces` selects the variant of ONE
-  package, never bundles several.
-- **Audit before you edit a fleet repo** — `diffPlan` turns the per-file conformance checklist
-  into findings; add `--live` for guide + range freshness, or `--groups a,b` to gate CI on a
-  subset (e.g. `--groups configs,docs,orchestration`); repair the `missing` / `stale` HOST-ORIGIN
-  set with `repair` (never a hand-written `src` / `tests` / `package.json` file — `repair` is
-  the host-restoration tool ONLY), refresh mirrors with `Sync.write`, and leave `aligned` /
-  `current` untouched.
-- **A named `--from` must resolve** — the default host degrades to presence-only silently when
-  absent (dev ergonomics), but an explicitly-passed `--from` that fails to resolve is a coded
-  `TARGET` failure on `audit` / `repair` / `fleet` — never a silent downgrade for a source the
-  caller named on purpose.
-- **True the fleet with `fleet`, not by hand** — run `scaffold fleet` from the folder that
-  CONTAINS your checkouts (no `--root` flag — the cd-model is the interface); it runs
-  `discoverPackages` → per-repo hydrated audit → repair on an accepted confirm (or `--apply`),
-  EXCLUDING `.github/workflows/ci.yml` (repo-flavored, never fleet-clobbered — use
-  single-target `repair --apply` for that one file); reach for `repair --prune` only for the
-  bounded `.claude/agents/` / `scripts/` cleanup a single target needs, never a wider deletion.
-- **Override, don't fork** — need a bespoke file? Add one `override` for that path; the rest
-  stay canonical and keep tracking the shipped templates. Never copy the whole plan to change
-  one file.
-- **Reference deps by their real range** — a `dependency('@orkestrel/contract', '^0.0.5')`
-  drives the `package.json` entry, the vendored guide mirror (when scaffold ships it), and the
-  build externals from one declaration; declare exactly what `src/` imports (the exports combination rules).
-- **Collect by default, `strict` for CI** — leave `Sync` in collect mode for an interactive
-  freshness report; flip `strict: true` only where a network fault MUST fail the run (a CI
-  gate), and inject `guides.base` / `registry.base` at a local fixture for hermetic tests.
-- **Gate untrusted blueprints twice** — `parseBlueprint` for shape at the boundary,
-  `validateBlueprint` for semantics; reserve `createBlueprint`'s throw for programmer-error
-  contexts where invalidity is a bug (§12).
-- **Store `pinPlan` output, not drafts** — the `hash` is the identity;
-  `JSON.stringify(plan)` out, `parsePlan` back in, and the `PlanManager` recognizes the
-  unchanged content as the same version.
-- **Keep the target vacant for creation** — `materialize` refuses a non-empty target
-  (throwing `TARGET`); repair into an existing package with `repair`, never by clearing it
-  first.
-- **Destroy when done** — `destroy()` releases the emitter; a destroyed `Compiler` /
-  `PlanManager` / `Materializer` / `Sync` throws `DESTROYED` on use (narrow with
-  `isScaffoldError`).
 
 ## Tests
 
-Environment-dependent cases degrade gracefully rather than false-redding: `tests/setupServer.ts`
-probes the running host's actual capability once at load (`canSymlink`, `canSocket`, `hasModes` —
-the last is platform-as-semantics, since POSIX mode bits have no Windows equivalent to probe for),
-and the handful of tests that need a real symlink, a real Unix domain socket, or a real exec bit
-guard themselves with `it.skipIf` naming exactly what goes unverified on a host lacking the
-capability. Every one of those cases runs — and must pass — unconditionally on a capable POSIX
-host; the skip is the environment's ceiling, never a hidden failure.
-
-- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the
-  `## Surface` ↔ `src/core` + `src/server` bijection (value + type exports; `src/bin` is
-  EXCLUDED — the executable has no public exports) and the `## Methods` ↔ interface-method
-  bijection, across both library surfaces.
+- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the pure leaves: table
+  alignment, byte encoding, snapshots, host selection, conflicts, projections, hashing, and
+  format-stable JSON.
+- [`tests/src/core/builders.test.ts`](../../tests/src/core/builders.test.ts) — the blueprint,
+  dependency, override, and member builders, including optional-field omission.
+- [`tests/src/core/validators.test.ts`](../../tests/src/core/validators.test.ts) — every guard and
+  refinement against valid, off-contract, hostile, and boundary input.
+- [`tests/src/core/shapers.test.ts`](../../tests/src/core/shapers.test.ts) — per-shape guard
+  exactness, schema essentials, seeded generation, and parse round-trips.
+- [`tests/src/core/compilers.test.ts`](../../tests/src/core/compilers.test.ts) — every drafted
+  group, the manifest and exports combination rules, the one-owner guide law for a workspace that
+  names a line guide, and the emitted configuration text.
 - [`tests/src/core/Compiler.test.ts`](../../tests/src/core/Compiler.test.ts) — the three-stage
-  pipeline, stage order and records, group-scoped compilation, the `audit` projection,
-  override layering, fail-closed blocking (questions + `BLOCKED` failure + absent plan), event
-  sequences (`compile` vs `block`, `audit`), idempotent `destroy`, `DESTROYED` throws.
-- [`tests/src/core/PlanManager.test.ts`](../../tests/src/core/PlanManager.test.ts) —
-  content-hash IS the id, distinct content mints a fresh record at `version: 1`, an
-  unchanged re-add returns the existing record with `version` never incrementing, batch
-  `remove` all-or-nothing, per-event emissions, destroy semantics.
-- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — every projection
-  (`blueprintToMembers` inventory, `blueprintToPlan` PER-VARIANT generation conformance across
-  ALL SIX live classes — core-only, core+server, core+browser+server, server-only,
-  browser-only, core+browser — asserting the right `src/<surface>/*` + `tests/src/<surface>/*`
-  artifact set, the conditional `setupServer.ts` / `setupBrowser.ts`, the computed
-  `{{specifiers}}` parity fill, and the three `rootViteConfig` shapes per surface count, plus
-  `SURFACE_MATRIX` wiring and the manifest/exports combination rules — `peerDependencies` /
-  `peerDependenciesMeta` emission for `peers`, `extras` merging into `devDependencies` with
-  extras winning a collision — template-fill vs computed origins + the token-collision
-  boundary, `planToReview` / `auditToReview` / `syncToReview` table emission, `planToSummary`
-  counts, `diffPlan` drift verdicts incl. host presence-only on a RAW (unhydrated) plan and
-  `template`-origin birth-only audit-exemption (always `aligned`, present or absent, matching
-  content or not),
-  `manifestToDependencies` across all three sections deduplicated, `rangeToFreshness` exact-pin
-  law, `pinPlan` determinism), `validateBlueprint` errors + warnings (incl. the per-array
-  `peers` / `extras` name/range/duplicate rules and the three cross-array overlap blocks),
-  `validateDependencyArray`'s pure `{ questions, seen }` return, `pascalCase`, `alignTable`
-  (oxfmt-width padding, `\|` escaping, alignment delimiter row) and its `splitTableRow` /
-  `padCell` / `delimiterCell` leaves, `isBehind`'s `'behind'`-only verdict, `inferGroup`'s
-  ordered prefix classification, `isRecord`'s plain-object narrowing, and `computeHash` /
-  `stableStringify` determinism (key-order-independent hashing).
-- [`tests/src/core/compilers.test.ts`](../../tests/src/core/compilers.test.ts) — every drafting
-  leaf `blueprintToPlan` orchestrates: `hostGroup` classification, `fillArtifact` template
-  filling (with/without a `surface` tag, throwing on an unknown template id), `surfaceVariant` /
-  `entryFields` / `dualCondition` / `exportsMap` across every variant, `compareCodeUnit` /
-  `devDependenciesFor` merging, `packageManifest` shape, `rootTsconfig`, the three
-  `rootViteConfig` / `singleSurfaceViteConfig` shapes, `coreTsconfig` / `coreViteConfig`,
-  `surfaceTsconfig` / `surfaceViteConfig`, `configArtifacts` / `sourceArtifacts` drafting,
-  `paritySpecifiers` primary-surface resolution, `testArtifacts` drafting, `guideArtifacts` /
-  `guideMemberTable` dedup-across-surfaces, `applyOverrides` replace/no-op/host-skip/no-match
-  semantics, plus byte-for-byte cross-consistency between each direct leaf's output and the
-  matching artifact `blueprintToPlan` emits, across every surface variant.
-- [`tests/src/core/builders.test.ts`](../../tests/src/core/builders.test.ts) — every builder's
-  output shape (defaults filled, absent optional keys omitted, exact-guard round-trips).
-- [`tests/src/core/validators.test.ts`](../../tests/src/core/validators.test.ts) — each guard
-  accepts valid / rejects invalid + adversarial junk, exact-record semantics, off-vocabulary
-  literal rejection, `parseBlueprint` / `parsePlan` / `parseSyncReport` ↔ guard soundness.
-- [`tests/src/core/shapers.test.ts`](../../tests/src/core/shapers.test.ts) — `blueprintShape` /
-  `planShape` / `syncReportShape` compilation through `createContract`: guard/parser/schema/generator
-  lockstep, generated values satisfy their guards.
+  pipeline, the fail-closed gate, the emission sequences, and post-destroy behavior.
+- [`tests/src/core/PlanManager.test.ts`](../../tests/src/core/PlanManager.test.ts) — content-hash
+  ids, the batch-overload semantics, and all-or-nothing list removal.
+- [`tests/src/core/policy.test.ts`](../../tests/src/core/policy.test.ts) — the repository coding-law
+  policy module against this workspace and against deliberately hostile fixtures.
+- [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — containment,
+  digests, host staging, hydration, derivation, prune scanning, and the local catalog.
+- [`tests/src/server/validators.test.ts`](../../tests/src/server/validators.test.ts) — the portable
+  path law, data-only reflection, and the exact-shape record guards.
 - [`tests/src/server/Materializer.test.ts`](../../tests/src/server/Materializer.test.ts) —
-  green-field `materialize` into a vacant temp dir (manifest-aware host copies incl. the
-  executable bit off `manifest.json`, plus rendered writes), `TARGET` refusal on a non-vacant
-  target, `repair` writing only drifted artifacts, `prune` deleting ONLY `foreign` artifacts
-  under `.claude/agents/` / `scripts/` (the bounded containment law) and leaving a foreign file
-  elsewhere untouched, PLUS `prune`'s FAIL-CLOSED law (H1): a `--host`-style unresolvable host
-  root throws `TARGET` BEFORE any deletion (target files untouched), while a host that GENUINELY
-  EXISTS and vendors zero files in a `directory` (an existing empty dir, or a manifest with zero
-  entries there) still prunes every foreign file under it — the distinction is missing-host vs
-  empty-vendor, never conflated; `isVacant` / `readTarget` / `hydratePlan` / `discoverPackages` /
-  `hostRoot` / `deriveBlueprint` against a real `node:fs` fixture — `deriveBlueprint` fixtures
-  covering surface detection off `src/<surface>/` directories, `peers` with
-  `peerDependenciesMeta`-sourced `optional`, `extras` excluding the generated devDependency
-  baseline (`devDependenciesFor([])`'s keys, covering `@orkestrel/guide` / `@orkestrel/scaffold`)
-  AND any devDependency ALSO present in `peerDependencies` / `dependencies` (H3: the middleware
-  pattern of dev-installing a peer for its own tests never double-lands in `extras`), an EXTERNAL
-  (non-`@orkestrel`) devDependency (e.g. `zod`) surviving that exclusion as a genuine `extras`
-  round-trip (U12c FIX 3: closes the hand-added-devDependency → immediate self-audit-DRIFTED
-  regression — the CLI never collects `extras` itself; a reader hand-adds the entry to
-  `package.json` and `deriveBlueprint` picks it back up), and the coded `TARGET` failures
-  (unreadable/non-JSON/
-  non-`@orkestrel` manifest, no surface directory); `hostRoot` resolving to the package's own
-  BUILT `dist/host` bundle (never `process.cwd()`); `WRITE` fail-fast, `remove` event emission,
-  destroy semantics.
-- [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — `hostRoot`,
-  `deriveBlueprint`, `discoverPackages`, `hydratePlan`, and `catalogPackages` against a real
-  `node:fs` fixture; `diffPlan` content-comparing a HYDRATED host-origin artifact (a
-  byte-mutated target is `stale`, counted in `drifted`) against the SAME target read by the
-  UNHYDRATED plan (still `aligned` — presence-only preserved when there is no `content` to
-  compare), plus a `Materializer.repair` round-trip proving a hydrated `'stale'` finding
-  re-copies the artifact byte-equal from `host`; `pruneTargets` (a real fixture: an unexpected file under
-  `.claude/agents/` / `scripts/` is reported, a vendored one is not, an absent prune directory
-  under `target` yields `[]`, and the fail-closed `TARGET` throw when `host` cannot positively
-  establish an allowlist for a prune directory that DOES exist under `target` — the same law
-  `Materializer.prune` and the bin's audit/repair UX both consume), plus the three
-  no-nested-functions leaves standalone:
-  `selectOrkestrelEntries` (`@orkestrel/`-prefixed string-valued filtering, `[]` on a
-  non-object), `isManifestEntry` (valid entry accepted; missing/mistyped `executable` and a
-  non-object rejected), and `locateHostSource` (the manifest-`undefined` raw-join fallback, the
-  single-match resolution, and `undefined` on zero or duplicate `destination` matches);
-  `storagePath` (dotfile-top-level-file, `.claude`/`.github` directory-segment un-dotting,
-  nested `.github/workflows/ci.yml`, and a plain undotted name) and `stageHost` against a real
-  temp-directory fixture with a hand-built `paths` list — byte-preserving copies, the
-  owner-execute bit captured AND propagated onto the staged copy, a wipe-first `out` (a stale
-  file left over from a prior run disappears), the written `manifest.json`'s
-  destination-sorted/tab-indented/trailing-newline shape, a missing-source `TARGET` naming the
-  path, and a `storagePath` collision's `TARGET` naming both destinations.
-- [`tests/src/server/Sync.test.ts`](../../tests/src/server/Sync.test.ts) — a real `node:http`
-  fixture serving guide bytes at `/<name>/<branch>/guides/src/<name>.md` and registry JSON
-  `{"dist-tags":{"latest":"0.0.N"}}` at the URL-encoded scoped path, with `guides.base` /
-  `registry.base` injected (§16 no-mocks): asserts fetching + writing under the containment
-  law, the `freshness` verdicts (incl. `404` → `missing` and timeout → `failed`), the `strict`
-  `FETCH` throw naming the URL, the bounded `concurrency`, the `guide` / `version` / `write` /
-  `done` event order, and `DESTROYED`. `Sync.catalog` adds an org-list fixture
-  (`/-/org/orkestrel/package`) plus per-package packument + guide routes: registry entries
-  prefer the guide blockquote description over the packument's, a guide `404` STAYS LISTED
-  with the packument-description fallback and the exact `guide unreachable (HTTP 404 — repo
-private or guide missing?)` note, a failed packument keeps the entry degraded (`version: ''`)
-  rather than dropping it, an unreachable/malformed org-list response throws a coded `FETCH`,
-  entries sort code-unit by `name` regardless of org-list key order, and no request anywhere
-  (org list, packument, guide) ever carries an `Authorization` header.
-- [`tests/src/server/integration.test.ts`](../../tests/src/server/integration.test.ts) —
-  the full flow against the fixture: `new` → `pull` → `audit --live` (compile → materialize →
-  audit clean → mutate a file → audit drift → repair clean; then a stale mirror synced current);
-  a scaffolded package whose deps are all vendored (contract / emitter / markdown / template /
-  terminal / console) runs its own gates green by construction, while a dep outside that set
-  leaves its mirror a pointer plus a non-blocking Question.
-- [`tests/src/bin/scaffold.test.ts`](../../tests/src/bin/scaffold.test.ts) — the bin's six
-  subcommands: `new` (`parseArgs` flag decoding, a non-interactive `--json` compile emitting
-  exactly one JSON value, dry-run review + summary table, the interactive preview-then-confirm
-  flow driven by a scripted fake terminal — accept AND default-No decline — `--yes`
-  pre-answering that confirm, `--apply` writing into a temp directory unasked, and the
-  positional package name validated against the SAME shape the interactive prompt enforces
-  (`^[a-z][a-z0-9-]*$`) — an invalid positional name exits `2` naming the expected shape, under
-  `--json` and without alike (F4); the extras UX was removed from `new` entirely (`--extras` is
-  now an unrecognized flag — `parseArgs`'s strict mode rejects it, exit `2`, nothing written);
-  U12c FIX 3 (THE VERIFIER SMOKE, the closure regression): `new --apply` followed by a
-  hand-added `package.json` `devDependencies` entry, then `audit --target <name>` exits `0`
-  CLEAN — an external extra round-trips through `deriveBlueprint` instead of drifting on its
-  own generated `package.json`; a dedicated offline case also resolves the package's own
-  BUILT `dist/host` vendored `.claude/agents/orkestrel.md` through `hostRoot()` +
-  `readHostManifest` + `locateHostSource`, proving `catalogNames` parses real `@orkestrel/*`
-  rows off it — the exact primitive chain Q1's interactive catalog validation reads), `pull`
-  (report + confirm-then-write, `--apply` writing unasked, `--json` emitting exactly one
-  `SyncReport`, `--strict` still THROWING `FETCH` on a network fault, and any drift/failure
-  exiting `1` regardless of `--strict` — `pull`'s prior only-nonzero-under-`--strict` posture
-  is gone), `audit` (`deriveBlueprint` reconstruction, `--live` drift → exit `1`,
-  hydration-aware host drift, the MERGED prune scan — a `pruneTargets`-found foreign file is a
-  real finding that counts toward drift and exits `1`, its count carried under `--json`
-  (`Audit.foreign`) alongside a `live` field when `--live` ran, `--groups a,b` scoping the
-  compiled plan validated against `GROUPS` with exit `2` (a plain USAGE error, not a coded
-  failure) on an unrecognized name, an EXPLICIT `--from` that fails to resolve exiting `TARGET`
-  rather than silently downgrading — M1, an unscannable `--from` host that DOES resolve but
-  cannot establish a vendored allowlist for a prune directory `target` actually has degrading
-  the audit to its un-scanned findings with a printed `scanSkipped` note instead of crashing
-  (F3), the repair-handoff confirm offered ONLY on a real TTY — `--apply` / `--yes` are NEVER
-  handoff consent, so `audit --apply` (with or without `--prune`) on a drifted/foreign target
-  is asserted to leave every file exactly as found and exit `1`, never auto-repairing or
-  auto-pruning (F1) — and, when offered, ONLY when there is host/template-origin drift OR a
-  foreign file present AND `--prune` was passed (a foreign-only handoff without `--prune` would
-  be a dead end — F2); a foreign file with no `--prune` instead prints the `foreignHint` pointing
-  at `scaffold repair --prune` (never a generated-file note, which stays reserved for
-  computed-only drift), and — on an ACCEPTED handoff — a FULL-PLAN re-diff afterward that still
-  exits `1` if any drift (e.g. generated-file drift `repair` cannot touch) remains), `repair`
-  (`deriveBlueprint` reconstruction,
-  dry-run exit code, confirm-then-write (or `--apply`) scoped to HOST-ORIGIN artifacts ONLY
-  (H2) — INCLUDING `.github/workflows/ci.yml` (full HOST scope, no exclusion, unlike `fleet`)
-  but a hand-modified `src` file is NEVER touched even when the target also carries drifted
-  host files — a SECOND default-No confirm (or `--prune`) that LISTS the exact foreign paths
-  before deleting `.claude/agents/` / `scripts/` foreigns ONLY, a `0`-count skipping the
-  question entirely with a "no unexpected files to delete" note, `--prune` reaching the
-  preview/confirm/deletion flow even on a CLEAN host audit — a clean audit alone no longer
-  bypasses pruning, only a clean audit WITH nothing to prune does (U11 F2) — `--from` override defaulting
-  to `hostRoot()`), a shared non-TTY CASE across every write verb asserting the ONE-PROMPT
-  ceiling — a piped/non-TTY run never sees a second question (the prune confirm resolves to its
-  safe default with a printed `pruneSkipped` explanation instead of blocking; `audit`'s
-  repair-handoff is TTY-only from the start, so a non-TTY `audit` never asks it at all —
-  degrading straight to the `foreignHint` / `generatedNote` prose instead), and a missing
-  REQUIRED input off a TTY (e.g. `new` with no name/`--surfaces`) exits
-  `2` naming the flag rather than hanging, and `fleet` (a FLEET
-  fixture: multiple `discoverPackages`-discovered repos under the CURRENT WORKING DIRECTORY's
-  immediate children — no `--root` flag anywhere, the cd-model IS the interface — `.github/
-workflows/ci.yml` EXCLUDED from the scoped plan regardless of confirm/`--apply`, per-repo +
-  total drift table, `--json` emitting exactly one fleet-drift array, `--apply` writing
-  unasked, exit `1` on residual drift) — all against the `node:http` fixture, PLUS a shared
-  `ctrl-c`-at-prompt case asserting `cancelled — nothing written` and exit `1` — and `catalog`
-  (`--offline` exercises the fully-local path against a fixture fleet under two `--from` roots,
-  one guide carrying a blockquote and one missing its guide entirely: dry-run reports the
-  no-description list and exits `1` on marker drift, `--apply` writes the spliced table and a
-  re-run exits `0`, a target `.claude/agents/orkestrel.md` missing either marker exits coded
-  `TARGET`, multiple `--from` values merge into one sorted, deduplicated table, `--json` emitting
-  exactly `{ entries, drift, shrink? }` — NEVER a bare `CatalogEntry[]` — and a shrink
-  warning prints on both dry-run and `--apply` when the new table has fewer rows than the
-  currently-embedded one — the registry-authoritative default path's fetch/merge logic is
-  covered at the `Sync.catalog()` unit level, `tests/src/server/Sync.test.ts`, against a
-  fixture org-list + packument + guide host). A shared unknown-command case asserts `scaffold
-sync` / `scaffold mirror` print the explicit "renamed" redirect (`pull` / `fleet`
-  respectively) rather than a fuzzy guess, any other typo gets the nearest-`KNOWN_VERBS`
-  suggestion, and either way exits `2` with a single JSON error envelope (`{ error: { code,
-message } }`, `code: 'USAGE'`) under `--json` — the same envelope shape asserted for every
-  other usage/unexpected failure across every verb, so `--json` NEVER emits a bare stderr line.
-- a BUILT-BIN end-to-end pack→install→scaffold-new proof — `npm pack` the built tarball,
-  install it into a scratch project as a devDependency, then invoke the installed `scaffold
-new` bin with NO `--from` flag and assert the DEFAULT host resolution (`hostRoot()`) lands on
-  the vendored `dist/host` bundle inside the installed package (not the source tree, not
-  `process.cwd()`) — proving the published artifact is self-sufficient.
+  green-field writes, scoped repair, prune quarantine and rollback, and every fail-closed preflight.
+- [`tests/src/server/Sync.test.ts`](../../tests/src/server/Sync.test.ts) — freshness verdicts,
+  bounded concurrency, redirect and oversize handling, strict mode, pull, write, and catalog against
+  protocol-faithful fixture servers.
+- [`tests/src/server/integration.test.ts`](../../tests/src/server/integration.test.ts) — the whole
+  compile, materialize, audit, repair round trip against real directories.
+- [`tests/src/bin/helpers.test.ts`](../../tests/src/bin/helpers.test.ts) — the executable's rendered
+  verdicts, tables, notes, and suggestion machinery.
+- [`tests/src/bin/parsers.test.ts`](../../tests/src/bin/parsers.test.ts) — argument parsing, token
+  splitting, and pull-selection resolution against a target's declared dependencies.
+- [`tests/src/bin/validators.test.ts`](../../tests/src/bin/validators.test.ts) — the verb
+  vocabulary.
+- [`tests/src/bin/errors.test.ts`](../../tests/src/bin/errors.test.ts) — the executable's exit
+  signalling.
+- [`tests/src/bin/scaffold.test.ts`](../../tests/src/bin/scaffold.test.ts) — each verb's dry-run,
+  confirm, apply, and JSON paths.
+- [`tests/src/bin/e2e.test.ts`](../../tests/src/bin/e2e.test.ts) — the built executable driven end
+  to end over real directories.
+- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — this guide against
+  the two barrels: every export documented, every documented symbol real, every interface method
+  matched, every documented function exampled, and every link resolvable.
 
 ## See also
 
-- [`contract.md`](contract.md) — the guards, shapers, and `createContract` machinery the
-  validators compile from, and `schemaToParameters` / `seededRandom` for the tool boundary.
-- [`emitter.md`](emitter.md) — the typed emitter behind the compiler's, manager's,
-  materializer's, and sync's observation surfaces.
-- [`markdown.md`](markdown.md) — the AST + `renderMarkdown` writer `alignTable` builds the
-  guide Surface tables on (`parseInline`, `TableNode`, `TableAlign`).
-- [`template.md`](template.md) — the `TemplateDefinition` + pure `fillTemplate` engine (`missing:
-'error'`) that carries the rendered defaults.
-- [`terminal.md`](terminal.md) — the `createTerminal` `PromptFormInterface` the bin drives for
-  interactive blueprint building (with a non-TTY readline fallback).
-- [`console.md`](console.md) — the `createReporter` / `createSpinner` + server `createServerSink`
-  the bin narrates the plan, sync, and materialization through.
-- [`AGENTS.md`](../../AGENTS.md) — the rules; §4 naming, §9 managers, §11 determinism, §12
-  errors, §13 emitters, §14 totality, §21 mechanism-never-policy, §22 documentation-as-contracts.
-- [`README.md`](../README.md) — the package index.
+- [`AGENTS.md`](../../AGENTS.md) — the coding contract every generated workspace inherits.
+- [`README.md`](../README.md) — the guides index.
+- [`contract.md`](contract.md) — the shape, guard, parser, and outcome primitives the blueprint and
+  plan contracts compile through.
+- [`emitter.md`](emitter.md) — the observation channel every entity here composes.
+- [`markdown.md`](markdown.md) — the AST and renderer behind the table and blockquote work.
+- [`template.md`](template.md) — the pure fill engine behind every template-origin artifact.
+- [`terminal.md`](terminal.md) and [`console.md`](console.md) — the prompt and reporter toolkits
+  consumed only at the executable boundary.
+- [`guide.md`](guide.md) — the guides-parity toolkit this guide is checked with.

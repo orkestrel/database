@@ -78,7 +78,10 @@ export class Table<T = Row> implements TableInterface<T> {
 		this.#contract = contract
 		this.#guard = contract.is
 		this.#generate = generate
-		this.#emitter = new Emitter<TableEventMap>({ on, error })
+		this.#emitter = new Emitter<TableEventMap>({
+			...(on !== undefined ? { on } : {}),
+			...(error !== undefined ? { error } : {}),
+		})
 	}
 
 	get emitter(): EmitterInterface<TableEventMap> {

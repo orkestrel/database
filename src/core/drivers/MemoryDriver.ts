@@ -215,7 +215,16 @@ export class MemoryDriver implements DriverInterface {
 						rows.map(([, row]) => row),
 						[step],
 					)
-					rows.forEach(([key], index) => store.set(key, migrated[index]))
+					for (const [index, [key]] of rows.entries()) {
+						const row = migrated[index]
+						if (row === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+								table: step.table,
+								index,
+							})
+						}
+						store.set(key, row)
+					}
 					break
 				}
 				case 'index.add':

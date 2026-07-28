@@ -1000,7 +1000,7 @@ describe('generateUUID', () => {
 			for (let index = 0; index < uuid.length; index++) {
 				if (index === 14 || index === 19) continue
 				const char = uuid[index]
-				if (char === '-') continue
+				if (char === undefined || char === '-') continue
 				seen.add(char)
 			}
 		}
