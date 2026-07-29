@@ -134,7 +134,7 @@ From [`types.ts`](../../src/core/types.ts).
 | `SrcDefinition`           | interface |
 | `AppDefinition`           | interface |
 | `ViteMachinery`           | interface |
-| `ViteAxes`                | interface |
+| `ViteFacts`               | interface |
 | `ViteProjectRegistration` | interface |
 | `Origin`                  | type      |
 | `Group`                   | type      |
@@ -192,8 +192,10 @@ single-file-component, HTML, and development-server machinery an application bro
 needs, and `output` for build-output containment. It never selects a boundary guarantee — those ship
 in every shape, as the compilers section sets out.
 
-`ViteAxes` is the optional structural-project slice shared by every root Vite compiler:
-`bin`, `integration`, and `service` each select their matching standalone project when `true`.
+`ViteFacts` is the optional structural-fact slice shared by every root Vite compiler:
+`bin`, `integration`, and `service` each select their matching standalone project when `true`;
+`global` records the exact-case consumer-owned global-setup module and wires it into each eligible
+project.
 
 `ViteProjectRegistration` carries one generated project factory identifier and its optional browser
 label. Root configuration renderers preserve that browser ownership as data through registration
@@ -217,6 +219,7 @@ interface Blueprint {
 	readonly bin: boolean
 	readonly integration: boolean
 	readonly service: boolean
+	readonly global: boolean
 }
 ```
 
@@ -227,11 +230,11 @@ packages — a peer flagged `optional` also gets a `peerDependenciesMeta` entry.
 package-specific development dependencies merged over the generated baseline, and may carry any
 valid npm package name.
 
-`bin`, `integration`, and `service` are the three structural axes, and they obey one law: each is
-`true` only when the workspace physically ships the directory that defines it — never because of
-the workspace's name, and never because a sibling axis is set. `deriveBlueprint` probes exactly
-those directories, so a fresh compile and an audit of a mature repository agree on what the
-workspace is.
+`bin`, `integration`, `service`, and `global` are structural project facts. All four obey one law:
+each is `true` only when the workspace physically ships the directory or exact-case file that
+defines it — never because of the workspace's name, and never because a sibling fact is set.
+`deriveBlueprint` probes those paths, so a fresh compile and an audit of a mature repository agree
+on what the workspace is.
 
 - **`bin`** — `src/bin/` exists. It alone turns on the self-hosting extras: the manifest's `bin`
   entry, the `scaffold` script pointed at the built executable, the bin check, test, and build
@@ -245,6 +248,10 @@ workspace is.
   running process, outside the default run: a standalone `service` project including
   `tests/service/**/*.test.ts`, with `tests/setupService.ts` after the shared setup, and the
   isolated `test:service` script.
+- **`global`** — the physical, exact-case `tests/setupGlobal.ts` file exists. It is the single
+  governing setup-presence fact. A declared `src/browser` project runs that consumer-owned module
+  as `globalSetup`; integration runs it only when `bin` and `integration` are also true.
+  Application-browser, styles, service, and unrelated proof projects never receive it.
 
 A service workspace owes two companion files beside that directory, and derivation requires both
 physically present: `tests/setupService.ts` and `scripts/service.sh`. Either missing companion is a
@@ -360,6 +367,7 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `APP_MATRIX`                      | const |
 | `HOST_PATHS`                      | const |
 | `SERVICE_SCRIPT_PATH`             | const |
+| `GLOBAL_SETUP_PATH`               | const |
 | `NAME_PATTERN`                    | const |
 | `MAX_NAME_LENGTH`                 | const |
 | `MAX_DEPENDENCY_NAME_LENGTH`      | const |
@@ -410,7 +418,8 @@ axis's computed `tsconfig` and Vite wrapper pair. `HOST_PATHS` is the ordered li
 host artifacts, and it is the staging manifest rather than the per-plan carried set:
 `stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
 for that one workspace. `SERVICE_SCRIPT_PATH` names the consumer-owned provisioner a service
-workspace's audit expects.
+workspace's audit expects, and `GLOBAL_SETUP_PATH` names the consumer-owned Vitest global-setup
+module that independently selected projects can load.
 
 The bounds are public because they are part of the contract, not implementation trivia.
 `MAX_ARTIFACT_BYTES` caps one artifact at 5 MiB and `MAX_TOTAL_ARTIFACT_BYTES` caps one blueprint,
@@ -789,6 +798,7 @@ From [`helpers.ts`](../../src/core/helpers.ts).
 | `stableStringify`           | function |
 | `planPayload`               | function |
 | `computeColumnWidth`        | function |
+| `fitsPrintWidth`            | function |
 | `renderArray`               | function |
 | `renderObject`              | function |
 | `renderValue`               | function |
@@ -800,10 +810,11 @@ own data descriptor, so parsed JSON cannot acquire manifest fields through a pol
 and accessors are never invoked. Each builder omits an absent optional
 field entirely rather than writing `undefined`, so a built value round-trips its own exact-record
 guard. `blueprint` fills the defaults: `version` and `engines` from their constants, `src` to
-`['core']`, and every other collection to empty. `pascalCase` derives the entity name from a
-lowercase-hyphen package name, and `blueprintToMembers` derives the declared public `Member[]` — a
-full entity, options type, interface, and factory per published environment, plus the exact declaration
-inventory each selected application environment contributes.
+`['core']`, every other collection to empty, and every structural fact to `false`. `pascalCase`
+derives the entity name from a lowercase-hyphen package name, and `blueprintToMembers` derives the
+declared public `Member[]` — a full entity, options type, interface, and factory per published
+environment, plus the exact declaration inventory each selected application environment
+contributes.
 
 `escapeHtmlText` and `serializeTypeScriptString` are the two escaping leaves used when a
 caller-supplied name reaches generated HTML or generated TypeScript source; the latter preserves
@@ -853,7 +864,7 @@ marks an empty axis). `PlanManager` compares the canonical payload whenever an
 id is already registered: an identical plan is idempotent, while a distinct payload with the same
 32-bit digest fails closed with `ScaffoldError('INVALID', 'Plan hash collision')`.
 `formatJson` and its leaves — `renderValue`,
-`renderArray`, `renderObject`, and `computeColumnWidth` — emit JSON that matches the fleet
+`renderArray`, `renderObject`, `computeColumnWidth`, and `fitsPrintWidth` — emit JSON that matches the fleet
 formatter byte for byte, collapsing a short array onto one line and breaking a long one, so
 computed configuration JSON is format-stable by construction.
 
@@ -949,10 +960,11 @@ omitting an absent path entirely. `readManifest` reads `package.json` text, and
 
 `deriveBlueprint` is the faithful inverse an audit needs: it reconstructs a blueprint from an
 existing workspace so a mature package is diffed against its own would-be scaffold rather than a
-dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`, and
-the three structural axes from the directory probes and the service companion law the blueprint
-section states — every one of them a reading of the filesystem, never of the name. Dependencies and
-peers come from the manifest's scoped entries, with an optional peer recovered from
+dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`, the
+three structural project facts from their directory probes, and `global` from the physical,
+exact-case `tests/setupGlobal.ts` file; the service companion law remains the one the blueprint
+section states — every fact is a reading of the filesystem, never of the name. Dependencies and peers come
+from the manifest's scoped entries, with an optional peer recovered from
 `peerDependenciesMeta`; and `extras` is every development dependency minus the complete set
 `devDependenciesFor` emits for those environments and structural axes, and minus anything already
 declared as a dependency or peer. An axis-emitted dependency is therefore never double-counted,
@@ -1095,13 +1107,17 @@ without output containment — and it still carries every boundary guarantee abo
 
 `renderViteTest` is the single root-project renderer. It consumes ordered `ViteProjectRegistration`
 data and emits either the plain project list or the browser gate, keeping source and application
-root configurations byte-consistent without reconstructing browser ownership.
+root configurations byte-consistent without reconstructing browser ownership. Both forms use the
+formatter's 100-column fixed point: a complete registration-array line, including indentation and
+its trailing comma, stays collapsed when it fits and expands one entry per line otherwise.
 `viteProjectRegistrations` is the one registration derivation every root shape consumes: it derives
 the selected source and application projects from the canonical environment order, then appends
 `policy`, `guides`, and the optional `srcBin`, `integration`, and `service` projects.
-`viteProjectDefinitions` renders the standalone proof and structural-axis definitions in that same
-order with one blank line between declarations. Both consume `ViteAxes`, so each optional project is
-controlled only by its matching `bin`, `integration`, or `service` blueprint axis.
+`viteProjectDefinitions` renders the standalone proof and structural-fact definitions in that same
+order with one blank line between declarations. Both consume `ViteFacts`, so each optional project
+is controlled only by its matching `bin`, `integration`, or `service` blueprint fact; the same
+slice carries `global` to integration and the source-browser compiler without adding another
+project.
 
 `coreViteConfig`, `srcViteConfig`, `binViteConfig`, and `appViteConfig` emit the thin per-target
 wrappers, while `binTsconfig` emits the executable declaration scope; `rootViteConfig`,
@@ -1115,9 +1131,12 @@ or application environment project. The guides project therefore uses only `test
 `tests/app/**/*.test.ts` exclude rows are uniform across all root shapes by design, including
 core-only workspaces where one row cannot currently match. Integration and service use 120-second
 test and hook timeouts with file parallelism disabled, and service alone layers
-`tests/setupService.ts` onto the shared setup. Where a bin workspace also ships the integration
-project, that project wires `tests/setupIntegration.ts` as its global setup for the shared
-template-registry harness; bin-less integration workspaces do not.
+`tests/setupService.ts` onto the shared setup. The integration project wires
+`tests/setupGlobal.ts` for the shared template-registry harness exactly when `bin`, `integration`,
+and `global` are all true. Independently, a `global` source-browser project places
+`globalSetup: ['./tests/setupGlobal.ts']` immediately before its ordinary `setupFiles` row (and
+after the core-test exclusion where that row exists). Application browser projects never receive
+that field.
 
 `configArtifacts`, `sourceArtifacts`, `applicationArtifacts`, `testArtifacts`, and `guideArtifacts`
 are the per-group drafters. When `bin` is selected, `configArtifacts` includes
@@ -1666,9 +1685,14 @@ readonly, that privacy is a runtime `#` field rather than a TypeScript modifier,
 re-exports only through `export *`, that a core source never names a worker-only global the
 `WebWorker` declarations expose, and that a computed dynamic import cannot smuggle a
 cross-environment dependency past the declared import rules. Vue components are inspected for the
-same evasions. It is a complement to lint and typecheck, never a second type system, and it is not a
-general-purpose source analyzer. Generated workspaces receive the same exported policy module as a
-host-origin file and run it as a dedicated Node-only `policy` test project over
+same evasions. A self-contained runtime entrypoint may be exempt from module-scope placement only
+when it is not a centralized kind file and has at least one real `node:` value import. Erased
+type-only imports may reference sibling contracts; any non-`node:` static value import,
+`export … from` re-export, or dynamic `import(...)` disqualifies the exemption. An importless file
+does not qualify, and centralized declarations remain subject to their export law. Every other
+policy law still applies. It is a complement to lint and typecheck, never a second type system, and
+it is not a general-purpose source analyzer. Generated workspaces receive the same exported policy
+module as a host-origin file and run it as a dedicated Node-only `policy` test project over
 `tests/policy.test.ts`.
 
 **Real browser capability.** Browser test projects are gated on the real executable: the generated
@@ -1682,6 +1706,15 @@ placeholders; an unreadable or mixed filter keeps the ordinary no-test failure s
 Node projects. One printed warning names every gated project label. A machine with a browser
 registers and runs the real browser suites unchanged; a machine without one runs the remaining
 projects and says so.
+
+**Consumer-owned global setup.** The single mechanism-named `tests/setupGlobal.ts` module may
+prepare a shared integration registry, a real Node-side counterpart for source-browser tests such
+as a WebSocket fixture server, or both. The scaffold does not emit or replace it. Derivation
+records its exact-case physical presence as `global`, the single governing fact. Integration
+consumes it only when `bin` and `integration` are also true; a declared `src/browser` independently
+wires it to `srcBrowser`. Removing the file removes both eligible rows from regenerated
+configuration byte-for-byte. Application browser, styles, and service readiness setup remain
+isolated from this seam.
 
 **Continuous integration.** The generated workflow runs on push and pull request, on
 `ubuntu-latest`, with read-only contents permission, a 60-minute timeout, and a matrix that **tests
@@ -1981,6 +2014,7 @@ import {
 	compareCodeUnit,
 	computeColumnWidth,
 	escapeHtmlText,
+	fitsPrintWidth,
 	formatJson,
 	renderArray,
 	renderObject,
@@ -1993,6 +2027,7 @@ renderValue('ESNext', '', '', '') // '"ESNext"'
 renderArray(['ESNext', 'DOM'], '', '', '') // '["ESNext", "DOM"]'
 renderObject({ lib: ['ESNext'] }, '') // '{\n\t"lib": ["ESNext"]\n}'
 computeColumnWidth('\t"a"') // 3
+fitsPrintWidth('\t["ESNext"],') // true
 
 escapeHtmlText('<app & "team">') // '&lt;app &amp; &quot;team&quot;&gt;'
 serializeTypeScriptString("app's") // "'app\\'s'"
@@ -2172,7 +2207,7 @@ appViteConfig('server')
 policyViteProject()
 guidesViteProject()
 binViteProject()
-integrationViteProject({ bin: true, integration: true })
+integrationViteProject({ bin: true, integration: true, global: true })
 serviceViteProject()
 viteProjectDefinitions({ integration: true }).includes('export const integration =') // true
 viteProjectRegistrations(['core'], [], { integration: true }).map(({ project }) => project)
