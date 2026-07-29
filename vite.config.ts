@@ -40,6 +40,57 @@ const resolve = {
 	}, {}),
 }
 
+export function gateBrowserProjects(
+	registrations: readonly {
+		readonly project: () => UserConfig
+		readonly browser?: string
+	}[],
+	available: boolean,
+	argv: readonly string[],
+): NonNullable<UserConfig['test']> {
+	const projects: UserConfig[] = []
+	const gated: string[] = []
+	for (const registration of registrations) {
+		if (registration.browser !== undefined && !available) {
+			gated.push(registration.browser)
+			projects.push({
+				resolve,
+				test: {
+					name: { label: registration.browser, color: 'yellow' },
+					include: [],
+					environment: 'node',
+					browser: { enabled: false },
+				},
+			})
+			continue
+		}
+		projects.push(registration.project())
+	}
+	if (gated.length === 0) return { projects }
+	console.warn(`browser projects skipped: Chromium absent (${gated.join(', ')})`)
+	const filters: string[] = []
+	let readable = true
+	for (let index = 0; index < argv.length; index += 1) {
+		const argument = argv[index]
+		if (argument === '--project') {
+			const filter = argv[index + 1]
+			if (filter === undefined) {
+				readable = false
+				continue
+			}
+			filters.push(filter)
+			index += 1
+			continue
+		}
+		if (argument?.startsWith('--project=') === true) {
+			filters.push(argument.slice('--project='.length))
+		}
+	}
+	return readable && filters.length > 0 && filters.every((filter) => gated.includes(filter))
+		? { passWithNoTests: true, projects }
+		: { projects }
+}
+
 export const ENVIRONMENT_CSS = Object.freeze({
 	transformer: 'lightningcss',
 	lightningcss: {
@@ -71,20 +122,34 @@ export const ENVIRONMENT_CSS = Object.freeze({
 		},
 	},
 } satisfies CSSOptions)
+
+/** Prevent the Vitest browser mid-run "optimized dependencies changed, reloading" stall. */
+export const BROWSER_TEST_DEPENDENCIES = Object.freeze([
+	'@vitest/browser/client',
+	'vitest/browser',
+	'vitest/internal/browser',
+	'vitest',
+])
 export const PACKAGE_MANIFEST_BYTES = 1_048_576
 export const ENVIRONMENT_MODULE_BYTES = 8_388_608
 
 const WORKSPACE_ROOT = realpathSync.native(dirname(fileURLToPath(import.meta.url)))
 
+export function fileSystemPath(pathname: string): string {
+	if (!pathname.startsWith('/@fs/')) return pathname
+	const candidate = pathname.slice('/@fs/'.length)
+	// Vite URL normalization can collapse the leading slash of a POSIX absolute path.
+	return candidate.startsWith('/') || /^[A-Za-z]:[\\/]/.test(candidate)
+		? candidate
+		: `/${candidate}`
+}
+
 export function physicalPath(path: string): string {
 	const [pathWithoutQuery] = path.split('?')
-	const candidate = pathWithoutQuery?.startsWith('/@fs/')
-		? pathWithoutQuery.slice('/@fs/'.length)
-		: pathWithoutQuery
-	const physicalCandidate =
-		candidate !== undefined && /^file:/i.test(candidate) ? fileURLToPath(candidate) : candidate
+	const candidate = fileSystemPath(pathWithoutQuery ?? path)
+	const physicalCandidate = /^file:/i.test(candidate) ? fileURLToPath(candidate) : candidate
 	const absoluteCandidate =
-		physicalCandidate === undefined || physicalCandidate.length === 0
+		physicalCandidate.length === 0
 			? WORKSPACE_ROOT
 			: isAbsolute(physicalCandidate)
 				? physicalCandidate
@@ -141,15 +206,18 @@ export function isWorkspaceBoundaryModule(id: string): boolean {
 	const normalizedId = id.replaceAll('\\', '/')
 	const [path] = normalizedId.split(/[?#]/)
 	if (path === undefined) return false
-	let candidate = path.startsWith('/@fs/') ? path.slice('/@fs/'.length) : path
+	let candidate = fileSystemPath(path)
 	try {
 		if (/^file:/i.test(candidate)) candidate = fileURLToPath(candidate)
 	} catch {
 		return false
 	}
-	const absoluteCandidate = isAbsolute(candidate)
-		? candidate
-		: resolvePath(WORKSPACE_ROOT, candidate)
+	const rootRelative = /^\/(?:app|src)\/(?:core|browser|server)\//.test(candidate)
+	const absoluteCandidate = rootRelative
+		? resolvePath(WORKSPACE_ROOT, candidate.slice(1))
+		: isAbsolute(candidate)
+			? candidate
+			: resolvePath(WORKSPACE_ROOT, candidate)
 	const relativeId = relative(WORKSPACE_ROOT, absoluteCandidate).replaceAll('\\', '/')
 	return (
 		relativeId !== '..' &&
@@ -162,10 +230,7 @@ export function isWorkspaceBoundaryModule(id: string): boolean {
 export function isOutsideWorkspacePath(path: string): boolean {
 	const [pathWithoutQuery] = path.split('?')
 	if (pathWithoutQuery === undefined) return false
-	const candidate = pathWithoutQuery.startsWith('/@fs/')
-		? pathWithoutQuery.slice('/@fs/'.length)
-		: pathWithoutQuery
-	return isAbsolute(candidate)
+	return isAbsolute(fileSystemPath(pathWithoutQuery))
 }
 
 export function containedPath(root: string, target: string): boolean {
@@ -744,10 +809,10 @@ export function environmentBoundary(
 					continue
 				}
 				for (const original of output.originalFileNames) {
-					if (!isWorkspaceBoundaryModule(original)) continue
 					const physical = physicalPath(
 						isAbsolute(original) ? original : resolvePath(environmentRoot, original),
 					)
+					if (isBoundaryExemptModule(original) || isBoundaryExemptModule(physical)) continue
 					const target = workspacePath(physical)
 					if (target === undefined) {
 						if (trustedPackageRootFor(physical, trustedPackageRoots) === undefined) {
@@ -864,7 +929,6 @@ export function environmentBoundary(
 	}
 }
 
-if (!hasChromium) console.warn('browser projects skipped: Chromium absent (src:browser)')
 export const srcCore = (config?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
@@ -884,35 +948,6 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 			},
 		},
 		config ?? {},
-	)
-
-export const policy = (config?: UserConfig): UserConfig =>
-	mergeConfig(
-		{
-			resolve,
-			test: {
-				name: { label: 'policy', color: 'white' },
-				include: ['tests/policy.test.ts'],
-				setupFiles: ['./tests/setup.ts'],
-				environment: 'node',
-				browser: { enabled: false },
-			},
-		},
-		config ?? {},
-	)
-
-export const guides = (config?: UserConfig): UserConfig =>
-	srcCore(
-		mergeConfig(
-			{
-				test: {
-					name: { label: 'guides', color: 'green' },
-					include: ['tests/guides/**/*.test.ts'],
-					exclude: ['tests/src/**/*.test.ts', 'tests/setup.test.ts'],
-				},
-			},
-			config ?? {},
-		),
 	)
 
 export const srcBrowser = (config?: UserConfig): UserConfig =>
@@ -937,12 +972,23 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 				},
 				test: {
 					name: { label: 'src:browser', color: 'yellow' },
-					include: hasChromium ? ['tests/src/browser/**/*.test.ts'] : [],
-					passWithNoTests: !hasChromium,
+					include: ['tests/src/browser/**/*.test.ts'],
 					exclude: ['tests/src/core/**/*.test.ts'],
 					setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
+					...(config?.test?.browser?.enabled === false
+						? {}
+						: {
+								deps: {
+									optimizer: {
+										client: {
+											enabled: true,
+											include: [...BROWSER_TEST_DEPENDENCIES],
+										},
+									},
+								},
+							}),
 					browser: {
-						enabled: hasChromium,
+						enabled: true,
 						provider: playwright(),
 						instances: [{ browser: 'chromium', headless: true }],
 					},
@@ -995,9 +1041,48 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 		),
 	)
 
+export const policy = (config?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'policy', color: 'white' },
+				include: ['tests/policy.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		config ?? {},
+	)
+
+export const guides = (config?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'guides', color: 'green' },
+				include: ['tests/guides/**/*.test.ts'],
+				exclude: ['tests/src/**/*.test.ts', 'tests/app/**/*.test.ts', 'tests/setup.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		config ?? {},
+	)
+
 export default defineConfig({
 	resolve,
-	test: {
-		projects: [srcCore, ...(hasChromium ? [srcBrowser] : []), srcServer, policy, guides],
-	},
+	test: gateBrowserProjects(
+		[
+			{ project: srcCore },
+			{ project: srcBrowser, browser: 'src:browser' },
+			{ project: srcServer },
+			{ project: policy },
+			{ project: guides },
+		],
+		hasChromium,
+		process.argv,
+	),
 })

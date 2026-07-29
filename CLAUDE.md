@@ -288,9 +288,12 @@ with the session id from the journal head as the recovery handle.
   implementation units) always uses the journaled CLI, and the Orchestrator — never a bridge
   agent — launches it as a harness-tracked background command: the brief at
   `tmp/codex/<unit>-brief.md`, then one
-  `timeout <cap> codex exec --json … > tmp/codex/<unit>.jsonl` with `--output-last-message`,
-  started through the shell's background-task mechanism so the exec appears in the session's
-  task list, its completion re-invokes the session, and the cap kills a wedged bench loudly.
+  `timeout <cap> codex exec --json … < /dev/null > tmp/codex/<unit>.jsonl` with
+  `--output-last-message`, started through the shell's background-task mechanism so the exec
+  appears in the session's task list, its completion re-invokes the session, and the cap kills
+  a wedged bench loudly. Stdin is always closed with `< /dev/null`: a background-launched exec
+  can inherit an open stdin pipe and wedge forever at "Reading additional input from stdin..."
+  before its first event, and a cap kill is the only thing that would ever surface it.
   The journal remains the durable, resumable record and the session id the recovery handle. A
   bridge that backgrounds an exec and ends its turn orphans it — no owner, no completion
   signal, no death notice — so bridges keep two jobs only: drafting briefs and short MCP

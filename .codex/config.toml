@@ -6,6 +6,8 @@
 # Terra is available only for explicitly mechanical, taste-free work; Luna is
 # opt-in only for a proven repeatable high-volume workload.
 
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 review_model = "gpt-5.6-sol"

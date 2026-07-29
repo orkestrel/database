@@ -127,49 +127,51 @@ plan.artifacts.some((artifact) => artifact.path === 'app/server/main.ts') // tru
 
 From [`types.ts`](../../src/core/types.ts).
 
-| Name                   | Kind      |
-| ---------------------- | --------- |
-| `Environment`          | type      |
-| `BuildFormat`          | type      |
-| `SrcDefinition`        | interface |
-| `AppDefinition`        | interface |
-| `ViteMachinery`        | interface |
-| `Origin`               | type      |
-| `Group`                | type      |
-| `Category`             | type      |
-| `CatalogEntry`         | interface |
-| `Drift`                | type      |
-| `Freshness`            | type      |
-| `CompileStage`         | type      |
-| `ScaffoldErrorCode`    | type      |
-| `Dependency`           | interface |
-| `Override`             | interface |
-| `Blueprint`            | interface |
-| `Member`               | interface |
-| `ArtifactBase`         | interface |
-| `HostArtifact`         | interface |
-| `ContentArtifact`      | interface |
-| `Artifact`             | type      |
-| `Snapshot`             | type      |
-| `Plan`                 | interface |
-| `Finding`              | interface |
-| `Audit`                | interface |
-| `Question`             | interface |
-| `Validation`           | interface |
-| `GuideSync`            | interface |
-| `VersionSync`          | interface |
-| `SyncReport`           | interface |
-| `PlanSummary`          | interface |
-| `CompileRecord`        | interface |
-| `CompileFailure`       | interface |
-| `Scaffolding`          | interface |
-| `PlanRecord`           | interface |
-| `CompilerEventMap`     | type      |
-| `CompilerOptions`      | interface |
-| `CompilerInterface`    | interface |
-| `PlanManagerEventMap`  | type      |
-| `PlanManagerOptions`   | interface |
-| `PlanManagerInterface` | interface |
+| Name                      | Kind      |
+| ------------------------- | --------- |
+| `Environment`             | type      |
+| `BuildFormat`             | type      |
+| `SrcDefinition`           | interface |
+| `AppDefinition`           | interface |
+| `ViteMachinery`           | interface |
+| `ViteAxes`                | interface |
+| `ViteProjectRegistration` | interface |
+| `Origin`                  | type      |
+| `Group`                   | type      |
+| `Category`                | type      |
+| `CatalogEntry`            | interface |
+| `Drift`                   | type      |
+| `Freshness`               | type      |
+| `CompileStage`            | type      |
+| `ScaffoldErrorCode`       | type      |
+| `Dependency`              | interface |
+| `Override`                | interface |
+| `Blueprint`               | interface |
+| `Member`                  | interface |
+| `ArtifactBase`            | interface |
+| `HostArtifact`            | interface |
+| `ContentArtifact`         | interface |
+| `Artifact`                | type      |
+| `Snapshot`                | type      |
+| `Plan`                    | interface |
+| `Finding`                 | interface |
+| `Audit`                   | interface |
+| `Question`                | interface |
+| `Validation`              | interface |
+| `GuideSync`               | interface |
+| `VersionSync`             | interface |
+| `SyncReport`              | interface |
+| `PlanSummary`             | interface |
+| `CompileRecord`           | interface |
+| `CompileFailure`          | interface |
+| `Scaffolding`             | interface |
+| `PlanRecord`              | interface |
+| `CompilerEventMap`        | type      |
+| `CompilerOptions`         | interface |
+| `CompilerInterface`       | interface |
+| `PlanManagerEventMap`     | type      |
+| `PlanManagerOptions`      | interface |
+| `PlanManagerInterface`    | interface |
 
 The closed vocabularies are small and total. `Environment` is `'core' | 'browser' | 'server'`.
 `BuildFormat` is `'es' | 'cjs'`. `Origin` is `'host' | 'template' | 'computed'`. `Group` is
@@ -190,6 +192,13 @@ single-file-component, HTML, and development-server machinery an application bro
 needs, and `output` for build-output containment. It never selects a boundary guarantee — those ship
 in every shape, as the compilers section sets out.
 
+`ViteAxes` is the optional structural-project slice shared by every root Vite compiler:
+`bin`, `integration`, and `service` each select their matching standalone project when `true`.
+
+`ViteProjectRegistration` carries one generated project factory identifier and its optional browser
+label. Root configuration renderers preserve that browser ownership as data through registration
+instead of inferring it from a project identifier.
+
 `Blueprint` is the closed input spec:
 
 ```ts
@@ -205,19 +214,44 @@ interface Blueprint {
 	readonly version: string
 	readonly engines: string
 	readonly overrides: readonly Override[]
-	readonly engine: boolean
+	readonly bin: boolean
+	readonly integration: boolean
+	readonly service: boolean
 }
 ```
 
-`src` selects published library environments under `src`; `app` selects private runtime environments under
-`app`. The two axes are independent, so library-only, application-only, and mixed workspaces are
-all first class. `dependencies` and `peers` are runtime `@orkestrel/*` packages — a peer flagged
-`optional` also gets a `peerDependenciesMeta` entry. `extras` are package-specific development
-dependencies merged over the generated baseline, and may carry any valid npm package name. `engine`
-is structural, never inferred from a name: it is `true` only for a workspace that ships its own
-`src/bin`, and it alone turns on the self-hosting extras (a `bin` field, the `scaffold` script
-pointed at the built executable, the bin check, test, and build scripts, `build:host`, and the
-`src:bin` test project).
+`src` selects published library environments under `src`; `app` selects private runtime
+environments under `app`. The two axes are independent, so library-only, application-only, and
+mixed workspaces are all first class. `dependencies` and `peers` are runtime `@orkestrel/*`
+packages — a peer flagged `optional` also gets a `peerDependenciesMeta` entry. `extras` are
+package-specific development dependencies merged over the generated baseline, and may carry any
+valid npm package name.
+
+`bin`, `integration`, and `service` are the three structural axes, and they obey one law: each is
+`true` only when the workspace physically ships the directory that defines it — never because of
+the workspace's name, and never because a sibling axis is set. `deriveBlueprint` probes exactly
+those directories, so a fresh compile and an audit of a mature repository agree on what the
+workspace is.
+
+- **`bin`** — `src/bin/` exists. It alone turns on the self-hosting extras: the manifest's `bin`
+  entry, the `scaffold` script pointed at the built executable, the bin check, test, and build
+  scripts, `build:host`, the `configs/src/tsconfig.bin.json` and `configs/src/vite.bin.config.ts`
+  artifacts, and the `src:bin` test project.
+- **`integration`** — `tests/integration/` exists. It records a slow, opt-in proof project over the
+  workspace's own built output, outside the default run: the generated root configuration registers
+  a standalone `integration` project including `tests/integration/**/*.test.ts`, and the manifest
+  emits `test:integration`.
+- **`service`** — `tests/service/` exists. It records a slow, opt-in proof project against a foreign
+  running process, outside the default run: a standalone `service` project including
+  `tests/service/**/*.test.ts`, with `tests/setupService.ts` after the shared setup, and the
+  isolated `test:service` script.
+
+A service workspace owes two companion files beside that directory, and derivation requires both
+physically present: `tests/setupService.ts` and `scripts/service.sh`. Either missing companion is a
+coded `TARGET` failure naming the missing path rather than a silent `service: false`. This package
+emits neither: both are consumer-owned seams, and the generated-workspace section sets out what
+each owes its workspace and which proof runs in which gate. Nothing here is inferred — the
+executable axis turns on neither proof project, and neither proof project turns on the other.
 
 `Override` replaces a rendered artifact's content at a path, never partially merges it. `Member` is
 one declared public export of the scaffolded workspace, derived rather than authored.
@@ -322,8 +356,10 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `FRESHNESS`                       | const |
 | `COMPILE_STAGES`                  | const |
 | `SRC_MATRIX`                      | const |
+| `BIN_CONFIGS`                     | const |
 | `APP_MATRIX`                      | const |
 | `HOST_PATHS`                      | const |
+| `SERVICE_SCRIPT_PATH`             | const |
 | `NAME_PATTERN`                    | const |
 | `MAX_NAME_LENGTH`                 | const |
 | `MAX_DEPENDENCY_NAME_LENGTH`      | const |
@@ -368,11 +404,13 @@ From [`constants.ts`](../../src/core/constants.ts).
 `ENVIRONMENTS`, `ORIGINS`, `GROUPS`, `CATEGORIES`, `FRESHNESS`, and `COMPILE_STAGES` are the frozen
 value lists behind their literal unions. `SRC_MATRIX` is the `src` environment matrix as
 data — each environment's `configs/src` files, test-project label, `exports` subpath, and build
-formats. `APP_MATRIX` is its application sibling, adding the runtime entry where an environment produces
-one (`app/browser/index.html`, `app/server/main.ts`). `HOST_PATHS` is the ordered list of
-byte-copied host artifacts, and it is the staging manifest rather than the per-plan carried set:
+formats. `APP_MATRIX` is its application sibling, adding the runtime entry where an environment
+produces one (`app/browser/index.html`, `app/server/main.ts`). `BIN_CONFIGS` is the executable
+axis's computed `tsconfig` and Vite wrapper pair. `HOST_PATHS` is the ordered list of byte-copied
+host artifacts, and it is the staging manifest rather than the per-plan carried set:
 `stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
-for that one workspace.
+for that one workspace. `SERVICE_SCRIPT_PATH` names the consumer-owned provisioner a service
+workspace's audit expects.
 
 The bounds are public because they are part of the contract, not implementation trivia.
 `MAX_ARTIFACT_BYTES` caps one artifact at 5 MiB and `MAX_TOTAL_ARTIFACT_BYTES` caps one blueprint,
@@ -826,6 +864,7 @@ From [`helpers.ts`](../../src/server/helpers.ts).
 | Name                       | Kind     |
 | -------------------------- | -------- |
 | `isRealDirectory`          | function |
+| `isRealFile`               | function |
 | `digestFile`               | function |
 | `digestHex`                | function |
 | `digestText`               | function |
@@ -888,7 +927,7 @@ so a file swapped mid-read is a failure rather than a silent wrong digest. `read
 strictly, rejecting invalid UTF-8. Manifest reads stop at `MAX_MANIFEST_BYTES`; catalog guide reads
 stop at `MAX_GUIDE_BYTES`. `listFiles` and `listDirectories` walk a real, unlinked root under the
 entry and depth bounds, returning sorted POSIX-relative paths and `[]` for an absent root.
-`isRealDirectory` is the physical-directory predicate they all lean on.
+`isRealDirectory` and `isRealFile` are the physical path predicates they all lean on.
 
 The write-transaction helpers are the fail-closed mutation path. `createWriteDirectory` establishes
 a directory one segment at a time behind captured identities; `validateWriteAnchor`,
@@ -910,14 +949,17 @@ omitting an absent path entirely. `readManifest` reads `package.json` text, and
 
 `deriveBlueprint` is the faithful inverse an audit needs: it reconstructs a blueprint from an
 existing workspace so a mature package is diffed against its own would-be scaffold rather than a
-dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`;
-`engine` is `true` only when `src/bin/` exists; dependencies and peers come from the manifest's
-scoped entries, with an optional peer recovered from `peerDependenciesMeta`; and `extras` is every
-development dependency minus the generated baseline and minus anything already declared as a
-dependency or peer, so a hand-added development dependency round-trips and stays audit-clean.
-Derivation yields no `overrides`: they are caller-time inputs, not repository state. A computed
-artifact that must differ reveals a gap in the canon; the blueprint grows an axis for that
-distinction rather than the repository forking the file.
+dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`, and
+the three structural axes from the directory probes and the service companion law the blueprint
+section states — every one of them a reading of the filesystem, never of the name. Dependencies and
+peers come from the manifest's scoped entries, with an optional peer recovered from
+`peerDependenciesMeta`; and `extras` is every development dependency minus the complete set
+`devDependenciesFor` emits for those environments and structural axes, and minus anything already
+declared as a dependency or peer. An axis-emitted dependency is therefore never double-counted,
+while a hand-added development dependency round-trips and stays audit-clean. Derivation yields no
+`overrides`: they are caller-time inputs, not repository state. A computed artifact that must differ
+reveals a gap in the canon; the blueprint grows an axis for that distinction rather than the
+repository forking the file.
 
 `storagePath`, `stageHost`, `readHostManifest`, `locateHostSource`, `remapArtifactPath`, and
 `hydratePlan` are the vendored-host path. `storagePath` maps a repo-relative path to its un-dotted
@@ -956,43 +998,52 @@ ordered guide and version outcomes.
 
 From [`compilers.ts`](../../src/core/compilers.ts).
 
-| Name                    | Kind     |
-| ----------------------- | -------- |
-| `hostGroup`             | function |
-| `fillArtifact`          | function |
-| `srcVariant`            | function |
-| `entryFields`           | function |
-| `dualCondition`         | function |
-| `exportsMap`            | function |
-| `compareCodeUnit`       | function |
-| `devDependenciesFor`    | function |
-| `packageManifest`       | function |
-| `rootTsconfig`          | function |
-| `viteMachinery`         | function |
-| `viteHeader`            | function |
-| `policyViteProject`     | function |
-| `singleSrcViteConfig`   | function |
-| `rootViteConfig`        | function |
-| `applicationViteConfig` | function |
-| `coreTsconfig`          | function |
-| `coreViteConfig`        | function |
-| `srcTsconfig`           | function |
-| `srcViteConfig`         | function |
-| `appTsconfig`           | function |
-| `appViteConfig`         | function |
-| `ciWorkflow`            | function |
-| `configArtifacts`       | function |
-| `sourceArtifacts`       | function |
-| `applicationArtifacts`  | function |
-| `paritySpecifiers`      | function |
-| `testArtifacts`         | function |
-| `guideMemberTable`      | function |
-| `guideUsage`            | function |
-| `guideMethods`          | function |
-| `guideTests`            | function |
-| `guideArtifacts`        | function |
-| `applyOverrides`        | function |
-| `blueprintToPlan`       | function |
+| Name                       | Kind     |
+| -------------------------- | -------- |
+| `hostGroup`                | function |
+| `fillArtifact`             | function |
+| `srcVariant`               | function |
+| `entryFields`              | function |
+| `dualCondition`            | function |
+| `exportsMap`               | function |
+| `compareCodeUnit`          | function |
+| `devDependenciesFor`       | function |
+| `packageManifest`          | function |
+| `rootTsconfig`             | function |
+| `viteMachinery`            | function |
+| `renderViteTest`           | function |
+| `viteHeader`               | function |
+| `policyViteProject`        | function |
+| `guidesViteProject`        | function |
+| `binViteProject`           | function |
+| `integrationViteProject`   | function |
+| `serviceViteProject`       | function |
+| `viteProjectRegistrations` | function |
+| `viteProjectDefinitions`   | function |
+| `singleSrcViteConfig`      | function |
+| `rootViteConfig`           | function |
+| `applicationViteConfig`    | function |
+| `coreTsconfig`             | function |
+| `coreViteConfig`           | function |
+| `srcTsconfig`              | function |
+| `srcViteConfig`            | function |
+| `binTsconfig`              | function |
+| `binViteConfig`            | function |
+| `appTsconfig`              | function |
+| `appViteConfig`            | function |
+| `ciWorkflow`               | function |
+| `configArtifacts`          | function |
+| `sourceArtifacts`          | function |
+| `applicationArtifacts`     | function |
+| `paritySpecifiers`         | function |
+| `testArtifacts`            | function |
+| `guideMemberTable`         | function |
+| `guideUsage`               | function |
+| `guideMethods`             | function |
+| `guideTests`               | function |
+| `guideArtifacts`           | function |
+| `applyOverrides`           | function |
+| `blueprintToPlan`          | function |
 
 `blueprintToPlan` is the whole pure compilation: draft each selected group's artifacts, append the
 host set, apply overrides, and pin. Everything above it is an exported leaf of that drafting, each
@@ -1002,10 +1053,11 @@ independently callable and independently tested.
 several. `entryFields`, `dualCondition`, and `exportsMap` build the manifest entry fields and the
 `exports` map from that variant; a browser-only package exports a single module condition, while
 core and server src get dual import and require conditions with matching declaration files.
-`devDependenciesFor` merges a blueprint's extras over the shared baseline, extras winning a name
-collision, sorted by `compareCodeUnit` so ordering is stable across locales. `packageManifest`
-assembles the whole file — name, publication mode, files, scripts, dependencies, peers and their
-optional metadata, and engines.
+`devDependenciesFor` emits the blueprint's complete development dependency set: the shared
+baseline, package extras, dev-installed peers, selected browser toolchains, and the bin axis's
+browser test provider. Extras and peers are sorted by `compareCodeUnit` so ordering is stable across
+locales. `packageManifest` assembles the whole file — name, publication mode, files, scripts,
+dependencies, peers and their optional metadata, and engines.
 
 `rootTsconfig` emits the root compiler options and one path alias per declared environment;
 `coreTsconfig`, `srcTsconfig`, and `appTsconfig` emit the scoped configurations that remove the
@@ -1041,13 +1093,36 @@ along the three `ViteMachinery` axes:
 An application of `app/core` alone is the sole shape that builds nothing, so it is the sole shape
 without output containment — and it still carries every boundary guarantee above.
 
-`coreViteConfig`, `srcViteConfig`, and `appViteConfig` emit the thin per-target wrappers;
-`rootViteConfig`, `singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for
-a library-only, single non-core `src` environment, and application-bearing workspace respectively;
-`policyViteProject` emits the dedicated Node-only repository-policy test project.
+`renderViteTest` is the single root-project renderer. It consumes ordered `ViteProjectRegistration`
+data and emits either the plain project list or the browser gate, keeping source and application
+root configurations byte-consistent without reconstructing browser ownership.
+`viteProjectRegistrations` is the one registration derivation every root shape consumes: it derives
+the selected source and application projects from the canonical environment order, then appends
+`policy`, `guides`, and the optional `srcBin`, `integration`, and `service` projects.
+`viteProjectDefinitions` renders the standalone proof and structural-axis definitions in that same
+order with one blank line between declarations. Both consume `ViteAxes`, so each optional project is
+controlled only by its matching `bin`, `integration`, or `service` blueprint axis.
+
+`coreViteConfig`, `srcViteConfig`, `binViteConfig`, and `appViteConfig` emit the thin per-target
+wrappers, while `binTsconfig` emits the executable declaration scope; `rootViteConfig`,
+`singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for a library-only,
+single non-core `src` environment, and application-bearing workspace respectively; and
+`policyViteProject`, `guidesViteProject`, `integrationViteProject`, and `serviceViteProject` emit
+the standalone Node proof projects, with `binViteProject` the single executable-project emitter. A
+proof project is structurally derived from the directory holding its tests and never wraps a source
+or application environment project. The guides project therefore uses only `tests/setup.ts`, never
+`setupServer.ts`, `setupBrowser.ts`, or `setupService.ts`; and its `tests/src/**/*.test.ts` and
+`tests/app/**/*.test.ts` exclude rows are uniform across all root shapes by design, including
+core-only workspaces where one row cannot currently match. Integration and service use 120-second
+test and hook timeouts with file parallelism disabled, and service alone layers
+`tests/setupService.ts` onto the shared setup. Where a bin workspace also ships the integration
+project, that project wires `tests/setupIntegration.ts` as its global setup for the shared
+template-registry harness; bin-less integration workspaces do not.
 
 `configArtifacts`, `sourceArtifacts`, `applicationArtifacts`, `testArtifacts`, and `guideArtifacts`
-are the per-group drafters. `paritySpecifiers` computes the self-specifier and module map the
+are the per-group drafters. When `bin` is selected, `configArtifacts` includes
+`configs/src/tsconfig.bin.json` and `configs/src/vite.bin.config.ts` beside the declared environment
+configuration pairs. `paritySpecifiers` computes the self-specifier and module map the
 generated parity suite resolves fence imports through. `guideMemberTable`, `guideUsage`,
 `guideMethods`, and `guideTests` render the generated guide's member tables, usage examples, method
 contract, and test inventory. `fillArtifact` fills one template entry into a `template`-origin
@@ -1276,13 +1351,13 @@ Audit semantics follow directly from that.
 - A target file the plan does not own is `foreign`, and `inferGroup` classifies it by its leading
   path segment.
 
-The same ownership boundary is what makes mutation safe. **`repair` and `fleet` mutate host-origin
-artifacts only.** Both scope the compiled plan to host origin before hydrating, diffing, or applying
-anything, so a mature workspace's hand-written source, tests, guides, and manifest are never
-overwritten with a stub. A consequence worth stating plainly: the generated
-`.github/workflows/ci.yml` is a **computed** artifact, so **user-owned CI is never repaired**. Once
-a workspace has its own workflow, that copy stands, and any change to it is an ordinary edit in that
-workspace. Audit still compares it because computed artifacts are content-aware canon. A legitimate
+The same ownership boundary is what makes mutation safe. **`fleet` and default `repair` both scope
+the compiled plan to host origin before hydrating, diffing, or applying.** `--generated` widens that
+scoped plan to generated canon except `package.json`; template artifacts remain birth-only in
+either mode. A mature workspace's hand-written source, tests, guides, and manifest are therefore
+never overwritten with a stub. The generated `.github/workflows/ci.yml` is a **computed** artifact,
+so user-owned CI stands by default but is intentionally restored when `--generated` is passed.
+Audit always compares it because computed artifacts are content-aware canon. A legitimate
 difference that the blueprint cannot express is a canon gap: add the missing blueprint axis rather
 than forking the computed file in one repository.
 
@@ -1314,12 +1389,20 @@ An audit is a pure function of a plan and a snapshot, so the same engine that cr
 checks one. `readTarget` supplies the snapshot as exact bytes; `diffPlan` returns findings as data;
 `auditToReview` renders them for a human. Nothing in that path writes.
 
+The executable's physical unexpected-file scan treats exactly `scripts/service.sh` as an expected
+consumer-owned seam when the derived blueprint has `service: true`. That exclusion is warranted
+because a service blueprint cannot derive without the physical file: the companion-file law raises
+a `TARGET` failure first, so the scan removes a false positive and can never mask an absent
+provisioner. A non-service workspace still reports the same path as foreign.
+
 `repair` turns those findings back into the narrowest possible write. It re-reads the target,
 re-diffs it, and refuses to proceed if the findings changed since the preview it was given — a
 target that moved under the caller is a `TARGET` failure, not a race to win. It then derives a write
 precondition per artifact from the audit itself: a `missing` finding requires the destination to
 still be absent, a `stale` finding requires it to still carry exactly the bytes that were observed.
 Those preconditions are checked again inside the write transaction before any promotion.
+An interactive audit repair hand-off forwards `--generated` into the repair invocation when the
+flag was present on `audit`.
 
 `prune` is the deletion arm, and it is deliberately narrow. Its candidate set comes from
 `pruneTargets`, which is also what the executable's audit and preview read, so what is reported and
@@ -1390,20 +1473,65 @@ configuration, and ships `dist/src` plus its README. An application-only workspa
 that builds its own executable additionally ships `dist/bin` and `dist/host`. Scripts are emitted in
 a fixed, interleaved order so aggregates sit immediately before their per-environment members:
 
-- `clean`, `copy`, `scaffold`
-- `lint` and `lint:check`, `format` and `format:check`
+- `clean`, `copy`, `scaffold`, `lint`
 - `check`, then `check:src` with one `check:src:<environment>` per published environment, then
   `check:app` with one `check:app:<environment>` per app environment — the browser app scope uses the
   Vue typechecker, every other scope uses plain `tsc`
-- `test`, then `test:src` and its per-environment scopes, `test:app` and its per-environment scopes,
-  `test:policy`, and `test:guides`; an engine also receives the deliberately non-default
-  `test:integration` live installed-consumer gate
+- `format`, `format:check`, `lint:check`
+- `test`, then `test:src` and its per-environment scopes, the optional `test:integration`,
+  `test:equivalence`, and `test:service` proofs, `test:app` and its per-environment scopes, then
+  `test:policy` and `test:guides`
 - `build`, then `build:src` and its per-environment targets, `build:app` and its runtime targets, and
-  `build:host` for an engine workspace
+  `build:host` for a bin workspace
 - `dev` when a browser application is selected; `serve` and `serve:build` when a server application
   is selected
-- `prepublishOnly` chaining `format:check → lint:check → check → build → test`, followed by the
-  live generated-consumer integration gate for the scaffold engine itself
+- `prepublishOnly` chaining `format:check → lint:check → check → build → test`, followed by
+  `test:integration` when the integration axis is selected
+
+**Proof gating.** The opt-in proofs are predictable from the axes alone. `test:integration` rides
+the `integration` axis and `test:service` the `service` axis, while `test:equivalence` is emitted
+only where `bin` and `integration` are both set:
+
+| Proof              | `npm test` | `prepublishOnly` | CI                         |
+| ------------------ | ---------- | ---------------- | -------------------------- |
+| `test:integration` | no         | yes, last        | after the standard gates   |
+| `test:equivalence` | no         | no               | no                         |
+| `test:service`     | no         | never            | after `scripts/service.sh` |
+
+No proof joins the default chain: `npm test` runs the source, application, policy, and guide
+projects, and nothing there needs a build artifact or a foreign process. Publication is the one
+asymmetry — `prepublishOnly` appends `test:integration`, because a package about to be published
+should prove itself against its own built output, while `test:service` is never in that chain.
+Neither default testing nor publication starts or requires a foreign process.
+
+When a prerequisite is absent the proof fails rather than skipping. `test:integration` reads the
+workspace's own built output, so it belongs after `build` — which is exactly where `prepublishOnly`
+and CI put it. `test:service` refuses to start against an unprovisioned service: its setup throws at
+module load, which is why CI runs `bash scripts/service.sh` immediately before it. And a script the
+axes do not emit is simply not there: `test:equivalence` in a workspace that is not both `bin` and
+`integration` is an unknown script rather than a quietly passing one.
+
+The equivalence proof is a dual-path re-run rather than a separate suite. Run
+`npm run test:equivalence` after changing the persistent boundary build driver; it invokes the
+integration project in dual-path mode and proves each programmatic driver verdict against the
+spawned npm-script reference. Ordinary integration runs keep the faster driver-only path.
+
+**Consumer-owned service seams.** The service axis is the one place canon stops at the boundary:
+there is no template for a proof project and neither companion path is on `HOST_PATHS`, so a
+service workspace owns both of its seams outright. They come as a pair.
+
+- `tests/setupService.ts` is the readiness seam. It probes the foreign process and warms it before
+  any test runs, and throws at module load — naming the `service` project — when that process is
+  unreachable, so an unprovisioned run fails loudly instead of passing an empty suite. Only the
+  `service` project loads it.
+- `scripts/service.sh` is the provisioning seam, named once by `SERVICE_SCRIPT_PATH`. It brings that
+  process up idempotently — a second run against an already-provisioned service is a no-op rather
+  than a second instance — and exits nonzero when it cannot, which is what makes CI's
+  `bash scripts/service.sh` step a gate rather than a hint.
+
+The audit expects the script rather than reporting it foreign, on the derive-time warrant the audit
+section gives. Repair pruning applies the same exclusion, so it never proposes or removes that
+required consumer-owned provisioner.
 
 **Environment isolation.** Scoped TypeScript projects remove the wrong host's globals from each
 environment: core scopes carry the WHATWG web-interop surface and no host at all — no DOM, no Node,
@@ -1546,11 +1674,14 @@ host-origin file and run it as a dedicated Node-only `policy` test project over
 **Real browser capability.** Browser test projects are gated on the real executable: the generated
 configuration and the generated policy test both probe `existsSync(chromium.executablePath())`. A
 browser suite runs when a real Chromium is installed and is skipped honestly when it is not, rather
-than being faked. The gate is applied at registration, not only inside the project: without a
-Chromium the browser project is left out of the emitted `projects` list entirely, so the runner
-never has to reconcile a registered project whose include set resolves to nothing, and one printed
-warning names every omitted project label. A machine with a browser runs the browser suite; a
-machine without one runs the remaining projects and says so.
+than being faked. The gate is applied at registration, not inside the real browser project: without
+Chromium, each browser factory is replaced by a same-label Node/no-test placeholder, so generated
+`--project <label>` and `--project=<label>` filters still resolve while no browser code runs. The
+root permits an empty run only when every recognized exact project filter names one of those gated
+placeholders; an unreadable or mixed filter keeps the ordinary no-test failure semantics for its
+Node projects. One printed warning names every gated project label. A machine with a browser
+registers and runs the real browser suites unchanged; a machine without one runs the remaining
+projects and says so.
 
 **Continuous integration.** The generated workflow runs on push and pull request, on
 `ubuntu-latest`, with read-only contents permission, a 60-minute timeout, and a matrix that **tests
@@ -1558,7 +1689,8 @@ Node `22.12.0` and `26`** with fail-fast disabled. Checkout and Node setup are p
 action commits, and checkout does not persist credentials. Dependencies install with
 `npm ci --ignore-scripts`; Chromium is installed only when the workspace selects a browser environment
 or builds its own executable. The gates then run in order: `format:check`, `lint:check`, `check`,
-`build`, `test`; engine workspaces then run the separate live installed-consumer integration gate.
+`build`, `test`, and the workspace's selected proofs follow as their own named steps, in the order
+the proof-gating table gives them.
 
 **Agent orchestration files.** The session hooks in the generated `.claude/settings.json` run the
 dependency, model, and external-tool readiness scripts at session start. The **`Stop` hook runs only
@@ -1587,7 +1719,7 @@ no module API of its own. Six verbs:
 | `new`     | scaffold a workspace into `./<name>`                     |
 | `pull`    | refresh vendored guides and versions, report drift       |
 | `audit`   | whole-plan conformance report                            |
-| `repair`  | restore the shared host-owned set                        |
+| `repair`  | restore host-owned files and optional generated canon    |
 | `fleet`   | audit or repair every workspace under the cwd's children |
 | `catalog` | regenerate the fleet package-catalog table               |
 
@@ -1608,8 +1740,10 @@ declared dependency mirror is considered.
 `--groups a,b` scopes an audit to artifact groups. `--live` adds an upstream freshness check to an
 audit. `--strict` makes a pull throw on a network fault. `--offline` restricts a catalog to local
 sources. `--prune` opts a repair or fleet run into deleting unexpected files under the three prune
-directories. `--json` emits one machine-readable value. `--apply` writes, `--yes` skips the
-confirmation, and `-h` or `--help` prints usage.
+directories. `--generated` opts a repair or fleet run into restoring generated canon except
+`package.json`; on `audit`, it is inherited if the interactive repair hand-off is accepted.
+`--json` emits one machine-readable value. `--apply` writes, `--yes` skips the confirmation, and
+`-h` or `--help` prints usage.
 
 **Safety model.** Every verb is a dry run by default. On a terminal a write asks for confirmation
 first, defaulting to no; in a script, `--apply` writes and `--yes` skips the question. Every write is
@@ -1619,8 +1753,9 @@ non-interactive session without `--apply` or `--yes` skips pruning rather than g
 operates on the immediate children of the working directory and never on the directory itself, and
 it has no root flag at all — `repair` is the single-workspace tool.
 
-Both `repair` and `fleet` are scoped to host-origin artifacts, and the executable states that scope
-in its own output: starter and generated files are never touched.
+`fleet` and default `repair` are scoped to host-origin artifacts. `repair` states its selected scope
+in the output; `--generated` widens both verbs to generated files while still excluding starter
+files and `package.json`.
 
 **Catalog markers.** `catalog` rewrites the block between `<!-- catalog:start -->` and
 `<!-- catalog:end -->` in `.claude/agents/orkestrel.md`. **Ambiguous markers fail before any
@@ -1973,7 +2108,7 @@ srcVariant(['core', 'server']) // 'multi'
 entryFields(['browser']).main // './dist/src/browser/index.js'
 dualCondition('./dist/src/core/index')
 exportsMap(['core'])['.']
-devDependenciesFor(spec.extras).typescript
+devDependenciesFor(spec).typescript
 packageManifest(spec) // the whole manifest, newline-terminated
 
 configArtifacts(spec).length
@@ -2003,16 +2138,23 @@ import {
 	appTsconfig,
 	appViteConfig,
 	applicationViteConfig,
+	binViteProject,
 	coreTsconfig,
 	coreViteConfig,
+	guidesViteProject,
+	integrationViteProject,
 	policyViteProject,
+	renderViteTest,
 	rootTsconfig,
 	rootViteConfig,
+	serviceViteProject,
 	singleSrcViteConfig,
 	srcTsconfig,
 	srcViteConfig,
 	viteHeader,
 	viteMachinery,
+	viteProjectDefinitions,
+	viteProjectRegistrations,
 } from '@orkestrel/scaffold'
 
 rootTsconfig(['core'], ['core', 'server'])
@@ -2022,13 +2164,21 @@ appTsconfig('browser', true)
 
 viteMachinery(['core']) // { browser: false, vue: false, output: true }
 viteMachinery([], ['core', 'browser']) // { browser: true, vue: true, output: true }
+renderViteTest([{ project: 'srcCore' }], false).includes('projects: [srcCore]') // true
 viteHeader(viteMachinery([], ['core', 'browser'])) // the shared header, with browser and Vue support
 coreViteConfig()
 srcViteConfig('browser')
 appViteConfig('server')
 policyViteProject()
+guidesViteProject()
+binViteProject()
+integrationViteProject({ bin: true, integration: true })
+serviceViteProject()
+viteProjectDefinitions({ integration: true }).includes('export const integration =') // true
+viteProjectRegistrations(['core'], [], { integration: true }).map(({ project }) => project)
+// ['srcCore', 'policy', 'guides', 'integration']
 
-rootViteConfig(['core', 'server'])
+rootViteConfig(['core', 'server'], { bin: true })
 singleSrcViteConfig('server').includes('srcServer') // true
 applicationViteConfig([], ['core', 'server']).includes('appServer') // true
 ```
@@ -2133,6 +2283,7 @@ import {
 	discoverPackages,
 	guideToDescription,
 	isRealDirectory,
+	isRealFile,
 	listDirectories,
 	listFiles,
 	pruneTargets,
@@ -2147,6 +2298,7 @@ deriveBlueprint('./packages/router') // the faithful inverse an audit diffs agai
 selectOrkestrelEntries({ '@orkestrel/contract': '^0.0.7', vite: '^8.1.5' })
 
 isRealDirectory('./packages/router')
+isRealFile('./packages/router/package.json')
 listFiles('./packages/router/.claude/agents')
 listDirectories('./packages/router/.claude')
 

@@ -51,6 +51,7 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 	'contracts.ts',
 	'relations.ts',
 	'schemas.ts',
+	'shapers.ts',
 	'templates.ts',
 	'validators.ts',
 ])
