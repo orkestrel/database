@@ -1,4 +1,4 @@
-import type { DatabaseInterface, DatabaseOptions, DriverInterface, TablesShape } from './types.js'
+import type { DatabaseInterface, DatabaseOptions, DriverInterface, TableMap } from './types.js'
 import { Database } from './Database.js'
 import { MemoryDriver } from './drivers/MemoryDriver.js'
 
@@ -11,10 +11,10 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  * level. The `const` type parameter captures the literal names and columns, so
  * `db.table('users')` is checked against the schema and typed by `Infer` of its
  * columns — no annotations. Name a non-`id` primary-key column per table via the
- * optional `keys` map.
+ * optional `primary` and `indexes` maps.
  *
- * @param options - The driver, the `tables` column map, optional `keys`, and an
- *                   optional `name`
+ * @param options - The driver, `tables`, and optional `primary`, `indexes`,
+ *   `name`, `generator`, `version`, and emitter hooks
  * @returns A typed {@link DatabaseInterface}
  *
  * @example
@@ -28,12 +28,12 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  * 		users: { id: stringShape(), age: integerShape() },
  * 		posts: { slug: stringShape(), title: stringShape() },
  * 	},
- * 	keys: { posts: 'slug' },
+ * 	primary: { posts: 'slug' },
  * })
  * await db.table('users').set({ id: 'u1', age: 36 }) // typed; coerced + validated
  * ```
  */
-export function createDatabase<const T extends TablesShape>(
+export function createDatabase<const T extends TableMap>(
 	options: DatabaseOptions<T>,
 ): DatabaseInterface<T> {
 	return new Database(options)

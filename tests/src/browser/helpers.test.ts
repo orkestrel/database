@@ -1,9 +1,9 @@
 import type { TableSchema } from '@src/core'
+import type { IndexedDBErrorCode } from '@orkestrel/indexeddb'
 import { IndexedDBError } from '@orkestrel/indexeddb'
 import {
-	conditionRange,
-	deriveIndexName,
-	isKey,
+	conditionToRange,
+	deriveIndexedDBIndexName,
 	mapIndexedDBError,
 	mapMigrationError,
 	selectPlan,
@@ -23,12 +23,12 @@ const SCHEMA: TableSchema = {
 	name: 'users',
 	primary: 'id',
 	columns: [
-		{ name: 'id', type: 'text', nullable: false },
-		{ name: 'age', type: 'integer', nullable: false },
-		{ name: 'score', type: 'real', nullable: false },
-		{ name: 'name', type: 'text', nullable: false },
-		{ name: 'active', type: 'boolean', nullable: false },
-		{ name: 'payload', type: 'json', nullable: true },
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'score', storage: 'real', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+		{ name: 'payload', storage: 'json', optional: false, nullable: true },
 	],
 	indexes: [['age']],
 }
@@ -43,7 +43,7 @@ describe('selectPlan — pushable operators on the primary key', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('u3')
 		expect(plan.range?.upper).toBe('u3')
 		expect(plan.range?.lowerOpen).toBe(false)
@@ -52,7 +52,7 @@ describe('selectPlan — pushable operators on the primary key', () => {
 
 	it('above → lowerBound exclusive', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'above', ['m'])] }, SCHEMA, INDEXES)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('m')
 		expect(plan.range?.lowerOpen).toBe(true)
 		expect(plan.range?.upper).toBeUndefined()
@@ -60,7 +60,7 @@ describe('selectPlan — pushable operators on the primary key', () => {
 
 	it('below → upperBound exclusive', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'below', ['m'])] }, SCHEMA, INDEXES)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.upper).toBe('m')
 		expect(plan.range?.upperOpen).toBe(true)
 		expect(plan.range?.lower).toBeUndefined()
@@ -68,14 +68,14 @@ describe('selectPlan — pushable operators on the primary key', () => {
 
 	it('from → lowerBound inclusive', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'from', ['m'])] }, SCHEMA, INDEXES)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('m')
 		expect(plan.range?.lowerOpen).toBe(false)
 	})
 
 	it('to → upperBound inclusive', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'to', ['m'])] }, SCHEMA, INDEXES)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.upper).toBe('m')
 		expect(plan.range?.upperOpen).toBe(false)
 	})
@@ -86,7 +86,7 @@ describe('selectPlan — pushable operators on the primary key', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('a')
 		expect(plan.range?.upper).toBe('z')
 		expect(plan.range?.lowerOpen).toBe(false)
@@ -120,7 +120,7 @@ describe('selectPlan — pushable operators on a single-column secondary index',
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 })
 
@@ -129,14 +129,14 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 		const plan = selectPlan({ conditions: [buildCondition('active', 'equals', [true])] }, SCHEMA, [
 			'active',
 		])
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('a json column → full scan', () => {
 		const plan = selectPlan({ conditions: [buildCondition('payload', 'equals', ['x'])] }, SCHEMA, [
 			'payload',
 		])
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('a nested-array FieldPath (descends a json value) → full scan', () => {
@@ -145,14 +145,14 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('a column absent from the schema → full scan', () => {
 		const plan = selectPlan({ conditions: [buildCondition('missing', 'equals', ['x'])] }, SCHEMA, [
 			'missing',
 		])
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('starts → full scan (prefix range can miss strings past U+FFFF)', () => {
@@ -161,12 +161,12 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('not → full scan (no single exact range)', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'not', ['u1'])] }, SCHEMA, INDEXES)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('any → full scan (membership, not a single range)', () => {
@@ -175,12 +175,12 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('absent → full scan (existence, not a range)', () => {
 		const plan = selectPlan({ conditions: [buildCondition('id', 'absent', [])] }, SCHEMA, INDEXES)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('a non-string/number operand → full scan (not a usable key)', () => {
@@ -189,12 +189,12 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('no conditions → full scan', () => {
-		expect(selectPlan({}, SCHEMA, INDEXES)).toEqual({ index: null, range: null })
-		expect(selectPlan(undefined, SCHEMA, INDEXES)).toEqual({ index: null, range: null })
+		expect(selectPlan({}, SCHEMA, INDEXES)).toEqual({})
+		expect(selectPlan(undefined, SCHEMA, INDEXES)).toEqual({})
 	})
 })
 
@@ -227,7 +227,7 @@ describe('selectPlan — selection among several conditions', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('u1')
 		expect(plan.range?.upper).toBe('u1')
 	})
@@ -260,7 +260,7 @@ describe('selectPlan — selection among several conditions', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('a later or-joined condition forces a scan even if an earlier pair is AND', () => {
@@ -275,12 +275,12 @@ describe('selectPlan — selection among several conditions', () => {
 			SCHEMA,
 			INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it("the first condition's connector is ignored (only c2.. matter)", () => {
 		// A lone condition whose connector is 'or' still pushes — the first connector
-		// only seeds the fold, so a single-condition criteria is always all-AND.
+		// only seeds the fold, so a single-condition input is always all-AND.
 		const plan = selectPlan(
 			{ conditions: [buildCondition('age', 'from', [18], 'or')] },
 			SCHEMA,
@@ -291,28 +291,35 @@ describe('selectPlan — selection among several conditions', () => {
 	})
 })
 
-describe('conditionRange', () => {
+describe('conditionToRange', () => {
 	it('maps each exact-comparison operator over a scalar operand to its IDBKeyRange', () => {
-		expect(conditionRange(buildCondition('id', 'equals', ['u1']))?.lower).toBe('u1')
-		expect(conditionRange(buildCondition('id', 'above', ['m']))?.lowerOpen).toBe(true)
-		expect(conditionRange(buildCondition('id', 'below', ['m']))?.upperOpen).toBe(true)
-		expect(conditionRange(buildCondition('id', 'from', ['m']))?.lowerOpen).toBe(false)
-		expect(conditionRange(buildCondition('id', 'to', ['m']))?.upperOpen).toBe(false)
-		const between = conditionRange(buildCondition('id', 'between', ['a', 'z']))
+		expect(conditionToRange(buildCondition('id', 'equals', ['u1']))?.lower).toBe('u1')
+		expect(conditionToRange(buildCondition('id', 'above', ['m']))?.lowerOpen).toBe(true)
+		expect(conditionToRange(buildCondition('id', 'below', ['m']))?.upperOpen).toBe(true)
+		expect(conditionToRange(buildCondition('id', 'from', ['m']))?.lowerOpen).toBe(false)
+		expect(conditionToRange(buildCondition('id', 'to', ['m']))?.upperOpen).toBe(false)
+		const between = conditionToRange(buildCondition('id', 'between', ['a', 'z']))
 		expect(between?.lower).toBe('a')
 		expect(between?.upper).toBe('z')
 	})
 
-	it('returns null for a non-comparison operator', () => {
-		expect(conditionRange(buildCondition('id', 'not', ['u1']))).toBeNull()
-		expect(conditionRange(buildCondition('id', 'starts', ['u']))).toBeNull()
-		expect(conditionRange(buildCondition('id', 'absent', []))).toBeNull()
+	it('returns undefined for a non-comparison operator', () => {
+		expect(conditionToRange(buildCondition('id', 'not', ['u1']))).toBeUndefined()
+		expect(conditionToRange(buildCondition('id', 'starts', ['u']))).toBeUndefined()
+		expect(conditionToRange(buildCondition('id', 'absent', []))).toBeUndefined()
 	})
 
-	it('returns null when the operand is not a scalar key', () => {
-		expect(conditionRange(buildCondition('id', 'equals', [{ nested: true }]))).toBeNull()
+	it('returns undefined when the operand is not a scalar key', () => {
+		expect(conditionToRange(buildCondition('id', 'equals', [{ nested: true }]))).toBeUndefined()
+		expect(conditionToRange(buildCondition('id', 'equals', [Number.NaN]))).toBeUndefined()
+		expect(
+			conditionToRange(buildCondition('id', 'from', [Number.POSITIVE_INFINITY])),
+		).toBeUndefined()
+		expect(conditionToRange(buildCondition('id', 'to', [Number.NEGATIVE_INFINITY]))).toBeUndefined()
 		// `between` needs BOTH ends to be keys.
-		expect(conditionRange(buildCondition('id', 'between', ['a', { nested: true }]))).toBeNull()
+		expect(
+			conditionToRange(buildCondition('id', 'between', ['a', { nested: true }])),
+		).toBeUndefined()
 	})
 })
 
@@ -323,8 +330,8 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 		name: 'people',
 		primary: 'id',
 		columns: [
-			{ name: 'id', type: 'text', nullable: false },
-			{ name: 'age', type: 'integer', nullable: true },
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: false, nullable: true },
 		],
 		indexes: [['age']],
 	}
@@ -336,7 +343,7 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('to on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
@@ -345,7 +352,7 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
-		expect(plan).toEqual({ index: null, range: null })
+		expect(plan).toEqual({})
 	})
 
 	it('below/to on the PRIMARY key still pushes (a primary key is never absent/null)', () => {
@@ -354,14 +361,14 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
-		expect(below.index).toBeNull()
+		expect(below.index).toBeUndefined()
 		expect(below.range?.upper).toBe('m')
 		const to = selectPlan(
 			{ conditions: [buildCondition('id', 'to', ['m'])] },
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
-		expect(to.index).toBeNull()
+		expect(to.index).toBeUndefined()
 		expect(to.range?.upper).toBe('m')
 	})
 
@@ -407,28 +414,28 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
-		expect(plan.index).toBeNull()
+		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('u1')
 	})
 })
 
-describe('conditionRange — reversed between bounds', () => {
-	it('returns null for a reversed same-type pair (first > second)', () => {
-		expect(conditionRange(buildCondition('id', 'between', ['z', 'a']))).toBeNull()
+describe('conditionToRange — reversed between bounds', () => {
+	it('returns undefined for a reversed same-type pair (first > second)', () => {
+		expect(conditionToRange(buildCondition('id', 'between', ['z', 'a']))).toBeUndefined()
 	})
 
-	it('returns null for a reversed mixed-type pair (a number above a string in rank still reverses numerically)', () => {
-		expect(conditionRange(buildCondition('age', 'between', [100, 1]))).toBeNull()
+	it('returns undefined for a reversed mixed-type pair (a number above a string in rank still reverses numerically)', () => {
+		expect(conditionToRange(buildCondition('age', 'between', [100, 1]))).toBeUndefined()
 	})
 
 	it('still returns a range for an equal pair (first === second, not reversed)', () => {
-		const same = conditionRange(buildCondition('id', 'between', ['m', 'm']))
+		const same = conditionToRange(buildCondition('id', 'between', ['m', 'm']))
 		expect(same?.lower).toBe('m')
 		expect(same?.upper).toBe('m')
 	})
 
 	it('still returns a range for a properly ordered pair', () => {
-		const ordered = conditionRange(buildCondition('id', 'between', ['a', 'z']))
+		const ordered = conditionToRange(buildCondition('id', 'between', ['a', 'z']))
 		expect(ordered?.lower).toBe('a')
 		expect(ordered?.upper).toBe('z')
 	})
@@ -454,15 +461,8 @@ describe('mapIndexedDBError / mapMigrationError', () => {
 		expect(mapped.context?.code).toBe('QUOTA')
 	})
 
-	it('maps BLOCKED to DRIVER with context.code = BLOCKED and retryable = true', () => {
-		const mapped = mapIndexedDBError(new IndexedDBError('BLOCKED', 'held open'))
-		expect(mapped.code).toBe('DRIVER')
-		expect(mapped.context?.code).toBe('BLOCKED')
-		expect(mapped.context?.retryable).toBe(true)
-	})
-
 	it('maps every other code (including UPGRADE) to DRIVER outside migrate()', () => {
-		for (const code of [
+		const codes: readonly IndexedDBErrorCode[] = [
 			'UPGRADE',
 			'ABORTED',
 			'NOT_FOUND',
@@ -470,7 +470,8 @@ describe('mapIndexedDBError / mapMigrationError', () => {
 			'OPEN',
 			'INACTIVE',
 			'UNKNOWN',
-		] as const) {
+		]
+		for (const code of codes) {
 			expect(mapIndexedDBError(new IndexedDBError(code, 'x')).code).toBe('DRIVER')
 		}
 	})
@@ -483,42 +484,26 @@ describe('mapIndexedDBError / mapMigrationError', () => {
 	})
 })
 
-describe('deriveIndexName', () => {
+describe('deriveIndexedDBIndexName', () => {
 	it('keeps a single-column index bare (matches the column name exactly)', () => {
-		expect(deriveIndexName(['age'])).toBe('age')
-		expect(deriveIndexName(['a_b'])).toBe('a_b')
+		expect(deriveIndexedDBIndexName(['age'])).toBe('age')
+		expect(deriveIndexedDBIndexName(['a_b'])).toBe('a_b')
 	})
 
 	it('encodes a compound index without colliding with a single-column literal of the joined form', () => {
-		const compound = deriveIndexName(['a', 'b'])
+		const compound = deriveIndexedDBIndexName(['a', 'b'])
 		expect(compound).not.toBe('a_b')
-		expect(compound).not.toBe(deriveIndexName(['a_b']))
+		expect(compound).not.toBe(deriveIndexedDBIndexName(['a_b']))
 	})
 
 	it('is deterministic (same columns → same name every call)', () => {
-		expect(deriveIndexName(['city', 'age'])).toBe(deriveIndexName(['city', 'age']))
+		expect(deriveIndexedDBIndexName(['city', 'age'])).toBe('2#4:city3:age')
 	})
 
 	it('distinguishes column groups that share a joined-form collision', () => {
 		// ['a', 'bc'] and ['ab', 'c'] both join to 'a_bc'/'ab_c' differently, but a
 		// pathological pair like ['a', 'b_c'] and ['a_b', 'c'] both underscore-join
 		// to 'a_b_c' — the length-prefixed encoding must still tell them apart.
-		expect(deriveIndexName(['a', 'b_c'])).not.toBe(deriveIndexName(['a_b', 'c']))
-	})
-})
-
-describe('isKey', () => {
-	it('is true for a string or a number', () => {
-		expect(isKey('u1')).toBe(true)
-		expect(isKey(42)).toBe(true)
-		expect(isKey(0)).toBe(true)
-	})
-
-	it('is false for any non-scalar value', () => {
-		expect(isKey(true)).toBe(false)
-		expect(isKey(null)).toBe(false)
-		expect(isKey(undefined)).toBe(false)
-		expect(isKey({ nested: true })).toBe(false)
-		expect(isKey(['u1'])).toBe(false)
+		expect(deriveIndexedDBIndexName(['a', 'b_c'])).not.toBe(deriveIndexedDBIndexName(['a_b', 'c']))
 	})
 })

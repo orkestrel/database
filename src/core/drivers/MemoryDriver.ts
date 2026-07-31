@@ -1,14 +1,28 @@
 import type {
-	Criteria,
+	QueryInput,
 	DriverInterface,
-	DriverMeta,
+	DriverMetadata,
 	Key,
-	Migration,
+	MigrationInput,
+	MigrationStep,
+	OperationOptions,
 	Row,
 	TableSchema,
 } from '../types.js'
+import { cloneDriverMetadata, cloneMigrationInput } from '../cloners.js'
 import { DatabaseError } from '../errors.js'
-import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
+import {
+	bindRowKey,
+	checkAbort,
+	compareValues,
+	equalsValue,
+	matchesQuery,
+	migrateRows,
+	normalizeDriverSchema,
+	planMigration,
+	projectMigrationSchema,
+} from '../helpers.js'
+import { isKey, validatePage } from '../validators.js'
 
 /**
  * The reference {@link DriverInterface} — nested maps, no I/O.
@@ -21,22 +35,34 @@ import { compareValues, matchesCriteria, migrateRows } from '../helpers.js'
  * snapshot capture and restore — so a caller mutating a nested field of an input
  * row, a returned row, or a row mutated in place between snapshot and rollback
  * can never perturb stored state (AGENTS §11); a shallow `{ ...row }` spread
- * would still share nested object/array references. `snapshot`
+ * would still share nested object/array references. Metadata instead routes
+ * through `cloneDriverMetadata`: `stamp` and migration snapshot exact JSON at
+ * ingress, and `metadata` returns a distinct deeply frozen owned copy. `snapshot`
  * clones every table to give transactions an exact rollback point. `scan` and
  * `keys` yield in key order — sorted by the core {@link compareValues} total
  * order, the same contract the SQLite (`ORDER BY`) and IndexedDB (key-ordered
  * reads) backends honor, so an unordered read agrees across every backend rather
  * than leaking Map insertion order. A persistent backend (IndexedDB, SQLite)
- * implements the same nine methods over real storage.
+ * implements the same required methods over real storage.
  */
 export class MemoryDriver implements DriverInterface {
 	readonly #tables = new Map<string, Map<Key, Row>>()
-	#meta: DriverMeta | undefined
+	#identities = new Map<string, object>()
+	#schema: readonly TableSchema[] = []
+	#metadata: DriverMetadata | undefined
 
 	async open(schema: readonly TableSchema[]): Promise<void> {
-		for (const table of schema) {
-			if (!this.#tables.has(table.name)) this.#tables.set(table.name, new Map())
+		const owned = normalizeDriverSchema(schema)
+		const deployed = normalizeDriverSchema(this.#metadata?.schema ?? owned)
+		const names = new Set(deployed.map((table) => table.name))
+		for (const name of this.#identities.keys()) {
+			if (!names.has(name)) this.#identities.delete(name)
 		}
+		for (const table of deployed) {
+			if (!this.#tables.has(table.name)) this.#tables.set(table.name, new Map())
+			if (!this.#identities.has(table.name)) this.#identities.set(table.name, {})
+		}
+		this.#schema = deployed
 	}
 
 	async close(): Promise<void> {}
@@ -46,11 +72,27 @@ export class MemoryDriver implements DriverInterface {
 		return row === undefined ? undefined : structuredClone(row)
 	}
 
-	async write(table: string, key: Key, row: Row): Promise<void> {
-		this.#store(table).set(key, structuredClone(row))
+	async write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+		checkAbort(options?.signal)
+		const primary = this.#table(table).primary
+		this.#store(table).set(key, structuredClone(bindRowKey(row, primary, key)))
 	}
 
-	async delete(table: string, key: Key): Promise<boolean> {
+	async insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+		checkAbort(options?.signal)
+		const store = this.#store(table)
+		if (store.has(key)) {
+			throw new DatabaseError('CONFLICT', `Row '${key}' already exists in table '${table}'`, {
+				table,
+				key,
+			})
+		}
+		const primary = this.#table(table).primary
+		store.set(key, structuredClone(bindRowKey(row, primary, key)))
+	}
+
+	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
+		checkAbort(options?.signal)
 		return this.#store(table).delete(key)
 	}
 
@@ -72,17 +114,17 @@ export class MemoryDriver implements DriverInterface {
 	 * @remarks
 	 * Iterates the table's keys in the same key order `scan` and `keys` yield
 	 * (sorted by {@link compareValues}), testing each row against
-	 * `criteria.conditions` (via {@link matchesCriteria}) before counting it
+	 * `input.conditions` (via {@link matchesQuery}) before counting it
 	 * toward `offset` / `limit`. Both are applied lazily as matches are found —
 	 * `offset` matches are skipped without being yielded, and iteration stops the
 	 * instant `limit` yields have been produced, so a large table is never fully
-	 * walked for a small page. `criteria.order` is IGNORED (the same contract as
+	 * walked for a small page. `input.order` is IGNORED (the same contract as
 	 * `TableInterface.scan` and `QueryInterface.stream`): streaming yields key
 	 * order, sorted output is `records()`'s job. Rows yield copy-out (AGENTS
 	 * §11), and an unknown table mirrors `scan`'s empty-yield behavior.
 	 *
 	 * @param table - The table to stream
-	 * @param criteria - The filter / offset / limit to apply lazily
+	 * @param input - The filter / offset / limit to apply lazily
 	 *
 	 * @example
 	 * ```ts
@@ -91,18 +133,23 @@ export class MemoryDriver implements DriverInterface {
 	 * }
 	 * ```
 	 */
-	async *stream(table: string, criteria: Criteria): AsyncIterable<Row> {
+	stream(table: string, input: QueryInput): AsyncIterable<Row> {
+		validatePage(input)
+		return this.#stream(table, input)
+	}
+
+	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		const store = this.#store(table)
-		const conditions = criteria.conditions
-		const offset = criteria.offset ?? 0
-		const limit = criteria.limit
+		const conditions = input.conditions
+		const offset = input.offset ?? 0
+		const limit = input.limit
 		let skipped = 0
 		let yielded = 0
 		for (const key of this.#ordered(table)) {
 			if (limit !== undefined && yielded >= limit) return
 			const row = store.get(key)
 			if (row === undefined) continue
-			if (conditions !== undefined && conditions.length > 0 && !matchesCriteria(row, conditions)) {
+			if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
 				continue
 			}
 			if (skipped < offset) {
@@ -122,117 +169,135 @@ export class MemoryDriver implements DriverInterface {
 	 * Capture the current state and return a thunk that rolls back to it.
 	 *
 	 * @remarks
-	 * `tables` omitted clones and restores the WHOLE store, byte-identical to the
-	 * prior whole-store behavior. `tables` provided clones ONLY the named tables,
-	 * and the returned thunk restores ONLY those — every other table keeps
-	 * whatever it was mutated to after the snapshot was taken.
+	 * Capture owns rows, schema, and one session-local table identity. Replay
+	 * adapts rows to each surviving same-identity table's current schema before
+	 * changing storage. Removed or replaced tables are skipped; uncaptured and
+	 * later-added tables retain their current rows. Schema and metadata are never
+	 * restored.
 	 *
 	 * @param tables - The table names to scope the snapshot to; omitted captures every table
 	 * @returns A thunk that restores the captured tables
 	 */
 	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		if (tables === undefined) {
-			const copy = new Map<string, Map<Key, Row>>()
-			for (const [name, store] of this.#tables) {
-				const cloned = new Map<Key, Row>()
-				for (const [key, row] of store) cloned.set(key, structuredClone(row))
-				copy.set(name, cloned)
+		const names =
+			tables === undefined
+				? this.#schema.map((table) => table.name)
+				: [...new Set(tables)].filter((name) => this.#schema.some((table) => table.name === name))
+		const captured = new Map<
+			string,
+			{
+				readonly identity: object
+				readonly rows: ReadonlyMap<Key, Row>
+				readonly schema: TableSchema
 			}
-			return async () => {
-				this.#tables.clear()
-				for (const [name, store] of copy) {
-					const restored = new Map<Key, Row>()
-					for (const [key, row] of store) restored.set(key, structuredClone(row))
-					this.#tables.set(name, restored)
-				}
-			}
-		}
-		const copy = new Map<string, Map<Key, Row>>()
-		for (const name of tables) {
+		>()
+		for (const name of names) {
+			const schema = this.#schema.find((table) => table.name === name)
 			const store = this.#tables.get(name)
-			if (store === undefined) continue
-			const cloned = new Map<Key, Row>()
-			for (const [key, row] of store) cloned.set(key, structuredClone(row))
-			copy.set(name, cloned)
+			const identity = this.#identities.get(name)
+			if (schema === undefined || store === undefined || identity === undefined) continue
+			const rows = new Map<Key, Row>()
+			for (const [key, row] of store) rows.set(key, structuredClone(row))
+			captured.set(name, { identity, rows, schema })
 		}
 		return async () => {
-			for (const [name, store] of copy) {
-				const restored = new Map<Key, Row>()
-				for (const [key, row] of store) restored.set(key, structuredClone(row))
-				this.#tables.set(name, restored)
+			const replacements = new Map<Map<Key, Row>, ReadonlyMap<Key, Row>>()
+			for (const [name, capture] of captured) {
+				const schema = this.#schema.find((table) => table.name === name)
+				const store = this.#tables.get(name)
+				if (
+					schema === undefined ||
+					store === undefined ||
+					this.#identities.get(name) !== capture.identity
+				) {
+					continue
+				}
+				const plan = planMigration([capture.schema], [schema])
+				const entries = [...capture.rows.entries()]
+				const migrated = migrateRows(
+					entries.map(([, row]) => row),
+					plan.steps,
+				)
+				if (migrated.length !== entries.length) {
+					throw new DatabaseError('MIGRATION', 'Snapshot row count changed during migration', {
+						table: name,
+					})
+				}
+				const rows = new Map<Key, Row>()
+				for (const [index, [key]] of entries.entries()) {
+					const row = migrated[index]
+					if (!isKey(key) || row === undefined) {
+						throw new DatabaseError('MIGRATION', 'Snapshot row has no usable primary key', {
+							table: name,
+							column: schema.primary,
+							index,
+						})
+					}
+					rows.set(key, structuredClone(bindRowKey(row, schema.primary, key)))
+				}
+				replacements.set(store, rows)
+			}
+			for (const [store, rows] of replacements) {
+				store.clear()
+				for (const [key, row] of rows) store.set(key, row)
 			}
 		}
 	}
 
 	/**
-	 * Return the persisted {@link DriverMeta}, or `undefined` when the store has
+	 * Return the persisted {@link DriverMetadata}, or `undefined` when the store has
 	 * never been stamped.
 	 *
 	 * @remarks
 	 * In-process only — the metadata lives in this instance's memory, exactly
-	 * like the rest of this driver's storage. A driver-conformance-valid
-	 * implementation of the optional `meta` / `stamp` pair.
+	 * like the rest of this driver's storage. The returned value is a distinct
+	 * deeply frozen owned snapshot. A driver-conformance-valid implementation of
+	 * the optional `metadata` / `stamp` pair.
 	 *
-	 * @returns The last-stamped {@link DriverMeta}, or `undefined`
+	 * @returns The last-stamped {@link DriverMetadata}, or `undefined`
 	 */
-	async meta(): Promise<DriverMeta | undefined> {
-		return this.#meta
+	async metadata(): Promise<DriverMetadata | undefined> {
+		return this.#metadata === undefined ? undefined : cloneDriverMetadata(this.#metadata)
 	}
 
 	/**
-	 * Persist `meta` verbatim for a later `meta()` to return.
+	 * Persist an owned snapshot for a later `metadata()` to return.
 	 *
-	 * @param meta - The {@link DriverMeta} to persist
+	 * @param metadata - The {@link DriverMetadata} to persist
 	 */
-	async stamp(meta: DriverMeta): Promise<void> {
-		this.#meta = meta
+	async stamp(metadata: DriverMetadata): Promise<void> {
+		this.#metadata = cloneDriverMetadata(metadata)
 	}
 
 	/**
 	 * Apply a {@link Migration} plan's steps against the in-memory store.
 	 *
 	 * @remarks
-	 * A multi-step plan applies its steps sequentially and is NOT atomic — a
-	 * failure partway through a plan leaves the earlier steps already applied.
+	 * Steps apply against an isolated candidate. Rows, schema changes, and
+	 * optional metadata publish together only after the whole request succeeds.
 	 *
-	 * @param plan - The migration plan to apply
+	 * @param input - The migration plan and optional metadata to settle atomically
 	 */
-	async migrate(plan: Migration): Promise<void> {
-		for (const step of plan.steps) {
-			switch (step.operation) {
-				case 'table.add':
-					if (!this.#tables.has(step.table.name)) this.#tables.set(step.table.name, new Map())
-					break
-				case 'table.remove':
-					this.#require(step.table)
-					this.#tables.delete(step.table)
-					break
-				case 'column.add':
-				case 'column.remove': {
-					const store = this.#require(step.table)
-					const rows = [...store.entries()]
-					const migrated = migrateRows(
-						rows.map(([, row]) => row),
-						[step],
-					)
-					for (const [index, [key]] of rows.entries()) {
-						const row = migrated[index]
-						if (row === undefined) {
-							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
-								table: step.table,
-								index,
-							})
-						}
-						store.set(key, row)
-					}
-					break
-				}
-				case 'index.add':
-				case 'index.remove':
-					this.#require(step.table)
-					break
-			}
+	async migrate(input: MigrationInput): Promise<void> {
+		const owned = cloneMigrationInput(input)
+		const schema = projectMigrationSchema(this.#schema, owned.plan.steps)
+		if (
+			owned.metadata !== undefined &&
+			!equalsValue(normalizeDriverSchema(owned.metadata.schema), schema)
+		) {
+			throw new DatabaseError('MIGRATION', 'Migration metadata schema does not match the plan', {
+				projected: schema,
+				metadata: owned.metadata.schema,
+			})
 		}
+		const candidate = this.#copy(this.#tables)
+		const identities = this.#projectIdentities(this.#identities, owned.plan.steps)
+		for (const step of owned.plan.steps) this.#migrate(candidate, step)
+		this.#tables.clear()
+		for (const [name, store] of candidate) this.#tables.set(name, store)
+		this.#identities = identities
+		this.#schema = schema
+		if (owned.metadata !== undefined) this.#metadata = owned.metadata
 	}
 
 	// A table's keys in key order — the contract `scan` and `keys` yield in.
@@ -244,21 +309,87 @@ export class MemoryDriver implements DriverInterface {
 
 	// A migration step's table must already exist — unlike `#store`, a missing
 	// table here is a MIGRATION error rather than an as-yet-untouched table.
-	#require(table: string): Map<Key, Row> {
-		const store = this.#tables.get(table)
+	#require(tables: Map<string, Map<Key, Row>>, table: string): Map<Key, Row> {
+		const store = tables.get(table)
 		if (store === undefined) {
 			throw new DatabaseError('MIGRATION', `migrate: unknown table '${table}'`, { table })
 		}
 		return store
 	}
 
-	// Lazily create a table's backing map — a write to an as-yet-untouched (but
-	// declared) table just works, and reads of an empty table return nothing.
+	#copy(tables: Map<string, Map<Key, Row>>): Map<string, Map<Key, Row>> {
+		const copy = new Map<string, Map<Key, Row>>()
+		for (const [name, store] of tables) {
+			const cloned = new Map<Key, Row>()
+			for (const [key, row] of store) cloned.set(key, structuredClone(row))
+			copy.set(name, cloned)
+		}
+		return copy
+	}
+
+	#projectIdentities(
+		identities: ReadonlyMap<string, object>,
+		steps: readonly MigrationStep[],
+	): Map<string, object> {
+		const projected = new Map(identities)
+		for (const step of steps) {
+			if (step.operation === 'table.add') projected.set(step.table.name, {})
+			if (step.operation === 'table.remove') projected.delete(step.table)
+		}
+		return projected
+	}
+
+	#table(name: string): TableSchema {
+		const schema = this.#schema.find((table) => table.name === name)
+		if (schema === undefined) {
+			throw new DatabaseError('NOT_FOUND', `Unknown table '${name}'`, { table: name })
+		}
+		return schema
+	}
+
+	#migrate(tables: Map<string, Map<Key, Row>>, step: MigrationStep): void {
+		switch (step.operation) {
+			case 'table.add':
+				if (!tables.has(step.table.name)) tables.set(step.table.name, new Map())
+				break
+			case 'table.remove':
+				this.#require(tables, step.table)
+				tables.delete(step.table)
+				break
+			case 'column.add':
+			case 'column.remove': {
+				const store = this.#require(tables, step.table)
+				const rows = [...store.entries()]
+				const migrated = migrateRows(
+					rows.map(([, row]) => row),
+					[step],
+				)
+				for (const [index, [key]] of rows.entries()) {
+					const row = migrated[index]
+					if (row === undefined) {
+						throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+							table: step.table,
+							index,
+						})
+					}
+					store.set(key, row)
+				}
+				break
+			}
+			case 'index.add':
+			case 'index.remove':
+				this.#require(tables, step.table)
+				break
+		}
+	}
+
+	// Resolve only a currently declared table. `open` creates every backing map,
+	// so a missing map is a lookup failure rather than an implicit declaration.
 	#store(table: string): Map<Key, Row> {
-		let store = this.#tables.get(table)
+		this.#table(table)
+		const store = this.#tables.get(table)
 		if (store === undefined) {
-			store = new Map()
-			this.#tables.set(table, store)
+			throw new DatabaseError('NOT_FOUND', `Table '${table}' has no backing store`, { table })
 		}
 		return store
 	}

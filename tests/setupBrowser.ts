@@ -33,27 +33,56 @@ export function uniqueName(prefix = 'taverna-idb'): string {
 	return `${prefix}-${databaseCounter}`
 }
 
+/**
+ * Persist an arbitrary value through a real native IndexedDB transaction.
+ *
+ * @remarks
+ * Corruption-boundary tests need to seed values outside the wrapper's typed row
+ * contract. The native API is the storage boundary under test, and awaiting the
+ * transaction completion ensures the value is durable before a wrapper opens it.
+ *
+ * @param database - The connected native database
+ * @param store - The object-store name
+ * @param key - The durable record key
+ * @param value - The arbitrary value to persist
+ * @returns A promise that settles with the native transaction
+ */
+export function putIndexedDBValue(
+	database: IDBDatabase,
+	store: string,
+	key: IDBValidKey,
+	value: unknown,
+): Promise<void> {
+	const transaction = database.transaction(store, 'readwrite')
+	transaction.objectStore(store).put(value, key)
+	return new Promise((resolve, reject) => {
+		transaction.oncomplete = () => resolve()
+		transaction.onerror = () => reject(transaction.error)
+		transaction.onabort = () => reject(transaction.error)
+	})
+}
+
 /** Register a database cleanup with the caller's teardown — the per-file `cleanups`
  *  push, decoupled from the array so a seed helper need not know its shape. */
 export type CleanupRegistrar = (cleanup: () => Promise<void>) => void
 
-/** A teardown registrar: push disposers as a test sets them up, `run` them all in
+/** A teardown registrar: push disposers as a test sets them up, execute them all in
  *  registration order. Its `push` IS a {@link CleanupRegistrar}, so a seed helper
  *  composes with `register: registrar.push`. */
 export interface CleanupRegistrarInterface {
-	/** Register a disposer (sync or async) to run at teardown. */
+	/** Register a disposer (sync or async) to execute at teardown. */
 	push(disposer: () => void | Promise<void>): void
-	/** Run every registered disposer once, in registration order, then forget them. */
-	run(): Promise<void>
+	/** Execute every registered disposer once, in registration order, then forget them. */
+	execute(): Promise<void>
 }
 
 /**
  * Build a teardown registrar replacing a hand-rolled per-file `cleanups[]` +
  * `afterEach` loop (AGENTS §16.1). Push disposers as a test opens resources; wire
- * `registrar.run` into an `afterEach`. Disposers run in REGISTRATION order and are
+ * `registrar.execute` into an `afterEach`. Disposers execute in REGISTRATION order and are
  * forgotten after, so the registrar is reused across cases.
  *
- * @returns A registrar with `push(disposer)` and `run()`
+ * @returns A registrar with `push(disposer)` and `execute()`
  */
 export function createCleanups(): CleanupRegistrarInterface {
 	const disposers: Array<() => void | Promise<void>> = []
@@ -61,7 +90,7 @@ export function createCleanups(): CleanupRegistrarInterface {
 		push(disposer) {
 			disposers.push(disposer)
 		},
-		async run() {
+		async execute() {
 			for (const disposer of disposers.splice(0)) await disposer()
 		},
 	}
@@ -81,7 +110,7 @@ export interface IntegrationDatabaseInterface {
 }
 
 /**
- * Open the core database + relations stack over the IndexedDB driver, under a
+ * Open the core database over the IndexedDB driver, under a
  * unique name, returning the handle, its name, and a cleanup — the shared opener
  * for the cross-driver integration test.
  *
@@ -93,9 +122,12 @@ export function createIntegrationDatabase(): IntegrationDatabaseInterface {
 		driver: createIndexedDBDriver(name),
 		tables: INTEGRATION_TABLES,
 	})
-	const cleanup = async (): Promise<void> => {
-		await db.close()
-		await deleteDatabase(name)
+	return {
+		db,
+		name,
+		async cleanup(): Promise<void> {
+			await db.close()
+			await deleteDatabase(name)
+		},
 	}
-	return { db, name, cleanup }
 }

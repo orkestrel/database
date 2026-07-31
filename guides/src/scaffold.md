@@ -1098,7 +1098,7 @@ along the three `ViteMachinery` axes:
 | Machinery                                                         | Emitted when                         |
 | ----------------------------------------------------------------- | ------------------------------------ |
 | CSS pipeline (`ENVIRONMENT_CSS`, `preprocessCSS`, `isCSSRequest`) | a `src` or `app` browser environment |
-| Playwright provider and `hasChromium`                             | a `src` or `app` browser environment |
+| Playwright provider and `resolveChromium`                         | a `src` or `app` browser environment |
 | Vue plugin, HTML boundary, browser development server             | an `app` browser environment         |
 | Output containment (`outputBoundary`, `enforceOutputPath`)        | anything the workspace builds        |
 

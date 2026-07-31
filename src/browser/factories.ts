@@ -5,9 +5,9 @@ import { IndexedDBDriver } from './drivers/IndexedDBDriver.js'
  * Create a persistent IndexedDB {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
- * relations stack against IndexedDB instead of memory — the `Database` / `Table` /
- * `Query` / relations API is unchanged; only where the bytes live changes. The
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the typed database
+ * layer against IndexedDB instead of memory — the `Database` / `Table` / `Query`
+ * API is unchanged; only where the bytes live changes. The
  * driver is built on the published `@orkestrel/indexeddb` wrapper in auto-managed
  * mode, so a table added to the `tables` map is created on the next open with no
  * version bump. This unit omits `transaction` / `aggregate` (see

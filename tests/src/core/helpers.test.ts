@@ -1,29 +1,32 @@
-import type { DriverInterface, Key, Row, TableSchema } from '@src/core'
+import type { ColumnSchema, DriverInterface, Key, MigrationStep, Row, TableSchema } from '@src/core'
 import {
-	applyCriteria,
+	applyQuery,
 	auditDriver,
+	bindRowKey,
 	checkAbort,
 	compareValues,
 	computeAggregate,
 	conformDriver,
 	createMemoryDriver,
-	deepEqual,
+	equalsValue,
 	driverFindings,
 	extractKey,
 	filterRows,
-	generateUUID,
-	globMatch,
+	matchesGlobPattern,
 	isDatabaseError,
-	isDriverMeta,
-	likeMatch,
+	isDriverMetadata,
+	matchesLikePattern,
 	matchesCondition,
-	matchesCriteria,
+	matchesQuery,
 	MAX_PATTERN_LENGTH,
 	migrateRows,
+	normalizeDriverSchema,
 	planMigration,
-	shapeToColumnType,
+	projectMigrationSchema,
+	shapeToColumnSchema,
+	shapeToColumnStorage,
 	sortRows,
-	wildcardMatch,
+	matchesWildcardPattern,
 } from '@src/core'
 import {
 	arrayShape,
@@ -37,7 +40,6 @@ import {
 	objectShape,
 	optionalShape,
 	rawShape,
-	seededRandom,
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
@@ -103,7 +105,7 @@ describe('matchesCondition', () => {
 		expect(matchesCondition(row, buildCondition('tag', 'present', []))).toBe(false)
 	})
 
-	it('equals/not/any/none use STRUCTURAL equality (deepEqual), not the total-order rank', () => {
+	it('equals/not/any/none use STRUCTURAL equality (equalsValue), not the total-order rank', () => {
 		const objRow = { info: { a: 1 }, list: [1, 2, 3] }
 		// A differing object is NOT equal — the old rank-based comparator ranked
 		// every non-scalar equal, matching ANY object.
@@ -129,7 +131,7 @@ describe('matchesCondition', () => {
 		)
 	})
 
-	it('equals/any use SameValueZero via deepEqual — NaN now equals NaN', () => {
+	it('equals/any use SameValueZero via equalsValue — NaN now equals NaN', () => {
 		const nanRow = { n: Number.NaN }
 		expect(matchesCondition(nanRow, buildCondition('n', 'equals', [Number.NaN]))).toBe(true)
 		expect(matchesCondition(nanRow, buildCondition('n', 'any', [1, Number.NaN]))).toBe(true)
@@ -142,108 +144,110 @@ describe('matchesCondition', () => {
 	})
 })
 
-describe('likeMatch', () => {
+describe('matchesLikePattern', () => {
 	it('matches % (any run) and _ (any single char), anchored', () => {
-		expect(likeMatch('abc', 'a%')).toBe(true)
-		expect(likeMatch('xab', 'a%')).toBe(false) // anchored at the start
-		expect(likeMatch('abc', 'a_c')).toBe(true)
-		expect(likeMatch('ac', 'a_c')).toBe(false) // _ needs exactly one char
+		expect(matchesLikePattern('abc', 'a%')).toBe(true)
+		expect(matchesLikePattern('xab', 'a%')).toBe(false) // anchored at the start
+		expect(matchesLikePattern('abc', 'a_c')).toBe(true)
+		expect(matchesLikePattern('ac', 'a_c')).toBe(false) // _ needs exactly one char
 	})
 
 	it('is case-insensitive', () => {
-		expect(likeMatch('Alice', 'al%')).toBe(true)
+		expect(matchesLikePattern('Alice', 'al%')).toBe(true)
 	})
 
 	it('treats every non-wildcard char as a LITERAL (no metacharacter hazard)', () => {
 		// A literal '.' matches a dot, not any char — the regex-escape hazard is gone with the regex.
-		expect(likeMatch('a.c', 'a.c')).toBe(true)
-		expect(likeMatch('abc', 'a.c')).toBe(false)
+		expect(matchesLikePattern('a.c', 'a.c')).toBe(true)
+		expect(matchesLikePattern('abc', 'a.c')).toBe(false)
 		// '(' / '[' / '\' / '+' are plain literals.
-		expect(likeMatch('a(b', 'a(b')).toBe(true)
-		expect(likeMatch('a[b', 'a[b')).toBe(true)
-		expect(likeMatch('a\\b', 'a\\b')).toBe(true)
-		expect(likeMatch('a+b', 'a+b')).toBe(true)
-		expect(likeMatch('aaab', 'a+b')).toBe(false)
+		expect(matchesLikePattern('a(b', 'a(b')).toBe(true)
+		expect(matchesLikePattern('a[b', 'a[b')).toBe(true)
+		expect(matchesLikePattern('a\\b', 'a\\b')).toBe(true)
+		expect(matchesLikePattern('a+b', 'a+b')).toBe(true)
+		expect(matchesLikePattern('aaab', 'a+b')).toBe(false)
 	})
 
 	it('a % run behaves as a single any-run (a%%%b ≡ a%b)', () => {
-		expect(likeMatch('axyzb', 'a%%%b')).toBe(true)
-		expect(likeMatch('ab', 'a%%%b')).toBe(true)
-		expect(likeMatch('axb', 'a%%%b')).toBe(true)
-		expect(likeMatch('axc', 'a%%%b')).toBe(false)
+		expect(matchesLikePattern('axyzb', 'a%%%b')).toBe(true)
+		expect(matchesLikePattern('ab', 'a%%%b')).toBe(true)
+		expect(matchesLikePattern('axb', 'a%%%b')).toBe(true)
+		expect(matchesLikePattern('axc', 'a%%%b')).toBe(false)
 		// Equivalent to the single-% form on the same inputs.
-		expect(likeMatch('axyzb', 'a%%%%%%b')).toBe(likeMatch('axyzb', 'a%b'))
-		expect(likeMatch('ab', 'a%%%%%%b')).toBe(likeMatch('ab', 'a%b'))
+		expect(matchesLikePattern('axyzb', 'a%%%%%%b')).toBe(matchesLikePattern('axyzb', 'a%b'))
+		expect(matchesLikePattern('ab', 'a%%%%%%b')).toBe(matchesLikePattern('ab', 'a%b'))
 	})
 
 	it('_ runs require exactly that many chars (a__b ≠ a_b)', () => {
-		expect(likeMatch('axyb', 'a__b')).toBe(true)
-		expect(likeMatch('axb', 'a__b')).toBe(false) // two chars required
-		expect(likeMatch('axb', 'a_b')).toBe(true) // exactly one char
+		expect(matchesLikePattern('axyb', 'a__b')).toBe(true)
+		expect(matchesLikePattern('axb', 'a__b')).toBe(false) // two chars required
+		expect(matchesLikePattern('axb', 'a_b')).toBe(true) // exactly one char
 	})
 
 	it('a wildcard char is ALWAYS a wildcard, even when the value contains it literally', () => {
 		// `any` is tested before a literal match, so a value '%' never shadows the pattern's %.
-		expect(likeMatch('a%b', 'a%b')).toBe(true)
-		expect(likeMatch('axb', 'a%b')).toBe(true)
+		expect(matchesLikePattern('a%b', 'a%b')).toBe(true)
+		expect(matchesLikePattern('axb', 'a%b')).toBe(true)
 	})
 })
 
-describe('globMatch', () => {
+describe('matchesGlobPattern', () => {
 	it('matches * (any run) and ? (any single char), anchored', () => {
-		expect(globMatch('abc', 'a*')).toBe(true)
-		expect(globMatch('xab', 'a*')).toBe(false)
-		expect(globMatch('abc', 'a?c')).toBe(true)
-		expect(globMatch('ac', 'a?c')).toBe(false)
+		expect(matchesGlobPattern('abc', 'a*')).toBe(true)
+		expect(matchesGlobPattern('xab', 'a*')).toBe(false)
+		expect(matchesGlobPattern('abc', 'a?c')).toBe(true)
+		expect(matchesGlobPattern('ac', 'a?c')).toBe(false)
 	})
 
 	it('is case-SENSITIVE (unlike LIKE)', () => {
-		expect(globMatch('Alice', 'Al*')).toBe(true)
-		expect(globMatch('Alice', 'al*')).toBe(false)
+		expect(matchesGlobPattern('Alice', 'Al*')).toBe(true)
+		expect(matchesGlobPattern('Alice', 'al*')).toBe(false)
 	})
 
 	it('treats every non-wildcard char as a literal', () => {
-		expect(globMatch('a.c', 'a.c')).toBe(true)
-		expect(globMatch('abc', 'a.c')).toBe(false)
-		expect(globMatch('a(b', 'a(b')).toBe(true)
-		expect(globMatch('a\\b', 'a\\b')).toBe(true)
+		expect(matchesGlobPattern('a.c', 'a.c')).toBe(true)
+		expect(matchesGlobPattern('abc', 'a.c')).toBe(false)
+		expect(matchesGlobPattern('a(b', 'a(b')).toBe(true)
+		expect(matchesGlobPattern('a\\b', 'a\\b')).toBe(true)
 	})
 
 	it('a * run behaves as a single any-run (a***b ≡ a*b)', () => {
-		expect(globMatch('axyzb', 'a***b')).toBe(true)
-		expect(globMatch('ab', 'a***b')).toBe(true)
-		expect(globMatch('axc', 'a***b')).toBe(false)
-		expect(globMatch('axyzb', 'a******b')).toBe(globMatch('axyzb', 'a*b'))
+		expect(matchesGlobPattern('axyzb', 'a***b')).toBe(true)
+		expect(matchesGlobPattern('ab', 'a***b')).toBe(true)
+		expect(matchesGlobPattern('axc', 'a***b')).toBe(false)
+		expect(matchesGlobPattern('axyzb', 'a******b')).toBe(matchesGlobPattern('axyzb', 'a*b'))
 	})
 
 	it('? runs require exactly that many chars (a??b ≠ a?b)', () => {
-		expect(globMatch('axyb', 'a??b')).toBe(true)
-		expect(globMatch('axb', 'a??b')).toBe(false)
-		expect(globMatch('axb', 'a?b')).toBe(true)
+		expect(matchesGlobPattern('axyb', 'a??b')).toBe(true)
+		expect(matchesGlobPattern('axb', 'a??b')).toBe(false)
+		expect(matchesGlobPattern('axb', 'a?b')).toBe(true)
 	})
 })
 
-describe('wildcardMatch — the linear, ReDoS-safe engine', () => {
+describe('matchesWildcardPattern — the linear, ReDoS-safe engine', () => {
 	it('matches generically with the injected wildcard chars + fold flag', () => {
-		expect(wildcardMatch('abc', 'a%', '%', '_', false)).toBe(true)
-		expect(wildcardMatch('ABC', 'a%', '%', '_', true)).toBe(true) // fold
-		expect(wildcardMatch('ABC', 'a%', '%', '_', false)).toBe(false) // no fold
-		expect(wildcardMatch('axc', 'a_c', '%', '_', false)).toBe(true)
+		expect(matchesWildcardPattern('abc', 'a%', '%', '_', false)).toBe(true)
+		expect(matchesWildcardPattern('ABC', 'a%', '%', '_', true)).toBe(true) // fold
+		expect(matchesWildcardPattern('ABC', 'a%', '%', '_', false)).toBe(false) // no fold
+		expect(matchesWildcardPattern('axc', 'a_c', '%', '_', false)).toBe(true)
 	})
 
 	it('rejects an over-length pattern with a VALIDATION DatabaseError', () => {
 		const long = 'a'.repeat(MAX_PATTERN_LENGTH + 1)
-		const error = captureError(() => wildcardMatch('x', long, '%', '_', false))
+		const error = captureError(() => matchesWildcardPattern('x', long, '%', '_', false))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('VALIDATION')
 		// A pattern exactly at the cap is accepted (no throw).
-		expect(() => wildcardMatch('x', 'a'.repeat(MAX_PATTERN_LENGTH), '%', '_', false)).not.toThrow()
+		expect(() =>
+			matchesWildcardPattern('x', 'a'.repeat(MAX_PATTERN_LENGTH), '%', '_', false),
+		).not.toThrow()
 	})
 
 	it('a huge any-run is fine — the matcher is LINEAR (only the length is capped, not the count)', () => {
 		// 1000 consecutive % (well under the length cap) behave as one any-run, fast — no
 		// wildcard-COUNT cap is needed, because the matcher never backtracks like a regex.
-		expect(likeMatch('aXYZb', `a${'%'.repeat(1000)}b`)).toBe(true)
-		expect(likeMatch('ab', `a${'%'.repeat(1000)}b`)).toBe(true)
+		expect(matchesLikePattern('aXYZb', `a${'%'.repeat(1000)}b`)).toBe(true)
+		expect(matchesLikePattern('ab', `a${'%'.repeat(1000)}b`)).toBe(true)
 	})
 
 	it('bounds the catastrophic-backtracking SHAPE in well under a few milliseconds', () => {
@@ -254,7 +258,7 @@ describe('wildcardMatch — the linear, ReDoS-safe engine', () => {
 		const hostilePattern = `${'a%'.repeat(300)}X` // 300 any-runs separated by literals
 		const hostileInput = 'a'.repeat(20_000)
 		const started = performance.now()
-		const matched = likeMatch(hostileInput, hostilePattern)
+		const matched = matchesLikePattern(hostileInput, hostilePattern)
 		const elapsed = performance.now() - started
 		expect(matched).toBe(false)
 		// A backtracking regex takes seconds-to-forever; the linear matcher finishes near-instantly.
@@ -263,22 +267,22 @@ describe('wildcardMatch — the linear, ReDoS-safe engine', () => {
 	})
 })
 
-describe('matchesCriteria', () => {
+describe('matchesQuery', () => {
 	const row = { age: 30, role: 'admin' }
 
 	it('matches every row on an empty condition list', () => {
-		expect(matchesCriteria(row, [])).toBe(true)
+		expect(matchesQuery(row, [])).toBe(true)
 	})
 
 	it('folds conditions left-to-right by connector', () => {
 		const and = [buildCondition('age', 'above', [18]), buildCondition('role', 'equals', ['member'])]
-		expect(matchesCriteria(row, and)).toBe(false) // role mismatch
+		expect(matchesQuery(row, and)).toBe(false) // role mismatch
 
 		const or = [
 			buildCondition('age', 'above', [40]), // false
 			buildCondition('role', 'equals', ['admin'], 'or'), // true
 		]
-		expect(matchesCriteria(row, or)).toBe(true)
+		expect(matchesQuery(row, or)).toBe(true)
 	})
 })
 
@@ -306,7 +310,7 @@ describe('sortRows', () => {
 	})
 })
 
-describe('applyCriteria', () => {
+describe('applyQuery', () => {
 	const rows = [
 		{ id: 'a', n: 1 },
 		{ id: 'b', n: 2 },
@@ -315,7 +319,7 @@ describe('applyCriteria', () => {
 	]
 
 	it('filters, sorts, then pages', () => {
-		const result = applyCriteria(rows, {
+		const result = applyQuery(rows, {
 			conditions: [{ column: 'n', operator: 'above', values: [1], connector: 'and' }],
 			order: [{ column: 'n', direction: 'descending' }],
 			offset: 1,
@@ -324,8 +328,18 @@ describe('applyCriteria', () => {
 		expect(result.map((row) => row.id)).toEqual(['c', 'b'])
 	})
 
-	it('returns rows unchanged with no criteria', () => {
-		expect(applyCriteria(rows)).toEqual(rows)
+	it('returns rows unchanged with no input', () => {
+		expect(applyQuery(rows)).toEqual(rows)
+	})
+
+	it('validates paging before applying it and accepts zero', () => {
+		expect(() => applyQuery(rows, { limit: -1 })).toThrow(
+			'Query limit must be a nonnegative integer',
+		)
+		expect(() => applyQuery(rows, { offset: Number.POSITIVE_INFINITY })).toThrow(
+			'Query offset must be a nonnegative integer',
+		)
+		expect(applyQuery(rows, { limit: 0, offset: 0 })).toEqual([])
 	})
 })
 
@@ -359,83 +373,150 @@ describe('extractKey', () => {
 	})
 })
 
-describe('shapeToColumnType', () => {
-	it('maps scalar shapes to their portable type', () => {
-		expect(shapeToColumnType(stringShape())).toBe('text')
-		expect(shapeToColumnType(integerShape())).toBe('integer')
-		expect(shapeToColumnType(numberShape())).toBe('real')
-		expect(shapeToColumnType(booleanShape())).toBe('boolean')
-	})
-
-	it('maps null / object / array / union / json / raw to json', () => {
-		expect(shapeToColumnType(nullShape())).toBe('json')
-		expect(shapeToColumnType(objectShape({ a: stringShape() }))).toBe('json')
-		expect(shapeToColumnType(arrayShape(stringShape()))).toBe('json')
-		expect(shapeToColumnType(unionShape(stringShape(), integerShape()))).toBe('json')
-		expect(shapeToColumnType(jsonShape())).toBe('json')
-		expect(shapeToColumnType(rawShape({ type: 'object' }))).toBe('json')
-	})
-
-	it('unwraps optional / nullable to the inner type', () => {
-		expect(shapeToColumnType(optionalShape(integerShape()))).toBe('integer')
-		expect(shapeToColumnType(nullableShape(stringShape()))).toBe('text')
-	})
-
-	it('takes a literal shape from its values', () => {
-		expect(shapeToColumnType(literalShape(['a', 'b']))).toBe('text')
-		expect(shapeToColumnType(literalShape([1, 2]))).toBe('integer')
-		expect(shapeToColumnType(literalShape([1.5, 2]))).toBe('real')
-		expect(shapeToColumnType(literalShape([true, false]))).toBe('boolean')
+describe('bindRowKey', () => {
+	it('returns a fresh row with the storage key authoritative for any primary name', () => {
+		const input = { slug: 'caller', title: 'Hello' }
+		expect(bindRowKey(input, 'slug', 'stored')).toEqual({ slug: 'stored', title: 'Hello' })
+		expect(input).toEqual({ slug: 'caller', title: 'Hello' })
 	})
 })
 
-describe('isDriverMeta', () => {
+describe('shapeToColumnStorage', () => {
+	it('maps scalar shapes to their portable type', () => {
+		expect(shapeToColumnStorage(stringShape())).toBe('text')
+		expect(shapeToColumnStorage(integerShape())).toBe('integer')
+		expect(shapeToColumnStorage(numberShape())).toBe('real')
+		expect(shapeToColumnStorage(booleanShape())).toBe('boolean')
+	})
+
+	it('maps null / object / array / union / json / raw to json', () => {
+		expect(shapeToColumnStorage(nullShape())).toBe('json')
+		expect(shapeToColumnStorage(objectShape({ a: stringShape() }))).toBe('json')
+		expect(shapeToColumnStorage(arrayShape(stringShape()))).toBe('json')
+		expect(shapeToColumnStorage(unionShape(stringShape(), integerShape()))).toBe('json')
+		expect(shapeToColumnStorage(jsonShape())).toBe('json')
+		expect(shapeToColumnStorage(rawShape({ type: 'object' }))).toBe('json')
+	})
+
+	it('unwraps optional / nullable to the inner type', () => {
+		expect(shapeToColumnStorage(optionalShape(integerShape()))).toBe('integer')
+		expect(shapeToColumnStorage(nullableShape(stringShape()))).toBe('text')
+	})
+
+	it('takes a literal shape from its values', () => {
+		expect(shapeToColumnStorage(literalShape(['a', 'b']))).toBe('text')
+		expect(shapeToColumnStorage(literalShape([1, 2]))).toBe('integer')
+		expect(shapeToColumnStorage(literalShape([1.5, 2]))).toBe('real')
+		expect(shapeToColumnStorage(literalShape([true, false]))).toBe('boolean')
+	})
+})
+
+describe('shapeToColumnSchema', () => {
+	it('derives absence and null acceptance independently from the compiled contract', () => {
+		expect(shapeToColumnSchema('value', stringShape())).toEqual({
+			name: 'value',
+			storage: 'text',
+			optional: false,
+			nullable: false,
+		})
+		expect(shapeToColumnSchema('value', optionalShape(stringShape()))).toEqual({
+			name: 'value',
+			storage: 'text',
+			optional: true,
+			nullable: false,
+		})
+		expect(shapeToColumnSchema('value', nullableShape(stringShape()))).toEqual({
+			name: 'value',
+			storage: 'text',
+			optional: false,
+			nullable: true,
+		})
+		expect(shapeToColumnSchema('value', optionalShape(nullableShape(stringShape())))).toEqual({
+			name: 'value',
+			storage: 'text',
+			optional: true,
+			nullable: true,
+		})
+	})
+})
+
+describe('isDriverMetadata', () => {
 	const validSchema: TableSchema = {
 		name: 'users',
 		primary: 'id',
-		columns: [{ name: 'id', type: 'text', nullable: false }],
+		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
 		indexes: [['id']],
 	}
 
-	it('accepts a well-formed DriverMeta', () => {
-		expect(isDriverMeta({ version: 1, schema: [validSchema] })).toBe(true)
-		expect(isDriverMeta({ version: 0, schema: [] })).toBe(true)
+	it('accepts a well-formed DriverMetadata', () => {
+		expect(isDriverMetadata({ version: 1, schema: [validSchema] })).toBe(true)
+		expect(isDriverMetadata({ version: 0, schema: [] })).toBe(true)
 	})
 
 	it('rejects a non-record value', () => {
-		expect(isDriverMeta(null)).toBe(false)
-		expect(isDriverMeta('meta')).toBe(false)
-		expect(isDriverMeta([])).toBe(false)
+		expect(isDriverMetadata(null)).toBe(false)
+		expect(isDriverMetadata('invalid')).toBe(false)
+		expect(isDriverMetadata([])).toBe(false)
 	})
 
 	it('rejects a non-finite version', () => {
-		expect(isDriverMeta({ version: Number.NaN, schema: [] })).toBe(false)
-		expect(isDriverMeta({ version: Number.POSITIVE_INFINITY, schema: [] })).toBe(false)
-		expect(isDriverMeta({ version: '1', schema: [] })).toBe(false)
+		expect(isDriverMetadata({ version: Number.NaN, schema: [] })).toBe(false)
+		expect(isDriverMetadata({ version: Number.POSITIVE_INFINITY, schema: [] })).toBe(false)
+		expect(isDriverMetadata({ version: '1', schema: [] })).toBe(false)
 	})
 
 	it('rejects a schema that is not an array', () => {
-		expect(isDriverMeta({ version: 1, schema: {} })).toBe(false)
-		expect(isDriverMeta({ version: 1 })).toBe(false)
+		expect(isDriverMetadata({ version: 1, schema: {} })).toBe(false)
+		expect(isDriverMetadata({ version: 1 })).toBe(false)
 	})
 
 	it('rejects a table schema with a bad column type', () => {
-		const bad = { ...validSchema, columns: [{ name: 'id', type: 'nope', nullable: false }] }
-		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+		const bad = {
+			...validSchema,
+			columns: [{ name: 'id', storage: 'nope', optional: false, nullable: false }],
+		}
+		expect(isDriverMetadata({ version: 1, schema: [bad] })).toBe(false)
 	})
 
 	it('rejects a table schema with a non-record column', () => {
 		const bad = { ...validSchema, columns: ['id'] }
-		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+		expect(isDriverMetadata({ version: 1, schema: [bad] })).toBe(false)
 	})
 
 	it('rejects a table schema with a non-string index entry', () => {
 		const bad = { ...validSchema, indexes: [[1]] }
-		expect(isDriverMeta({ version: 1, schema: [bad] })).toBe(false)
+		expect(isDriverMetadata({ version: 1, schema: [bad] })).toBe(false)
 	})
 
 	it('rejects a table schema that is not a record', () => {
-		expect(isDriverMeta({ version: 1, schema: ['users'] })).toBe(false)
+		expect(isDriverMetadata({ version: 1, schema: ['users'] })).toBe(false)
+	})
+
+	it('returns false for hostile root and nested reads', () => {
+		const fault = new Error('hostile read')
+		const root = Object.defineProperty({ schema: [] }, 'version', {
+			enumerable: true,
+			get: () => {
+				throw fault
+			},
+		})
+		const nested = {
+			version: 1,
+			schema: [
+				Object.defineProperty({ primary: 'id', columns: [], indexes: [] }, 'name', {
+					enumerable: true,
+					get: () => {
+						throw fault
+					},
+				}),
+			],
+		}
+		const proxy = Proxy.revocable({ version: 1, schema: [] }, {})
+		proxy.revoke()
+
+		expect(isDriverMetadata(root)).toBe(false)
+		expect(isDriverMetadata(nested)).toBe(false)
+		expect(isDriverMetadata(proxy.proxy)).toBe(false)
 	})
 })
 
@@ -456,11 +537,51 @@ describe('checkAbort', () => {
 	})
 })
 
+describe('normalizeDriverSchema', () => {
+	it('owns, sorts, and deeply freezes tables, columns, and index lists without mutating input', () => {
+		const users = schema({
+			name: 'users',
+			columns: [
+				{ name: 'name', storage: 'text', optional: false, nullable: false },
+				{ name: 'age', storage: 'integer', optional: true, nullable: false },
+			],
+			indexes: [['name'], ['age', 'name']],
+		})
+		const posts = schema({ name: 'posts' })
+		const input = [users, posts]
+		const normalized = normalizeDriverSchema(input)
+
+		expect(input).toEqual([users, posts])
+		expect(normalized.map((table) => table.name)).toEqual(['posts', 'users'])
+		expect(normalized[1]?.columns.map((column) => column.name)).toEqual(['age', 'id', 'name'])
+		expect(normalized[1]?.indexes).toEqual([['age', 'name'], ['name']])
+		expect(normalized).not.toBe(input)
+		expect(normalized[1]).not.toBe(users)
+		expect(normalized[1]?.columns).not.toBe(users.columns)
+		expect(normalized[1]?.indexes).not.toBe(users.indexes)
+		expect(Object.isFrozen(normalized)).toBe(true)
+		expect(Object.isFrozen(normalized[1])).toBe(true)
+		expect(Object.isFrozen(normalized[1]?.columns)).toBe(true)
+		expect(Object.isFrozen(normalized[1]?.indexes[0])).toBe(true)
+	})
+
+	it('rejects malformed input through the driver-schema validation boundary', () => {
+		expect(captureError(() => normalizeDriverSchema([{ name: 'users' }]))).toMatchObject({
+			code: 'VALIDATION',
+			context: { path: 'schema' },
+		})
+	})
+})
+
 // Local schema-literal builder — kept file-local since only this file diffs
 // TableSchema literals directly (AGENTS §16.1: extract once it serves a
 // second file).
 function schema(overrides: Partial<TableSchema> & { name: string }): TableSchema {
-	return { primary: 'id', columns: [], indexes: [], ...overrides }
+	const columns: readonly ColumnSchema[] = [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		...(overrides.columns ?? []),
+	]
+	return { primary: 'id', indexes: [], ...overrides, columns }
 }
 
 describe('planMigration', () => {
@@ -481,7 +602,7 @@ describe('planMigration', () => {
 		const fresh = schema({ name: 'fresh' })
 		const shared = schema({
 			name: 'shared',
-			columns: [{ name: 'age', type: 'integer', nullable: false }],
+			columns: [{ name: 'age', storage: 'integer', optional: true, nullable: false }],
 		})
 		const sharedBefore = schema({ name: 'shared' })
 		const plan = planMigration([gone, sharedBefore], [fresh, shared])
@@ -491,7 +612,7 @@ describe('planMigration', () => {
 			{
 				operation: 'column.add',
 				table: 'shared',
-				column: { name: 'age', type: 'integer', nullable: false },
+				column: { name: 'age', storage: 'integer', optional: true, nullable: false },
 			},
 		])
 	})
@@ -499,11 +620,11 @@ describe('planMigration', () => {
 	it('adds and removes columns on a shared table', () => {
 		const before = schema({
 			name: 'users',
-			columns: [{ name: 'legacy', type: 'text', nullable: false }],
+			columns: [{ name: 'legacy', storage: 'text', optional: false, nullable: false }],
 		})
 		const after = schema({
 			name: 'users',
-			columns: [{ name: 'age', type: 'integer', nullable: true }],
+			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: true }],
 		})
 		const plan = planMigration([before], [after])
 		expect(plan.steps).toEqual([
@@ -511,14 +632,19 @@ describe('planMigration', () => {
 			{
 				operation: 'column.add',
 				table: 'users',
-				column: { name: 'age', type: 'integer', nullable: true },
+				column: { name: 'age', storage: 'integer', optional: false, nullable: true },
 			},
 		])
 	})
 
 	it('adds and removes index groups by deep equality of the column-name array', () => {
-		const before = schema({ name: 'users', indexes: [['name'], ['a', 'b']] })
-		const after = schema({ name: 'users', indexes: [['name'], ['b', 'a']] })
+		const columns: readonly ColumnSchema[] = [
+			{ name: 'name', storage: 'text', optional: false, nullable: false },
+			{ name: 'a', storage: 'text', optional: false, nullable: false },
+			{ name: 'b', storage: 'text', optional: false, nullable: false },
+		]
+		const before = schema({ name: 'users', columns, indexes: [['name'], ['a', 'b']] })
+		const after = schema({ name: 'users', columns, indexes: [['name'], ['b', 'a']] })
 		const plan = planMigration([before], [after])
 		expect(plan.steps).toEqual([
 			{ operation: 'index.remove', table: 'users', index: ['a', 'b'] },
@@ -529,21 +655,67 @@ describe('planMigration', () => {
 	it('produces no steps for identical schemas', () => {
 		const users = schema({
 			name: 'users',
-			columns: [{ name: 'name', type: 'text', nullable: false }],
+			columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
 			indexes: [['name']],
 		})
 		const plan = planMigration([users], [users])
 		expect(plan.steps).toEqual([])
 	})
 
+	it('produces no steps when only table, column, and index-list order differs', () => {
+		const users = schema({
+			name: 'users',
+			columns: [
+				{ name: 'name', storage: 'text', optional: false, nullable: false },
+				{ name: 'age', storage: 'integer', optional: true, nullable: false },
+			],
+			indexes: [['name'], ['age', 'name']],
+		})
+		const posts = schema({ name: 'posts' })
+		const reorderedUsers: TableSchema = {
+			...users,
+			columns: [...users.columns].reverse(),
+			indexes: [...users.indexes].reverse(),
+		}
+		expect(planMigration([users, posts], [posts, reorderedUsers]).steps).toEqual([])
+	})
+
+	it('preserves compound-index column order as migration-significant', () => {
+		const columns: readonly ColumnSchema[] = [
+			{ name: 'a', storage: 'text', optional: false, nullable: false },
+			{ name: 'b', storage: 'text', optional: false, nullable: false },
+		]
+		const before = schema({ name: 'users', columns, indexes: [['a', 'b']] })
+		const after = schema({ name: 'users', columns, indexes: [['b', 'a']] })
+		expect(planMigration([before], [after]).steps).toEqual([
+			{ operation: 'index.remove', table: 'users', index: ['a', 'b'] },
+			{ operation: 'index.add', table: 'users', index: ['b', 'a'] },
+		])
+	})
+
+	it('rejects adding a required non-null column to an existing table', () => {
+		const before = schema({ name: 'users' })
+		const after = schema({
+			name: 'users',
+			columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
+		})
+		const error = captureError(() => planMigration([before], [after]))
+		expect(error).toMatchObject({
+			code: 'MIGRATION',
+			message:
+				"migrate: required non-null column 'name' cannot be added automatically to existing table 'users'",
+			context: { table: 'users', column: 'name' },
+		})
+	})
+
 	it('throws a MIGRATION DatabaseError when a shared column changes type', () => {
 		const before = schema({
 			name: 'users',
-			columns: [{ name: 'age', type: 'text', nullable: false }],
+			columns: [{ name: 'age', storage: 'text', optional: false, nullable: false }],
 		})
 		const after = schema({
 			name: 'users',
-			columns: [{ name: 'age', type: 'integer', nullable: false }],
+			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
 		})
 		const error = captureError(() => planMigration([before], [after]))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
@@ -554,15 +726,48 @@ describe('planMigration', () => {
 	it('throws a MIGRATION DatabaseError when a shared column changes nullability', () => {
 		const before = schema({
 			name: 'users',
-			columns: [{ name: 'age', type: 'integer', nullable: false }],
+			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
 		})
 		const after = schema({
 			name: 'users',
-			columns: [{ name: 'age', type: 'integer', nullable: true }],
+			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: true }],
 		})
 		const error = captureError(() => planMigration([before], [after]))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 		expect(isDatabaseError(error) ? String(error.message) : '').toContain('age')
+	})
+
+	it('throws MIGRATION when a shared table changes primary or a column changes optionality', () => {
+		const before = schema({
+			name: 'users',
+			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
+		})
+		const primary = { ...before, primary: 'age' }
+		const optional = {
+			...before,
+			columns: before.columns.map((column) =>
+				column.name === 'age' ? { ...column, optional: true } : column,
+			),
+		}
+		expect(captureError(() => planMigration([before], [primary]))).toMatchObject({
+			code: 'MIGRATION',
+		})
+		expect(captureError(() => planMigration([before], [optional]))).toMatchObject({
+			code: 'MIGRATION',
+		})
+	})
+
+	it('removes dependent indexes before removing their columns', () => {
+		const before = schema({
+			name: 'users',
+			columns: [{ name: 'legacy', storage: 'text', optional: false, nullable: false }],
+			indexes: [['legacy']],
+		})
+		const after = schema({ name: 'users' })
+		expect(planMigration([before], [after]).steps).toEqual([
+			{ operation: 'index.remove', table: 'users', index: ['legacy'] },
+			{ operation: 'column.remove', table: 'users', column: 'legacy' },
+		])
 	})
 
 	it('defaults from to 0 and to to 1', () => {
@@ -575,6 +780,101 @@ describe('planMigration', () => {
 		const plan = planMigration([], [], 3, 4)
 		expect(plan.from).toBe(3)
 		expect(plan.to).toBe(4)
+	})
+})
+
+describe('projectMigrationSchema', () => {
+	const users = schema({
+		name: 'users',
+		columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
+		indexes: [['name']],
+	})
+
+	it('projects ordered table, column, and index transitions to a fresh valid schema', () => {
+		const result = projectMigrationSchema(
+			[users],
+			[
+				{ operation: 'index.remove', table: 'users', index: ['name'] },
+				{ operation: 'column.remove', table: 'users', column: 'name' },
+				{
+					operation: 'column.add',
+					table: 'users',
+					column: { name: 'age', storage: 'integer', optional: true, nullable: false },
+				},
+				{ operation: 'index.add', table: 'users', index: ['age'] },
+			],
+		)
+		expect(result).toEqual([
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'age', storage: 'integer', optional: true, nullable: false },
+					{ name: 'id', storage: 'text', optional: false, nullable: false },
+				],
+				indexes: [['age']],
+			},
+		])
+		expect(result[0]).not.toBe(users)
+	})
+
+	it('rejects invalid sequential transitions before publishing a schema', () => {
+		const cases: readonly (readonly MigrationStep[])[] = [
+			[{ operation: 'table.remove', table: 'missing' }],
+			[{ operation: 'column.remove', table: 'users', column: 'id' }],
+			[{ operation: 'column.remove', table: 'users', column: 'name' }],
+			[{ operation: 'index.add', table: 'users', index: ['missing'] }],
+			[{ operation: 'index.remove', table: 'users', index: ['id'] }],
+		]
+		for (const steps of cases) {
+			expect(captureError(() => projectMigrationSchema([users], steps))).toMatchObject({
+				code: 'MIGRATION',
+			})
+		}
+	})
+
+	it('accepts optional-only and nullable-only additions but rejects required non-null additions', () => {
+		const optional = projectMigrationSchema(
+			[users],
+			[
+				{
+					operation: 'column.add',
+					table: 'users',
+					column: { name: 'optional', storage: 'text', optional: true, nullable: false },
+				},
+			],
+		)
+		const nullable = projectMigrationSchema(
+			[users],
+			[
+				{
+					operation: 'column.add',
+					table: 'users',
+					column: { name: 'nullable', storage: 'text', optional: false, nullable: true },
+				},
+			],
+		)
+		expect(optional[0]?.columns.some((column) => column.name === 'optional')).toBe(true)
+		expect(nullable[0]?.columns.some((column) => column.name === 'nullable')).toBe(true)
+		expect(
+			captureError(() =>
+				projectMigrationSchema(
+					[users],
+					[
+						{
+							operation: 'column.add',
+							table: 'users',
+							column: {
+								name: 'required',
+								storage: 'text',
+								optional: false,
+								nullable: false,
+							},
+						},
+					],
+				),
+			),
+		).toMatchObject({ code: 'MIGRATION', context: { table: 'users', column: 'required' } })
 	})
 })
 
@@ -599,7 +899,7 @@ describe('migrateRows', () => {
 			{
 				operation: 'column.add',
 				table: 'users',
-				column: { name: 'age', type: 'integer', nullable: true },
+				column: { name: 'age', storage: 'integer', optional: false, nullable: true },
 			},
 		])
 		expect(result).toEqual([{ id: 'a', name: 'Ada' }])
@@ -633,34 +933,75 @@ describe('migrateRows', () => {
 	})
 })
 
-describe('deepEqual', () => {
+describe('equalsValue', () => {
 	it('compares primitives by SameValueZero (NaN equal to itself)', () => {
-		expect(deepEqual(1, 1)).toBe(true)
-		expect(deepEqual(1, 2)).toBe(false)
-		expect(deepEqual('a', 'a')).toBe(true)
-		expect(deepEqual(Number.NaN, Number.NaN)).toBe(true)
-		expect(deepEqual(0, -0)).toBe(true)
-		expect(deepEqual(undefined, undefined)).toBe(true)
-		expect(deepEqual(null, null)).toBe(true)
-		expect(deepEqual(null, undefined)).toBe(false)
+		expect(equalsValue(1, 1)).toBe(true)
+		expect(equalsValue(1, 2)).toBe(false)
+		expect(equalsValue('a', 'a')).toBe(true)
+		expect(equalsValue(Number.NaN, Number.NaN)).toBe(true)
+		expect(equalsValue(0, -0)).toBe(true)
+		expect(equalsValue(undefined, undefined)).toBe(true)
+		expect(equalsValue(null, null)).toBe(true)
+		expect(equalsValue(null, undefined)).toBe(false)
 	})
 
 	it('compares nested objects and arrays structurally', () => {
-		expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
-		expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 3 }] })).toBe(false)
-		expect(deepEqual([1, 2, 3], [1, 2, 3])).toBe(true)
-		expect(deepEqual([1, 2, 3], [1, 2])).toBe(false)
+		expect(equalsValue({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
+		expect(equalsValue({ a: [1, { b: 2 }] }, { a: [1, { b: 3 }] })).toBe(false)
+		expect(equalsValue([1, 2, 3], [1, 2, 3])).toBe(true)
+		expect(equalsValue([1, 2, 3], [1, 2])).toBe(false)
 	})
 
 	it('rejects mismatched shapes (array vs object, extra keys)', () => {
-		expect(deepEqual([1, 2], { 0: 1, 1: 2 })).toBe(false)
-		expect(deepEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false)
+		expect(equalsValue([1, 2], { 0: 1, 1: 2 })).toBe(false)
+		expect(equalsValue({ a: 1 }, { a: 1, b: 2 })).toBe(false)
 	})
 
 	it('treats a key present with value undefined as NOT equal to that key being absent', () => {
-		expect(deepEqual({ a: undefined }, {})).toBe(false)
-		expect(deepEqual({}, { a: undefined })).toBe(false)
-		expect(deepEqual({ a: undefined }, { a: undefined })).toBe(true)
+		expect(equalsValue({ a: undefined }, {})).toBe(false)
+		expect(equalsValue({}, { a: undefined })).toBe(false)
+		expect(equalsValue({ a: undefined }, { a: undefined })).toBe(true)
+	})
+
+	it('terminates for equal and unequal self-referential containers', () => {
+		const left: Record<string, unknown> = { label: 'same' }
+		const right: Record<string, unknown> = { label: 'same' }
+		left.self = left
+		right.self = right
+		expect(equalsValue(left, right)).toBe(true)
+		right.label = 'different'
+		expect(equalsValue(left, right)).toBe(false)
+
+		const leftArray: unknown[] = []
+		const rightArray: unknown[] = []
+		leftArray.push(leftArray)
+		rightArray.push(rightArray)
+		expect(equalsValue(leftArray, rightArray)).toBe(true)
+		rightArray.push('extra')
+		expect(equalsValue(leftArray, rightArray)).toBe(false)
+	})
+
+	it('terminates for equal and unequal mutually cyclic graphs through matchesCondition', () => {
+		const leftRoot: Record<string, unknown> = { label: 'root' }
+		const leftChild: Record<string, unknown> = { label: 'child', parent: leftRoot }
+		leftRoot.child = leftChild
+		const rightRoot: Record<string, unknown> = { label: 'root' }
+		const rightChild: Record<string, unknown> = { label: 'child', parent: rightRoot }
+		rightRoot.child = rightChild
+
+		expect(
+			matchesCondition(
+				{ graph: leftRoot },
+				{ column: 'graph', operator: 'equals', values: [rightRoot], connector: 'and' },
+			),
+		).toBe(true)
+		rightChild.label = 'changed'
+		expect(
+			matchesCondition(
+				{ graph: leftRoot },
+				{ column: 'graph', operator: 'equals', values: [rightRoot], connector: 'and' },
+			),
+		).toBe(false)
 	})
 })
 
@@ -677,57 +1018,102 @@ describe('filterRows', () => {
 	})
 })
 
+function createReferenceLeakingDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	const stored = new Map<Key, Row>()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		async write(table: string, key: Key, row: Row): Promise<void> {
+			await inner.write(table, key, row)
+			stored.set(key, row)
+		},
+		insert: (table, key, row) => inner.insert(table, key, row),
+		async read(table: string, key: Key): Promise<Row | undefined> {
+			if (stored.has(key)) return stored.get(key)
+			return inner.read(table, key)
+		},
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: () => inner.snapshot(),
+	}
+}
+
+function createDescendingKeyDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		async keys(table: string): Promise<readonly Key[]> {
+			return [...(await inner.keys(table))].reverse()
+		},
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: () => inner.snapshot(),
+	}
+}
+
+function createMismatchedMetadataDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: (tables) => inner.snapshot(tables),
+		async metadata() {
+			return { version: 99, schema: [] }
+		},
+		async stamp() {
+			// Deliberately ignores the stamped value.
+		},
+	}
+}
+
+function createWholeSnapshotDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: () => inner.snapshot(),
+	}
+}
+
 describe('conformDriver', () => {
 	it('resolves for a conformant driver (the reference memory driver)', async () => {
 		await expect(conformDriver(() => createMemoryDriver())).resolves.toBeUndefined()
 	})
 
 	it('rejects with a CONFORMANCE DatabaseError when read violates copy-out isolation', async () => {
-		function createBrokenDriver(): DriverInterface {
-			const inner = createMemoryDriver()
-			const stored = new Map<Key, Row>()
-			return {
-				open: (tables) => inner.open(tables),
-				close: () => inner.close(),
-				async write(table: string, key: Key, row: Row): Promise<void> {
-					await inner.write(table, key, row)
-					stored.set(key, row) // stores the reference directly (breaks copy-in)
-				},
-				async read(table: string, key: Key): Promise<Row | undefined> {
-					// Returns the stored reference directly instead of a copy — breaks copy-out.
-					if (stored.has(key)) return stored.get(key)
-					return inner.read(table, key)
-				},
-				delete: (table, key) => inner.delete(table, key),
-				keys: (table) => inner.keys(table),
-				scan: (table) => inner.scan(table),
-				clear: (table) => inner.clear(table),
-				snapshot: () => inner.snapshot(),
-			}
-		}
-		const error = await conformDriver(() => createBrokenDriver()).catch((caught: unknown) => caught)
+		const error = await conformDriver(() => createReferenceLeakingDriver()).catch(
+			(caught: unknown) => caught,
+		)
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 	})
 
 	it('rejects with a CONFORMANCE DatabaseError when keys are not ascending', async () => {
-		function createBrokenDriver(): DriverInterface {
-			const inner = createMemoryDriver()
-			return {
-				open: (tables) => inner.open(tables),
-				close: () => inner.close(),
-				read: (table, key) => inner.read(table, key),
-				write: (table, key, row) => inner.write(table, key, row),
-				delete: (table, key) => inner.delete(table, key),
-				async keys(table: string): Promise<readonly Key[]> {
-					return [...(await inner.keys(table))].reverse()
-				},
-				scan: (table) => inner.scan(table),
-				clear: (table) => inner.clear(table),
-				snapshot: () => inner.snapshot(),
-			}
-		}
-		const error = await conformDriver(() => createBrokenDriver()).catch((caught: unknown) => caught)
+		const error = await conformDriver(() => createDescendingKeyDriver()).catch(
+			(caught: unknown) => caught,
+		)
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 	})
@@ -746,6 +1132,7 @@ function createDoublyBrokenDriver(): DriverInterface {
 			await inner.write(table, key, row)
 			stored.set(key, row) // stores the reference directly (breaks copy-in/copy-out)
 		},
+		insert: (table, key, row) => inner.insert(table, key, row),
 		async read(table: string, key: Key): Promise<Row | undefined> {
 			if (stored.has(key)) return stored.get(key)
 			return inner.read(table, key)
@@ -768,6 +1155,7 @@ function createCrashingDriver(): DriverInterface {
 		close: () => inner.close(),
 		read: (table, key) => inner.read(table, key),
 		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
 		delete: (table, key) => inner.delete(table, key),
 		keys: (table) => inner.keys(table),
 		scan(): AsyncIterable<Row> {
@@ -802,57 +1190,23 @@ describe('driverFindings', () => {
 		expect(findings.some((finding) => finding.message === 'scan exploded')).toBe(true)
 	})
 
-	it('runs the meta/stamp phase for a driver that implements both hooks (MemoryDriver — landed at validation time) and finds a violation when meta() disagrees with the stamped value', async () => {
-		function createMismatchedMetaDriver(): DriverInterface {
-			const inner = createMemoryDriver()
-			return {
-				open: (tables) => inner.open(tables),
-				close: () => inner.close(),
-				read: (table, key) => inner.read(table, key),
-				write: (table, key, row) => inner.write(table, key, row),
-				delete: (table, key) => inner.delete(table, key),
-				keys: (table) => inner.keys(table),
-				scan: (table) => inner.scan(table),
-				clear: (table) => inner.clear(table),
-				snapshot: (tables) => inner.snapshot(tables),
-				async meta() {
-					return { version: 99, schema: [] }
-				},
-				async stamp() {
-					// Deliberately ignores the stamped value.
-				},
-			}
-		}
+	it('runs the metadata/stamp phase for a driver that implements both hooks and finds a mismatched read', async () => {
 		const findings: string[] = []
-		for await (const finding of driverFindings(() => createMismatchedMetaDriver())) {
+		for await (const finding of driverFindings(() => createMismatchedMetadataDriver())) {
 			findings.push(finding.check)
 		}
-		expect(findings).toContain('meta-fresh')
+		expect(findings).toContain('metadata-fresh')
 
-		// And the reference MemoryDriver — which now implements meta/stamp — passes cleanly.
+		// And the reference MemoryDriver — which implements metadata/stamp — passes cleanly.
 		const clean: string[] = []
 		for await (const finding of driverFindings(() => createMemoryDriver()))
 			clean.push(finding.check)
-		expect(clean.some((check) => check.startsWith('meta'))).toBe(false)
+		expect(clean.some((check) => check.startsWith('metadata'))).toBe(false)
 	})
 
 	it('runs the scoped-snapshot phase and finds a violation when snapshot rolls back the whole store instead of only the named table', async () => {
-		function createWholeStoreSnapshotDriver(): DriverInterface {
-			const inner = createMemoryDriver()
-			return {
-				open: (tables) => inner.open(tables),
-				close: () => inner.close(),
-				read: (table, key) => inner.read(table, key),
-				write: (table, key, row) => inner.write(table, key, row),
-				delete: (table, key) => inner.delete(table, key),
-				keys: (table) => inner.keys(table),
-				scan: (table) => inner.scan(table),
-				clear: (table) => inner.clear(table),
-				snapshot: () => inner.snapshot(), // ignores the `tables` scope entirely
-			}
-		}
 		const findings: string[] = []
-		for await (const finding of driverFindings(() => createWholeStoreSnapshotDriver())) {
+		for await (const finding of driverFindings(() => createWholeSnapshotDriver())) {
 			findings.push(finding.check)
 		}
 		expect(findings).toContain('snapshot-scoped-posts')
@@ -886,134 +1240,5 @@ describe('conformDriver (fail-fast over driverFindings)', () => {
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 		expect(isDatabaseError(error) ? error.context?.check : undefined).toBe('copy-in')
-	})
-})
-
-describe('generateUUID', () => {
-	const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-
-	it('produces a canonical lowercase 8-4-4-4-12 hex UUID', () => {
-		const uuid = generateUUID(seededRandom(1))
-		expect(uuid).toMatch(V4)
-		expect(uuid.length).toBe(36)
-		expect(uuid[8]).toBe('-')
-		expect(uuid[13]).toBe('-')
-		expect(uuid[18]).toBe('-')
-		expect(uuid[23]).toBe('-')
-	})
-
-	it('always forces the version nibble to 4', () => {
-		for (let seed = 0; seed < 50; seed++) {
-			const uuid = generateUUID(seededRandom(seed))
-			expect(uuid[14]).toBe('4')
-		}
-	})
-
-	it('always forces the variant nibble to 8, 9, a, or b', () => {
-		for (let seed = 0; seed < 50; seed++) {
-			const uuid = generateUUID(seededRandom(seed))
-			expect(['8', '9', 'a', 'b']).toContain(uuid[19])
-		}
-	})
-
-	it('is deterministic for a given seed', () => {
-		expect(generateUUID(seededRandom(42))).toBe(generateUUID(seededRandom(42)))
-	})
-
-	it('continues one source sequence across calls, reproducibly', () => {
-		const r = seededRandom(7)
-		const a = generateUUID(r)
-		const b = generateUUID(r)
-		expect(a).not.toBe(b)
-
-		const fresh = seededRandom(7)
-		expect(generateUUID(fresh)).toBe(a)
-		expect(generateUUID(fresh)).toBe(b)
-	})
-
-	it('diverges across different seeds', () => {
-		const uuids = new Set<string>()
-		for (let seed = 1; seed <= 8; seed++) uuids.add(generateUUID(seededRandom(seed)))
-		expect(uuids.size).toBe(8)
-	})
-
-	it('draws exactly sixteen values from the source per UUID', () => {
-		const source = seededRandom(1)
-		let count = 0
-		function counting(): number {
-			count++
-			return source()
-		}
-		generateUUID(counting)
-		expect(count).toBe(16)
-		generateUUID(counting)
-		expect(count).toBe(32)
-	})
-
-	it('yields the canonical all-zero UUID from a constant-zero source', () => {
-		expect(generateUUID(() => 0)).toBe('00000000-0000-4000-8000-000000000000')
-	})
-
-	it('yields the canonical all-f UUID from a saturated source', () => {
-		expect(generateUUID(() => 0.9999999999)).toBe('ffffffff-ffff-4fff-bfff-ffffffffffff')
-	})
-
-	it('never emits a malformed UUID from out-of-contract sources', () => {
-		const hostile = [
-			() => 1,
-			() => 2,
-			() => -0.5,
-			() => -1,
-			() => Number.NaN,
-			() => Number.POSITIVE_INFINITY,
-			() => Number.NEGATIVE_INFINITY,
-			() => Number.MAX_VALUE,
-			() => Number.MIN_VALUE,
-			() => Number.EPSILON,
-		]
-		for (const source of hostile) expect(generateUUID(source)).toMatch(V4)
-	})
-
-	it('stays well-formed for boundary seeds', () => {
-		const seeds = [0, -1, 2 ** 32 - 1, 2 ** 32, 3.7, -0]
-		for (const seed of seeds) expect(generateUUID(seededRandom(seed))).toMatch(V4)
-	})
-
-	it('produces no collisions across a large batch from one seeded source', () => {
-		const r = seededRandom(123)
-		const uuids = new Set<string>()
-		for (let i = 0; i < 10_000; i++) uuids.add(generateUUID(r))
-		expect(uuids.size).toBe(10_000)
-	})
-
-	it('produces distinct first UUIDs across many seeds', () => {
-		const uuids = new Set<string>()
-		for (let seed = 0; seed < 1000; seed++) uuids.add(generateUUID(seededRandom(seed)))
-		expect(uuids.size).toBe(1000)
-	})
-
-	it('reaches every hex digit in the free positions over many samples', () => {
-		const r = seededRandom(5)
-		const seen = new Set<string>()
-		for (let i = 0; i < 200; i++) {
-			const uuid = generateUUID(r)
-			for (let index = 0; index < uuid.length; index++) {
-				if (index === 14 || index === 19) continue
-				const char = uuid[index]
-				if (char === undefined || char === '-') continue
-				seen.add(char)
-			}
-		}
-		expect([...seen].sort()).toEqual('0123456789abcdef'.split(''))
-	})
-
-	it('produces a well-formed UUID from the default source', () => {
-		expect(generateUUID()).toMatch(V4)
-	})
-
-	it('produces distinct UUIDs from the default source across calls', () => {
-		const uuids = new Set<string>()
-		for (let i = 0; i < 100; i++) uuids.add(generateUUID())
-		expect(uuids.size).toBe(100)
 	})
 })

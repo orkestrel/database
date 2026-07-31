@@ -3,15 +3,16 @@
 // `document` / `window`: node-only helpers live in `setupServer.ts`.
 
 import type {
-	AggregateFunction,
-	Columns,
+	AggregateOperation,
+	ColumnMap,
 	Condition,
 	ConditionOperator,
-	Connector,
-	Criteria,
+	ConditionConnector,
+	QueryInput,
 	DatabaseInterface,
 	DriverInterface,
-	Key,
+	DriverMetadata,
+	MigrationInput,
 	Row,
 	RowOf,
 	TableInterface,
@@ -19,13 +20,9 @@ import type {
 } from '@src/core'
 import type { EmitterErrorHandler, EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
-import { integerShape, stringShape } from '@orkestrel/contract'
+import { integerShape, literalShape, stringShape } from '@orkestrel/contract'
 import { conformDriver as coreConformDriver, createDatabase, createMemoryDriver } from '@src/core'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-
-afterEach(() => {
-	vi.restoreAllMocks()
-})
+import { describe, expect, it } from 'vitest'
 
 // A real callback that records its calls — use instead of a mock when a test
 // only needs to count invocations or inspect arguments.
@@ -76,6 +73,25 @@ export async function collectRows<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 /**
+ * Collect sorted ids from the parity suite's optional-rank stream case.
+ *
+ * @param table - The real backend table under comparison
+ * @returns Matching row ids in stable order
+ */
+export async function collectRankStreamIds<T extends { readonly id: string }>(
+	table: TableInterface<T>,
+): Promise<readonly string[]> {
+	const ids: string[] = []
+	for await (const row of table
+		.query()
+		.condition({ column: 'rank', operator: 'below', values: [10], connector: 'and' })
+		.stream()) {
+		ids.push(row.id)
+	}
+	return ids.sort()
+}
+
+/**
  * A minimal {@link TableSchema}`[]` for the named tables — each scan-only (empty
  * `columns` / `indexes`, `primary: 'id'`), enough to ready a table by name on a
  * driver that reads only `name` (the reference `MemoryDriver`).
@@ -84,11 +100,16 @@ export async function collectRows<T>(iterable: AsyncIterable<T>): Promise<T[]> {
  * @returns One scan-only schema per name
  */
 export function tableSchemas(...names: readonly string[]): readonly TableSchema[] {
-	return names.map((name) => ({ name, primary: 'id', columns: [], indexes: [] }))
+	return names.map((name) => ({
+		name,
+		primary: 'id',
+		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+		indexes: [],
+	}))
 }
 
 /**
- * Build one {@link Condition} for a criteria/compiler test — the verbose literal
+ * Build one {@link Condition} for a input/compiler test — the verbose literal
  * (`{ column, operator, values, connector }`) folded into a call.
  *
  * @param column - The {@link FieldPath} the condition reads (a string is ONE
@@ -103,7 +124,7 @@ export function buildCondition(
 	column: FieldPath,
 	operator: ConditionOperator,
 	values: readonly unknown[],
-	connector: Connector = 'and',
+	connector: ConditionConnector = 'and',
 ): Condition {
 	return { column, operator, values, connector }
 }
@@ -112,7 +133,7 @@ export function buildCondition(
 export const INTEGRATION_TABLES = {
 	users: { id: stringShape(), name: stringShape(), age: integerShape() },
 	posts: { id: stringShape(), author: stringShape(), title: stringShape() },
-} as const
+} satisfies Readonly<Record<string, ColumnMap>>
 
 /** A row of the canonical `users` table ({@link INTEGRATION_TABLES}` users`). */
 export interface UserRow {
@@ -156,7 +177,7 @@ export function userRows(): readonly UserRow[] {
  * Stand up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `database`
  * entity tests — `createDatabase({ driver: createMemoryDriver(), tables: { users: columns } })`,
  * seed the rows, and return `db.table('users')` (AGENTS §16.1). The shared form of the per-file
- * `seeded()` the `Cursor` / `Query` / `Clause` tests each hand-rolled (each over the SAME base
+ * `seeded()` the `Cursor` / `Query` tests each hand-rolled (each over the SAME base
  * `id` / `name` / `age` columns plus its own 4th column — a `role` literal, a `nickname` optional).
  * The caller passes its FULL `columns` map and `rows`; because `columns` is captured as a `const`
  * generic, the returned table's row type is `RowOf<C>` — inferred PRECISELY (the literal-union
@@ -168,7 +189,7 @@ export function userRows(): readonly UserRow[] {
  * @param options - `columns` (the full column map) and `rows` (the seed rows, typed `RowOf<C>`)
  * @returns The seeded `users` table, typed `TableInterface<RowOf<C>>`
  */
-export async function seedUsersTable<const C extends Columns>(
+export async function seedUsersTable<const C extends ColumnMap>(
 	columns: C,
 	seed: (users: TableInterface<RowOf<C>>) => Promise<unknown>,
 ): Promise<TableInterface<RowOf<C>>> {
@@ -204,118 +225,254 @@ export function createConstrainedUsersDatabase(error?: EmitterErrorHandler): {
 	return { db, users: db.table('users') }
 }
 
-/** One recorded call to {@link createRecordingDriver}'s native `aggregate` hook. */
-export interface RecordingAggregate {
-	readonly operation: AggregateFunction
-	readonly column: FieldPath
-	readonly criteria: Criteria
+/** The exact columns used by the Cursor behavior and transaction-lifetime scenarios. */
+export const CURSOR_COLUMNS = {
+	id: stringShape(),
+	name: stringShape(),
+	age: integerShape({ min: 0 }),
+	role: literalShape(['admin', 'member', 'guest']),
+}
+
+/** One row in the shared Cursor scenario. */
+export type CursorUserRow = RowOf<typeof CURSOR_COLUMNS>
+
+/** The canonical three-row seed used by Cursor ordering and mutation scenarios. */
+export const CURSOR_ROWS: readonly CursorUserRow[] = [
+	{ id: 'u1', name: 'Ada', age: 36, role: 'admin' },
+	{ id: 'u2', name: 'Bo', age: 17, role: 'guest' },
+	{ id: 'u3', name: 'Cy', age: 41, role: 'member' },
+]
+
+/**
+ * Create the shared Cursor database over a caller-selected driver.
+ *
+ * @param driver - The storage driver; defaults to a fresh real Memory driver
+ * @returns The database and its typed `users` table
+ */
+export function createCursorDatabase(driver: DriverInterface = createMemoryDriver()) {
+	const db = createDatabase({ driver, tables: { users: CURSOR_COLUMNS } })
+	return { db, users: db.table('users') }
 }
 
 /**
- * A recording {@link DriverInterface} over a Map that ALSO implements the optional
- * native `records` / `count` / `aggregate` hooks (AGENTS §21) — a real driver, not
- * a mock. Rows are stored (so a scan WOULD return them), but the three hooks
+ * Create and seed the shared Cursor database.
+ *
+ * @param driver - The storage driver; defaults to a fresh real Memory driver
+ * @returns The database and its seeded typed `users` table
+ */
+export async function seedCursorDatabase(driver?: DriverInterface) {
+	const instance = createCursorDatabase(driver)
+	await instance.users.set(CURSOR_ROWS)
+	return instance
+}
+
+/**
+ * Adapt a real Memory driver to only the required DriverInterface primitives.
+ *
+ * @param memory - The real Memory driver to expose
+ * @returns A required-surface driver suitable for adding one test-specific hook
+ */
+export function createMemoryAdapter(
+	memory: DriverInterface = createMemoryDriver(),
+): DriverInterface {
+	return {
+		open: (schema) => memory.open(schema),
+		close: () => memory.close(),
+		read: (table, key) => memory.read(table, key),
+		write: (table, key, row, options) => memory.write(table, key, row, options),
+		insert: (table, key, row, options) => memory.insert(table, key, row, options),
+		delete: (table, key, options) => memory.delete(table, key, options),
+		keys: (table) => memory.keys(table),
+		scan: (table) => memory.scan(table),
+		clear: (table) => memory.clear(table),
+		snapshot: (tables) => memory.snapshot(tables),
+	}
+}
+
+/** Optional metadata capabilities exposed by a reconciliation test driver. */
+export interface ReconciliationDriverOptions {
+	readonly metadata: boolean
+	readonly stamp: boolean
+	readonly migrate?: boolean
+	readonly initial?: DriverMetadata
+}
+
+/**
+ * Create a real Memory-backed driver with an exact optional metadata-hook set.
+ *
+ * @param options - Which optional hooks exist and the initial persisted metadata
+ * @returns The driver plus call records for reconciliation assertions
+ */
+export function createReconciliationDriver(options: ReconciliationDriverOptions): {
+	readonly driver: DriverInterface
+	readonly metadataCalls: readonly number[]
+	readonly stampCalls: readonly DriverMetadata[]
+	readonly migrateCalls: readonly MigrationInput[]
+} {
+	const memory = createMemoryDriver()
+	const metadataCalls: number[] = []
+	const stampCalls: DriverMetadata[] = []
+	const migrateCalls: MigrationInput[] = []
+	let stored = options.initial
+	const driver: DriverInterface = {
+		...createMemoryAdapter(memory),
+		...(options.metadata
+			? {
+					async metadata() {
+						metadataCalls.push(1)
+						return stored
+					},
+				}
+			: {}),
+		...(options.stamp
+			? {
+					async stamp(next: DriverMetadata) {
+						stampCalls.push(next)
+						stored = next
+					},
+				}
+			: {}),
+		...(options.migrate
+			? {
+					async migrate(input: MigrationInput) {
+						migrateCalls.push(input)
+						await memory.migrate?.(input)
+						if (input.metadata !== undefined) stored = input.metadata
+					},
+				}
+			: {}),
+	}
+	return { driver, metadataCalls, stampCalls, migrateCalls }
+}
+
+/** A reusable host-independent AsyncIterable over one supplied AsyncIterator. */
+export class IteratorSource<T> implements AsyncIterable<T> {
+	readonly #iterator: AsyncIterator<T>
+
+	constructor(iterator: AsyncIterator<T>) {
+		this.#iterator = iterator
+	}
+
+	[Symbol.asyncIterator](): AsyncIterator<T> {
+		return this.#iterator
+	}
+}
+
+/** An async iterator wrapper that records every delegated source cleanup. */
+export class RecordingIterator<T> implements AsyncIterator<T> {
+	readonly #source: AsyncIterator<T>
+	readonly #cleanup: () => void
+
+	constructor(source: AsyncIterator<T>, cleanup: () => void) {
+		this.#source = source
+		this.#cleanup = cleanup
+	}
+
+	next(): Promise<IteratorResult<T>> {
+		return this.#source.next()
+	}
+
+	async return(): Promise<IteratorResult<T>> {
+		this.#cleanup()
+		if (this.#source.return === undefined) return { done: true, value: undefined }
+		return this.#source.return()
+	}
+}
+
+/** One recorded call to {@link createRecordingDriver}'s native `aggregate` hook. */
+export interface RecordingAggregate {
+	readonly operation: AggregateOperation
+	readonly column: FieldPath
+	readonly input: QueryInput
+}
+
+/**
+ * A recording {@link DriverInterface} over the real Memory driver that ALSO implements
+ * the optional native `records` / `aggregate` hooks (AGENTS §21). Rows are
+ * stored (so a scan WOULD return them), but the two hooks
  * short-circuit to a fixed sentinel and record what they were handed, so a test can
  * prove `Table` preferred the hook over the scan engine.
  */
 export interface RecordingDriverInterface extends DriverInterface {
-	/** The native filtered-read hook (always present here) — records its criteria. */
-	records(table: string, criteria: Criteria): Promise<readonly Row[]>
-	/** The native count hook (always present here) — records its criteria. */
-	count(table: string, criteria: Criteria): Promise<number>
+	/** The native filtered-read hook (always present here) — records its input. */
+	records(table: string, input: QueryInput): Promise<readonly Row[]>
 	/** The native aggregate hook (always present here) — records its arguments. */
 	aggregate(
 		table: string,
-		operation: AggregateFunction,
+		operation: AggregateOperation,
 		column: FieldPath,
-		criteria: Criteria,
+		input: QueryInput,
 	): Promise<number | undefined>
 }
 
 /** The sentinel row {@link createRecordingDriver}'s native `records` hook returns. */
 export const RECORDING_ROW: Row = { id: 'native', name: 'Native', age: 7 }
 
-/** The sentinel total {@link createRecordingDriver}'s native `count` hook returns. */
-export const RECORDING_COUNT = 999
-
 /** The sentinel value {@link createRecordingDriver}'s native `aggregate` hook returns. */
 export const RECORDING_AGGREGATE = 123
 
 /**
  * Create a {@link RecordingDriverInterface} plus the arrays its native hooks
- * record into — a real Map-backed driver whose `records` / `count` / `aggregate`
- * return fixed sentinels ({@link RECORDING_ROW} / {@link RECORDING_COUNT} /
- * {@link RECORDING_AGGREGATE}) and push what they receive onto `recordsCalls` /
- * `countCalls` / `aggregateCalls`. Lets a test assert the native hook ran (and with
+ * record into — a real Memory-backed driver whose `records` / `aggregate`
+ * return fixed sentinels ({@link RECORDING_ROW} / {@link RECORDING_AGGREGATE})
+ * and push what they receive onto `recordsCalls` / `aggregateCalls`. Lets a test assert the native hook ran (and with
  * which arguments) instead of the scan engine. `aggregatesUndefined` makes the
  * `aggregate` hook resolve to `undefined` instead — to prove `Table` treats a
  * present hook as having handled the call even when its result is `undefined`.
  *
  * @param aggregatesUndefined - When `true`, the native `aggregate` hook resolves to
  *   `undefined` (still recording the call); defaults to `false`
- * @returns The driver and its three recorded-call arrays
+ * @returns The driver and its two recorded-call arrays
  */
 export function createRecordingDriver(aggregatesUndefined = false): {
 	readonly driver: RecordingDriverInterface
-	readonly recordsCalls: readonly Criteria[]
-	readonly countCalls: readonly Criteria[]
+	readonly recordsCalls: readonly QueryInput[]
 	readonly aggregateCalls: readonly RecordingAggregate[]
 } {
-	const tables = new Map<string, Map<Key, Row>>()
-	const recordsCalls: Criteria[] = []
-	const countCalls: Criteria[] = []
+	const memory = createMemoryDriver()
+	const recordsCalls: QueryInput[] = []
 	const aggregateCalls: RecordingAggregate[] = []
-	const store = (table: string): Map<Key, Row> => {
-		let map = tables.get(table)
-		if (map === undefined) {
-			map = new Map()
-			tables.set(table, map)
-		}
-		return map
-	}
 	const driver: RecordingDriverInterface = {
 		async open(schema) {
-			for (const table of schema) {
-				if (!tables.has(table.name)) tables.set(table.name, new Map())
-			}
+			await memory.open(schema)
 		},
-		async close() {},
+		async close() {
+			await memory.close()
+		},
 		async read(table, key) {
-			const row = store(table).get(key)
-			return row === undefined ? undefined : { ...row }
+			return memory.read(table, key)
 		},
-		async write(table, key, row) {
-			store(table).set(key, { ...row })
+		async write(table, key, row, options) {
+			await memory.write(table, key, row, options)
 		},
-		async delete(table, key) {
-			return store(table).delete(key)
+		async insert(table, key, row, options) {
+			await memory.insert(table, key, row, options)
+		},
+		async delete(table, key, options) {
+			return memory.delete(table, key, options)
 		},
 		async keys(table) {
-			return [...store(table).keys()]
+			return memory.keys(table)
 		},
-		async *scan(table) {
-			for (const row of store(table).values()) yield { ...row }
+		scan(table) {
+			return memory.scan(table)
 		},
 		async clear(table) {
-			store(table).clear()
+			await memory.clear(table)
 		},
 		async snapshot() {
-			return async () => {}
+			return memory.snapshot()
 		},
-		async records(_table, criteria) {
-			recordsCalls.push(criteria)
+		async records(_table, input) {
+			recordsCalls.push(input)
 			return [{ ...RECORDING_ROW }]
 		},
-		async count(_table, criteria) {
-			countCalls.push(criteria)
-			return RECORDING_COUNT
-		},
-		async aggregate(_table, operation, column, criteria) {
-			aggregateCalls.push({ operation, column, criteria })
+		async aggregate(_table, operation, column, input) {
+			aggregateCalls.push({ operation, column, input })
 			return aggregatesUndefined ? undefined : RECORDING_AGGREGATE
 		},
 	}
-	return { driver, recordsCalls, countCalls, aggregateCalls }
+	return { driver, recordsCalls, aggregateCalls }
 }
 
 /**

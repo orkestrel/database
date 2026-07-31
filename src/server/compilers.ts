@@ -1,12 +1,81 @@
-import type { ColumnType, Condition, Criteria, Order, TableSchema } from '@src/core'
-import type { CompiledSQL, SQLiteValue } from './types.js'
-import { DatabaseError } from '@src/core'
+import type {
+	AggregateOperation,
+	ColumnStorage,
+	Condition,
+	MigrationStep,
+	Order,
+	QueryInput,
+	TableSchema,
+} from '@src/core'
+import type { FieldPath } from '@orkestrel/contract'
+import type { SQLiteValue } from '@orkestrel/sqlite'
+import type { CompiledSQL } from './types.js'
+import { DatabaseError, validatePage } from '@src/core'
 import { isString } from '@orkestrel/contract'
-import { encodeValue, fieldColumn, quote } from './helpers.js'
+import { deriveSQLiteIndexName, encodeValue, quoteIdentifier } from './helpers.js'
+
+/**
+ * Map a portable {@link ColumnStorage} to its SQLite column type.
+ *
+ * @param storage - The portable column type
+ * @returns The SQLite column type keyword
+ */
+export function compileColumnSQL(storage: ColumnStorage): string {
+	switch (storage) {
+		case 'text':
+		case 'json':
+			return 'TEXT'
+		case 'integer':
+		case 'boolean':
+			return 'INTEGER'
+		case 'real':
+			return 'REAL'
+		case 'blob':
+			return 'BLOB'
+	}
+}
+
+/**
+ * Compile a {@link FieldPath} to the SQL expression that reads it.
+ *
+ * @param path - The field path
+ * @returns The SQL expression selecting the value
+ */
+export function compileFieldSQL(path: FieldPath): string {
+	if (isString(path)) return quoteIdentifier(path)
+	const [column, ...nested] = path
+	if (column === undefined) {
+		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
+	}
+	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
+	return 'json_extract(' + quoteIdentifier(column) + ", '$" + rest + "')"
+}
+
+/**
+ * Compile an {@link AggregateOperation} over a {@link FieldPath}.
+ *
+ * @param operation - The aggregate to compute
+ * @param column - The column or nested path to aggregate
+ * @returns The SQL aggregate expression
+ */
+export function compileAggregateSQL(operation: AggregateOperation, column: FieldPath): string {
+	switch (operation) {
+		case 'count':
+			return 'COUNT(*)'
+		case 'sum':
+			return 'SUM(' + compileFieldSQL(column) + ')'
+		case 'average':
+			return 'AVG(' + compileFieldSQL(column) + ')'
+		case 'minimum':
+			return 'MIN(' + compileFieldSQL(column) + ')'
+		case 'maximum':
+			return 'MAX(' + compileFieldSQL(column) + ')'
+	}
+}
 
 /**
  * Compile a NESTED {@link FieldPath} to the `json_type(<col>, <path>)` SQL
- * expression — the {@link fieldColumn} `json_extract` sibling used to tell a
+ * expression — the {@link compileFieldSQL} `json_extract` sibling used to tell a
  * PRESENT JSON `null` apart from an ABSENT path (both read back as SQL `NULL`
  * through `json_extract`, but `json_type` reports `'null'` for the former and
  * SQL `NULL` for the latter).
@@ -16,26 +85,27 @@ import { encodeValue, fieldColumn, quote } from './helpers.js'
  *
  * @example
  * ```ts
- * jsonTypeColumn(['payload', 'user', 'id']) // "json_type(\"payload\", '$.user.id')"
+ * compileJSONTypeSQL(['payload', 'user', 'id']) // "json_type(\"payload\", '$.user.id')"
  * ```
  */
-export function jsonTypeColumn(path: readonly string[]): string {
+export function compileJSONTypeSQL(path: readonly string[]): string {
 	const [column, ...nested] = path
 	if (column === undefined) {
 		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
 	}
 	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
-	return 'json_type(' + quote(column) + ", '$" + rest + "')"
+	return 'json_type(' + quoteIdentifier(column) + ", '$" + rest + "')"
 }
 
-// The `Criteria` → parameterized SQL compiler — the native-query payoff. It turns
-// a portable `Criteria` (the same one the core engine's `applyCriteria` folds)
+// The `QueryInput` → parameterized SQL compiler — the native-query payoff. It turns
+// a portable `QueryInput` (the same one the core engine's `applyQuery` folds)
 // into the `WHERE` / `ORDER BY` / `LIMIT` tail of a `SELECT`, with bound `?`
-// params in clause order. Its WHERE fold parenthesizes LEFT-TO-RIGHT to match the
-// engine's `matchesCriteria` exactly (NOT SQL's AND-over-OR precedence), so a
+// parameters in clause order. Its WHERE fold parenthesizes LEFT-TO-RIGHT to match the
+// engine's `matchesQuery` exactly (NOT SQL's AND-over-OR precedence), so a
 // native read and an engine read agree on every query (the parity test). Branches
 // are centralized and public per AGENTS §5 — no operator logic buried in closures.
-// This module speaks pure strings/values only — it imports no SQLite package.
+// This module speaks pure strings/values only. Its SQLiteValue import is
+// type-only and cannot couple the emitted JavaScript to the native package.
 
 /**
  * Escape `\`, `%`, and `_` (each with a leading `\`) so a `starts` / `ends`
@@ -58,15 +128,15 @@ export function escapeLike(text: string): string {
  *
  * @param column - The column name
  * @param schema - The table's schema
- * @returns The column's {@link ColumnType}, or `undefined` if the schema does not carry it
+ * @returns The column's {@link ColumnStorage}, or `undefined` if the schema does not carry it
  *
  * @example
  * ```ts
- * declaredType('age', schema) // 'integer'
+ * findColumnStorage('age', schema) // 'integer'
  * ```
  */
-export function declaredType(column: string, schema: TableSchema): ColumnType | undefined {
-	return schema.columns.find((candidate) => candidate.name === column)?.type
+export function findColumnStorage(column: string, schema: TableSchema): ColumnStorage | undefined {
+	return schema.columns.find((candidate) => candidate.name === column)?.storage
 }
 
 /**
@@ -82,15 +152,15 @@ export function declaredType(column: string, schema: TableSchema): ColumnType | 
  * edge of comparing against a json subtree).
  *
  * @param value - The runtime operand value
- * @returns The {@link ColumnType} to encode it as
+ * @returns The {@link ColumnStorage} to encode it as
  *
  * @example
  * ```ts
- * valueType(true) // 'boolean'
- * valueType(9) // 'integer'
+ * inferValueStorage(true) // 'boolean'
+ * inferValueStorage(9) // 'integer'
  * ```
  */
-export function valueType(value: unknown): ColumnType {
+export function inferValueStorage(value: unknown): ColumnStorage {
 	if (typeof value === 'boolean') return 'boolean'
 	if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'real'
 	if (typeof value === 'bigint') return 'integer'
@@ -99,7 +169,7 @@ export function valueType(value: unknown): ColumnType {
 }
 
 /**
- * Compile one condition to its `<column> <operator>` SQL fragment and the params
+ * Compile one condition to its `<column> <operator>` SQL fragment and the parameters
  * it binds — engine-exact under SQL's three-valued NULL logic.
  *
  * @remarks
@@ -109,7 +179,7 @@ export function valueType(value: unknown): ColumnType {
  * encodes each operand as the NATIVE scalar `json_extract` returns, derived from
  * the operand's runtime type (per-operand, since `between` / `any` / `none` can
  * mix types). `any` / `none` collapse an empty list to a constant (`0` matches
- * nothing, `1` matches all) with no params.
+ * nothing, `1` matches all) with no parameters.
  *
  * The core engine's total order ranks `undefined` (rank 0) BELOW `null`
  * (rank 1) (see `compareValues`), so a MISSING/`NULL` column MATCHES
@@ -137,13 +207,11 @@ export function valueType(value: unknown): ColumnType {
  * absent                | true                           | true                      | false
  * ```
  *
- * Because a flat column's `NULL` always decodes to `undefined`, `equals`
- * against a `null` operand needs no special flat compilation (`col = ?`
- * binding a `NULL` param is already always-false in SQL, matching "no match"
- * above) — but flat `not` against `null` must match EVERY row (both the
- * absent and the scalar rows), which `col != ? OR col IS NULL` cannot express
- * (it only catches the `IS NULL` row), so a flat `not`-with-`null`-operand
- * compiles to the constant `1`.
+ * A flat SQL `NULL` represents absence or explicit null according to its
+ * {@link ColumnSchema}; optional-and-nullable columns use a storage-class
+ * sentinel to distinguish the two. The native exactness gate therefore
+ * refines every optional or nullable scalar comparison through the core engine.
+ * This compiler still emits a total SQL fragment for direct consumers.
  *
  * A NESTED path can be present-but-`null` (a stored JSON `null`), which
  * `json_extract` reads back as SQL `NULL` — indistinguishable from an ABSENT
@@ -163,28 +231,32 @@ export function valueType(value: unknown): ColumnType {
  *
  * @example
  * ```ts
- * fragment({ column: 'age', operator: 'above', values: [18], connector: 'and' }, schema)
- * // { sql: '"age" > ?', params: [18] }
- * fragment({ column: 'age', operator: 'below', values: [18], connector: 'and' }, schema)
- * // { sql: '("age" < ? OR "age" IS NULL)', params: [18] }
+ * compileConditionSQL({ column: 'age', operator: 'above', values: [18], connector: 'and' }, schema)
+ * // { sql: '"age" > ?', parameters: [18] }
+ * compileConditionSQL({ column: 'age', operator: 'below', values: [18], connector: 'and' }, schema)
+ * // { sql: '("age" < ? OR "age" IS NULL)', parameters: [18] }
  * ```
  */
-export function fragment(condition: Condition, schema: TableSchema): CompiledSQL {
-	const column = fieldColumn(condition.column)
+export function compileConditionSQL(condition: Condition, schema: TableSchema): CompiledSQL {
+	const column = compileFieldSQL(condition.column)
 	const nested = !isString(condition.column)
-	const declared = isString(condition.column) ? declaredType(condition.column, schema) : undefined
+	const declared = isString(condition.column)
+		? schema.columns.find((candidate) => candidate.name === condition.column)
+		: undefined
 	const first = condition.values[0]
 	const second = condition.values[1]
 	const nullOperand = first === null || first === undefined
 	// The nested `json_type` read — built only when `condition.column` is an
 	// array (a nested path) — disambiguates a present JSON `null` from an
 	// absent path under `equals` / `not` (see the truth table above).
-	const jsonType = !isString(condition.column) ? jsonTypeColumn(condition.column) : ''
+	const jsonType = !isString(condition.column) ? compileJSONTypeSQL(condition.column) : ''
 	let sql: string
 	let values: readonly unknown[]
 	switch (condition.operator) {
 		case 'equals':
-			if (nullOperand && nested) return { sql: jsonType + " = 'null'", params: [] }
+			if (nullOperand && nested) {
+				return { sql: jsonType + " = 'null'", parameters: [] }
+			}
 			sql = column + ' = ?'
 			values = [first]
 			break
@@ -193,13 +265,13 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 				if (nested) {
 					return {
 						sql: '(' + jsonType + ' IS NULL OR ' + jsonType + " != 'null')",
-						params: [],
+						parameters: [],
 					}
 				}
 				// A flat column's decoded value is never a present null, so
 				// `compareValues(value, null)` is nonzero for EVERY row (absent or
 				// scalar) — the engine's `not null` matches unconditionally.
-				return { sql: '1', params: [] }
+				return { sql: '1', parameters: [] }
 			}
 			sql = '(' + column + ' != ? OR ' + column + ' IS NULL)'
 			values = [first]
@@ -240,7 +312,9 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			// empty operand matches every text-column value (the engine: every
 			// string starts with '').
 			const text = isString(first) ? first : ''
-			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
+			if (text === '') {
+				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
+			}
 			const length = Array.from(text).length
 			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)'
 			values = [first]
@@ -250,19 +324,21 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			// Mirror of `starts`: `substr(<col>, -N)` (SQLite's 2-arg form counts
 			// from the right when N is negative) reads the last N code points.
 			const text = isString(first) ? first : ''
-			if (text === '') return { sql: 'typeof(' + column + ") = 'text'", params: [] }
+			if (text === '') {
+				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
+			}
 			const length = Array.from(text).length
 			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)'
 			values = [first]
 			break
 		}
 		case 'any':
-			if (condition.values.length === 0) return { sql: '0', params: [] }
+			if (condition.values.length === 0) return { sql: '0', parameters: [] }
 			sql = column + ' IN (' + condition.values.map(() => '?').join(', ') + ')'
 			values = condition.values
 			break
 		case 'none':
-			if (condition.values.length === 0) return { sql: '1', params: [] }
+			if (condition.values.length === 0) return { sql: '1', parameters: [] }
 			sql =
 				'(' +
 				column +
@@ -274,27 +350,28 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
 			values = condition.values
 			break
 		case 'absent':
-			return { sql: column + ' IS NULL', params: [] }
+			return { sql: column + ' IS NULL', parameters: [] }
 		case 'present':
-			return { sql: column + ' IS NOT NULL', params: [] }
+			return { sql: column + ' IS NOT NULL', parameters: [] }
 	}
 	return {
 		sql,
-		params: values.map((value) =>
-			encodeValue(value, nested ? valueType(value) : (declared ?? 'json')),
-		),
+		parameters: values.map((value) => {
+			const storage = nested ? inferValueStorage(value) : (declared?.storage ?? 'json')
+			return encodeValue(value, declared ?? { name: '', storage, optional: false, nullable: false })
+		}),
 	}
 }
 
 /**
  * Fold the conditions into one WHERE clause, parenthesizing progressively
- * left-to-right so the grouping matches the engine's `matchesCriteria` fold.
+ * left-to-right so the grouping matches the engine's `matchesQuery` fold.
  *
  * @remarks
  * The first condition's connector is ignored, per the {@link Condition} types.
- * Every fragment (see {@link fragment}'s truth table) replicates the core
+ * Every fragment (see {@link compileConditionSQL}'s truth table) replicates the core
  * engine's total order EXACTLY under SQL's three-valued NULL logic, so this
- * clause matches `applyCriteria` row-for-row over the same table — a native
+ * clause matches `applyQuery` row-for-row over the same table — a native
  * `records` / `count` read never disagrees with a scan-and-filter fallback.
  *
  * @param conditions - The conditions to fold
@@ -304,22 +381,22 @@ export function fragment(condition: Condition, schema: TableSchema): CompiledSQL
  * @example
  * ```ts
  * compileWhere([{ column: 'age', operator: 'from', values: [18], connector: 'and' }], schema)
- * // { sql: 'WHERE "age" >= ?', params: [18] }
+ * // { sql: 'WHERE "age" >= ?', parameters: [18] }
  * ```
  */
 export function compileWhere(conditions: readonly Condition[], schema: TableSchema): CompiledSQL {
 	const [first, ...remaining] = conditions
-	if (first === undefined) return { sql: '', params: [] }
-	const head = fragment(first, schema)
+	if (first === undefined) return { sql: '', parameters: [] }
+	const head = compileConditionSQL(first, schema)
 	let clause = head.sql
-	const params: SQLiteValue[] = [...head.params]
+	const parameters: SQLiteValue[] = [...head.parameters]
 	for (const condition of remaining) {
-		const next = fragment(condition, schema)
+		const next = compileConditionSQL(condition, schema)
 		const operator = condition.connector === 'or' ? 'OR' : 'AND'
 		clause = '(' + clause + ' ' + operator + ' ' + next.sql + ')'
-		params.push(...next.params)
+		parameters.push(...next.parameters)
 	}
-	return { sql: 'WHERE ' + clause, params }
+	return { sql: 'WHERE ' + clause, parameters }
 }
 
 /**
@@ -350,12 +427,12 @@ export function compileWhere(conditions: readonly Condition[], schema: TableSche
  */
 export function compileOrder(order: readonly Order[] | undefined, schema: TableSchema): string {
 	const terms = (order ?? []).map(
-		(term) => fieldColumn(term.column) + (term.direction === 'descending' ? ' DESC' : ' ASC'),
+		(term) => compileFieldSQL(term.column) + (term.direction === 'descending' ? ' DESC' : ' ASC'),
 	)
 	const ordersByPrimary = (order ?? []).some(
 		(term) => isString(term.column) && term.column === schema.primary,
 	)
-	if (!ordersByPrimary) terms.push(quote(schema.primary))
+	if (!ordersByPrimary) terms.push(quoteIdentifier(schema.primary))
 	return terms.length === 0 ? '' : 'ORDER BY ' + terms.join(', ')
 }
 
@@ -372,20 +449,24 @@ export function compileOrder(order: readonly Order[] | undefined, schema: TableS
  *
  * @example
  * ```ts
- * compilePage(undefined, 5) // { sql: 'LIMIT -1 OFFSET ?', params: [5] }
+ * compilePage(undefined, 5) // { sql: 'LIMIT -1 OFFSET ?', parameters: [5] }
  * ```
  */
 export function compilePage(limit: number | undefined, offset: number | undefined): CompiledSQL {
+	validatePage({
+		...(limit === undefined ? {} : { limit }),
+		...(offset === undefined ? {} : { offset }),
+	})
 	if (limit !== undefined && offset !== undefined) {
-		return { sql: 'LIMIT ? OFFSET ?', params: [limit, offset] }
+		return { sql: 'LIMIT ? OFFSET ?', parameters: [limit, offset] }
 	}
-	if (limit !== undefined) return { sql: 'LIMIT ?', params: [limit] }
-	if (offset !== undefined) return { sql: 'LIMIT -1 OFFSET ?', params: [offset] }
-	return { sql: '', params: [] }
+	if (limit !== undefined) return { sql: 'LIMIT ?', parameters: [limit] }
+	if (offset !== undefined) return { sql: 'LIMIT -1 OFFSET ?', parameters: [offset] }
+	return { sql: '', parameters: [] }
 }
 
 /**
- * Compile a {@link Criteria} into the SQL clause that follows a table name, with
+ * Compile a {@link QueryInput} into the SQL clause that follows a table name, with
  * its bound parameters in clause order.
  *
  * @remarks
@@ -393,30 +474,124 @@ export function compilePage(limit: number | undefined, offset: number | undefine
  * `[where, orderBy, limitOffset]` (each possibly empty) into one clause so a
  * `SELECT * FROM <table> <clause>` runs the whole read in the engine instead of
  * over a JS `scan`. The WHERE fold is parenthesized **left-to-right** to mirror
- * the core engine's `matchesCriteria` (not SQL's native AND-over-OR precedence),
+ * the core engine's `matchesQuery` (not SQL's native AND-over-OR precedence),
  * so a native and an engine read return identical rows. Each operand is encoded
  * via `encodeValue`: a flat column uses its declared schema type, while a nested
  * `FieldPath` (a `json_extract` read) encodes each operand as the native scalar
  * the extract returns — derived from the operand's runtime type — so it compares.
  * The 15 operators map per the databases guide's operator table, with
  * `starts` / `ends` using `LIKE … ESCAPE '\'` and an empty `any` / `none` list
- * collapsing to a constant. A `undefined` criteria (or one with no parts)
+ * collapsing to a constant. An `undefined` input (or one with no parts)
  * compiles to an empty clause.
  *
- * @param criteria - The read specification, or `undefined` for all rows
+ * @param input - The read specification, or `undefined` for all rows
  * @param schema - The table's schema (column types for operand encoding)
  * @returns The SQL tail and its bound parameters
  *
  * @example
  * ```ts
- * compileCriteria({ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] }, schema)
- * // { sql: 'WHERE "age" >= ? ORDER BY "id"', params: [18] }
+ * compileQuerySQL({ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] }, schema)
+ * // { sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18] }
  * ```
  */
-export function compileCriteria(criteria: Criteria | undefined, schema: TableSchema): CompiledSQL {
-	const where = compileWhere(criteria?.conditions ?? [], schema)
-	const orderBy = compileOrder(criteria?.order, schema)
-	const page = compilePage(criteria?.limit, criteria?.offset)
+export function compileQuerySQL(input: QueryInput | undefined, schema: TableSchema): CompiledSQL {
+	validatePage(input)
+	const where = compileWhere(input?.conditions ?? [], schema)
+	const orderBy = compileOrder(input?.order, schema)
+	const page = compilePage(input?.limit, input?.offset)
 	const sql = [where.sql, orderBy, page.sql].filter((part) => part !== '').join(' ')
-	return { sql, params: [...where.params, ...page.params] }
+	return {
+		sql,
+		parameters: [...where.parameters, ...page.parameters],
+	}
+}
+
+/**
+ * Project a {@link TableSchema} to its `CREATE TABLE IF NOT EXISTS` statement.
+ *
+ * @param schema - The table schema
+ * @returns The complete table declaration
+ */
+export function schemaToTable(schema: TableSchema): string {
+	const columns = schema.columns.map(
+		(column) =>
+			quoteIdentifier(column.name) +
+			' ' +
+			compileColumnSQL(column.storage) +
+			(column.optional || column.nullable ? '' : ' NOT NULL'),
+	)
+	return (
+		'CREATE TABLE IF NOT EXISTS ' +
+		quoteIdentifier(schema.name) +
+		' (' +
+		columns.join(', ') +
+		', PRIMARY KEY (' +
+		quoteIdentifier(schema.primary) +
+		'))'
+	)
+}
+
+/**
+ * Project a {@link TableSchema} to its declared SQLite indexes.
+ *
+ * @param schema - The table schema
+ * @returns One statement per declared index
+ */
+export function schemaToIndexes(schema: TableSchema): readonly string[] {
+	return schema.indexes.map(
+		(group) =>
+			'CREATE INDEX IF NOT EXISTS ' +
+			quoteIdentifier(deriveSQLiteIndexName(schema.name, group)) +
+			' ON ' +
+			quoteIdentifier(schema.name) +
+			' (' +
+			group.map(quoteIdentifier).join(', ') +
+			')',
+	)
+}
+
+/**
+ * Project one {@link MigrationStep} to SQLite DDL.
+ *
+ * @param step - The migration step
+ * @returns The statements that apply the step
+ */
+export function stepToSQL(step: MigrationStep): readonly string[] {
+	switch (step.operation) {
+		case 'table.add':
+			return [schemaToTable(step.table), ...schemaToIndexes(step.table)]
+		case 'table.remove':
+			return ['DROP TABLE IF EXISTS ' + quoteIdentifier(step.table)]
+		case 'column.add':
+			return [
+				'ALTER TABLE ' +
+					quoteIdentifier(step.table) +
+					' ADD COLUMN ' +
+					quoteIdentifier(step.column.name) +
+					' ' +
+					compileColumnSQL(step.column.storage) +
+					(step.column.optional || step.column.nullable ? '' : ' NOT NULL'),
+			]
+		case 'column.remove':
+			return [
+				'ALTER TABLE ' +
+					quoteIdentifier(step.table) +
+					' DROP COLUMN ' +
+					quoteIdentifier(step.column),
+			]
+		case 'index.add':
+			return [
+				'CREATE INDEX IF NOT EXISTS ' +
+					quoteIdentifier(deriveSQLiteIndexName(step.table, step.index)) +
+					' ON ' +
+					quoteIdentifier(step.table) +
+					' (' +
+					step.index.map(quoteIdentifier).join(', ') +
+					')',
+			]
+		case 'index.remove':
+			return [
+				'DROP INDEX IF EXISTS ' + quoteIdentifier(deriveSQLiteIndexName(step.table, step.index)),
+			]
+	}
 }

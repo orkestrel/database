@@ -1,31 +1,36 @@
 import type { ContractInterface, FieldPath, Guard } from '@orkestrel/contract'
-import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
+import type { DatabaseContext } from './DatabaseContext.js'
 import type {
-	AggregateFunction,
-	Criteria,
+	AggregateOperation,
+	QueryInput,
 	CursorInterface,
-	DriverInterface,
 	Key,
 	KeyFunction,
 	QueryInterface,
-	ReadOptions,
+	OperationOptions,
 	Row,
 	TableEventMap,
 	TableInterface,
+	StorageInterface,
 } from './types.js'
 import { isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import {
-	applyCriteria,
+	applyQuery,
 	checkAbort,
 	computeAggregate,
+	equalsValue,
 	extractKey,
 	filterRows,
-	matchesCriteria,
+	matchesQuery,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
+import { DatabaseIterator } from './DatabaseIterator.js'
 import { Query } from './Query.js'
+import { TransactionScope } from './TransactionScope.js'
+import { validatePage } from './validators.js'
 
 /**
  * A table — typed keyed CRUD plus fluent query and cursor access over a driver.
@@ -50,12 +55,14 @@ import { Query } from './Query.js'
  */
 export class Table<T = Row> implements TableInterface<T> {
 	readonly #ready: () => Promise<void>
-	readonly #driver: DriverInterface
+	readonly #driver: StorageInterface
 	readonly #name: string
 	readonly #key: string
 	readonly #contract: ContractInterface<T>
 	readonly #guard: Guard<T>
 	readonly #generate: KeyFunction | undefined
+	readonly #context: DatabaseContext | undefined
+	readonly #scope: TransactionScope | undefined
 	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into a write
 	// or a transaction.
@@ -63,13 +70,14 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	constructor(
 		ready: () => Promise<void>,
-		driver: DriverInterface,
+		driver: StorageInterface,
 		name: string,
 		key: string,
 		contract: ContractInterface<T>,
 		generate?: KeyFunction,
-		on?: EmitterHooks<TableEventMap>,
 		error?: EmitterErrorHandler,
+		context?: DatabaseContext,
+		scope?: TransactionScope,
 	) {
 		this.#ready = ready
 		this.#driver = driver
@@ -78,8 +86,9 @@ export class Table<T = Row> implements TableInterface<T> {
 		this.#contract = contract
 		this.#guard = contract.is
 		this.#generate = generate
+		this.#context = context
+		this.#scope = scope
 		this.#emitter = new Emitter<TableEventMap>({
-			...(on !== undefined ? { on } : {}),
 			...(error !== undefined ? { error } : {}),
 		})
 	}
@@ -102,73 +111,95 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	get(key: Key): Promise<T | undefined>
 	get(keys: readonly Key[]): Promise<readonly (T | undefined)[]>
-	async get(keys: Key | readonly Key[]): Promise<(T | undefined) | readonly (T | undefined)[]> {
-		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, (key) => this.#read(key))
-		return this.#read(keys)
+	get(keys: Key | readonly Key[]): Promise<(T | undefined) | readonly (T | undefined)[]> {
+		return this.#track(async () => {
+			await this.#ready()
+			if (isArray(keys)) return this.#each(keys, (key) => this.#read(key))
+			return this.#read(keys)
+		})
 	}
 
 	resolve(key: Key): Promise<T>
 	resolve(keys: readonly Key[]): Promise<readonly T[]>
-	async resolve(keys: Key | readonly Key[]): Promise<T | readonly T[]> {
-		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, (key) => this.#resolveOne(key))
-		return this.#resolveOne(keys)
+	resolve(keys: Key | readonly Key[]): Promise<T | readonly T[]> {
+		return this.#track(async () => {
+			await this.#ready()
+			if (isArray(keys)) return this.#each(keys, (key) => this.#resolveOne(key))
+			return this.#resolveOne(keys)
+		})
 	}
 
 	has(key: Key): Promise<boolean>
 	has(keys: readonly Key[]): Promise<readonly boolean[]>
-	async has(keys: Key | readonly Key[]): Promise<boolean | readonly boolean[]> {
-		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, async (key) => (await this.#read(key)) !== undefined)
-		return (await this.#read(keys)) !== undefined
+	has(keys: Key | readonly Key[]): Promise<boolean | readonly boolean[]> {
+		return this.#track(async () => {
+			await this.#ready()
+			if (isArray(keys)) {
+				return this.#each(keys, async (key) => (await this.#read(key)) !== undefined)
+			}
+			return (await this.#read(keys)) !== undefined
+		})
 	}
 
-	async keys(): Promise<readonly Key[]> {
-		await this.#ready()
-		return this.#driver.keys(this.#name)
+	keys(): Promise<readonly Key[]> {
+		return this.#track(async () => {
+			await this.#ready()
+			return this.#driver.keys(this.#name)
+		})
 	}
 
-	async records(criteria?: Criteria, options?: ReadOptions): Promise<readonly T[]> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		// Native filtered read when the backend offers one; else the engine over scan.
-		const native = await this.#driver.records?.(this.#name, criteria ?? {})
-		const source = native ?? applyCriteria(await this.#collect(), criteria)
-		const rows: T[] = []
-		for (const row of source) {
-			if (this.#guard(row)) rows.push(row)
-		}
-		return rows
+	async records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]> {
+		validatePage(input)
+		return this.#track(async () => {
+			checkAbort(options?.signal)
+			await this.#ready()
+			const candidate: QueryInput = {
+				...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
+				...(input?.order === undefined ? {} : { order: input.order }),
+			}
+			const native = await this.#driver.records?.(this.#name, candidate)
+			const source = native ?? applyQuery(await this.#collect(), candidate)
+			const rows: T[] = []
+			for (const row of source) {
+				if (this.#guard(row)) rows.push(row)
+			}
+			const offset = input?.offset ?? 0
+			const limit = input?.limit
+			return rows.slice(offset, limit === undefined ? undefined : offset + limit)
+		})
 	}
 
 	/**
-	 * Count rows matching `criteria`'s conditions.
+	 * Count contract-valid rows matching `input`'s conditions.
 	 *
 	 * @remarks
-	 * Unlike {@link records}, which narrows every row through the table's
-	 * contract guard before returning it, `count` operates on STORED rows
-	 * WITHOUT that guard (both the native `driver.count` hook and the
-	 * `filterRows`-over-`#collect()` fallback count raw storage) — so it can
-	 * exceed `(await records(criteria)).length` when storage holds rows that
-	 * no longer conform to the table's contract (legacy or migrated data).
+	 * Paging is ignored. Candidate rows use the driver's native `records` hook
+	 * when present, then the table contract guard determines the count so legacy
+	 * invalid rows cannot make `count()` disagree with `records()`.
 	 *
-	 * @param criteria - Optional conditions to filter by (paging is ignored)
+	 * @param input - Optional conditions to filter by (paging is ignored)
 	 * @param options - `{ signal }` to abort
-	 * @returns The count of matching stored rows
+	 * @returns The count of matching contract-valid rows
 	 */
-	async count(criteria?: Criteria, options?: ReadOptions): Promise<number> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		// Counts ignore paging — pass conditions only, so native and scan agree.
-		const conditions = criteria?.conditions
-		const native = await this.#driver.count?.(this.#name, conditions ? { conditions } : {})
-		if (native !== undefined) return native
-		return filterRows(await this.#collect(), criteria?.conditions ?? []).length
+	async count(input?: QueryInput, options?: OperationOptions): Promise<number> {
+		validatePage(input)
+		return this.#track(async () => {
+			checkAbort(options?.signal)
+			await this.#ready()
+			const conditions = input?.conditions
+			const candidate: QueryInput = conditions === undefined ? {} : { conditions }
+			const native = await this.#driver.records?.(this.#name, candidate)
+			const rows = native ?? filterRows(await this.#collect(), conditions ?? [])
+			let count = 0
+			for (const row of rows) {
+				if (this.#guard(row)) count += 1
+			}
+			return count
+		})
 	}
 
 	/**
-	 * Compute an aggregate over `column` across rows matching `criteria`'s
+	 * Compute an aggregate over `column` across rows matching `input`'s
 	 * conditions.
 	 *
 	 * @remarks
@@ -180,146 +211,182 @@ export class Table<T = Row> implements TableInterface<T> {
 	 *
 	 * @param operation - The aggregate to compute
 	 * @param column - The column to aggregate
-	 * @param criteria - Optional conditions to filter by (paging is ignored)
+	 * @param input - Optional conditions to filter by (paging is ignored)
 	 * @param options - `{ signal }` to abort
 	 * @returns The aggregate value, or `undefined` when undefined for the inputs
 	 */
 	async aggregate(
-		operation: AggregateFunction,
+		operation: AggregateOperation,
 		column: FieldPath,
-		criteria?: Criteria,
-		options?: ReadOptions,
+		input?: QueryInput,
+		options?: OperationOptions,
 	): Promise<number | undefined> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		// Aggregate over filtered (not paged) rows — native hook, native records, or scan.
-		const conditions = criteria?.conditions
-		const filter: Criteria = conditions ? { conditions } : {}
-		// `?.()` is `undefined` only when the driver lacks the method; a present
-		// hook returns a Promise (whose resolved value may itself be `undefined`).
-		const native = this.#driver.aggregate?.(this.#name, operation, column, filter)
-		if (native !== undefined) return native
-		const rows = await this.#driver.records?.(this.#name, filter)
-		const matched = rows ?? filterRows(await this.#collect(), criteria?.conditions ?? [])
-		return computeAggregate(matched, operation, column)
+		validatePage(input)
+		return this.#track(async () => {
+			checkAbort(options?.signal)
+			await this.#ready()
+			// Aggregate over filtered (not paged) rows — native hook, native records, or scan.
+			const conditions = input?.conditions
+			const filter: QueryInput = conditions ? { conditions } : {}
+			// `?.()` is `undefined` only when the driver lacks the method; a present
+			// hook returns a Promise (whose resolved value may itself be `undefined`).
+			const native = this.#driver.aggregate?.(this.#name, operation, column, filter)
+			if (native !== undefined) return native
+			const rows = await this.#driver.records?.(this.#name, filter)
+			const matched = rows ?? filterRows(await this.#collect(), input?.conditions ?? [])
+			return computeAggregate(matched, operation, column)
+		})
 	}
 
 	/**
-	 * Stream the table's rows matching `criteria`, applying offset/limit paging.
+	 * Stream the table's rows matching `input`, applying offset/limit paging.
 	 *
 	 * @remarks
-	 * `criteria.limit` counts rows that pass BOTH the criteria conditions AND the
-	 * table's contract guard (a stored row that fails the guard is skipped and
-	 * does not count toward `limit`) — this can differ from {@link records}'s
-	 * `limit`, which a driver's optional native `records` hook applies BEFORE
-	 * the contract guard runs, when storage holds rows that no longer conform
-	 * to the table's contract.
+	 * `input.limit` counts rows that pass both the input conditions and the
+	 * table's contract guard. Native streams receive only the conditions; this
+	 * table rechecks them, narrows each candidate, and applies offset/limit last,
+	 * matching {@link records} when storage contains legacy invalid rows.
 	 *
-	 * @param criteria - Optional conditions plus offset/limit paging
+	 * @param input - Optional conditions plus offset/limit paging
 	 * @param options - `{ signal }` to abort mid-stream
 	 * @returns An async iterable of matching, guard-conforming rows
 	 */
-	async *scan(criteria?: Criteria, options?: ReadOptions): AsyncIterable<T> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		if (this.#driver.stream !== undefined) {
-			for await (const row of this.#driver.stream(this.#name, criteria ?? {})) {
-				checkAbort(options?.signal)
-				const narrowed = this.#cast(row)
-				if (narrowed !== undefined) yield narrowed
-			}
-			return
-		}
-		const conditions = criteria?.conditions
-		const offset = criteria?.offset ?? 0
-		const limit = criteria?.limit
-		let matched = 0
-		let yielded = 0
-		for await (const row of this.#driver.scan(this.#name)) {
-			checkAbort(options?.signal)
-			if (limit !== undefined && yielded >= limit) break
-			if (conditions !== undefined && conditions.length > 0 && !matchesCriteria(row, conditions)) {
-				continue
-			}
-			if (matched < offset) {
-				matched += 1
-				continue
-			}
-			matched += 1
-			const narrowed = this.#cast(row)
-			if (narrowed !== undefined) {
-				yielded += 1
-				yield narrowed
-			}
-		}
+	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
+		validatePage(input)
+		const source = this.#scan(input, options)
+		if (this.#context !== undefined) return new DatabaseIterator(source, this.#context)
+		return this.#scope === undefined ? source : this.#scope.stream(source)
 	}
 
-	set(row: T, options?: ReadOptions): Promise<Key>
-	set(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
-	async set(rows: T | readonly T[], options?: ReadOptions): Promise<Key | readonly Key[]> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, false), options?.signal)
-		return this.#put(rows, false)
+	set(row: T, options?: OperationOptions): Promise<Key>
+	set(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
+	set(rows: T | readonly T[], options?: OperationOptions): Promise<Key | readonly Key[]> {
+		return this.#track(async () => {
+			await this.#wait(options?.signal)
+			if (isArray(rows)) {
+				return this.#each(rows, (row) => this.#put(row, false, options), options?.signal)
+			}
+			return this.#put(rows, false, options)
+		})
 	}
 
-	add(row: T, options?: ReadOptions): Promise<Key>
-	add(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
-	async add(rows: T | readonly T[], options?: ReadOptions): Promise<Key | readonly Key[]> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		if (isArray(rows)) return this.#each(rows, (row) => this.#put(row, true), options?.signal)
-		return this.#put(rows, true)
+	add(row: T, options?: OperationOptions): Promise<Key>
+	add(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
+	add(rows: T | readonly T[], options?: OperationOptions): Promise<Key | readonly Key[]> {
+		return this.#track(async () => {
+			await this.#wait(options?.signal)
+			if (isArray(rows)) {
+				return this.#each(rows, (row) => this.#put(row, true, options), options?.signal)
+			}
+			return this.#put(rows, true, options)
+		})
 	}
 
-	update(key: Key, changes: Partial<T>, options?: ReadOptions): Promise<boolean>
+	update(key: Key, changes: Partial<T>, options?: OperationOptions): Promise<boolean>
 	update(
 		keys: readonly Key[],
 		changes: Partial<T>,
-		options?: ReadOptions,
+		options?: OperationOptions,
 	): Promise<readonly boolean[]>
-	async update(
+	update(
 		keys: Key | readonly Key[],
 		changes: Partial<T>,
-		options?: ReadOptions,
+		options?: OperationOptions,
 	): Promise<boolean | readonly boolean[]> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		if (isArray(keys)) {
-			return this.#each(keys, (key) => this.#updateOne(key, changes), options?.signal)
-		}
-		return this.#updateOne(keys, changes)
+		return this.#track(async () => {
+			await this.#wait(options?.signal)
+			if (isArray(keys)) {
+				return this.#each(keys, (key) => this.#updateOne(key, changes, options), options?.signal)
+			}
+			return this.#updateOne(keys, changes, options)
+		})
 	}
 
-	remove(key: Key, options?: ReadOptions): Promise<boolean>
-	remove(keys: readonly Key[], options?: ReadOptions): Promise<readonly boolean[]>
-	async remove(
+	remove(key: Key, options?: OperationOptions): Promise<boolean>
+	remove(keys: readonly Key[], options?: OperationOptions): Promise<readonly boolean[]>
+	remove(
 		keys: Key | readonly Key[],
-		options?: ReadOptions,
+		options?: OperationOptions,
 	): Promise<boolean | readonly boolean[]> {
-		checkAbort(options?.signal)
-		await this.#ready()
-		if (isArray(keys)) return this.#each(keys, (key) => this.#delete(key), options?.signal)
-		return this.#delete(keys)
+		return this.#track(async () => {
+			await this.#wait(options?.signal)
+			if (isArray(keys)) {
+				return this.#each(keys, (key) => this.#delete(key, options), options?.signal)
+			}
+			return this.#delete(keys, options)
+		})
 	}
 
-	async clear(): Promise<void> {
-		await this.#ready()
-		await this.#driver.clear(this.#name)
-		// Observe the cleared table — AFTER the driver emptied it, so a swallowed listener
-		// throw can never alter the clear (no value payload — `clear` is a pure signal).
-		this.#emitter.emit('clear')
+	clear(): Promise<void> {
+		return this.#track(async () => {
+			await this.#ready()
+			await this.#driver.clear(this.#name)
+			// Observe the cleared table — AFTER the driver emptied it, so a swallowed listener
+			// throw can never alter the clear (no value payload — `clear` is a pure signal).
+			this.#emitter.emit('clear')
+		})
 	}
 
 	query(): QueryInterface<T> {
 		return new Query<T>(this)
 	}
 
-	async cursor(): Promise<CursorInterface<T>> {
+	cursor(): Promise<CursorInterface<T>> {
+		return this.#track(async () => {
+			await this.#ready()
+			let initializing = true
+			const cursor = new Cursor<T>(
+				await this.#driver.keys(this.#name),
+				(key) => this.#readCursor(key),
+				(key, changes) => this.#updateCursor(key, changes),
+				(key) => this.#deleteCursor(key),
+				(operation) => (initializing ? operation() : this.#track(operation)),
+			)
+			await cursor.next()
+			initializing = false
+			return cursor
+		})
+	}
+
+	async *#scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
+		checkAbort(options?.signal)
 		await this.#ready()
-		const cursor = new Cursor<T>(this, await this.#driver.keys(this.#name))
-		await cursor.next()
-		return cursor
+		const conditions = input?.conditions
+		const offset = input?.offset ?? 0
+		const limit = input?.limit
+		let matched = 0
+		let yielded = 0
+		const source =
+			this.#driver.stream === undefined
+				? this.#driver.scan(this.#name)
+				: this.#driver.stream(this.#name, conditions === undefined ? {} : { conditions })
+		const iterator = source[Symbol.asyncIterator]()
+		try {
+			while (true) {
+				await this.#ready()
+				checkAbort(options?.signal)
+				if (limit !== undefined && yielded >= limit) return
+				const step = await iterator.next()
+				await this.#ready()
+				checkAbort(options?.signal)
+				if (step.done === true) return
+				const row = step.value
+				if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
+					continue
+				}
+				const narrowed = this.#cast(row)
+				if (narrowed === undefined) continue
+				if (matched < offset) {
+					matched += 1
+					continue
+				}
+				matched += 1
+				yielded += 1
+				yield narrowed
+			}
+		} finally {
+			await iterator.return?.()
+		}
 	}
 
 	// Run a single-item operation across each item in order — the batch overloads
@@ -328,14 +395,14 @@ export class Table<T = Row> implements TableInterface<T> {
 	// checked before EVERY item, so an abort mid-batch stops before the next
 	// item runs — already-applied items stay applied (no rollback).
 	async #each<I, R>(
-		items: readonly I[],
-		operation: (item: I) => Promise<R>,
+		elements: readonly I[],
+		operation: (element: I) => Promise<R>,
 		signal?: AbortSignal,
 	): Promise<readonly R[]> {
 		const results: R[] = []
-		for (const item of items) {
+		for (const element of elements) {
 			checkAbort(signal)
-			results.push(await operation(item))
+			results.push(await operation(element))
 		}
 		return results
 	}
@@ -343,6 +410,11 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Read and narrow one row (assumes the driver is connected).
 	async #read(key: Key): Promise<T | undefined> {
 		return this.#cast(await this.#driver.read(this.#name, key))
+	}
+
+	async #readCursor(key: Key): Promise<T | undefined> {
+		await this.#ready()
+		return this.#read(key)
 	}
 
 	// Read one row or throw NOT_FOUND.
@@ -357,17 +429,12 @@ export class Table<T = Row> implements TableInterface<T> {
 		return row
 	}
 
-	// Coerce/validate and write one row; `exclusive` makes it an insert (CONFLICT on a dup).
-	async #put(row: T, exclusive: boolean): Promise<Key> {
+	// Coerce/validate and write one row; `insert` selects the atomic insert primitive.
+	async #put(row: T, insert: boolean, options?: OperationOptions): Promise<Key> {
 		const validated = this.#validate(this.#prepare(row))
 		const key = this.#resolveKey(validated)
-		if (exclusive && (await this.#driver.read(this.#name, key)) !== undefined) {
-			throw new DatabaseError('CONFLICT', `Row '${key}' already exists in table '${this.#name}'`, {
-				table: this.#name,
-				key,
-			})
-		}
-		await this.#driver.write(this.#name, key, validated)
+		if (insert) await this.#driver.insert(this.#name, key, validated, options)
+		else await this.#driver.write(this.#name, key, validated, options)
 		// Observe the written row — AFTER the driver write succeeded; carries the KEY only
 		// (set / add / update all emit one `write`, the consumer re-reads if it needs the
 		// value). A swallowed listener throw can't perturb the write (or its transaction).
@@ -376,22 +443,91 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	// Merge changes into one existing row and re-validate; `false` when it is absent.
-	async #updateOne(key: Key, changes: Partial<T>): Promise<boolean> {
+	async #updateOne(key: Key, changes: Partial<T>, options?: OperationOptions): Promise<boolean> {
 		const existing = await this.#driver.read(this.#name, key)
-		if (existing === undefined) return false
-		await this.#driver.write(this.#name, key, this.#validate(Object.assign({}, existing, changes)))
+		if (existing === undefined) {
+			checkAbort(options?.signal)
+			return false
+		}
+		const input: unknown = changes
+		if (isRecord(input) && Object.hasOwn(input, this.#key) && !equalsValue(input[this.#key], key)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`Update cannot change primary column '${this.#key}' on table '${this.#name}'`,
+				{ table: this.#name, column: this.#key, key },
+			)
+		}
+		await this.#driver.write(
+			this.#name,
+			key,
+			this.#validate(Object.assign({}, existing, changes)),
+			options,
+		)
 		// Observe the updated row — AFTER the driver write, and only on the path that wrote
 		// (an absent key returned `false` above, emitting nothing).
 		this.#emitter.emit('write', key)
 		return true
 	}
 
+	async #updateCursor(key: Key, changes: Partial<T>): Promise<boolean> {
+		await this.#wait(undefined)
+		return this.#updateOne(key, changes)
+	}
+
 	// Delete one row, emitting `remove` only when a row was actually removed (a delete of
 	// an absent key returns `false` and emits nothing) — AFTER the driver delete completes.
-	async #delete(key: Key): Promise<boolean> {
-		const removed = await this.#driver.delete(this.#name, key)
+	async #delete(key: Key, options?: OperationOptions): Promise<boolean> {
+		const removed = await this.#driver.delete(this.#name, key, options)
 		if (removed) this.#emitter.emit('remove', key)
 		return removed
+	}
+
+	async #deleteCursor(key: Key): Promise<boolean> {
+		await this.#wait(undefined)
+		return this.#delete(key)
+	}
+
+	// Await the shared lazy-open promise without tying its lifetime to this
+	// mutation. An abort rejects this waiter promptly and consumes the open
+	// promise's later settlement; the driver still checks the same signal at its
+	// commit point, so a readiness completion after abort can never dispatch a
+	// row mutation.
+	async #wait(signal: AbortSignal | undefined): Promise<void> {
+		checkAbort(signal)
+		const ready = this.#ready()
+		if (signal === undefined) {
+			await ready
+			return
+		}
+		const cleanup = new AbortController()
+		try {
+			await new Promise<void>((resolve, reject) => {
+				signal.addEventListener(
+					'abort',
+					() => {
+						ready.catch(() => {})
+						try {
+							checkAbort(signal)
+						} catch (error) {
+							reject(error)
+						}
+					},
+					{ once: true, signal: cleanup.signal },
+				)
+				ready.then(resolve, reject)
+				if (signal.aborted) {
+					ready.catch(() => {})
+					try {
+						checkAbort(signal)
+					} catch (error) {
+						reject(error)
+					}
+				}
+			})
+		} finally {
+			cleanup.abort()
+		}
+		checkAbort(signal)
 	}
 
 	// Gather the table's full contents from the driver's ordered scan.
@@ -410,14 +546,27 @@ export class Table<T = Row> implements TableInterface<T> {
 		}
 		const prepared: Row = { ...row }
 		if (prepared[this.#key] === undefined) {
-			if (this.#generate === undefined) {
-				throw new DatabaseError(
-					'VALIDATION',
-					`Row for table '${this.#name}' is missing its key column '${this.#key}' and no key factory was provided`,
-					{ table: this.#name, column: this.#key },
-				)
+			if (this.#generate !== undefined) {
+				try {
+					prepared[this.#key] = this.#generate()
+				} catch (cause) {
+					throw new DatabaseError(
+						'VALIDATION',
+						`Failed to generate primary column '${this.#key}' for table '${this.#name}'`,
+						{ table: this.#name, column: this.#key, cause },
+					)
+				}
+			} else {
+				try {
+					prepared[this.#key] = crypto.randomUUID()
+				} catch (cause) {
+					throw new DatabaseError(
+						'DRIVER',
+						`Host failed to generate primary column '${this.#key}' for table '${this.#name}'`,
+						{ table: this.#name, column: this.#key, cause },
+					)
+				}
 			}
-			prepared[this.#key] = this.#generate()
 		}
 		return prepared
 	}
@@ -432,9 +581,10 @@ export class Table<T = Row> implements TableInterface<T> {
 	#validate(row: Row): Row {
 		const parsed = this.#contract.parse(row)
 		if (parsed === undefined || !isRecord(parsed)) {
+			const [fault] = this.#contract.explain(row)
 			throw new DatabaseError('VALIDATION', `Row failed the '${this.#name}' contract`, {
 				table: this.#name,
-				row,
+				...(fault === undefined ? {} : { field: fault.path, reason: fault.reason }),
 			})
 		}
 		return parsed
@@ -454,5 +604,10 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Narrow a stored row to the table's type through the contract guard.
 	#cast(row: Row | undefined): T | undefined {
 		return row !== undefined && this.#guard(row) ? row : undefined
+	}
+
+	#track<R>(operation: () => Promise<R>): Promise<R> {
+		if (this.#context !== undefined) return this.#context.track(operation)
+		return this.#scope === undefined ? operation() : this.#scope.track(operation)
 	}
 }

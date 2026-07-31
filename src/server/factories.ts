@@ -1,6 +1,5 @@
 import type { DriverInterface } from '@src/core'
 import type { SQLiteDriverOptions } from './types.js'
-import { isString } from '@orkestrel/contract'
 import { JSONDriver } from './drivers/JSONDriver.js'
 import { SQLiteDriver } from './drivers/SQLiteDriver.js'
 
@@ -8,9 +7,9 @@ import { SQLiteDriver } from './drivers/SQLiteDriver.js'
  * Create a persistent JSON-file {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
- * relations stack against a single JSON file instead of memory — the `Database` /
- * `Table` / `Query` / relations API is unchanged; only where the bytes live changes.
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the typed
+ * database against a single JSON file instead of memory — the `Database` /
+ * `Table` / `Query` API is unchanged; only where the bytes live changes.
  * The driver is the reference `MemoryDriver` plus JSON-file persistence: `open` loads
  * the file, every mutation flushes the whole store back, and querying runs through
  * the core engine over `scan` (it is scan-only — no native `records` / `count` /
@@ -41,19 +40,20 @@ export function createJSONDriver(path: string): DriverInterface {
  * Create a trusted-mode SQLite {@link DriverInterface} for the core database layer.
  *
  * @remarks
- * Pass it to `createDatabase` from `@orkestrel/database` to run the whole typed database +
- * relations stack against a real SQLite database — the `Database` / `Table` /
- * `Query` / relations API is unchanged; only where the bytes live changes. Built
+ * Pass it to `createDatabase` from `@orkestrel/database` to run the typed
+ * database against a real SQLite database — the `Database` / `Table` /
+ * `Query` API is unchanged; only where the bytes live changes. Built
  * on the published `@orkestrel/sqlite` synchronous wrapper: `open` issues real
  * typed `CREATE TABLE` / `CREATE INDEX` statements (reopen-safe) plus a reserved
- * `_meta` table for `meta()` / `stamp()` — avoid naming a table `_meta`.
+ * `_metadata` table for `metadata()` / `stamp()` — avoid naming a table `_metadata`.
  * Querying, paging, and aggregation run natively (`records` / `count` /
  * `aggregate` / `stream`); `transaction` and `migrate` use real `BEGIN` /
  * `COMMIT` / `ROLLBACK`, so `migrate` is atomic even mid-plan.
  *
- * @param options - A bare database file path (`':memory:'` by default, for
- *   back-compat), or a full {@link SQLiteDriverOptions} bag (`path`,
- *   `readonly`, `timeout`, `foreignKeys`, `pragmas`)
+ * @param options - The {@link SQLiteDriverOptions} bag (`path`, `readonly`,
+ *   `timeout`, `references`, `pragmas`); `references` directly enables or
+ *   disables foreign-key enforcement, and omission retains the upstream
+ *   default; omit the whole bag for an in-memory database
  * @returns A {@link DriverInterface} backed by SQLite
  *
  * @example
@@ -63,18 +63,15 @@ export function createJSONDriver(path: string): DriverInterface {
  * import { createSQLiteDriver } from '@orkestrel/database/server'
  *
  * const db = createDatabase({
- * 	driver: createSQLiteDriver('data/app.sqlite'),
+ * 	driver: createSQLiteDriver({ path: 'data/app.sqlite' }),
  * 	tables: { users: { id: stringShape(), name: stringShape() } },
  * })
  * await db.table('users').set({ id: 'u1', name: 'Ada' }) // persisted to app.sqlite
  *
- * // Or with options:
+ * // Or with additional options:
  * createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { journal_mode: 'WAL' } })
  * ```
  */
-export function createSQLiteDriver(
-	options: string | SQLiteDriverOptions = ':memory:',
-): DriverInterface {
-	const resolved: SQLiteDriverOptions = isString(options) ? { path: options } : options
-	return new SQLiteDriver(resolved.path ?? ':memory:', resolved)
+export function createSQLiteDriver(options?: SQLiteDriverOptions): DriverInterface {
+	return new SQLiteDriver(options)
 }

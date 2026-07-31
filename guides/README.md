@@ -20,24 +20,17 @@ directory (AGENTS §22).
 ## Dependency reference
 
 [`src/contract.md`](src/contract.md) is a byte-identical mirror of the guide for
-`@orkestrel/contract` — one of this package's runtime dependencies. It documents
+`@orkestrel/contract` — a runtime dependency. It documents
 **that package's** surface (guards, combinators, parsers, and the shape DSL), not
 anything sourced in this repo; it is kept here so a reader of this package can see
 the primitives it is built from without leaving this guide set.
 
 [`src/emitter.md`](src/emitter.md) is a byte-identical mirror of the guide for
-`@orkestrel/emitter` — this package's other runtime dependency. It documents
+`@orkestrel/emitter` — a runtime dependency. It documents
 **that package's** surface (the `Emitter` class, `EmitterInterface`, and the
 listener-isolation contract), not anything sourced in this repo; it is kept here
 so a reader of this package can see the primitives it is built from without
 leaving this guide set.
-
-[`src/abort.md`](src/abort.md) is a byte-identical mirror of the guide for
-`@orkestrel/abort` — this package's third runtime dependency. It documents
-**that package's** surface (the `Abort` class, `AbortInterface`, and the
-parent-linking / cascading-cancellation contract), not anything sourced in
-this repo; it is kept here so a reader of this package can see the primitives
-it is built from without leaving this guide set.
 
 [`src/guide.md`](src/guide.md) is a byte-identical mirror of the guide for
 `@orkestrel/guide` — the devDependency powering this repo's guides-parity test
@@ -47,14 +40,14 @@ sourced in this repo; it is kept here so a reader of the parity suite can see
 the primitives it is built from without leaving this guide set.
 
 [`src/indexeddb.md`](src/indexeddb.md) is a byte-identical mirror of the guide
-for `@orkestrel/indexeddb` — this package's fourth runtime dependency. It
+for `@orkestrel/indexeddb` — a runtime dependency. It
 documents **that package's** surface (`IndexedDBDatabase`, stores, indexes,
 cursors, and transactions), not anything sourced in this repo; it is kept
 here so a reader of this package can see the primitives its IndexedDB driver
 is built from without leaving this guide set.
 
 [`src/sqlite.md`](src/sqlite.md) is a byte-identical mirror of the guide for
-`@orkestrel/sqlite` — this package's fifth runtime dependency. It documents
+`@orkestrel/sqlite` — a runtime dependency. It documents
 **that package's** surface (`SQLiteDatabase`, prepared statements, and
 transactions over `node:sqlite`), not anything sourced in this repo; it is
 kept here so a reader of this package can see the primitives its SQLite

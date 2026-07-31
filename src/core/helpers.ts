@@ -1,12 +1,12 @@
-import type { ContractShape, FieldPath, RandomFunction } from '@orkestrel/contract'
+import type { ContractShape, FieldPath } from '@orkestrel/contract'
 import type {
-	AggregateFunction,
-	ColumnType,
+	AggregateOperation,
+	ColumnSchema,
+	ColumnStorage,
 	ConformanceFinding,
 	Condition,
-	Criteria,
+	QueryInput,
 	DriverInterface,
-	DriverMeta,
 	Key,
 	Migration,
 	MigrationStep,
@@ -15,16 +15,17 @@ import type {
 	TableSchema,
 } from './types.js'
 import {
-	isArray,
-	isBoolean,
-	isFiniteNumber,
+	compileGuard,
 	isRecord,
 	isString,
+	objectShape,
 	parseNumber,
 	resolveField,
 } from '@orkestrel/contract'
-import { MAX_PATTERN_LENGTH, UUID_BYTE_COUNT, UUID_BYTE_RANGE } from './constants.js'
+import { MAX_PATTERN_LENGTH } from './constants.js'
+import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
+import { isKey, validatePage } from './validators.js'
 
 // The query engine. Every backend's `scan` yields rows; these pure helpers do
 // the filtering, ordering, paging, and aggregation once, so a driver never
@@ -87,14 +88,15 @@ export function compareValues(left: unknown, right: unknown): number {
  *
  * @remarks
  * Primitives compare by SameValueZero (`NaN` equals itself; `+0` equals `-0`).
- * Arrays compare by index (same length, every element `deepEqual`). Plain
+ * Arrays compare by index (same length, every element `equalsValue`). Plain
  * records (via `isRecord`) compare by their OWN enumerable keys: same key
  * COUNT and, for every key in `left`, `right` has that key (`Object.hasOwn`)
- * with a `deepEqual` value — so a key present with value `undefined` is NOT
+ * with a `equalsValue` value — so a key present with value `undefined` is NOT
  * equal to that key being absent (both differ in `Object.keys` membership).
  * Anything else (functions, class instances, mismatched shapes) falls through
- * to `false`. There is no cycle detection — a cyclic input recurses forever;
- * callers pass acyclic data (rows, plans, config).
+ * to `false`. Container pairs are tracked iteratively, so self-referential and
+ * mutually cyclic arrays/records terminate without consuming the call stack.
+ * Hostile proxy traps and accessors are contained as a non-match.
  *
  * @param left - The left value
  * @param right - The right value
@@ -102,41 +104,82 @@ export function compareValues(left: unknown, right: unknown): number {
  *
  * @example
  * ```ts
- * deepEqual(Number.NaN, Number.NaN) // true
- * deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }) // true
- * deepEqual({ a: undefined }, {}) // false — present-undefined ≠ absent
+ * equalsValue(Number.NaN, Number.NaN) // true
+ * equalsValue({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }) // true
+ * equalsValue({ a: undefined }, {}) // false — present-undefined ≠ absent
  * ```
  */
-export function deepEqual(left: unknown, right: unknown): boolean {
-	if (typeof left === 'number' && typeof right === 'number') {
-		return (Number.isNaN(left) && Number.isNaN(right)) || left === right
+export function equalsValue(left: unknown, right: unknown): boolean {
+	const pending: Array<readonly [unknown, unknown]> = [[left, right]]
+	const compared = new WeakMap<object, WeakSet<object>>()
+	try {
+		while (pending.length > 0) {
+			const pair = pending.pop()
+			if (pair === undefined) continue
+			const [currentLeft, currentRight] = pair
+			if (typeof currentLeft === 'number' && typeof currentRight === 'number') {
+				if (
+					(Number.isNaN(currentLeft) && Number.isNaN(currentRight)) ||
+					currentLeft === currentRight
+				) {
+					continue
+				}
+				return false
+			}
+			if (currentLeft === currentRight) continue
+
+			const leftArray = Array.isArray(currentLeft)
+			const rightArray = Array.isArray(currentRight)
+			const leftRecord = isRecord(currentLeft)
+			const rightRecord = isRecord(currentRight)
+			if (leftArray !== rightArray || leftRecord !== rightRecord) return false
+			if ((!leftArray && !leftRecord) || (!rightArray && !rightRecord)) return false
+
+			const prior = compared.get(currentLeft)
+			if (prior?.has(currentRight)) continue
+			if (prior === undefined) {
+				compared.set(currentLeft, new WeakSet([currentRight]))
+			} else {
+				prior.add(currentRight)
+			}
+
+			if (leftArray && rightArray) {
+				if (currentLeft.length !== currentRight.length) return false
+				for (let index = 0; index < currentLeft.length; index += 1) {
+					const leftOwn = Object.hasOwn(currentLeft, index)
+					const rightOwn = Object.hasOwn(currentRight, index)
+					if (leftOwn !== rightOwn) return false
+					if (leftOwn) pending.push([currentLeft[index], currentRight[index]])
+				}
+				continue
+			}
+			if (leftRecord && rightRecord) {
+				const leftKeys = Object.keys(currentLeft)
+				const rightKeys = Object.keys(currentRight)
+				if (leftKeys.length !== rightKeys.length) return false
+				for (const key of leftKeys) {
+					if (!Object.hasOwn(currentRight, key)) return false
+					pending.push([currentLeft[key], currentRight[key]])
+				}
+			}
+		}
+		return true
+	} catch {
+		return false
 	}
-	if (left === right) return true
-	if (Array.isArray(left) && Array.isArray(right)) {
-		return (
-			left.length === right.length && left.every((item, index) => deepEqual(item, right[index]))
-		)
-	}
-	if (isRecord(left) && isRecord(right)) {
-		const leftKeys = Object.keys(left)
-		const rightKeys = Object.keys(right)
-		if (leftKeys.length !== rightKeys.length) return false
-		return leftKeys.every((key) => Object.hasOwn(right, key) && deepEqual(left[key], right[key]))
-	}
-	return false
 }
 
 // === Pattern matching
 
 /**
  * Match a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
- * engine behind {@link likeMatch} and {@link globMatch}.
+ * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
  * @remarks
  * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is CATASTROPHIC on a hostile pattern:
  * `.*` segments separated by literals, matched against a long non-matching input, blow
  * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it
- * (AGENTS §6.5, now that the authed server runs model-supplied `list` criteria over the
+ * (AGENTS §6.5, now that the authed server runs model-supplied `list` input over the
  * wire). So this builds NO regex. It runs the classic GREEDY TWO-POINTER wildcard match:
  * the `any` wildcard records its position and, on a later mismatch, backtracks ONLY to
  * that last `any` (letting it absorb one more char) — so the work is O(value × pattern),
@@ -159,7 +202,7 @@ export function deepEqual(left: unknown, right: unknown): boolean {
  * @returns Whether `value` matches `pattern`
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
  */
-export function wildcardMatch(
+export function matchesWildcardPattern(
 	value: string,
 	pattern: string,
 	any: string,
@@ -207,13 +250,13 @@ export function wildcardMatch(
 }
 
 // SQL `LIKE` → case-INSENSITIVE wildcard match (`%` any run, `_` any char).
-export function likeMatch(value: string, pattern: string): boolean {
-	return wildcardMatch(value, pattern, '%', '_', true)
+export function matchesLikePattern(value: string, pattern: string): boolean {
+	return matchesWildcardPattern(value, pattern, '%', '_', true)
 }
 
 // `GLOB` → case-SENSITIVE wildcard match (`*` any run, `?` any char).
-export function globMatch(value: string, pattern: string): boolean {
-	return wildcardMatch(value, pattern, '*', '?', false)
+export function matchesGlobPattern(value: string, pattern: string): boolean {
+	return matchesWildcardPattern(value, pattern, '*', '?', false)
 }
 
 // === Condition matching
@@ -226,10 +269,10 @@ export function globMatch(value: string, pattern: string): boolean {
  * string is one column; an array descends a nested value) — and applies the
  * operator. Range operators (`above` / `below` / `from` / `to` / `between`) use
  * {@link compareValues}, the total order; the equality family (`equals` / `not`
- * / `any` / `none`) uses {@link deepEqual} — STRUCTURAL equality, not the total
+ * / `any` / `none`) uses {@link equalsValue} — STRUCTURAL equality, not the total
  * order's rank-5-collapses-all-objects behavior, so `equals` on an object/array
  * operand only matches a structurally-equal value, never every row holding any
- * object. This is a semantics change from ranking: `deepEqual` is SameValueZero
+ * object. This is a semantics change from ranking: `equalsValue` is SameValueZero
  * on leaves, so `NaN` now equals `NaN` under `equals` / `any` (it never matched
  * anything under the old rank-based comparison). `like` / `glob` / `starts` /
  * `ends` match only strings; `absent` / `present` test nullishness. Total — a
@@ -245,9 +288,9 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 	const second = condition.values[1]
 	switch (condition.operator) {
 		case 'equals':
-			return deepEqual(value, first)
+			return equalsValue(value, first)
 		case 'not':
-			return !deepEqual(value, first)
+			return !equalsValue(value, first)
 		case 'above':
 			return compareValues(value, first) > 0
 		case 'below':
@@ -259,17 +302,17 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 		case 'between':
 			return compareValues(value, first) >= 0 && compareValues(value, second) <= 0
 		case 'like':
-			return isString(value) && isString(first) && likeMatch(value, first)
+			return isString(value) && isString(first) && matchesLikePattern(value, first)
 		case 'glob':
-			return isString(value) && isString(first) && globMatch(value, first)
+			return isString(value) && isString(first) && matchesGlobPattern(value, first)
 		case 'starts':
 			return isString(value) && isString(first) && value.startsWith(first)
 		case 'ends':
 			return isString(value) && isString(first) && value.endsWith(first)
 		case 'any':
-			return condition.values.some((candidate) => deepEqual(value, candidate))
+			return condition.values.some((candidate) => equalsValue(value, candidate))
 		case 'none':
-			return !condition.values.some((candidate) => deepEqual(value, candidate))
+			return !condition.values.some((candidate) => equalsValue(value, candidate))
 		case 'absent':
 			return value === undefined || value === null
 		case 'present':
@@ -290,7 +333,7 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
  * @param conditions - The conditions to fold
  * @returns Whether the row satisfies the combined conditions
  */
-export function matchesCriteria(row: Row, conditions: readonly Condition[]): boolean {
+export function matchesQuery(row: Row, conditions: readonly Condition[]): boolean {
 	let result = true
 	let seeded = false
 	for (const condition of conditions) {
@@ -307,11 +350,11 @@ export function matchesCriteria(row: Row, conditions: readonly Condition[]): boo
 
 /**
  * Filter rows by a list of conditions — the shared basis for a table's count
- * and aggregate paths (no sort/page, unlike {@link applyCriteria}).
+ * and aggregate paths (no sort/page, unlike {@link applyQuery}).
  *
  * @remarks
  * An empty condition list matches every row (returned as-is, no copy). Folds
- * each row through {@link matchesCriteria}.
+ * each row through {@link matchesQuery}.
  *
  * @param rows - The rows to filter
  * @param conditions - The conditions to apply (empty matches everything)
@@ -327,7 +370,7 @@ export function matchesCriteria(row: Row, conditions: readonly Condition[]): boo
  */
 export function filterRows(rows: readonly Row[], conditions: readonly Condition[]): readonly Row[] {
 	if (conditions.length === 0) return rows
-	return rows.filter((row) => matchesCriteria(row, conditions))
+	return rows.filter((row) => matchesQuery(row, conditions))
 }
 
 // === Ordering & paging
@@ -359,30 +402,31 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
 }
 
 /**
- * Apply a {@link Criteria} to rows — filter, then sort, then page.
+ * Apply a {@link QueryInput} to rows — filter, then sort, then page.
  *
  * @remarks
  * The whole portable read pipeline in one place: conditions filter, `order`
  * sorts, and `offset` / `limit` window the result. Each step is skipped when its
- * part of the criteria is absent. The reference {@link DriverInterface} backends
+ * part of the input is absent. The reference {@link DriverInterface} backends
  * lean on this rather than each re-deriving it.
  *
  * @param rows - The rows to process (typically a table's full `scan`)
- * @param criteria - The read specification, or `undefined` for all rows as-is
+ * @param input - The read specification, or `undefined` for all rows as-is
  * @returns The filtered, sorted, paged rows
  */
-export function applyCriteria(rows: readonly Row[], criteria?: Criteria): readonly Row[] {
+export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly Row[] {
+	validatePage(input)
 	let result = rows
-	const conditions = criteria?.conditions
+	const conditions = input?.conditions
 	if (conditions !== undefined && conditions.length > 0) {
-		result = result.filter((row) => matchesCriteria(row, conditions))
+		result = result.filter((row) => matchesQuery(row, conditions))
 	}
-	const order = criteria?.order
+	const order = input?.order
 	if (order !== undefined && order.length > 0) {
 		result = sortRows(result, order)
 	}
-	const offset = criteria?.offset ?? 0
-	const limit = criteria?.limit
+	const offset = input?.offset ?? 0
+	const limit = input?.limit
 	if (offset > 0 || limit !== undefined) {
 		result = result.slice(offset, limit !== undefined ? offset + limit : undefined)
 	}
@@ -407,7 +451,7 @@ export function applyCriteria(rows: readonly Row[], criteria?: Criteria): readon
  */
 export function computeAggregate(
 	rows: readonly unknown[],
-	operation: AggregateFunction,
+	operation: AggregateOperation,
 	column: FieldPath,
 ): number | undefined {
 	if (operation === 'count') return rows.length
@@ -436,15 +480,25 @@ export function computeAggregate(
  */
 export function extractKey(row: Row, column: string): Key | undefined {
 	const value = row[column]
-	if (isString(value)) return value
-	if (isFiniteNumber(value)) return value
-	return undefined
+	return isKey(value) ? value : undefined
+}
+
+/**
+ * Return a fresh row whose primary column is authoritatively bound to its storage key.
+ *
+ * @param row - The caller row
+ * @param primary - The primary column
+ * @param key - The authoritative storage key
+ * @returns A fresh row with the bound primary
+ */
+export function bindRowKey(row: Row, primary: string, key: Key): Row {
+	return { ...row, [primary]: key }
 }
 
 // === Schema
 
 /**
- * Map a column's {@link ContractShape} to its portable {@link ColumnType} — the
+ * Map a column's {@link ContractShape} to its portable {@link ColumnStorage} — the
  * value a `TableSchema` carries so a native backend can declare a real column.
  *
  * @remarks
@@ -461,13 +515,13 @@ export function extractKey(row: Row, column: string): Key | undefined {
  *
  * @example
  * ```ts
- * shapeToColumnType(stringShape()) // 'text'
- * shapeToColumnType(integerShape()) // 'integer'
- * shapeToColumnType(optionalShape(integerShape())) // 'integer'
- * shapeToColumnType(objectShape({ a: stringShape() })) // 'json'
+ * shapeToColumnStorage(stringShape()) // 'text'
+ * shapeToColumnStorage(integerShape()) // 'integer'
+ * shapeToColumnStorage(optionalShape(integerShape())) // 'integer'
+ * shapeToColumnStorage(objectShape({ a: stringShape() })) // 'json'
  * ```
  */
-export function shapeToColumnType(shape: ContractShape): ColumnType {
+export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 	switch (shape.type) {
 		case 'string':
 			return 'text'
@@ -484,7 +538,7 @@ export function shapeToColumnType(shape: ContractShape): ColumnType {
 		}
 		case 'optional':
 		case 'nullable':
-			return shapeToColumnType(shape.inner)
+			return shapeToColumnStorage(shape.inner)
 		case 'null':
 		case 'object':
 		case 'array':
@@ -496,67 +550,34 @@ export function shapeToColumnType(shape: ContractShape): ColumnType {
 }
 
 /**
- * Whether a value is a well-formed {@link DriverMeta} — the boundary guard a
- * versioning driver's `meta()` narrows a stored (structured-clone or
- * `JSON.parse`d) value through before trusting it, replacing the per-driver
- * duplicated narrowing every backend used to hand-roll (AGENTS §14: never `as`).
+ * Project one contract shape into a portable column schema.
  *
- * @remarks
- * Total and total-recursive over the whole shape: a finite `version`, and a
- * `schema` array of well-formed {@link TableSchema} entries — each a `name` /
- * `primary` string pair, a `columns` array of well-formed {@link ColumnSchema}
- * entries (a `name` string, a {@link ColumnType} literal, a `nullable`
- * boolean), and an `indexes` array of string arrays. Anything off-shape
- * (including a non-record) returns `false` rather than throwing.
- *
- * @param value - The value to test
- * @returns `true` when `value` is a well-formed `DriverMeta`
- *
- * @example
- * ```ts
- * isDriverMeta({ version: 1, schema: [] }) // true
- * isDriverMeta({ version: 1, schema: [{ name: 'users' }] }) // false
- * ```
+ * @param name - The column name
+ * @param shape - The column contract shape
+ * @returns The portable storage and independent absence/null acceptance
  */
-export function isDriverMeta(value: unknown): value is DriverMeta {
-	return (
-		isRecord(value) &&
-		isFiniteNumber(value.version) &&
-		isArray(value.schema) &&
-		value.schema.every(
-			(table) =>
-				isRecord(table) &&
-				isString(table.name) &&
-				isString(table.primary) &&
-				isArray(table.columns) &&
-				table.columns.every(
-					(column) =>
-						isRecord(column) &&
-						isString(column.name) &&
-						isString(column.type) &&
-						(
-							['text', 'integer', 'real', 'boolean', 'json', 'blob'] satisfies readonly ColumnType[]
-						).some((type) => type === column.type) &&
-						isBoolean(column.nullable),
-				) &&
-				isArray(table.indexes) &&
-				table.indexes.every((index) => isArray(index) && index.every((column) => isString(column))),
-		)
-	)
+export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnSchema {
+	const isColumn = compileGuard(objectShape({ value: shape }))
+	return {
+		name,
+		storage: shapeToColumnStorage(shape),
+		optional: isColumn({}),
+		nullable: isColumn({ value: null }),
+	}
 }
 
-// === Cancellation
+// === Abort
 
 /**
- * Throw when an {@link ReadOptions.signal | AbortSignal} has fired — the shared
- * cancellation gate checked at operation boundaries and between streamed rows.
+ * Throw when an {@link OperationOptions.signal | AbortSignal} has fired — the shared
+ * abort gate checked at operation boundaries and between streamed rows.
  *
  * @remarks
  * A no-op for `undefined` or a live signal, so callers thread `options?.signal`
  * straight through. When the signal has aborted, throws an `ABORTED`
  * {@link DatabaseError} carrying the signal's `reason` in its context — callers
- * mint signals with whatever tool they like (`AbortSignal.timeout(ms)`,
- * `new AbortController()`, `@orkestrel/abort`).
+ * mint signals with native APIs such as `AbortSignal.timeout(ms)` or
+ * `new AbortController()`.
  *
  * @param signal - The signal to check, if any
  * @returns Nothing — returns normally while the signal is live
@@ -593,11 +614,12 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  * `column.remove` / `index.add` / `index.remove` steps. Step order is
  * deterministic: every `table.remove`, then every `table.add`, then each
  * shared table's column/index changes in `declared` order. `from` / `to` are
- * plan labels only — version tracking itself is deferred to persistent
- * backends.
+ * plan labels only; versioning drivers persist and reconcile them through
+ * {@link DriverMetadata}.
  *
  * A column present in BOTH schemas under the same name but with a different
- * `type` or `nullable` throws a `MIGRATION` {@link DatabaseError} naming the
+ * `storage`, `optional`, or `nullable` value throws a `MIGRATION`
+ * {@link DatabaseError} naming the
  * table, the column, and the from→to difference — a name-only diff would
  * otherwise silently produce NO step for the drift, and versioned
  * reconciliation would stamp over it. There is no automatic in-place
@@ -610,14 +632,16 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  * @param from - The plan's source version label (defaults to `0`)
  * @param to - The plan's target version label (defaults to `1`)
  * @returns The migration plan moving `deployed` toward `declared`
- * @throws A `MIGRATION` {@link DatabaseError} when a shared column's `type` or
- * `nullable` differs between `deployed` and `declared`
+ * @throws A `MIGRATION` {@link DatabaseError} when a shared table's primary or
+ * a shared column's `storage`, `optional`, or `nullable` differs, or when a
+ * required non-null column would be added to an existing table without a
+ * portable backfill
  *
  * @example
  * ```ts
  * const plan = planMigration(
- * 	[{ name: 'users', primary: 'id', columns: [], indexes: [] }],
- * 	[{ name: 'users', primary: 'id', columns: [{ name: 'age', type: 'integer', nullable: false }], indexes: [] }],
+ * 	[{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }],
+ * 	[{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }, { name: 'age', storage: 'integer', optional: true, nullable: false }], indexes: [] }],
  * )
  * // plan.steps === [{ operation: 'column.add', table: 'users', column: { name: 'age', ... } }]
  * ```
@@ -628,67 +652,252 @@ export function planMigration(
 	from = 0,
 	to = 1,
 ): Migration {
-	const deployedByName = new Map(deployed.map((table) => [table.name, table]))
-	const declaredByName = new Map(declared.map((table) => [table.name, table]))
+	if (!Number.isFinite(from) || !Number.isFinite(to)) {
+		throw new DatabaseError('MIGRATION', 'Migration versions must be finite', { from, to })
+	}
+	let beforeSchema: readonly TableSchema[]
+	let targetSchema: readonly TableSchema[]
+	try {
+		beforeSchema = normalizeDriverSchema(deployed)
+		targetSchema = normalizeDriverSchema(declared)
+	} catch (error) {
+		throw new DatabaseError('MIGRATION', 'Migration schema is invalid', { cause: error })
+	}
+	const deployedByName = new Map(beforeSchema.map((table) => [table.name, table]))
+	const declaredByName = new Map(targetSchema.map((table) => [table.name, table]))
 
 	const steps: MigrationStep[] = []
 
-	for (const table of deployed) {
+	for (const table of beforeSchema) {
 		if (!declaredByName.has(table.name))
 			steps.push({ operation: 'table.remove', table: table.name })
 	}
-	for (const table of declared) {
+	for (const table of targetSchema) {
 		if (!deployedByName.has(table.name)) steps.push({ operation: 'table.add', table })
 	}
 
-	for (const table of declared) {
+	for (const table of targetSchema) {
 		const before = deployedByName.get(table.name)
 		if (before === undefined) continue
+		if (before.primary !== table.primary) {
+			throw new DatabaseError(
+				'MIGRATION',
+				`planMigration: primary column on table '${table.name}' changed from '${before.primary}' to '${table.primary}'`,
+				{ table: table.name, from: before.primary, to: table.primary },
+			)
+		}
 
-		const beforeColumns = new Map(before.columns.map((column) => [column.name, column]))
-		const afterColumns = new Map(table.columns.map((column) => [column.name, column]))
+		const beforeColumnMap = new Map(before.columns.map((column) => [column.name, column]))
+		const afterColumnMap = new Map(table.columns.map((column) => [column.name, column]))
 
+		for (const index of before.indexes) {
+			if (!table.indexes.some((candidate) => equalsValue(candidate, index))) {
+				steps.push({ operation: 'index.remove', table: table.name, index })
+			}
+		}
 		for (const column of before.columns) {
-			if (!afterColumns.has(column.name)) {
+			if (!afterColumnMap.has(column.name)) {
 				steps.push({ operation: 'column.remove', table: table.name, column: column.name })
 			}
 		}
 		for (const column of table.columns) {
-			const previous = beforeColumns.get(column.name)
+			const previous = beforeColumnMap.get(column.name)
 			if (previous === undefined) {
 				steps.push({ operation: 'column.add', table: table.name, column })
 				continue
 			}
-			if (previous.type !== column.type || previous.nullable !== column.nullable) {
+			if (
+				previous.storage !== column.storage ||
+				previous.optional !== column.optional ||
+				previous.nullable !== column.nullable
+			) {
 				throw new DatabaseError(
 					'MIGRATION',
 					`planMigration: column '${column.name}' on table '${table.name}' changed shape ` +
-						`(type ${previous.type}→${column.type}, nullable ${previous.nullable}→${column.nullable}) — ` +
-						`in-place type/nullability changes are not auto-migrated; add a new column, copy/convert ` +
+						`(storage ${previous.storage}→${column.storage}, optional ${previous.optional}→${column.optional}, nullable ${previous.nullable}→${column.nullable}) — ` +
+						`in-place storage/optionality/nullability changes are not auto-migrated; add a new column, copy/convert ` +
 						`the data, then remove the old column`,
 					{
 						table: table.name,
 						column: column.name,
-						from: { type: previous.type, nullable: previous.nullable },
-						to: { type: column.type, nullable: column.nullable },
+						from: {
+							storage: previous.storage,
+							optional: previous.optional,
+							nullable: previous.nullable,
+						},
+						to: {
+							storage: column.storage,
+							optional: column.optional,
+							nullable: column.nullable,
+						},
 					},
 				)
 			}
 		}
 
-		for (const index of before.indexes) {
-			if (!table.indexes.some((candidate) => deepEqual(candidate, index))) {
-				steps.push({ operation: 'index.remove', table: table.name, index })
-			}
-		}
 		for (const index of table.indexes) {
-			if (!before.indexes.some((candidate) => deepEqual(candidate, index))) {
+			if (!before.indexes.some((candidate) => equalsValue(candidate, index))) {
 				steps.push({ operation: 'index.add', table: table.name, index })
 			}
 		}
 	}
 
-	return { from, to, steps }
+	const projected = projectMigrationSchema(beforeSchema, steps)
+	if (!equalsValue(projected, targetSchema)) {
+		throw new DatabaseError('MIGRATION', 'Migration plan does not project to the declared schema', {
+			projected,
+			declared: targetSchema,
+		})
+	}
+	return cloneMigrationInput({ plan: { from, to, steps } }).plan
+}
+
+/**
+ * Sequentially project migration steps over a canonical validated owned schema.
+ * Adding a required non-null column to an existing table rejects with
+ * `MIGRATION`; optional-only and nullable-only additions remain portable.
+ *
+ * @param schema - The initial deployed schema
+ * @param steps - The ordered migration steps
+ * @returns A fresh owned final schema
+ */
+export function projectMigrationSchema(
+	schema: readonly TableSchema[],
+	steps: readonly MigrationStep[],
+): readonly TableSchema[] {
+	let owned: readonly TableSchema[]
+	let projectedSteps: readonly MigrationStep[]
+	try {
+		owned = normalizeDriverSchema(schema)
+		projectedSteps = cloneMigrationInput({ plan: { from: 0, to: 1, steps } }).plan.steps
+	} catch (error) {
+		throw new DatabaseError('MIGRATION', 'Migration input is invalid', { cause: error })
+	}
+	const tables = new Map(owned.map((table) => [table.name, table]))
+	for (const step of projectedSteps) {
+		if (step.operation === 'table.add') {
+			if (tables.has(step.table.name)) {
+				throw new DatabaseError('MIGRATION', `migrate: table '${step.table.name}' already exists`, {
+					table: step.table.name,
+				})
+			}
+			tables.set(step.table.name, step.table)
+			continue
+		}
+		const table = tables.get(step.table)
+		if (table === undefined) {
+			throw new DatabaseError('MIGRATION', `migrate: table '${step.table}' does not exist`, {
+				table: step.table,
+			})
+		}
+		if (step.operation === 'table.remove') {
+			tables.delete(step.table)
+			continue
+		}
+		if (step.operation === 'column.add') {
+			if (table.columns.some((column) => column.name === step.column.name)) {
+				throw new DatabaseError(
+					'MIGRATION',
+					`migrate: column '${step.column.name}' already exists`,
+					{ table: step.table, column: step.column.name },
+				)
+			}
+			if (!step.column.optional && !step.column.nullable) {
+				throw new DatabaseError(
+					'MIGRATION',
+					`migrate: required non-null column '${step.column.name}' cannot be added automatically to existing table '${step.table}'`,
+					{ table: step.table, column: step.column.name },
+				)
+			}
+			tables.set(step.table, { ...table, columns: [...table.columns, step.column] })
+			continue
+		}
+		if (step.operation === 'column.remove') {
+			if (!table.columns.some((column) => column.name === step.column)) {
+				throw new DatabaseError('MIGRATION', `migrate: column '${step.column}' does not exist`, {
+					table: step.table,
+					column: step.column,
+				})
+			}
+			if (table.primary === step.column) {
+				throw new DatabaseError('MIGRATION', 'migrate: cannot remove the primary column', {
+					table: step.table,
+					column: step.column,
+				})
+			}
+			if (table.indexes.some((index) => index.includes(step.column))) {
+				throw new DatabaseError('MIGRATION', 'migrate: cannot remove an indexed column', {
+					table: step.table,
+					column: step.column,
+				})
+			}
+			tables.set(step.table, {
+				...table,
+				columns: table.columns.filter((column) => column.name !== step.column),
+			})
+			continue
+		}
+		if (step.operation === 'index.add') {
+			if (
+				step.index.length === 0 ||
+				step.index.some((name) => !table.columns.some((column) => column.name === name))
+			) {
+				throw new DatabaseError('MIGRATION', 'migrate: index references a missing column', {
+					table: step.table,
+					index: step.index,
+				})
+			}
+			if (table.indexes.some((index) => equalsValue(index, step.index))) {
+				throw new DatabaseError('MIGRATION', 'migrate: index already exists', {
+					table: step.table,
+					index: step.index,
+				})
+			}
+			tables.set(step.table, { ...table, indexes: [...table.indexes, step.index] })
+			continue
+		}
+		if (!table.indexes.some((index) => equalsValue(index, step.index))) {
+			throw new DatabaseError('MIGRATION', 'migrate: index does not exist', {
+				table: step.table,
+				index: step.index,
+			})
+		}
+		tables.set(step.table, {
+			...table,
+			indexes: table.indexes.filter((index) => !equalsValue(index, step.index)),
+		})
+	}
+	try {
+		return normalizeDriverSchema([...tables.values()])
+	} catch (error) {
+		throw new DatabaseError('MIGRATION', 'Projected migration schema is invalid', { cause: error })
+	}
+}
+
+/**
+ * Canonicalize an unknown driver schema into a distinct deeply frozen snapshot.
+ *
+ * @remarks
+ * Table and column lists are sorted by name. The index list is sorted by the
+ * complete serialized tuple while column order inside each compound index is
+ * preserved because it carries index semantics. Validation and ownership flow
+ * through {@link cloneDriverSchema} before and after projection.
+ *
+ * @param value - Unknown driver schema
+ * @returns A validated, owned canonical schema
+ */
+export function normalizeDriverSchema(value: unknown): readonly TableSchema[] {
+	const owned = cloneDriverSchema(value)
+	const tables = owned.map((table) => ({
+		name: table.name,
+		primary: table.primary,
+		columns: [...table.columns].sort((left, right) => compareValues(left.name, right.name)),
+		indexes: [...table.indexes].sort((left, right) =>
+			compareValues(JSON.stringify(left), JSON.stringify(right)),
+		),
+	}))
+	tables.sort((left, right) => compareValues(left.name, right.name))
+	return cloneDriverSchema(tables)
 }
 
 /**
@@ -749,21 +958,24 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * `read` of a missing key returns `undefined`; `write`/`read` round-trip with
  * DEEP copy-in/copy-out isolation (mutating the caller's row — including a
  * NESTED field — after `write`, or a row `read` returns, never perturbs
- * stored state) and upsert-overwrite; `delete` returns `true` then `false`;
+ * stored state) and upsert-overwrite; simultaneous same-key `insert` calls
+ * produce exactly one commit and one `CONFLICT`; pre-aborted `write`,
+ * `insert`, and `delete` calls leave storage unchanged; `delete` returns
+ * `true` then `false`;
  * `keys`/`scan` yield in ascending key order; `clear` empties only its target
  * table; `snapshot`'s rollback thunk restores pre-snapshot state, including a
  * NESTED field mutated in place on a read-back row between capture and
  * restore; a scoped `snapshot(['users'])` rolls back only the named table,
  * leaving a concurrent mutation to another table intact; a
  * non-`id` primary key (`posts.slug`) round-trips; a nested-object row
- * round-trips structurally (via {@link deepEqual}). The optional surface is
+ * round-trips structurally (via {@link equalsValue}). The optional surface is
  * presence-gated: when `migrate` exists, a `column.remove` plan strips the
  * column from stored rows and a plan referencing an unknown table throws
  * `DatabaseError` `MIGRATION`; when `stream` exists, it yields only
  * condition-matching rows and honors `offset`/`limit`; when `transaction`
- * exists, `commit` persists and `rollback` restores; when both `meta` and
- * `stamp` exist, a fresh store's `meta()` is `undefined`, and after
- * `stamp({ version, schema })`, `meta()` returns the exact stamped value.
+ * exists, `commit` persists and `rollback` restores; when both `metadata` and
+ * `stamp` exist, a fresh store's `metadata()` is `undefined`, and after
+ * `stamp({ version, schema })`, `metadata()` returns the exact stamped value.
  *
  * Each phase runs within a `try`/`catch`: an EXPECTED mismatch yields a
  * finding built from the assertion, while an UNEXPECTED throw (a driver
@@ -798,13 +1010,13 @@ export async function* driverFindings(
 		name: 'users',
 		primary: 'id',
 		columns: [
-			{ name: 'id', type: 'text', nullable: false },
-			{ name: 'name', type: 'text', nullable: false },
-			{ name: 'age', type: 'integer', nullable: true },
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'name', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: true, nullable: false },
 			// Declared so the nested-roundtrip phase is fair to typed-column
 			// backends (a SQL driver persists only declared columns; schemaless
 			// backends ignore declarations entirely).
-			{ name: 'meta', type: 'json', nullable: true },
+			{ name: 'meta', storage: 'json', optional: true, nullable: false },
 		],
 		indexes: [],
 	}
@@ -812,8 +1024,8 @@ export async function* driverFindings(
 		name: 'posts',
 		primary: 'slug',
 		columns: [
-			{ name: 'slug', type: 'text', nullable: false },
-			{ name: 'title', type: 'text', nullable: false },
+			{ name: 'slug', storage: 'text', optional: false, nullable: false },
+			{ name: 'title', storage: 'text', optional: false, nullable: false },
 		],
 		indexes: [],
 	}
@@ -861,13 +1073,13 @@ export async function* driverFindings(
 		try {
 			const driver = factory()
 			await driver.open(CONFORMANCE_SCHEMA)
-			const input: Row = { id: 'u1', name: 'Ada', age: 30, meta: { tags: ['a'] } }
+			const input: Row = { id: 'caller', name: 'Ada', age: 30, meta: { tags: ['a'] } }
 			await driver.write('users', 'u1', input)
 			input.name = 'Mutated after write'
 			if (isRecord(input.meta) && Array.isArray(input.meta.tags)) input.meta.tags.push('mutated')
 			const stored = await driver.read('users', 'u1')
 			const original = { id: 'u1', name: 'Ada', age: 30, meta: { tags: ['a'] } }
-			if (stored === undefined || !deepEqual(stored, original)) {
+			if (stored === undefined || !equalsValue(stored, original)) {
 				await driver.close()
 				yield {
 					check: 'copy-in',
@@ -880,7 +1092,7 @@ export async function* driverFindings(
 			stored.name = 'Mutated after read'
 			if (isRecord(stored.meta) && Array.isArray(stored.meta.tags)) stored.meta.tags.push('mutated')
 			const reread = await driver.read('users', 'u1')
-			if (reread === undefined || !deepEqual(reread, original)) {
+			if (reread === undefined || !equalsValue(reread, original)) {
 				await driver.close()
 				yield {
 					check: 'copy-out',
@@ -890,20 +1102,59 @@ export async function* driverFindings(
 				}
 				break writeRead
 			}
-			const overwrite = { id: 'u1', name: 'Ada Overwritten', age: 31 }
+			const overwrite = { id: 'caller', name: 'Ada Overwritten', age: 31 }
 			await driver.write('users', 'u1', overwrite)
 			const overwritten = await driver.read('users', 'u1')
 			await driver.close()
-			if (overwritten === undefined || !deepEqual(overwritten, overwrite)) {
+			const expectedOverwrite = { ...overwrite, id: 'u1' }
+			if (overwritten === undefined || !equalsValue(overwritten, expectedOverwrite)) {
 				yield {
 					check: 'upsert',
 					message: 'write must upsert-overwrite an existing key',
-					context: { table: 'users', expected: overwrite, actual: overwritten },
+					context: { table: 'users', expected: expectedOverwrite, actual: overwritten },
 				}
 			}
 		} catch (error) {
 			yield {
 				check: 'write-read',
+				message: error instanceof Error ? error.message : String(error),
+				context: { error },
+			}
+		}
+	}
+
+	// c2. insert is atomic: concurrent duplicates produce one commit and one CONFLICT.
+	{
+		try {
+			const driver = factory()
+			await driver.open(CONFORMANCE_SCHEMA)
+			const outcomes = await Promise.allSettled([
+				driver.insert('users', 'u1', { id: 'u1', name: 'Ada', age: 30 }),
+				driver.insert('users', 'u1', { id: 'u1', name: 'Grace', age: 40 }),
+			])
+			let fulfilled = 0
+			let conflicted = 0
+			for (const outcome of outcomes) {
+				if (outcome.status === 'fulfilled') fulfilled += 1
+				else if (isDatabaseError(outcome.reason) && outcome.reason.code === 'CONFLICT') {
+					conflicted += 1
+				}
+			}
+			const keys = await driver.keys('users')
+			await driver.close()
+			if (fulfilled !== 1 || conflicted !== 1 || !equalsValue(keys, ['u1'])) {
+				yield {
+					check: 'insert-atomic',
+					message: 'concurrent same-key inserts must produce one commit and one CONFLICT',
+					context: {
+						expected: { fulfilled: 1, conflicted: 1, keys: ['u1'] },
+						actual: { fulfilled, conflicted, keys },
+					},
+				}
+			}
+		} catch (error) {
+			yield {
+				check: 'insert-atomic',
 				message: error instanceof Error ? error.message : String(error),
 				context: { error },
 			}
@@ -944,6 +1195,74 @@ export async function* driverFindings(
 		}
 	}
 
+	// d2. pre-aborted point mutations reject as ABORTED without changing rows.
+	try {
+		const driver = factory()
+		await driver.open(CONFORMANCE_SCHEMA)
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
+		const controller = new AbortController()
+		controller.abort('conformance abort')
+		let writeError: unknown
+		let insertError: unknown
+		let deleteError: unknown
+		try {
+			await driver.write(
+				'users',
+				'u2',
+				{ id: 'u2', name: 'Grace', age: 40 },
+				{ signal: controller.signal },
+			)
+		} catch (error) {
+			writeError = error
+		}
+		try {
+			await driver.insert(
+				'users',
+				'u2',
+				{ id: 'u2', name: 'Grace', age: 40 },
+				{ signal: controller.signal },
+			)
+		} catch (error) {
+			insertError = error
+		}
+		try {
+			await driver.delete('users', 'u1', { signal: controller.signal })
+		} catch (error) {
+			deleteError = error
+		}
+		const keys = await driver.keys('users')
+		await driver.close()
+		if (
+			!isDatabaseError(writeError) ||
+			writeError.code !== 'ABORTED' ||
+			!isDatabaseError(insertError) ||
+			insertError.code !== 'ABORTED' ||
+			!isDatabaseError(deleteError) ||
+			deleteError.code !== 'ABORTED' ||
+			!equalsValue(keys, ['u1'])
+		) {
+			yield {
+				check: 'mutation-abort',
+				message: 'pre-aborted write/insert/delete must reject ABORTED without changing rows',
+				context: {
+					expected: { write: 'ABORTED', insert: 'ABORTED', delete: 'ABORTED', keys: ['u1'] },
+					actual: {
+						write: isDatabaseError(writeError) ? writeError.code : writeError,
+						insert: isDatabaseError(insertError) ? insertError.code : insertError,
+						delete: isDatabaseError(deleteError) ? deleteError.code : deleteError,
+						keys,
+					},
+				},
+			}
+		}
+	} catch (error) {
+		yield {
+			check: 'mutation-abort',
+			message: error instanceof Error ? error.message : String(error),
+			context: { error },
+		}
+	}
+
 	// e. keys and scan in ascending key order.
 	orderPhase: {
 		try {
@@ -957,7 +1276,7 @@ export async function* driverFindings(
 			for (const row of rows) await driver.write('users', row.id, row)
 			const expected = ['a', 'b', 'c']
 			const keys = [...(await driver.keys('users'))]
-			if (!deepEqual(keys, expected)) {
+			if (!equalsValue(keys, expected)) {
 				await driver.close()
 				yield {
 					check: 'keys-order',
@@ -970,7 +1289,7 @@ export async function* driverFindings(
 			for await (const row of driver.scan('users')) scanned.push(row)
 			const scannedIds = scanned.map((row) => row.id)
 			await driver.close()
-			if (!deepEqual(scannedIds, expected)) {
+			if (!equalsValue(scannedIds, expected)) {
 				yield {
 					check: 'scan-order',
 					message: 'scan must yield rows in ascending key order',
@@ -1033,7 +1352,7 @@ export async function* driverFindings(
 			await driver.delete('users', 'u1')
 			await rollback()
 			const keys = [...(await driver.keys('users'))]
-			if (!deepEqual(keys, ['u1'])) {
+			if (!equalsValue(keys, ['u1'])) {
 				await driver.close()
 				yield {
 					check: 'snapshot-rollback',
@@ -1044,7 +1363,7 @@ export async function* driverFindings(
 			}
 			const restored = await driver.read('users', 'u1')
 			await driver.close()
-			if (restored === undefined || !deepEqual(restored, original)) {
+			if (restored === undefined || !equalsValue(restored, original)) {
 				yield {
 					check: 'snapshot-rollback-value',
 					message: 'snapshot rollback must restore pre-snapshot row values',
@@ -1080,7 +1399,7 @@ export async function* driverFindings(
 		await rollback()
 		const restored = await driver.read('users', 'u3')
 		await driver.close()
-		if (restored === undefined || !deepEqual(restored, original)) {
+		if (restored === undefined || !equalsValue(restored, original)) {
 			yield {
 				check: 'snapshot-nested',
 				message:
@@ -1100,7 +1419,7 @@ export async function* driverFindings(
 	try {
 		const driver = factory()
 		await driver.open(CONFORMANCE_SCHEMA)
-		await driver.write('posts', 'hello-world', { slug: 'hello-world', title: 'Hello' })
+		await driver.write('posts', 'hello-world', { slug: 'caller', title: 'Hello' })
 		const post = await driver.read('posts', 'hello-world')
 		const key = post === undefined ? undefined : extractKey(post, 'slug')
 		await driver.close()
@@ -1119,7 +1438,7 @@ export async function* driverFindings(
 		}
 	}
 
-	// i. nested-object row round-trip (structural, via deepEqual).
+	// i. nested-object row round-trip (structural, via equalsValue).
 	try {
 		const driver = factory()
 		await driver.open(CONFORMANCE_SCHEMA)
@@ -1132,7 +1451,7 @@ export async function* driverFindings(
 		await driver.write('users', 'u3', nested)
 		const readBack = await driver.read('users', 'u3')
 		await driver.close()
-		if (readBack === undefined || !deepEqual(readBack, nested)) {
+		if (readBack === undefined || !equalsValue(readBack, nested)) {
 			yield {
 				check: 'nested-roundtrip',
 				message: 'a nested-object row must round-trip structurally',
@@ -1156,13 +1475,13 @@ export async function* driverFindings(
 				...CONFORMANCE_USERS_SCHEMA,
 				columns: [
 					...CONFORMANCE_USERS_SCHEMA.columns,
-					{ name: 'legacy', type: 'boolean', nullable: true },
+					{ name: 'legacy', storage: 'boolean', optional: true, nullable: false },
 				],
 			}
 			await driver.open([deployedUsers, CONFORMANCE_POSTS_SCHEMA])
 			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
 			const removePlan = planMigration([deployedUsers], [CONFORMANCE_USERS_SCHEMA])
-			await driver.migrate(removePlan)
+			await driver.migrate({ plan: removePlan })
 			const migrated = await driver.read('users', 'u1')
 			if (migrated === undefined || 'legacy' in migrated) {
 				await driver.close()
@@ -1180,9 +1499,11 @@ export async function* driverFindings(
 			let caught: unknown
 			try {
 				await driver.migrate({
-					from: 0,
-					to: 1,
-					steps: [{ operation: 'table.remove', table: 'ghost' }],
+					plan: {
+						from: 0,
+						to: 1,
+						steps: [{ operation: 'table.remove', table: 'ghost' }],
+					},
 				})
 			} catch (error) {
 				caught = error
@@ -1221,13 +1542,13 @@ export async function* driverFindings(
 				{ id: 'c', name: 'C', age: 30 },
 			]
 			for (const row of rows) await driver.write('users', row.id, row)
-			const criteria: Criteria = {
+			const input: QueryInput = {
 				conditions: [{ column: 'age', operator: 'above', values: [10], connector: 'and' }],
 			}
 			const matched: Row[] = []
-			for await (const row of driver.stream('users', criteria)) matched.push(row)
+			for await (const row of driver.stream('users', input)) matched.push(row)
 			const matchedIds = matched.map((row) => row.id).sort()
-			if (!deepEqual(matchedIds, ['b', 'c'])) {
+			if (!equalsValue(matchedIds, ['b', 'c'])) {
 				await driver.close()
 				yield {
 					check: 'stream-match',
@@ -1262,11 +1583,11 @@ export async function* driverFindings(
 			if (driver.transaction === undefined) break transactionPhase
 			await driver.open(CONFORMANCE_SCHEMA)
 			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
-			const committing = await driver.transaction()
-			await driver.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
-			await committing.commit()
+			await driver.transaction(async (transaction) => {
+				await transaction.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
+			})
 			const afterCommit = [...(await driver.keys('users'))].sort()
-			if (!deepEqual(afterCommit, ['u1', 'u2'])) {
+			if (!equalsValue(afterCommit, ['u1', 'u2'])) {
 				await driver.close()
 				yield {
 					check: 'transaction-commit',
@@ -1275,12 +1596,18 @@ export async function* driverFindings(
 				}
 				break transactionPhase
 			}
-			const rollingBack = await driver.transaction()
-			await driver.write('users', 'u3', { id: 'u3', name: 'Marie', age: 50 })
-			await rollingBack.rollback()
+			const reason = {}
+			try {
+				await driver.transaction(async (transaction) => {
+					await transaction.write('users', 'u3', { id: 'u3', name: 'Marie', age: 50 })
+					throw reason
+				})
+			} catch (error) {
+				if (error !== reason) throw error
+			}
 			const afterRollback = [...(await driver.keys('users'))].sort()
 			await driver.close()
-			if (!deepEqual(afterRollback, ['u1', 'u2'])) {
+			if (!equalsValue(afterRollback, ['u1', 'u2'])) {
 				yield {
 					check: 'transaction-rollback',
 					message: 'transaction rollback must restore pre-transaction state',
@@ -1296,36 +1623,36 @@ export async function* driverFindings(
 		}
 	}
 
-	// m. meta/stamp (presence-gated): fresh is undefined; stamp round-trips.
-	metaPhase: {
+	// m. metadata/stamp (presence-gated): fresh is undefined; stamp round-trips.
+	metadataPhase: {
 		try {
 			const driver = factory()
-			if (driver.meta === undefined || driver.stamp === undefined) break metaPhase
+			if (driver.metadata === undefined || driver.stamp === undefined) break metadataPhase
 			await driver.open(CONFORMANCE_SCHEMA)
-			const fresh = await driver.meta()
+			const fresh = await driver.metadata()
 			if (fresh !== undefined) {
 				await driver.close()
 				yield {
-					check: 'meta-fresh',
-					message: 'a fresh store must report undefined meta',
+					check: 'metadata-fresh',
+					message: 'a fresh store must report undefined metadata',
 					context: { expected: undefined, actual: fresh },
 				}
-				break metaPhase
+				break metadataPhase
 			}
 			const stamped = { version: 1, schema: CONFORMANCE_SCHEMA }
 			await driver.stamp(stamped)
-			const read = await driver.meta()
+			const read = await driver.metadata()
 			await driver.close()
-			if (read === undefined || !deepEqual(read, stamped)) {
+			if (read === undefined || !equalsValue(read, stamped)) {
 				yield {
-					check: 'meta-stamp',
-					message: 'meta() must return exactly the last-stamped value',
+					check: 'metadata-stamp',
+					message: 'metadata() must return exactly the last-stamped value',
 					context: { expected: stamped, actual: read },
 				}
 			}
 		} catch (error) {
 			yield {
-				check: 'meta-stamp',
+				check: 'metadata-stamp',
 				message: error instanceof Error ? error.message : String(error),
 				context: { error },
 			}
@@ -1345,7 +1672,7 @@ export async function* driverFindings(
 			await driver.write('posts', 'p2', { slug: 'p2', title: 'Another post' })
 			await rollback()
 			const usersKeys = [...(await driver.keys('users'))]
-			if (!deepEqual(usersKeys, ['u1'])) {
+			if (!equalsValue(usersKeys, ['u1'])) {
 				await driver.close()
 				yield {
 					check: 'snapshot-scoped-users',
@@ -1356,7 +1683,7 @@ export async function* driverFindings(
 			}
 			const postsKeys = [...(await driver.keys('posts'))].sort()
 			await driver.close()
-			if (!deepEqual(postsKeys, ['p1', 'p2'])) {
+			if (!equalsValue(postsKeys, ['p1', 'p2'])) {
 				yield {
 					check: 'snapshot-scoped-posts',
 					message: "a scoped snapshot must leave an unnamed table's mutations intact",
@@ -1433,44 +1760,4 @@ export async function auditDriver(
 	const findings: ConformanceFinding[] = []
 	for await (const finding of driverFindings(factory)) findings.push(finding)
 	return findings
-}
-
-// === Identifiers
-
-/**
- * Generate an RFC 4122 version 4 UUID from a number source — no host crypto global.
- *
- * @remarks
- * Draws exactly {@link UUID_BYTE_COUNT} values from `random`, one per byte, then
- * forces the version (`4`) and variant (`10xx`) bits. The default source is
- * `Math.random` — a pure-ECMAScript intrinsic, so generation works on every host;
- * pass a seeded source (`seededRandom` from `@orkestrel/contract`) and reuse it
- * across calls for reproducible sequences in tests and fixtures — production
- * identifiers should keep the default source, whose engine entropy is far larger
- * than a 32-bit seed. Each byte is floored and masked, so a source straying
- * outside `[0, 1)` (negative, `>= 1`, `NaN`, `Infinity`) can never yield a
- * malformed UUID. Suitable as a collision-resistant record identifier — not a
- * cryptographic token; never use one as a secret.
- *
- * @param random - A number source returning values in the half-open range `[0, 1)` (defaults to `Math.random`)
- * @returns A lowercase RFC 4122 version 4 UUID
- *
- * @example
- * ```ts
- * import { generateUUID } from '@orkestrel/database'
- * import { seededRandom } from '@orkestrel/contract'
- *
- * generateUUID() // e.g. '9b2f7c1e-3d4a-4f6b-8e2d-5a1c0b9f8e7d'
- * generateUUID(seededRandom(42)) // the same UUID on every run
- * ```
- */
-export function generateUUID(random: RandomFunction = Math.random): string {
-	const bytes = Array.from({ length: UUID_BYTE_COUNT }, (_, index) => {
-		const byte = Math.floor(random() * UUID_BYTE_RANGE) & 0xff
-		if (index === 6) return (byte & 0x0f) | 0x40
-		if (index === 8) return (byte & 0x3f) | 0x80
-		return byte
-	})
-	const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0'))
-	return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`
 }

@@ -1,4 +1,4 @@
-import type { Criteria, DatabaseInterface, RowOf, TableInterface } from '@src/core'
+import type { DatabaseInterface, IndexMap, QueryInput, RowOf, TableInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { createIndexedDBDriver } from '@src/browser'
 import {
@@ -10,6 +10,7 @@ import {
 	stringShape,
 } from '@orkestrel/contract'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { collectRankStreamIds } from '../../setup.js'
 import { deleteDatabase, uniqueName } from '../../setupBrowser.js'
 
 // Cross-backend PARITY suite — the enduring regression net proving the
@@ -29,7 +30,7 @@ const USERS = {
 	bio: optionalShape(stringShape()),
 	meta: jsonShape(),
 	rank: optionalShape(integerShape()),
-} as const
+}
 
 type UserRow = RowOf<typeof USERS>
 
@@ -134,7 +135,7 @@ const ROWS: readonly UserRow[] = [
 	},
 ]
 
-const INDEXES = { users: [['age'], ['name'], ['rank']] } as const
+const INDEXES: IndexMap = { users: [['age'], ['name'], ['rank']] }
 
 function memoryDatabase(): DatabaseInterface<{ readonly users: typeof USERS }> {
 	return createDatabase({
@@ -163,151 +164,377 @@ function sortById(rows: readonly UserRow[]): readonly UserRow[] {
 interface RowCase {
 	readonly name: string
 	readonly ordered?: boolean
-	run(users: UsersTable): Promise<readonly UserRow[]>
+	execute(users: UsersTable): Promise<readonly UserRow[]>
 }
 
 // A scalar-returning case (count / an aggregate) — compared directly.
 interface ScalarCase {
 	readonly name: string
-	run(users: UsersTable): Promise<number | undefined>
+	execute(users: UsersTable): Promise<number | undefined>
 }
 
 const ROW_CASES: readonly RowCase[] = [
 	// ── All 15 clause operators (each its own case) ──────────────────────
-	{ name: 'equals', run: (users) => users.query().where('age').equals(36).all() },
-	{ name: 'not', run: (users) => users.query().where('active').not(true).all() },
-	{ name: 'above', run: (users) => users.query().where('age').above(18).all() },
-	{ name: 'below', run: (users) => users.query().where('age').below(18).all() },
-	{ name: 'from', run: (users) => users.query().where('age').from(18).all() },
-	{ name: 'to', run: (users) => users.query().where('age').to(18).all() },
-	{ name: 'between', run: (users) => users.query().where('age').between(0, 36).all() },
-	{ name: 'like', run: (users) => users.query().where('name').like('%a%').all() },
-	{ name: 'glob', run: (users) => users.query().where('name').glob('[A-Z]*').all() },
-	{ name: 'starts', run: (users) => users.query().where('name').starts('A').all() },
-	{ name: 'ends', run: (users) => users.query().where('name').ends('e').all() },
-	{ name: 'any', run: (users) => users.query().where('name').any(['Ada', 'Grace', 'nope']).all() },
-	{ name: 'none', run: (users) => users.query().where('name').none(['Ada', 'Grace']).all() },
-	{ name: 'absent (rank)', run: (users) => users.query().where('rank').absent().all() },
-	{ name: 'present (rank)', run: (users) => users.query().where('rank').present().all() },
+	{
+		name: 'equals',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'equals', values: [36], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'not',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'not', values: [true], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'above',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'below',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'below', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'from',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'to',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'to', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'between',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'between', values: [0, 36], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'like',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'like', values: ['%a%'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'glob',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'glob', values: ['[A-Z]*'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'starts',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['A'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'ends',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['e'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'any',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'name',
+					operator: 'any',
+					values: ['Ada', 'Grace', 'nope'],
+					connector: 'and',
+				})
+				.collect(),
+	},
+	{
+		name: 'none',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'none', values: ['Ada', 'Grace'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'absent (rank)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'absent', values: [], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'present (rank)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'present', values: [], connector: 'and' })
+				.collect(),
+	},
 
 	// ── starts/ends case-sensitivity ─────────────────────────────────────
 	{
 		name: "starts('ada') case variation",
-		run: (users) => users.query().where('name').starts('ada').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['ada'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: "starts('Ada') case variation",
-		run: (users) => users.query().where('name').starts('Ada').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['Ada'], connector: 'and' })
+				.collect(),
 	},
-	{ name: "ends('a') case variation", run: (users) => users.query().where('name').ends('a').all() },
-	{ name: "ends('A') case variation", run: (users) => users.query().where('name').ends('A').all() },
+	{
+		name: "ends('a') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['a'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "ends('A') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['A'], connector: 'and' })
+				.collect(),
+	},
 	{
 		name: "starts('') matches every row",
-		run: (users) => users.query().where('name').starts('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: [''], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: "ends('') matches every row",
-		run: (users) => users.query().where('name').ends('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: [''], connector: 'and' })
+				.collect(),
 	},
 
 	// ── non-ASCII like, bracket glob, non-string cells ───────────────────
 	{
 		name: "like non-ASCII pattern 'äpfel%'",
-		run: (users) => users.query().where('name').like('äpfel%').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'like', values: ['äpfel%'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: "glob '[a-z]' bracket pattern (engine-literal semantics)",
-		run: (users) => users.query().where('name').glob('[a-z]*').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'glob', values: ['[a-z]*'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'like against a non-string (age) column',
-		run: (users) => users.query().where('age').like('%3%').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'like', values: ['%3%'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'glob against a non-string (age) column',
-		run: (users) => users.query().where('age').glob('*3*').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'glob', values: ['*3*'], connector: 'and' })
+				.collect(),
 	},
 
 	// ── any([]) / none([]) / mixed lists / deep json equals ─────────────
-	{ name: 'any([]) matches nothing', run: (users) => users.query().where('name').any([]).all() },
+	{
+		name: 'any([]) matches nothing',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'any', values: [], connector: 'and' })
+				.collect(),
+	},
 	{
 		name: 'none([]) matches everything',
-		run: (users) => users.query().where('name').none([]).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'none', values: [], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'any with a mixed-type list',
-		run: (users) => users.query().where('age').any([36, 'nope', 0]).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'any', values: [36, 'nope', 0], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'none with a mixed-type list',
-		run: (users) => users.query().where('age').none([36, 'nope', 0]).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'none', values: [36, 'nope', 0], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'equals a deep matching json operand',
-		run: (users) =>
+		execute: (users) =>
 			users
 				.query()
-				.where('meta')
-				.equals({ tags: ['math', 'logic'], info: { level: 9, ok: true } })
-				.all(),
+				.condition({
+					column: 'meta',
+					operator: 'equals',
+					values: [{ tags: ['math', 'logic'], info: { level: 9, ok: true } }],
+					connector: 'and',
+				})
+				.collect(),
 	},
 	{
 		name: 'equals a deep non-matching json operand (different nested shape)',
-		run: (users) =>
+		execute: (users) =>
 			users
 				.query()
-				.where('meta')
-				.equals({ tags: ['math', 'logic'], info: { level: 9, ok: false } })
-				.all(),
+				.condition({
+					column: 'meta',
+					operator: 'equals',
+					values: [{ tags: ['math', 'logic'], info: { level: 9, ok: false } }],
+					connector: 'and',
+				})
+				.collect(),
 	},
 	{
 		name: 'not a deep json operand',
-		run: (users) =>
+		execute: (users) =>
 			users
 				.query()
-				.where('meta')
-				.not({ tags: [], info: { level: 0, ok: false } })
-				.all(),
+				.condition({
+					column: 'meta',
+					operator: 'not',
+					values: [{ tags: [], info: { level: 0, ok: false } }],
+					connector: 'and',
+				})
+				.collect(),
 	},
 
 	// ── range operators over the INDEXED optional `rank` column, some rows absent
 	// (the IndexedDB lossy-pushdown reproduction) ────────────────────────
 	{
 		name: 'rank below (with absent rows)',
-		run: (users) => users.query().where('rank').below(10).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'below', values: [10], connector: 'and' })
+				.collect(),
 	},
-	{ name: 'rank to (with absent rows)', run: (users) => users.query().where('rank').to(10).all() },
+	{
+		name: 'rank to (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'to', values: [10], connector: 'and' })
+				.collect(),
+	},
 	{
 		name: 'rank from (with absent rows)',
-		run: (users) => users.query().where('rank').from(5).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'from', values: [5], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'rank above (with absent rows)',
-		run: (users) => users.query().where('rank').above(5).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'above', values: [5], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'rank between (with absent rows)',
-		run: (users) => users.query().where('rank').between(1, 10).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'between', values: [1, 10], connector: 'and' })
+				.collect(),
 	},
 
 	// ── between reversed bounds ───────────────────────────────────────────
 	{
 		name: 'between reversed bounds is empty, never throws',
-		run: (users) => users.query().where('age').between(36, 0).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'between', values: [36, 0], connector: 'and' })
+				.collect(),
 	},
 
 	// ── mismatched operand types ──────────────────────────────────────────
 	{
 		name: 'equals with a string operand on an integer column',
-		run: (users) => users.query().where('age').equals('36').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'equals', values: ['36'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'above with a string operand on an integer column',
-		run: (users) => users.query().where('age').above('18').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: ['18'], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'equals with a number operand on a text column',
-		run: (users) => users.query().where('name').equals(36).all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'equals', values: [36], connector: 'and' })
+				.collect(),
 	},
 
 	// ── non-BMP text RANGE parity (FIX 8 — code point vs. code unit) ─────
@@ -317,91 +544,124 @@ const ROW_CASES: readonly RowCase[] = [
 	// collation; see the server parity suite's equivalent cases).
 	{
 		name: 'above on non-BMP text (name) — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').above('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'above', values: [''], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'below on non-BMP text (name) — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').below('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'below', values: [''], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'from on non-BMP text (name) — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').from('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'from', values: [''], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'to on non-BMP text (name) — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').to('').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'to', values: [''], connector: 'and' })
+				.collect(),
 	},
 	{
 		name: 'between on non-BMP text (name) — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').between('\u{10000}', '').all(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'name',
+					operator: 'between',
+					values: ['\u{10000}', ''],
+					connector: 'and',
+				})
+				.collect(),
 	},
 
 	// ── ordering ──────────────────────────────────────────────────────────
 	{
 		name: 'ascending on text (name)',
 		ordered: true,
-		run: (users) => users.query().ascending('name').all(),
+		execute: (users) => users.query().order({ column: 'name', direction: 'ascending' }).collect(),
 	},
 	{
 		name: 'descending on text (name)',
 		ordered: true,
-		run: (users) => users.query().descending('name').all(),
+		execute: (users) => users.query().order({ column: 'name', direction: 'descending' }).collect(),
 	},
 	{
 		name: 'ascending on non-BMP text (name) with limit — code point vs. code unit divergence',
 		ordered: true,
-		run: (users) => users.query().ascending('name').limit(4).all(),
+		execute: (users) =>
+			users.query().order({ column: 'name', direction: 'ascending' }).limit(4).collect(),
 	},
 	{
 		name: 'descending on non-BMP text (name) with limit — code point vs. code unit divergence',
 		ordered: true,
-		run: (users) => users.query().descending('name').limit(4).all(),
+		execute: (users) =>
+			users.query().order({ column: 'name', direction: 'descending' }).limit(4).collect(),
 	},
 	{
 		name: 'ascending on integer (age)',
 		ordered: true,
-		run: (users) => users.query().ascending('age').all(),
+		execute: (users) => users.query().order({ column: 'age', direction: 'ascending' }).collect(),
 	},
 	{
 		name: 'descending on integer (age)',
 		ordered: true,
-		run: (users) => users.query().descending('age').all(),
+		execute: (users) => users.query().order({ column: 'age', direction: 'descending' }).collect(),
 	},
 	{
 		name: 'ascending on boolean (active)',
 		ordered: true,
-		run: (users) => users.query().ascending('active').all(),
+		execute: (users) => users.query().order({ column: 'active', direction: 'ascending' }).collect(),
 	},
 	{
 		name: 'descending on boolean (active)',
 		ordered: true,
-		run: (users) => users.query().descending('active').all(),
+		execute: (users) =>
+			users.query().order({ column: 'active', direction: 'descending' }).collect(),
 	},
 	{
 		name: 'ascending on the json column (meta)',
 		ordered: true,
-		run: (users) => users.query().ascending('meta').all(),
+		execute: (users) => users.query().order({ column: 'meta', direction: 'ascending' }).collect(),
 	},
 	{
 		name: 'multi-term order (active then age)',
 		ordered: true,
-		run: (users) => users.query().ascending('active').ascending('age').all(),
+		execute: (users) =>
+			users
+				.query()
+				.order({ column: 'active', direction: 'ascending' })
+				.order({ column: 'age', direction: 'ascending' })
+				.collect(),
 	},
 	{
 		name: 'order + limit + offset paging',
 		ordered: true,
-		run: (users) => users.query().ascending('age').offset(2).limit(3).all(),
+		execute: (users) =>
+			users.query().order({ column: 'age', direction: 'ascending' }).offset(2).limit(3).collect(),
 	},
 
 	// ── stream() with conditions + offset + limit, order-insensitive ─────
 	{
 		name: 'stream with conditions + offset + limit',
-		run: async (users) => {
+		execute: async (users) => {
 			const collected: UserRow[] = []
 			for await (const row of users
 				.query()
-				.where('active')
-				.equals(true)
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
 				.offset(1)
 				.limit(2)
 				.stream()) {
@@ -411,53 +671,89 @@ const ROW_CASES: readonly RowCase[] = [
 		},
 	},
 
-	// ── records() with a prebuilt Criteria ────────────────────────────────
+	// ── records() with a prebuilt QueryInput ────────────────────────────────
 	{
-		name: 'records() with a prebuilt Criteria',
+		name: 'records() with a prebuilt QueryInput',
 		ordered: true,
-		run: (users) => {
-			const criteria: Criteria = {
+		execute: (users) => {
+			const input: QueryInput = {
 				conditions: [{ column: 'active', operator: 'equals', values: [true], connector: 'and' }],
 				order: [{ column: 'age', direction: 'ascending' }],
 			}
-			return users.records(criteria)
+			return users.records(input)
 		},
 	},
 ]
 
 const SCALAR_CASES: readonly ScalarCase[] = [
-	{ name: 'aggregate count (age, no conditions)', run: (users) => users.query().count() },
-	{ name: 'aggregate sum (age, no conditions)', run: (users) => users.query().sum('age') },
-	{ name: 'aggregate average (age, no conditions)', run: (users) => users.query().average('age') },
-	{ name: 'aggregate minimum (age, no conditions)', run: (users) => users.query().minimum('age') },
-	{ name: 'aggregate maximum (age, no conditions)', run: (users) => users.query().maximum('age') },
+	{ name: 'aggregate count (age, no conditions)', execute: (users) => users.query().count() },
+	{
+		name: 'aggregate sum (age, no conditions)',
+		execute: (users) => users.query().aggregate('sum', 'age'),
+	},
+	{
+		name: 'aggregate average (age, no conditions)',
+		execute: (users) => users.query().aggregate('average', 'age'),
+	},
+	{
+		name: 'aggregate minimum (age, no conditions)',
+		execute: (users) => users.query().aggregate('minimum', 'age'),
+	},
+	{
+		name: 'aggregate maximum (age, no conditions)',
+		execute: (users) => users.query().aggregate('maximum', 'age'),
+	},
 	{
 		name: 'aggregate sum (score, filtered by active)',
-		run: (users) => users.query().where('active').equals(true).sum('score'),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
+				.aggregate('sum', 'score'),
 	},
 	{
 		name: 'aggregate average (score, filtered by active)',
-		run: (users) => users.query().where('active').equals(true).average('score'),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
+				.aggregate('average', 'score'),
 	},
 	{
 		name: 'aggregate sum over the TEXT name column (parseNumber semantics)',
-		run: (users) => users.query().sum('name'),
+		execute: (users) => users.query().aggregate('sum', 'name'),
 	},
 	{
 		name: 'aggregate count over zero matching rows',
-		run: (users) => users.query().where('age').above(1e9).count(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [1e9], connector: 'and' })
+				.count(),
 	},
 	{
 		name: 'aggregate sum over zero matching rows',
-		run: (users) => users.query().where('age').above(1e9).sum('age'),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [1e9], connector: 'and' })
+				.aggregate('sum', 'age'),
 	},
 	{
 		name: 'rank count over a from-filtered range (indexed optional column)',
-		run: (users) => users.query().where('rank').from(5).count(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'from', values: [5], connector: 'and' })
+				.count(),
 	},
 	{
 		name: 'count over a non-BMP text (name) range — code point vs. code unit divergence',
-		run: (users) => users.query().where('name').above('').count(),
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'above', values: [''], connector: 'and' })
+				.count(),
 	},
 ]
 
@@ -483,30 +779,26 @@ describe('cross-backend parity — MemoryDriver vs IndexedDBDriver', () => {
 
 	for (const testCase of ROW_CASES) {
 		it(`rows match the reference engine — ${testCase.name}`, async () => {
-			const expected = await testCase.run(memory.table('users'))
-			const actual = await testCase.run(indexedDB.table('users'))
-			const normalize = testCase.ordered === true ? (rows: readonly UserRow[]) => rows : sortById
-			expect(normalize(actual)).toEqual(normalize(expected))
+			const expected = await testCase.execute(memory.table('users'))
+			const actual = await testCase.execute(indexedDB.table('users'))
+			expect(testCase.ordered === true ? actual : sortById(actual)).toEqual(
+				testCase.ordered === true ? expected : sortById(expected),
+			)
 		})
 	}
 
 	for (const testCase of SCALAR_CASES) {
 		it(`scalar matches the reference engine — ${testCase.name}`, async () => {
-			const expected = await testCase.run(memory.table('users'))
-			const actual = await testCase.run(indexedDB.table('users'))
+			const expected = await testCase.execute(memory.table('users'))
+			const actual = await testCase.execute(indexedDB.table('users'))
 			expect(actual).toBe(expected)
 		})
 	}
 
 	// stream() over the indexed optional `rank` column, order-insensitive.
 	it('stream matches the reference engine — rank below (with absent rows)', async () => {
-		async function streamIds(users: UsersTable): Promise<readonly string[]> {
-			const ids: string[] = []
-			for await (const row of users.query().where('rank').below(10).stream()) ids.push(row.id)
-			return [...ids].sort()
-		}
-		expect(await streamIds(indexedDB.table('users'))).toEqual(
-			await streamIds(memory.table('users')),
+		expect(await collectRankStreamIds(indexedDB.table('users'))).toEqual(
+			await collectRankStreamIds(memory.table('users')),
 		)
 	})
 })

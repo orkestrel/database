@@ -1,21 +1,27 @@
-import type { Criteria, TableSchema } from '@src/core'
+import type { QueryInput, TableSchema } from '@src/core'
 import {
-	compileCriteria,
+	compileAggregateSQL,
+	compileColumnSQL,
+	compileFieldSQL,
+	compileQuerySQL,
 	compileOrder,
 	compilePage,
 	compileWhere,
-	declaredType,
+	findColumnStorage,
 	escapeLike,
-	fragment,
-	valueType,
+	compileConditionSQL,
+	inferValueStorage,
+	schemaToIndexes,
+	schemaToTable,
+	stepToSQL,
 } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { buildCondition as cond } from '../../setup.js'
 
-// Unit tests for the Criteria → SQL compiler: representative operators, the
-// LEFT-TO-RIGHT parenthesization that mirrors the engine's matchesCriteria fold
+// Unit tests for the QueryInput → SQL compiler: representative operators, the
+// LEFT-TO-RIGHT parenthesization that mirrors the engine's matchesQuery fold
 // (NOT SQL precedence), ORDER BY, and LIMIT/OFFSET — asserting both the `sql`
-// string and the bound `params`. ORDER BY always ENDS with the primary key so the
+// string and the bound `parameters`. ORDER BY always ENDS with the primary key so the
 // native read resolves ties in key order, matching a primary-key-ordered `scan`
 // and the core engine's stable sort over a key-ordered scan (AGENTS §21 / §22
 // native ↔ engine parity): with no explicit order it is the sole `ORDER BY
@@ -27,32 +33,115 @@ const SCHEMA: TableSchema = {
 	name: 'users',
 	primary: 'id',
 	columns: [
-		{ name: 'id', type: 'text', nullable: false },
-		{ name: 'name', type: 'text', nullable: false },
-		{ name: 'age', type: 'integer', nullable: false },
-		{ name: 'active', type: 'boolean', nullable: false },
-		{ name: 'meta', type: 'json', nullable: true },
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
 	],
 	indexes: [],
 }
 
-function compile(criteria: Criteria): { sql: string; params: readonly unknown[] } {
-	const result = compileCriteria(criteria, SCHEMA)
-	return { sql: result.sql, params: result.params }
+describe('SQL declaration compilers', () => {
+	it('maps every portable column storage to its exact SQLite type', () => {
+		expect(compileColumnSQL('text')).toBe('TEXT')
+		expect(compileColumnSQL('json')).toBe('TEXT')
+		expect(compileColumnSQL('integer')).toBe('INTEGER')
+		expect(compileColumnSQL('boolean')).toBe('INTEGER')
+		expect(compileColumnSQL('real')).toBe('REAL')
+		expect(compileColumnSQL('blob')).toBe('BLOB')
+	})
+
+	it('compiles flat and nested fields with contained identifiers and paths', () => {
+		expect(compileFieldSQL('payload')).toBe('"payload"')
+		expect(compileFieldSQL(['payload', 'user', 'id'])).toBe(
+			'json_extract("payload", \'$.user.id\')',
+		)
+		expect(compileFieldSQL(['payload', "a'b"])).toBe("json_extract(\"payload\", '$.a''b')")
+	})
+
+	it('compiles every aggregate without changing SQL bytes', () => {
+		expect(compileAggregateSQL('count', 'age')).toBe('COUNT(*)')
+		expect(compileAggregateSQL('sum', 'age')).toBe('SUM("age")')
+		expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
+		expect(compileAggregateSQL('minimum', 'age')).toBe('MIN("age")')
+		expect(compileAggregateSQL('maximum', 'age')).toBe('MAX("age")')
+		expect(compileAggregateSQL('sum', ['payload', 'score'])).toBe(
+			'SUM(json_extract("payload", \'$.score\'))',
+		)
+	})
+})
+
+describe('schema and migration compilers', () => {
+	const INDEXED_SCHEMA: TableSchema = {
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'name', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		],
+		indexes: [['name'], ['name', 'age']],
+	}
+
+	it('compiles the exact table and index declarations', () => {
+		expect(schemaToTable(INDEXED_SCHEMA)).toBe(
+			'CREATE TABLE IF NOT EXISTS "users" ("id" TEXT NOT NULL, "name" TEXT NOT NULL, "age" INTEGER NOT NULL, PRIMARY KEY ("id"))',
+		)
+		expect(schemaToIndexes(INDEXED_SCHEMA)).toEqual([
+			'CREATE INDEX IF NOT EXISTS "idx_5_users_4_name" ON "users" ("name")',
+			'CREATE INDEX IF NOT EXISTS "idx_5_users_4_name_3_age" ON "users" ("name", "age")',
+		])
+		expect(schemaToIndexes({ ...INDEXED_SCHEMA, indexes: [] })).toEqual([])
+	})
+
+	it('uses the same persisted index bytes for open and migration', () => {
+		expect(stepToSQL({ operation: 'index.add', table: 'users', index: ['name'] })).toEqual([
+			'CREATE INDEX IF NOT EXISTS "idx_5_users_4_name" ON "users" ("name")',
+		])
+		expect(stepToSQL({ operation: 'index.remove', table: 'users', index: ['name'] })).toEqual([
+			'DROP INDEX IF EXISTS "idx_5_users_4_name"',
+		])
+	})
+
+	it('compiles table and column migration operations', () => {
+		expect(stepToSQL({ operation: 'table.add', table: INDEXED_SCHEMA })).toEqual([
+			schemaToTable(INDEXED_SCHEMA),
+			...schemaToIndexes(INDEXED_SCHEMA),
+		])
+		expect(stepToSQL({ operation: 'table.remove', table: 'users' })).toEqual([
+			'DROP TABLE IF EXISTS "users"',
+		])
+		expect(
+			stepToSQL({
+				operation: 'column.add',
+				table: 'users',
+				column: { name: 'nickname', storage: 'text', optional: true, nullable: true },
+			}),
+		).toEqual(['ALTER TABLE "users" ADD COLUMN "nickname" TEXT'])
+		expect(stepToSQL({ operation: 'column.remove', table: 'users', column: 'legacy' })).toEqual([
+			'ALTER TABLE "users" DROP COLUMN "legacy"',
+		])
+	})
+})
+
+function compile(input: QueryInput): { sql: string; parameters: readonly unknown[] } {
+	const result = compileQuerySQL(input, SCHEMA)
+	return { sql: result.sql, parameters: result.parameters }
 }
 
-describe('compileCriteria — operators', () => {
+describe('compileQuerySQL — operators', () => {
 	it('compiles equals to `= ?` with the encoded operand', () => {
 		expect(compile({ conditions: [cond('age', 'equals', [36])] })).toEqual({
 			sql: 'WHERE "age" = ? ORDER BY "id"',
-			params: [36],
+			parameters: [36],
 		})
 	})
 
 	it('encodes a boolean operand to 1 / 0', () => {
 		expect(compile({ conditions: [cond('active', 'equals', [true])] })).toEqual({
 			sql: 'WHERE "active" = ? ORDER BY "id"',
-			params: [1],
+			parameters: [1],
 		})
 	})
 
@@ -62,7 +151,7 @@ describe('compileCriteria — operators', () => {
 		// `!= ?` alone would exclude it (NULL comparisons are never true).
 		expect(compile({ conditions: [cond('age', 'not', [36])] })).toEqual({
 			sql: 'WHERE ("age" != ? OR "age" IS NULL) ORDER BY "id"',
-			params: [36],
+			parameters: [36],
 		})
 	})
 
@@ -80,11 +169,11 @@ describe('compileCriteria — operators', () => {
 		// column (rank 0 < any scalar's rank), so `below` / `to` must match it too.
 		expect(compile({ conditions: [cond('age', 'below', [18])] })).toEqual({
 			sql: 'WHERE ("age" < ? OR "age" IS NULL) ORDER BY "id"',
-			params: [18],
+			parameters: [18],
 		})
 		expect(compile({ conditions: [cond('age', 'to', [18])] })).toEqual({
 			sql: 'WHERE ("age" <= ? OR "age" IS NULL) ORDER BY "id"',
-			params: [18],
+			parameters: [18],
 		})
 	})
 
@@ -95,14 +184,14 @@ describe('compileCriteria — operators', () => {
 		// can express (it would only match the IS NULL row).
 		expect(compile({ conditions: [cond('age', 'not', [null])] })).toEqual({
 			sql: 'WHERE 1 ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
 	it('compiles between to BETWEEN ? AND ?', () => {
 		expect(compile({ conditions: [cond('age', 'between', [18, 65])] })).toEqual({
 			sql: 'WHERE "age" BETWEEN ? AND ? ORDER BY "id"',
-			params: [18, 65],
+			parameters: [18, 65],
 		})
 	})
 
@@ -122,14 +211,14 @@ describe('compileCriteria — operators', () => {
 		// not `.length` (matters for astral characters).
 		expect(compile({ conditions: [cond('name', 'starts', ['A_d%'])] })).toEqual({
 			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", 1, 4) = ?) ORDER BY "id"',
-			params: ['A_d%'],
+			parameters: ['A_d%'],
 		})
 	})
 
 	it('compiles ends to a case-sensitive substr(col, -N) = ? check', () => {
 		expect(compile({ conditions: [cond('name', 'ends', ['x'])] })).toEqual({
 			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", -1) = ?) ORDER BY "id"',
-			params: ['x'],
+			parameters: ['x'],
 		})
 	})
 
@@ -137,25 +226,25 @@ describe('compileCriteria — operators', () => {
 		// The engine: every string cell starts with / ends with ''.
 		expect(compile({ conditions: [cond('name', 'starts', [''])] })).toEqual({
 			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 		expect(compile({ conditions: [cond('name', 'ends', [''])] })).toEqual({
 			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
 	it('compiles a non-empty any to IN (?, ?)', () => {
 		expect(compile({ conditions: [cond('id', 'any', ['u1', 'u2'])] })).toEqual({
 			sql: 'WHERE "id" IN (?, ?) ORDER BY "id"',
-			params: ['u1', 'u2'],
+			parameters: ['u1', 'u2'],
 		})
 	})
 
 	it('collapses an empty any to the constant 0 (matches nothing)', () => {
 		expect(compile({ conditions: [cond('id', 'any', [])] })).toEqual({
 			sql: 'WHERE 0 ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
@@ -165,28 +254,28 @@ describe('compileCriteria — operators', () => {
 		// three-valued `NULL NOT IN (...)` is never true).
 		expect(compile({ conditions: [cond('id', 'none', ['u1', 'u2'])] })).toEqual({
 			sql: 'WHERE ("id" NOT IN (?, ?) OR "id" IS NULL) ORDER BY "id"',
-			params: ['u1', 'u2'],
+			parameters: ['u1', 'u2'],
 		})
 	})
 
 	it('collapses an empty none to the constant 1 (matches all)', () => {
 		expect(compile({ conditions: [cond('id', 'none', [])] })).toEqual({
 			sql: 'WHERE 1 ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
-	it('compiles absent to IS NULL with no params', () => {
+	it('compiles absent to IS NULL with no parameters', () => {
 		expect(compile({ conditions: [cond('meta', 'absent', [])] })).toEqual({
 			sql: 'WHERE "meta" IS NULL ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
-	it('compiles present to IS NOT NULL with no params', () => {
+	it('compiles present to IS NOT NULL with no parameters', () => {
 		expect(compile({ conditions: [cond('meta', 'present', [])] })).toEqual({
 			sql: 'WHERE "meta" IS NOT NULL ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
@@ -196,7 +285,7 @@ describe('compileCriteria — operators', () => {
 		// match zero rows. This is the operand-encoding fix.
 		expect(compile({ conditions: [cond(['meta', 'info', 'score'], 'equals', [9])] })).toEqual({
 			sql: 'WHERE json_extract("meta", \'$.info.score\') = ? ORDER BY "id"',
-			params: [9],
+			parameters: [9],
 		})
 	})
 
@@ -205,7 +294,7 @@ describe('compileCriteria — operators', () => {
 		// '"green"' — json_extract returns the string unquoted.
 		expect(compile({ conditions: [cond(['payload', 'tag'], 'equals', ['green'])] })).toEqual({
 			sql: 'WHERE json_extract("payload", \'$.tag\') = ? ORDER BY "id"',
-			params: ['green'],
+			parameters: ['green'],
 		})
 	})
 
@@ -214,7 +303,7 @@ describe('compileCriteria — operators', () => {
 		// as `1` — not JSON.stringify(true) = 'true'.
 		expect(compile({ conditions: [cond(['payload', 'flag'], 'equals', [true])] })).toEqual({
 			sql: 'WHERE json_extract("payload", \'$.flag\') = ? ORDER BY "id"',
-			params: [1],
+			parameters: [1],
 		})
 	})
 
@@ -224,7 +313,7 @@ describe('compileCriteria — operators', () => {
 		// operand binds as the raw string `v` (the native json_extract scalar).
 		expect(compile({ conditions: [cond(['meta', "x'y"], 'equals', ['v'])] })).toEqual({
 			sql: 'WHERE json_extract("meta", \'$.x\'\'y\') = ? ORDER BY "id"',
-			params: ['v'],
+			parameters: ['v'],
 		})
 	})
 
@@ -235,7 +324,7 @@ describe('compileCriteria — operators', () => {
 		// (absent decodes to `undefined`, which does NOT equal `null`).
 		expect(compile({ conditions: [cond(['meta', 'note'], 'equals', [null])] })).toEqual({
 			sql: 'WHERE json_type("meta", \'$.note\') = \'null\' ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
@@ -245,7 +334,7 @@ describe('compileCriteria — operators', () => {
 		// `compareValues(value, null) !== 0`.
 		expect(compile({ conditions: [cond(['meta', 'note'], 'not', [null])] })).toEqual({
 			sql: 'WHERE (json_type("meta", \'$.note\') IS NULL OR json_type("meta", \'$.note\') != \'null\') ORDER BY "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
@@ -255,14 +344,14 @@ describe('compileCriteria — operators', () => {
 		// undefined (rank 0) and a null (rank 1) nested value rank below any scalar.
 		expect(compile({ conditions: [cond(['meta', 'score'], 'below', [18])] })).toEqual({
 			sql: 'WHERE (json_extract("meta", \'$.score\') < ? OR json_extract("meta", \'$.score\') IS NULL) ORDER BY "id"',
-			params: [18],
+			parameters: [18],
 		})
 	})
 
 	it('compiles a nested none to `(NOT IN (...) OR json_extract IS NULL)`', () => {
 		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', ['a', 'b'])] })).toEqual({
 			sql: 'WHERE (json_extract("meta", \'$.tag\') NOT IN (?, ?) OR json_extract("meta", \'$.tag\') IS NULL) ORDER BY "id"',
-			params: ['a', 'b'],
+			parameters: ['a', 'b'],
 		})
 	})
 
@@ -272,14 +361,14 @@ describe('compileCriteria — operators', () => {
 		// agree (both match nothing). Applying IS NULL here would be a new divergence.
 		expect(compile({ conditions: [cond('meta', 'equals', [null])] })).toEqual({
 			sql: 'WHERE "meta" = ? ORDER BY "id"',
-			params: [null],
+			parameters: [null],
 		})
 	})
 })
 
-describe('compileCriteria — parenthesization', () => {
+describe('compileQuerySQL — parenthesization', () => {
 	it('folds a 3-condition and/or mix left-to-right (not SQL precedence)', () => {
-		const criteria: Criteria = {
+		const input: QueryInput = {
 			conditions: [
 				cond('age', 'from', [18]),
 				cond('name', 'starts', ['A'], 'or'),
@@ -287,22 +376,22 @@ describe('compileCriteria — parenthesization', () => {
 			],
 		}
 		// (((age >= ? OR starts(name)) AND active = ?)) — the fold wraps each step,
-		// matching the engine's left-to-right matchesCriteria (NOT SQL precedence).
-		expect(compile(criteria)).toEqual({
+		// matching the engine's left-to-right matchesQuery (NOT SQL precedence).
+		expect(compile(input)).toEqual({
 			sql: 'WHERE (("age" >= ? OR (typeof("name") = \'text\' AND substr("name", 1, 1) = ?)) AND "active" = ?) ORDER BY "id"',
-			params: [18, 'A', 1],
+			parameters: [18, 'A', 1],
 		})
 	})
 
 	it('ignores the first condition connector', () => {
-		const criteria: Criteria = {
+		const input: QueryInput = {
 			conditions: [cond('age', 'from', [18], 'or'), cond('active', 'equals', [true], 'and')],
 		}
-		expect(compile(criteria).sql).toBe('WHERE ("age" >= ? AND "active" = ?) ORDER BY "id"')
+		expect(compile(input).sql).toBe('WHERE ("age" >= ? AND "active" = ?) ORDER BY "id"')
 	})
 })
 
-describe('compileCriteria — order and paging', () => {
+describe('compileQuerySQL — order and paging', () => {
 	it('compiles ORDER BY with directions, appending the primary tie-breaker (ASC)', () => {
 		// An explicit order that does NOT include the primary appends `, "id"` as the
 		// final determinant — ASCENDING regardless of the explicit directions — so
@@ -317,7 +406,7 @@ describe('compileCriteria — order and paging', () => {
 					{ column: 'name', direction: 'ascending' },
 				],
 			}),
-		).toEqual({ sql: 'ORDER BY "age" DESC, "name" ASC, "id"', params: [] })
+		).toEqual({ sql: 'ORDER BY "age" DESC, "name" ASC, "id"', parameters: [] })
 	})
 
 	it('does NOT double-append when the explicit order already includes the primary', () => {
@@ -330,32 +419,32 @@ describe('compileCriteria — order and paging', () => {
 					{ column: 'id', direction: 'descending' },
 				],
 			}),
-		).toEqual({ sql: 'ORDER BY "age" ASC, "id" DESC', params: [] })
+		).toEqual({ sql: 'ORDER BY "age" ASC, "id" DESC', parameters: [] })
 	})
 
 	it('appends the primary tie-breaker to a single explicit non-primary term', () => {
 		// A lone explicit term that is not the primary still gets `, "id"` appended.
 		expect(compile({ order: [{ column: 'age', direction: 'ascending' }] })).toEqual({
 			sql: 'ORDER BY "age" ASC, "id"',
-			params: [],
+			parameters: [],
 		})
 	})
 
 	it('compiles LIMIT then OFFSET when both present (with the default key order)', () => {
 		expect(compile({ limit: 10, offset: 5 })).toEqual({
 			sql: 'ORDER BY "id" LIMIT ? OFFSET ?',
-			params: [10, 5],
+			parameters: [10, 5],
 		})
 	})
 
 	it('compiles LIMIT alone (with the default key order)', () => {
-		expect(compile({ limit: 10 })).toEqual({ sql: 'ORDER BY "id" LIMIT ?', params: [10] })
+		expect(compile({ limit: 10 })).toEqual({ sql: 'ORDER BY "id" LIMIT ?', parameters: [10] })
 	})
 
 	it('compiles offset-only to LIMIT -1 OFFSET ? (with the default key order)', () => {
 		expect(compile({ offset: 5 })).toEqual({
 			sql: 'ORDER BY "id" LIMIT -1 OFFSET ?',
-			params: [5],
+			parameters: [5],
 		})
 	})
 
@@ -369,20 +458,29 @@ describe('compileCriteria — order and paging', () => {
 			}),
 		).toEqual({
 			sql: 'WHERE "age" >= ? ORDER BY "age" ASC, "id" LIMIT ? OFFSET ?',
-			params: [18, 5, 2],
+			parameters: [18, 5, 2],
 		})
 	})
 
-	it('defaults an unordered criteria to ORDER BY the primary key (key order)', () => {
+	it('defaults an unordered input to ORDER BY the primary key (key order)', () => {
 		// No explicit order → the compiler appends ORDER BY "<primary>", so the native
 		// records read yields rows in key order, matching a primary-key-ordered `scan`
 		// and the core engine over an unordered scan (the parity safety net depends
 		// on this).
-		expect(compile({})).toEqual({ sql: 'ORDER BY "id"', params: [] })
+		expect(compile({})).toEqual({ sql: 'ORDER BY "id"', parameters: [] })
 	})
 
-	it('compiles an undefined criteria to the same default key order', () => {
-		expect(compileCriteria(undefined, SCHEMA)).toEqual({ sql: 'ORDER BY "id"', params: [] })
+	it('compiles an undefined input to the same default key order', () => {
+		expect(compileQuerySQL(undefined, SCHEMA)).toEqual({ sql: 'ORDER BY "id"', parameters: [] })
+	})
+
+	it('rejects invalid paging before compiling query SQL', () => {
+		expect(() => compileQuerySQL({ limit: 1.5 }, SCHEMA)).toThrow(
+			'Query limit must be a nonnegative integer',
+		)
+		expect(() => compileQuerySQL({ offset: Number.POSITIVE_INFINITY }, SCHEMA)).toThrow(
+			'Query offset must be a nonnegative integer',
+		)
 	})
 })
 
@@ -402,108 +500,111 @@ describe('escapeLike', () => {
 	})
 })
 
-describe('declaredType', () => {
+describe('findColumnStorage', () => {
 	it('returns the declared storage type of a known column', () => {
-		expect(declaredType('age', SCHEMA)).toBe('integer')
-		expect(declaredType('meta', SCHEMA)).toBe('json')
+		expect(findColumnStorage('age', SCHEMA)).toBe('integer')
+		expect(findColumnStorage('meta', SCHEMA)).toBe('json')
 	})
 
 	it('returns undefined for a column the schema does not carry', () => {
-		expect(declaredType('missing', SCHEMA)).toBeUndefined()
+		expect(findColumnStorage('missing', SCHEMA)).toBeUndefined()
 	})
 })
 
-describe('valueType', () => {
+describe('inferValueStorage', () => {
 	it('maps a boolean to boolean', () => {
-		expect(valueType(true)).toBe('boolean')
-		expect(valueType(false)).toBe('boolean')
+		expect(inferValueStorage(true)).toBe('boolean')
+		expect(inferValueStorage(false)).toBe('boolean')
 	})
 
 	it('maps an integer number to integer and a fractional number to real', () => {
-		expect(valueType(9)).toBe('integer')
-		expect(valueType(1.5)).toBe('real')
+		expect(inferValueStorage(9)).toBe('integer')
+		expect(inferValueStorage(1.5)).toBe('real')
 	})
 
 	it('maps a bigint to integer', () => {
-		expect(valueType(7n)).toBe('integer')
+		expect(inferValueStorage(7n)).toBe('integer')
 	})
 
 	it('maps an object / array to json', () => {
-		expect(valueType({ a: 1 })).toBe('json')
-		expect(valueType([1, 2])).toBe('json')
+		expect(inferValueStorage({ a: 1 })).toBe('json')
+		expect(inferValueStorage([1, 2])).toBe('json')
 	})
 
 	it('maps a string, null, and undefined to text', () => {
-		expect(valueType('hi')).toBe('text')
-		expect(valueType(null)).toBe('text')
-		expect(valueType(undefined)).toBe('text')
+		expect(inferValueStorage('hi')).toBe('text')
+		expect(inferValueStorage(null)).toBe('text')
+		expect(inferValueStorage(undefined)).toBe('text')
 	})
 })
 
-describe('fragment', () => {
-	it('builds a flat equals fragment encoding the operand by its declared type', () => {
+describe('compileConditionSQL', () => {
+	it('builds a flat equals compileConditionSQL encoding the operand by its declared type', () => {
 		// A flat `boolean` column encodes its operand to 1 / 0 via the declared type.
-		expect(fragment(cond('active', 'equals', [true]), SCHEMA)).toEqual({
+		expect(compileConditionSQL(cond('active', 'equals', [true]), SCHEMA)).toEqual({
 			sql: '"active" = ?',
-			params: [1],
+			parameters: [1],
 		})
 	})
 
-	it('builds a BETWEEN fragment binding both operands', () => {
-		expect(fragment(cond('age', 'between', [18, 65]), SCHEMA)).toEqual({
+	it('builds a BETWEEN compileConditionSQL binding both operands', () => {
+		expect(compileConditionSQL(cond('age', 'between', [18, 65]), SCHEMA)).toEqual({
 			sql: '"age" BETWEEN ? AND ?',
-			params: [18, 65],
+			parameters: [18, 65],
 		})
 	})
 
-	it('builds a case-sensitive starts fragment (substr(col, 1, N) = ?)', () => {
-		expect(fragment(cond('name', 'starts', ['A_d%']), SCHEMA)).toEqual({
+	it('builds a case-sensitive starts compileConditionSQL (substr(col, 1, N) = ?)', () => {
+		expect(compileConditionSQL(cond('name', 'starts', ['A_d%']), SCHEMA)).toEqual({
 			sql: '(typeof("name") = \'text\' AND substr("name", 1, 4) = ?)',
-			params: ['A_d%'],
+			parameters: ['A_d%'],
 		})
 	})
 
-	it('collapses an empty any to the constant 0 with no params', () => {
-		expect(fragment(cond('id', 'any', []), SCHEMA)).toEqual({ sql: '0', params: [] })
+	it('collapses an empty any to the constant 0 with no parameters', () => {
+		expect(compileConditionSQL(cond('id', 'any', []), SCHEMA)).toEqual({ sql: '0', parameters: [] })
 	})
 
-	it('collapses an empty none to the constant 1 with no params', () => {
-		expect(fragment(cond('id', 'none', []), SCHEMA)).toEqual({ sql: '1', params: [] })
+	it('collapses an empty none to the constant 1 with no parameters', () => {
+		expect(compileConditionSQL(cond('id', 'none', []), SCHEMA)).toEqual({
+			sql: '1',
+			parameters: [],
+		})
 	})
 
 	it("compiles a nested null equals to json_type = 'null' with no bound param", () => {
 		// A nested (json_extract) field with a null operand under equals compiles
 		// through json_type — 'null' means present-JSON-null, distinguishing it
 		// from an absent path (which json_extract alone cannot tell apart).
-		expect(fragment(cond(['meta', 'note'], 'equals', [null]), SCHEMA)).toEqual({
+		expect(compileConditionSQL(cond(['meta', 'note'], 'equals', [null]), SCHEMA)).toEqual({
 			sql: "json_type(\"meta\", '$.note') = 'null'",
-			params: [],
+			parameters: [],
 		})
 	})
 
 	it('encodes a nested operand as the native json_extract scalar (not JSON-quoted)', () => {
 		// A nested string operand binds raw (`green`), not JSON.stringify('green').
-		expect(fragment(cond(['meta', 'tag'], 'equals', ['green']), SCHEMA)).toEqual({
+		expect(compileConditionSQL(cond(['meta', 'tag'], 'equals', ['green']), SCHEMA)).toEqual({
 			sql: 'json_extract("meta", \'$.tag\') = ?',
-			params: ['green'],
+			parameters: ['green'],
 		})
 	})
 })
 
 describe('compileWhere', () => {
-	it('returns an empty clause and no params for zero conditions', () => {
-		expect(compileWhere([], SCHEMA)).toEqual({ sql: '', params: [] })
+	it('returns an empty clause and no parameters for zero conditions', () => {
+		expect(compileWhere([], SCHEMA)).toEqual({ sql: '', parameters: [] })
 	})
 
 	it('builds a single-condition WHERE with no wrapping parens', () => {
 		expect(compileWhere([cond('age', 'from', [18])], SCHEMA)).toEqual({
 			sql: 'WHERE "age" >= ?',
-			params: [18],
+			parameters: [18],
 		})
 	})
 
 	it('folds multiple conditions left-to-right, ignoring the first connector', () => {
-		// Each step wraps the running clause — matching the engine's matchesCriteria
+		// Each step wraps the running clause — matching the engine's matchesQuery
 		// fold, NOT SQL's AND-over-OR precedence; the first connector is dropped.
 		expect(
 			compileWhere(
@@ -516,7 +617,7 @@ describe('compileWhere', () => {
 			),
 		).toEqual({
 			sql: 'WHERE (("age" >= ? OR "name" = ?) AND "active" = ?)',
-			params: [18, 'A', 1],
+			parameters: [18, 'A', 1],
 		})
 	})
 })
@@ -553,19 +654,27 @@ describe('compileOrder', () => {
 
 describe('compilePage', () => {
 	it('compiles LIMIT then OFFSET when both are present', () => {
-		expect(compilePage(10, 5)).toEqual({ sql: 'LIMIT ? OFFSET ?', params: [10, 5] })
+		expect(compilePage(10, 5)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [10, 5] })
 	})
 
 	it('compiles LIMIT alone', () => {
-		expect(compilePage(10, undefined)).toEqual({ sql: 'LIMIT ?', params: [10] })
+		expect(compilePage(10, undefined)).toEqual({ sql: 'LIMIT ?', parameters: [10] })
 	})
 
 	it('compiles an offset without a limit to LIMIT -1 OFFSET ?', () => {
 		// SQLite needs a LIMIT for OFFSET to apply; -1 means "no limit".
-		expect(compilePage(undefined, 5)).toEqual({ sql: 'LIMIT -1 OFFSET ?', params: [5] })
+		expect(compilePage(undefined, 5)).toEqual({ sql: 'LIMIT -1 OFFSET ?', parameters: [5] })
 	})
 
 	it('returns an empty clause when neither limit nor offset is set', () => {
-		expect(compilePage(undefined, undefined)).toEqual({ sql: '', params: [] })
+		expect(compilePage(undefined, undefined)).toEqual({ sql: '', parameters: [] })
+	})
+
+	it('rejects invalid direct page values and accepts zero', () => {
+		expect(() => compilePage(-1, undefined)).toThrow('Query limit must be a nonnegative integer')
+		expect(() => compilePage(undefined, Number.NaN)).toThrow(
+			'Query offset must be a nonnegative integer',
+		)
+		expect(compilePage(0, 0)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [0, 0] })
 	})
 })

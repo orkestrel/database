@@ -24,26 +24,26 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
  *
  * @remarks
  * `string | number` is the intersection of what IndexedDB key ranges and SQL
- * primary keys both express without coercion. Auto-generated keys are UUID
- * strings; supply your own to use numeric keys.
+ * primary keys both express without coercion. The default generated key is a
+ * UUID string; configure a custom generator for numeric primary keys.
  */
 export type Key = string | number
 
 /**
- * A caller-supplied key minting function.
+ * A key-generating function.
  *
  * @remarks
- * Environment surfaces provide implementations (the server's `node:crypto`-backed
- * `generateKey`); the core mints no keys itself. Supplied via
- * {@link DatabaseOptions.key} and used by a table when a written row lacks its
- * primary key. Without one, writing a keyless row is a `VALIDATION` error.
+ * Supplied through {@link DatabaseOptions.generator} as an authoritative
+ * override when an application needs a non-UUID key or controlled generation.
+ * When omitted, a keyless write uses the global `crypto.randomUUID()`. Numeric
+ * primary keys therefore require a custom generator.
  */
 export type KeyFunction = () => Key
 
 /** A table row — a plain record of column values keyed by column name. */
 export type Row = Record<string, unknown>
 
-// === Query criteria
+// === Query input
 
 /**
  * A WHERE operator — the comparison a single {@link Condition} applies.
@@ -71,7 +71,7 @@ export type ConditionOperator =
 	| 'present'
 
 /** How a {@link Condition} joins to the running result of the conditions before it. */
-export type Connector = 'and' | 'or'
+export type ConditionConnector = 'and' | 'or'
 
 /**
  * One compiled WHERE condition.
@@ -88,16 +88,16 @@ export interface Condition {
 	readonly column: FieldPath
 	readonly operator: ConditionOperator
 	readonly values: readonly unknown[]
-	readonly connector: Connector
+	readonly connector: ConditionConnector
 }
 
 /** A sort direction. */
-export type Direction = 'ascending' | 'descending'
+export type OrderDirection = 'ascending' | 'descending'
 
 /** One ordering term — a column ({@link FieldPath}, flat or nested) and its direction. */
 export interface Order {
 	readonly column: FieldPath
-	readonly direction: Direction
+	readonly direction: OrderDirection
 }
 
 /**
@@ -106,9 +106,11 @@ export interface Order {
  *
  * @remarks
  * The post-fetch `filter` predicate lives on {@link QueryInterface}, never here,
- * so `Criteria` stays portable across backends.
+ * so `QueryInput` stays portable across backends. When present, `limit` and
+ * `offset` must be finite nonnegative integers. Zero is valid: `limit: 0`
+ * selects an empty page and `offset: 0` skips nothing.
  */
-export interface Criteria {
+export interface QueryInput {
 	readonly conditions?: readonly Condition[]
 	readonly order?: readonly Order[]
 	readonly limit?: number
@@ -116,18 +118,18 @@ export interface Criteria {
 }
 
 /** An aggregate computed over a numeric column. */
-export type AggregateFunction = 'count' | 'sum' | 'average' | 'minimum' | 'maximum'
+export type AggregateOperation = 'count' | 'sum' | 'average' | 'minimum' | 'maximum'
 
 /**
- * Options for a cancellable read / iteration operation.
+ * Options for an abortable operation.
  *
  * @remarks
  * When `signal` aborts, the operation throws a {@link DatabaseError} with code
- * `ABORTED` carrying `signal.reason` in `context`. `TableInterface.scan` and
- * `QueryInterface.stream` check the signal before each yield; other read
- * methods check it at entry.
+ * `ABORTED` carrying `signal.reason` in `context`. Reads check at their
+ * documented boundaries; point mutations propagate the signal through the
+ * driver to the backend commit point.
  */
-export interface ReadOptions {
+export interface OperationOptions {
 	readonly signal?: AbortSignal
 }
 
@@ -173,9 +175,10 @@ export interface ConformanceFinding {
  * listener throw is routed to the emitter's OWN `error` handler (the `error` option), never
  * onto this domain map and never into the snapshot / commit / rollback flow — so a buggy
  * observer can never reorder, throw into, or corrupt a transaction. Every emit sits AFTER the
- * relevant transition: `commit` only after the scope succeeds, `rollback` only after every
- * table has been restored (it OBSERVES the propagated error; the original throw still
- * propagates exactly as before). Subscribe via `database.emitter.on(...)`.
+ * relevant transition: `commit` only after the scope succeeds, `rollback` only after the
+ * rollback operation completes (it OBSERVES the propagated scope error; that exact reason
+ * still propagates). A rollback failure propagates instead and emits no misleading
+ * `rollback` event. Subscribe via `database.emitter.on(...)`.
  *
  * Declared as a `type` alias (not `interface extends EventMap`, §4.5 — `EventMap` is a
  * `type` kind): a type-literal satisfies the `EventMap` constraint
@@ -187,11 +190,11 @@ export type DatabaseEventMap = {
 	readonly open: readonly []
 	/** The database was closed (the driver released). */
 	readonly close: readonly []
-	/** A transaction scope began — the store was snapshotted, the scope is about to run. */
+	/** A transaction scope began after its native boundary or fallback snapshot was acquired. */
 	readonly transaction: readonly []
 	/** A transaction scope completed successfully (no rollback). */
 	readonly commit: readonly []
-	/** A transaction scope threw and every table was rolled back — the propagated error. */
+	/** A transaction scope failed and rollback completed — the exact propagated scope error. */
 	readonly rollback: readonly [error: unknown]
 	/** A {@link Migration} plan was applied via `migrate` — the applied plan. */
 	readonly migrate: readonly [migration: Migration]
@@ -201,9 +204,6 @@ export type DatabaseEventMap = {
  * The push observation surface of a {@link TableInterface} (AGENTS §13) — the per-row
  * mutation moments a fire-and-forget observer (cache invalidation, sync, an audit log)
  * subscribes to, ALONGSIDE the database-level {@link DatabaseEventMap}.
- *
- * @typeParam TKey - The table's primary-key type (a {@link Key}); the events carry the
- *   affected key so the map is `TableEventMap<TKey>`.
  *
  * @remarks
  * Events carry the affected KEY only — never the row value — to keep fan-out lean and
@@ -218,11 +218,11 @@ export type DatabaseEventMap = {
  * transaction. Subscribe via `table.emitter.on(...)`. Declared as a `type` alias (§4.5 —
  * `EventMap` is a `type` kind).
  */
-export type TableEventMap<TKey extends Key = Key> = {
+export type TableEventMap = {
 	/** A row was written (set / added / updated) — the affected key (no value payload). */
-	readonly write: readonly [key: TKey]
+	readonly write: readonly [key: Key]
 	/** A row was removed — the affected key. */
-	readonly remove: readonly [key: TKey]
+	readonly remove: readonly [key: Key]
 	/** The table was cleared (every row removed). */
 	readonly clear: readonly []
 }
@@ -232,32 +232,35 @@ export type TableEventMap<TKey extends Key = Key> = {
 /**
  * A portable storage type for a column — the backend maps it to its native type
  * (SQLite affinity, an IndexedDB value). Derived from a column's `ContractShape`
- * by `shapeToColumnType`; `json` covers object/array/union/raw values a backend stores
+ * by `shapeToColumnStorage`; `json` covers object/array/union/raw values a backend stores
  * as JSON text and can `json_extract` for nested-field queries.
  */
-export type ColumnType = 'text' | 'integer' | 'real' | 'boolean' | 'json' | 'blob'
+export type ColumnStorage = 'text' | 'integer' | 'real' | 'boolean' | 'json' | 'blob'
 
 /**
- * One column of a {@link TableSchema} — its name, portable {@link ColumnType}, and
- * whether it is nullable (its shape is `optionalShape` / `nullableShape`).
+ * One column of a {@link TableSchema} — its name, portable {@link ColumnStorage}, and
+ * whether it independently accepts absence (`optional`) and explicit `null`
+ * (`nullable`).
  */
 export interface ColumnSchema {
 	readonly name: string
-	readonly type: ColumnType
+	readonly storage: ColumnStorage
+	readonly optional: boolean
 	readonly nullable: boolean
 }
 
 /**
- * Persisted schema metadata a versioning driver stores verbatim and returns on
- * demand.
+ * Persisted schema metadata a versioning driver owns as an immutable snapshot.
  *
  * @remarks
- * The driver never introspects this payload — it hands back exactly what was
- * last stamped via {@link DriverInterface.stamp}. `meta()` returning `undefined`
- * is how a fresh store is distinguished from an upgradable one: it means the
- * store has never been stamped, not that it is at version zero.
+ * A driver snapshots metadata when it enters through `stamp` or a
+ * {@link MigrationInput}, so later caller mutation cannot alter stored version
+ * state. `metadata()` returns a distinct deeply frozen owned snapshot, never the
+ * driver's internal reference. `undefined` distinguishes a fresh store from an
+ * upgradable one: it means the store has never been stamped, not that it is at
+ * version zero.
  */
-export interface DriverMeta {
+export interface DriverMetadata {
 	readonly version: number
 	readonly schema: readonly TableSchema[]
 }
@@ -268,7 +271,7 @@ export interface DriverMeta {
  *
  * @remarks
  * Derived by the database from its `tables` contract shapes ({@link ColumnSchema}
- * per column, via `shapeToColumnType`), its `keys` (`primary`), and its `indexes` option
+ * per column, via `shapeToColumnStorage`), its `primary`, and its `indexes` option
  * (`indexes`, each entry one possibly-compound index of column names). A scan-only
  * backend (the reference `MemoryDriver`) ignores everything but `name`.
  */
@@ -317,111 +320,92 @@ export interface Migration {
 }
 
 /**
- * The handle a driver's native `transaction` hook returns.
+ * One atomic migration request.
  *
  * @remarks
- * `commit` finalizes the native BEGIN; `rollback` undoes it. When a driver
- * implements {@link DriverInterface.transaction}, the engine uses this handle
- * instead of the snapshot-based rollback floor.
+ * `plan` carries the schema changes. `metadata`, when present, is the snapshot that
+ * must settle in the same atomic unit as those changes so a failed migration
+ * cannot expose a new schema under stale version metadata.
  */
-export interface TransactionInterface {
-	commit(): Promise<void>
-	rollback(): Promise<void>
+export interface MigrationInput {
+	readonly plan: Migration
+	readonly metadata?: DriverMetadata
+}
+
+/**
+ * The storage operations available only inside a driver's transaction scope.
+ *
+ * @remarks
+ * A driver owns acquisition, commit or rollback, release, and lifetime. This
+ * capability exposes storage work only: it has no public `commit` / `rollback`,
+ * cannot start a nested transaction, and throws `CONFLICT` after its scope
+ * settles. Optional native read and migration hooks mirror the owning driver;
+ * callers fall back to `scan` when a native read hook is absent.
+ */
+export interface StorageInterface {
+	read(table: string, key: Key): Promise<Row | undefined>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	keys(table: string): Promise<readonly Key[]>
+	scan(table: string): AsyncIterable<Row>
+	clear(table: string): Promise<void>
+	records?(table: string, input: QueryInput): Promise<readonly Row[]>
+	aggregate?(
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined>
+	stream?(table: string, input: QueryInput): AsyncIterable<Row>
+	migrate?(input: MigrationInput): Promise<void>
+	metadata?(): Promise<DriverMetadata | undefined>
+	stamp?(metadata: DriverMetadata): Promise<void>
 }
 
 /**
  * The storage primitive every backend implements — the whole of the bridge.
  *
  * @remarks
- * The REQUIRED surface is deliberately minimal: keyed read / write / delete, an
- * ordered `scan`, a key listing, and a `snapshot` that backs transactions — the
- * irreducible primitive. There is **no** required query, count, or aggregate
+ * The REQUIRED surface is deliberately minimal: keyed read / write / atomic
+ * insert / delete, an ordered `scan`, a key listing, and a `snapshot` that backs
+ * transactions — the irreducible primitive. There is **no** required query,
+ * count, or aggregate
  * here: all of that is one query engine in the core (`helpers.ts`) running over
  * `scan`, so a new backend implements a handful of tiny methods rather than
  * re-deriving WHERE compilation. `open` now receives a derived
  * {@link TableSchema}`[]` (columns, types, primary, indexes) so a native backend
  * can build real tables and indexes; a scan-only backend reads only `name`. The
- * optional `records?` / `count?` / `aggregate?` are native overrides the engine
+ * optional `records?` / `aggregate?` are native overrides the engine
  * falls back from (AGENTS §21). The API is async (Promises) because IndexedDB is; synchronous
  * backends resolve immediately. Lookups that may miss return `undefined` /
- * `false` rather than throwing (AGENTS §12).
+ * `false` rather than throwing (AGENTS §12). Metadata has the same ownership
+ * boundary across every implementation: `stamp` and `migrate` snapshot
+ * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply frozen
+ * snapshot. A durable driver returns `undefined` only when it proves the
+ * metadata record or durable store is absent. Existing unreadable or malformed
+ * durable state fails `open` / `metadata` closed; it is never treated as fresh,
+ * rewritten, or repaired automatically.
  */
-export interface DriverInterface {
+export interface DriverInterface extends StorageInterface {
 	open(schema: readonly TableSchema[]): Promise<void>
 	close(): Promise<void>
-	read(table: string, key: Key): Promise<Row | undefined>
-	write(table: string, key: Key, row: Row): Promise<void>
-	delete(table: string, key: Key): Promise<boolean>
-	keys(table: string): Promise<readonly Key[]>
-	scan(table: string): AsyncIterable<Row>
-	clear(table: string): Promise<void>
 	/**
-	 * Capture the current state and return a thunk that rolls every table back to
-	 * it — the primitive transactions are built on (SQL `SAVEPOINT`, an IndexedDB
-	 * key buffer, a cloned map).
+	 * Capture table rows and return a repeatable thunk that restores those rows —
+	 * the primitive transactions are built on.
 	 *
 	 * @remarks
-	 * `tables` omitted captures/rolls back the WHOLE store (existing behavior).
-	 * `tables` provided captures/restores ONLY the named tables — the returned
-	 * rollback thunk leaves every other table untouched.
+	 * Snapshots are row-only: they never restore schema or driver metadata.
+	 * `tables` omitted captures every current table. `tables` provided captures
+	 * only existing named tables. Rollback skips captured tables removed since
+	 * capture and leaves every uncaptured or later-added table untouched.
 	 */
 	snapshot(tables?: readonly string[]): Promise<() => Promise<void>>
 	/**
-	 * Optional native filtered read (AGENTS §21). A backend that can evaluate a
-	 * {@link Criteria} natively (SQL `WHERE` + `ORDER`/`LIMIT`, an index range)
-	 * implements this; `Table` prefers it and falls back to `applyCriteria` over
-	 * `scan` when it is absent. Must honor the full criteria (filter, order, page).
+	 * Optional native transaction scope. The driver owns acquisition, commit or
+	 * rollback, release, and invalidation of the scoped capability.
 	 */
-	records?(table: string, criteria: Criteria): Promise<readonly Row[]>
-	/**
-	 * Optional native count (AGENTS §21). Counts rows matching the criteria's
-	 * conditions (paging is irrelevant to a count); `Table` falls back to counting
-	 * the engine-filtered `scan` when absent.
-	 */
-	count?(table: string, criteria: Criteria): Promise<number>
-	/**
-	 * Optional native aggregate (AGENTS §21). A backend that can compute an
-	 * aggregate natively (SQL `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, an indexed count)
-	 * implements this; `Table.aggregate` prefers it and otherwise falls back to
-	 * `computeAggregate` over the native-filtered (or scanned) rows. Aggregates
-	 * ignore paging, so `criteria` carries only conditions.
-	 */
-	aggregate?(
-		table: string,
-		operation: AggregateFunction,
-		column: FieldPath,
-		criteria: Criteria,
-	): Promise<number | undefined>
-	/**
-	 * Optional native transaction (BEGIN). When present, the engine uses the
-	 * returned {@link TransactionInterface}'s `commit` / `rollback` instead of
-	 * the snapshot-based rollback floor.
-	 */
-	transaction?(): Promise<TransactionInterface>
-	/**
-	 * Optional natively filtered lazy iteration — a {@link Criteria}-aware
-	 * streaming read. Drivers without it are served by the core scan fallback
-	 * (filtering `scan` lazily).
-	 */
-	stream?(table: string, criteria: Criteria): AsyncIterable<Row>
-	/**
-	 * Optional native migration — applies a {@link Migration} plan directly.
-	 * Throws `DatabaseError` `MIGRATION` when a step references an unknown
-	 * table.
-	 */
-	migrate?(plan: Migration): Promise<void>
-	/**
-	 * Optional persisted-metadata read (PAIRED with {@link stamp} — a driver
-	 * implements both or neither). Returns the {@link DriverMeta} last stamped,
-	 * or `undefined` when the store has never been stamped.
-	 */
-	meta?(): Promise<DriverMeta | undefined>
-	/**
-	 * Optional persisted-metadata write (PAIRED with {@link meta} — a driver
-	 * implements both or neither). Persists `meta` verbatim for a later `meta()`
-	 * to return.
-	 */
-	stamp?(meta: DriverMeta): Promise<void>
+	transaction?<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R>
 }
 
 // === Database
@@ -436,41 +420,44 @@ export interface DriverInterface {
  * at the table level. (Nested object *columns* still use `objectShape`, since a
  * column is not always an object.)
  */
-export type Columns = Readonly<Record<string, ContractShape>>
+export type ColumnMap = Readonly<Record<string, ContractShape>>
 
 /**
- * A database's table schema — a map of table name to its {@link Columns}.
+ * A database's table schema — a map of table name to its {@link ColumnMap}.
  *
  * @remarks
  * Each table's row type is `Infer` of its columns (see {@link RowOf}); primary-key
- * columns are named separately via {@link TableKeys}.
+ * columns are named separately via {@link PrimaryMap}.
  */
-export type TablesShape = Readonly<Record<string, Columns>>
+export type TableMap = Readonly<Record<string, ColumnMap>>
 
 /**
- * The row type a table's {@link Columns} describe — `Infer` of the `objectShape`
+ * The row type a table's {@link ColumnMap} describe — `Infer` of the `objectShape`
  * the database wraps them in.
  *
  * @remarks
  * Contract 0.0.4's non-distributive `Infer` resolves the OPEN case (the broad
- * `Columns` — e.g. when a database is held at its default type) directly:
- * `RowOf<Columns>` and {@link Row} are mutually assignable, so no short-circuit
+ * `ColumnMap` — e.g. when a database is held at its default type) directly:
+ * `RowOf<ColumnMap>` and {@link Row} are mutually assignable, so no short-circuit
  * to `Row` and no `additionalProperties: false` pin are needed — `Infer` no
  * longer trips TS's instantiation-depth guard over the open shape, and the
  * inferred row matches the CLOSED object `objectShape(columns)` builds at
  * runtime (its additional-properties parameter defaults to `false`) for every
  * concrete column map.
  */
-export type RowOf<C extends Columns> = Infer<{ readonly type: 'object'; readonly properties: C }>
+export type RowOf<C extends ColumnMap> = Infer<{
+	readonly type: 'object'
+	readonly properties: C
+}>
 
 /**
  * Per-table primary-key column overrides — `{ [table]: column }`.
  *
  * @remarks
  * A table absent from this map keys its rows by {@link DEFAULT_PRIMARY} (`id`).
- * Kept separate from {@link TablesShape} so the table map stays purely columns.
+ * Kept separate from {@link TableMap} so the table map stays purely columns.
  */
-export type TableKeys = Readonly<Record<string, string>>
+export type PrimaryMap = Readonly<Record<string, string>>
 
 /**
  * Per-table secondary indexes — `{ [table]: groups }`, each group one
@@ -479,46 +466,64 @@ export type TableKeys = Readonly<Record<string, string>>
  * @remarks
  * Contracts don't express indexes, so they're declared here on `createDatabase`
  * and flow into each {@link TableSchema}'s `indexes` (SQLite `CREATE INDEX`,
- * IndexedDB `createIndex`). Mirrors {@link TableKeys}.
+ * IndexedDB `createIndex`). Mirrors {@link PrimaryMap}.
  */
-export type TableIndexes = Readonly<Record<string, readonly (readonly string[])[]>>
+export type IndexMap = Readonly<Record<string, readonly (readonly string[])[]>>
 
 /**
  * Options for `createDatabase`.
  *
  * @remarks
  * `driver` is the storage backend; `tables` declares each table's columns;
- * `keys` overrides the primary-key column per table ({@link DEFAULT_PRIMARY}
+ * `primary` overrides the primary-key column per table ({@link DEFAULT_PRIMARY}
  * otherwise); `indexes` declares secondary indexes per table (contracts don't
  * express them) that flow into each derived {@link TableSchema}; `name` labels
  * the database; `on` wires initial {@link DatabaseEventMap} listeners (§8); `error`
  * is the emitter's listener-error handler (§13 — a listener throw routes here);
- * `key` is the key factory a table uses when a written row lacks its primary
- * key — without one, writing a keyless row is a `VALIDATION` error (the core
- * mints no keys itself).
+ * `generator` is the authoritative key-generation override a table uses when a
+ * written row's primary is exactly `undefined`. When omitted, the table uses
+ * global `crypto.randomUUID()`; numeric primary keys require a custom generator.
  */
-export interface DatabaseOptions<T extends TablesShape = TablesShape> {
+export interface DatabaseOptions<T extends TableMap = TableMap> {
 	readonly on?: EmitterHooks<DatabaseEventMap>
-	/** The emitter's listener-error handler (AGENTS §13) — a listener throw routes here, not to a domain event. */
+	/**
+	 * The listener-error handler shared by the database and every table emitter.
+	 *
+	 * @remarks
+	 * Listener throws from root, imported, and transaction-scoped handles route
+	 * here as `(error, event)`, never to a domain event and never into the
+	 * completed operation.
+	 */
 	readonly error?: EmitterErrorHandler
 	readonly driver: DriverInterface
 	readonly tables: T
-	readonly keys?: TableKeys
-	readonly indexes?: TableIndexes
+	readonly primary?: PrimaryMap
+	readonly indexes?: IndexMap
 	readonly name?: string
-	readonly key?: KeyFunction
+	/**
+	 * The authoritative key-generation override for a keyless write.
+	 *
+	 * @remarks
+	 * Omit it to use global `crypto.randomUUID()`. A numeric primary requires a
+	 * custom generator. Explicit primary values never invoke this function. A
+	 * custom generator throw is `VALIDATION`; a host
+	 * `crypto.randomUUID()` failure is `DRIVER`. An invalid returned key is
+	 * `VALIDATION`; neither branch falls back or retries.
+	 */
+	readonly generator?: KeyFunction
 	/**
 	 * The declared schema version.
 	 *
 	 * @remarks
-	 * Only meaningful when the driver implements BOTH {@link DriverInterface.meta}
+	 * Only meaningful when the driver implements BOTH {@link DriverInterface.metadata}
 	 * and {@link DriverInterface.stamp} (a versioning driver); unset, or a
 	 * non-versioning driver, leaves `open()` unchanged from today's behavior.
 	 * When set and the driver versions, `open()` reconciles against the
-	 * driver's persisted {@link DriverMeta}:
-	 * - **Fresh store** (`meta()` returns `undefined`) — no migration is
-	 *   possible (there is nothing deployed to diff against), so `open()`
-	 *   simply `stamp`s `{ version, schema }` for next time.
+	 * driver's persisted {@link DriverMetadata}:
+	 * - **Fresh store** (`metadata()` returns `undefined` after the durable
+	 *   driver proves absence) — no migration is possible (there is nothing
+	 *   deployed to diff against), so `open()` simply `stamp`s
+	 *   `{ version, schema }` for next time.
 	 * - **Stored version < `version`** — `planMigration(stored.schema, declared
 	 *   schema)` computes the upgrade plan, applied via the driver's optional
 	 *   `migrate` hook. If `migrate` is absent and the plan is non-empty,
@@ -526,13 +531,14 @@ export interface DatabaseOptions<T extends TablesShape = TablesShape> {
 	 *   `stamp`s the new `{ version, schema }` and emits the `migrate` event.
 	 * - **Stored version > `version`** — the store is newer than the declared
 	 *   schema; `open()` throws `DatabaseError` `MIGRATION`.
-	 * - **Stored version === `version`** — no-op.
+	 * - **Stored version === `version`** — the persisted and declared schemas
+	 *   must still match. Schema drift throws `DatabaseError` `MIGRATION`;
+	 *   otherwise `open()` is a no-op.
 	 *
-	 * When the driver ALSO implements {@link DriverInterface.transaction}, the
-	 * `migrate` + `stamp` pair applies atomically through that native handle
-	 * (all-or-nothing, rolled back cleanly on a mid-plan failure); otherwise the
-	 * pair applies sequentially, with a small documented window in which a `stamp`
-	 * failure after a successful `migrate` can leave new data under old meta.
+	 * A non-empty version upgrade passes both the plan and target metadata to
+	 * {@link DriverInterface.migrate} as one {@link MigrationInput}; the driver
+	 * settles both atomically. A zero-step version transition may use `stamp`
+	 * directly because no schema or rows change.
 	 */
 	readonly version?: number
 }
@@ -544,12 +550,26 @@ export interface DatabaseOptions<T extends TablesShape = TablesShape> {
  * @remarks
  * `schema` is the JSON Schema (universally portable, serializable); `columns` is
  * the source column map, which re-imports losslessly via `import` within a
- * TypeScript environment. `key` is the primary-key column.
+ * TypeScript environment. `primary` is the primary-key column.
  */
-export interface TableExport {
-	readonly key: string
-	readonly columns: Columns
+export interface TableDefinition {
+	readonly primary: string
+	readonly columns: ColumnMap
 	readonly schema: JSONSchema
+}
+
+/**
+ * A database view valid only inside one {@link DatabaseInterface.transaction}
+ * scope.
+ *
+ * @remarks
+ * The view exposes only declared tables backed by the driver's scoped
+ * {@link StorageInterface}. It cannot open, close, import, migrate, or nest
+ * a transaction. The view and every table captured from it throw `CONFLICT`
+ * after the scope settles.
+ */
+export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
+	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
 }
 
 /**
@@ -562,22 +582,24 @@ export interface TableExport {
  * created database is immediately usable. `import` defines more than one table
  * from a shape map and returns a new typed view of **those** tables over the
  * same driver and storage (so views can be split by concern and still share
- * data); `export` produces a portable {@link TableExport} per table for moving a
- * schema between databases or environments. `transaction` snapshots the store,
- * runs the scope, and rolls every table back if it throws — an optimistic model
- * that works uniformly across backends rather than reconciling SQL's and
- * IndexedDB's incompatible native transactions.
+ * data); `export` produces a portable {@link TableDefinition} per table for moving a
+ * schema between databases or environments. `transaction` runs a table-only
+ * scoped callback through a native driver transaction when available, otherwise
+ * through the universal whole-store snapshot floor.
  */
-export interface DatabaseInterface<T extends TablesShape = TablesShape> {
+export interface DatabaseInterface<T extends TableMap = TableMap> {
 	readonly emitter: EmitterInterface<DatabaseEventMap>
 	readonly name: string
 	readonly status: DatabaseStatus
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
-	import<U extends TablesShape>(tables: U, keys?: TableKeys): DatabaseInterface<U>
-	export(): Readonly<Record<string, TableExport>>
+	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U>
+	export(): Readonly<Record<string, TableDefinition>>
 	open(): Promise<void>
 	close(): Promise<void>
-	transaction<R>(scope: () => Promise<R>, options?: ReadOptions): Promise<R>
+	transaction<R>(
+		scope: (transaction: DatabaseStorageInterface<T>) => Promise<R>,
+		options?: OperationOptions,
+	): Promise<R>
 	/**
 	 * Diff a caller-supplied deployed schema against this database's declared
 	 * schema (its `tables`, as configured) via `planMigration`, apply the
@@ -592,11 +614,20 @@ export interface DatabaseInterface<T extends TablesShape = TablesShape> {
 	 * Throws `DatabaseError` `MIGRATION` when the driver does not implement
 	 * `migrate`, or when a step references an unknown table (propagated from
 	 * the driver). Throws `ABORTED` when `options.signal` has already fired at
-	 * entry. Emits the `migrate` event after a successful apply. Version
-	 * TRACKING (persisting `from` / `to`) remains deferred to persistent
-	 * backends — the caller owns knowing what was deployed.
+	 * entry. For explicit `migrate`, driver open and migration apply form one
+	 * readiness transition: status and the `open` event publish only after apply
+	 * succeeds. A failed explicit apply blocks ordinary open/table work with that
+	 * exact failure until a later explicit `migrate` succeeds; `close` remains
+	 * available. Automatic versioned open has a separate lifecycle: successful
+	 * physical driver open publishes `open` status and one `open` event before
+	 * reconciliation. If reconciliation fails, its readiness Promise and table
+	 * work reject until a later automatic retry succeeds on the same physical
+	 * handle. Emits the `migrate` event after a successful apply. Explicit
+	 * migration still accepts the caller's deployed schema; versioned open uses
+	 * {@link DatabaseOptions.version} with a driver's paired `metadata` / `stamp`
+	 * capabilities to persist and reconcile deployed version metadata.
 	 */
-	migrate(deployed: readonly TableSchema[], options?: ReadOptions): Promise<Migration>
+	migrate(deployed: readonly TableSchema[], options?: OperationOptions): Promise<Migration>
 }
 
 // === Table
@@ -607,7 +638,7 @@ export interface DatabaseInterface<T extends TablesShape = TablesShape> {
  * @remarks
  * Writes are coerced through the table's contract: a string input to a numeric
  * column is normalized, and a row that cannot be coerced throws `VALIDATION`. A
- * row missing its key is assigned a generated UUID. `get` returns `undefined`
+ * row whose primary is `undefined` receives a generated key. `get` returns `undefined`
  * when a key is absent; `resolve` throws `NOT_FOUND`. `set` upserts; `add`
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the
  * compiled contract for introspection (`schema`) and fixtures (`generate`).
@@ -629,48 +660,44 @@ export interface TableInterface<T = Row> {
 	has(key: Key): Promise<boolean>
 	has(keys: readonly Key[]): Promise<readonly boolean[]>
 	keys(): Promise<readonly Key[]>
-	records(criteria?: Criteria, options?: ReadOptions): Promise<readonly T[]>
+	records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]>
 	/**
-	 * Count rows matching `criteria`'s conditions.
+	 * Count contract-valid rows matching `input`'s conditions.
 	 *
 	 * @remarks
-	 * `records()` / `scan()` narrow every row through the table's contract
-	 * guard before returning it, so a non-conforming stored row (legacy data,
-	 * a row from before a migration) never appears in their results. `count`
-	 * operates on STORED rows WITHOUT that guard — it counts whatever
-	 * conditions-matches in storage, guard-conforming or not. This means
-	 * `count()` CAN exceed `(await records(criteria)).length` when storage
-	 * holds rows that no longer conform to the table's contract.
+	 * Paging is ignored. Like `records()` / `scan()`, `count()` narrows every
+	 * candidate through the table contract, so a non-conforming stored row does
+	 * not consume the count.
 	 */
-	count(criteria?: Criteria, options?: ReadOptions): Promise<number>
+	count(input?: QueryInput, options?: OperationOptions): Promise<number>
 	/**
-	 * Compute an aggregate over `column` across rows matching `criteria`'s
+	 * Compute an aggregate over `column` across rows matching `input`'s
 	 * conditions.
 	 *
 	 * @remarks
-	 * Like {@link TableInterface.count}, `aggregate` operates on STORED rows
-	 * WITHOUT the contract guard that `records()` / `scan()` apply — a
+	 * Unlike {@link TableInterface.count}, `aggregate` operates on STORED rows
+	 * without the contract guard that `records()` / `scan()` apply — a
 	 * non-conforming stored row still contributes to the aggregate (or to the
 	 * `count` operation's tally) when it matches the conditions, even though
 	 * it would never appear in `records()`'s output.
 	 */
 	aggregate(
-		operation: AggregateFunction,
+		operation: AggregateOperation,
 		column: FieldPath,
-		criteria?: Criteria,
-		options?: ReadOptions,
+		input?: QueryInput,
+		options?: OperationOptions,
 	): Promise<number | undefined>
 	/**
 	 * Lazy filtered iteration over the table's rows.
 	 *
 	 * @remarks
-	 * `criteria`'s `conditions` / `offset` / `limit` are honored lazily as rows
+	 * `input`'s `conditions` / `offset` / `limit` are honored lazily as rows
 	 * stream; `order` is intentionally IGNORED — streaming yields driver
 	 * key-order, sorted output is `records()`'s job. Breaking out of the
 	 * iteration early closes the underlying source. The signal (if any) is
 	 * checked before each yield.
 	 */
-	scan(criteria?: Criteria, options?: ReadOptions): AsyncIterable<T>
+	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T>
 	/**
 	 * Upsert one or more rows.
 	 *
@@ -678,7 +705,7 @@ export interface TableInterface<T = Row> {
 	 * @param options - Optional abort signal
 	 * @returns The row's key
 	 */
-	set(row: T, options?: ReadOptions): Promise<Key>
+	set(row: T, options?: OperationOptions): Promise<Key>
 	/**
 	 * Upsert one or more rows.
 	 *
@@ -691,7 +718,7 @@ export interface TableInterface<T = Row> {
 	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
 	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
 	 */
-	set(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	set(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
 	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
 	 *
@@ -699,7 +726,7 @@ export interface TableInterface<T = Row> {
 	 * @param options - Optional abort signal
 	 * @returns The row's key
 	 */
-	add(row: T, options?: ReadOptions): Promise<Key>
+	add(row: T, options?: OperationOptions): Promise<Key>
 	/**
 	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
 	 *
@@ -712,7 +739,7 @@ export interface TableInterface<T = Row> {
 	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
 	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
 	 */
-	add(rows: readonly T[], options?: ReadOptions): Promise<readonly Key[]>
+	add(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
 	 * Apply a partial change to one or more rows.
 	 *
@@ -721,7 +748,7 @@ export interface TableInterface<T = Row> {
 	 * @param options - Optional abort signal
 	 * @returns `true` when the row existed and was updated
 	 */
-	update(key: Key, changes: Partial<T>, options?: ReadOptions): Promise<boolean>
+	update(key: Key, changes: Partial<T>, options?: OperationOptions): Promise<boolean>
 	/**
 	 * Apply a partial change to one or more rows.
 	 *
@@ -738,7 +765,7 @@ export interface TableInterface<T = Row> {
 	update(
 		keys: readonly Key[],
 		changes: Partial<T>,
-		options?: ReadOptions,
+		options?: OperationOptions,
 	): Promise<readonly boolean[]>
 	/**
 	 * Delete one or more rows.
@@ -747,7 +774,7 @@ export interface TableInterface<T = Row> {
 	 * @param options - Optional abort signal
 	 * @returns `true` when the row existed and was removed
 	 */
-	remove(key: Key, options?: ReadOptions): Promise<boolean>
+	remove(key: Key, options?: OperationOptions): Promise<boolean>
 	/**
 	 * Delete one or more rows.
 	 *
@@ -760,7 +787,7 @@ export interface TableInterface<T = Row> {
 	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
 	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
 	 */
-	remove(keys: readonly Key[], options?: ReadOptions): Promise<readonly boolean[]>
+	remove(keys: readonly Key[], options?: OperationOptions): Promise<readonly boolean[]>
 	clear(): Promise<void>
 	query(): QueryInterface<T>
 	cursor(): Promise<CursorInterface<T>>
@@ -772,25 +799,22 @@ export interface TableInterface<T = Row> {
  * A fluent query builder.
  *
  * @remarks
- * `where` / `and` / `or` open a {@link ClauseInterface} whose operator
- * closes the condition and returns the query. `filter` adds a post-fetch JS
- * predicate (applied after the backend read, before paging). The terminals
- * (`all` / `first` / `count` / the aggregates) execute against the table; each
+ * `condition` appends one portable condition and `order` appends one portable
+ * ordering term. `filter` adds a post-fetch JavaScript predicate (applied after
+ * the backend read, before paging). The terminals (`collect` / `find` / `count`
+ * / `aggregate`) execute against the table; each
  * call mutates and returns the same builder, so a chain reads as one statement.
  * Every `column` is a {@link FieldPath} — a string is one column, an array
  * descends a nested value.
  */
 export interface QueryInterface<T = Row> {
-	where(column: FieldPath): ClauseInterface<T>
-	and(column: FieldPath): ClauseInterface<T>
-	or(column: FieldPath): ClauseInterface<T>
+	condition(input: Condition): QueryInterface<T>
+	order(input: Order): QueryInterface<T>
 	filter(predicate: (row: T) => boolean): QueryInterface<T>
-	ascending(column: FieldPath): QueryInterface<T>
-	descending(column: FieldPath): QueryInterface<T>
 	limit(count: number): QueryInterface<T>
 	offset(count: number): QueryInterface<T>
-	all(): Promise<readonly T[]>
-	first(): Promise<T | undefined>
+	collect(): Promise<readonly T[]>
+	find(): Promise<T | undefined>
 	count(): Promise<number>
 	/**
 	 * Lazy per-row evaluation of this query's conditions / filters / offset /
@@ -802,38 +826,8 @@ export interface QueryInterface<T = Row> {
 	 * {@link TableInterface.scan}: the signal (if any) is checked before each
 	 * yield, and breaking out early closes the underlying source.
 	 */
-	stream(options?: ReadOptions): AsyncIterable<T>
-	sum(column: FieldPath): Promise<number | undefined>
-	average(column: FieldPath): Promise<number | undefined>
-	minimum(column: FieldPath): Promise<number | undefined>
-	maximum(column: FieldPath): Promise<number | undefined>
-	aggregate(operation: AggregateFunction, column: FieldPath): Promise<number | undefined>
-}
-
-/**
- * A pending condition opened by `where` / `and` / `or`.
- *
- * @remarks
- * Each operator records its condition against the query and returns the query,
- * so the chain continues fluently. `absent` / `present` take no operand;
- * `between` takes two; `any` / `none` take a list.
- */
-export interface ClauseInterface<T = Row> {
-	equals(value: unknown): QueryInterface<T>
-	not(value: unknown): QueryInterface<T>
-	above(value: unknown): QueryInterface<T>
-	below(value: unknown): QueryInterface<T>
-	from(value: unknown): QueryInterface<T>
-	to(value: unknown): QueryInterface<T>
-	between(lower: unknown, upper: unknown): QueryInterface<T>
-	like(pattern: string): QueryInterface<T>
-	glob(pattern: string): QueryInterface<T>
-	starts(prefix: string): QueryInterface<T>
-	ends(suffix: string): QueryInterface<T>
-	any(values: readonly unknown[]): QueryInterface<T>
-	none(values: readonly unknown[]): QueryInterface<T>
-	absent(): QueryInterface<T>
-	present(): QueryInterface<T>
+	stream(options?: OperationOptions): AsyncIterable<T>
+	aggregate(operation: AggregateOperation, column: FieldPath): Promise<number | undefined>
 }
 
 // === Cursor
@@ -844,7 +838,11 @@ export interface ClauseInterface<T = Row> {
  * @remarks
  * Iterates a snapshot of the table's keys taken at creation; `update` and
  * `remove` act on the row at the current position through the owning table.
- * `done` is `true` once iteration has advanced past the last key.
+ * Promise operations execute serially in invocation order, and one rejection
+ * does not prevent later admitted work. `done` is `true` once iteration has
+ * advanced past the last key. `close` is synchronous and terminal: it clears
+ * the current value, queued work becomes a no-op, and in-flight work never
+ * republishes a value after settling.
  */
 export interface CursorInterface<T = Row> {
 	readonly value: T | undefined

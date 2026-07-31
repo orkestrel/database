@@ -1,4 +1,4 @@
-import type { CursorInterface, Key, TableInterface } from './types.js'
+import type { CursorInterface, Key } from './types.js'
 
 /**
  * A forward row cursor for bulk in-place mutation.
@@ -10,15 +10,28 @@ import type { CursorInterface, Key, TableInterface } from './types.js'
  * skipped. `update` and `remove` act on the row at the current position.
  */
 export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
-	readonly #table: TableInterface<T>
 	readonly #keys: readonly Key[]
+	readonly #read: (key: Key) => Promise<T | undefined>
+	readonly #update: (key: Key, changes: Partial<T>) => Promise<boolean>
+	readonly #remove: (key: Key) => Promise<boolean>
+	readonly #track: <R>(operation: () => Promise<R>) => Promise<R>
+	#tail = Promise.resolve()
 	#index = -1
 	#value: T | undefined
 	#closed = false
 
-	constructor(table: TableInterface<T>, keys: readonly Key[]) {
-		this.#table = table
+	constructor(
+		keys: readonly Key[],
+		read: (key: Key) => Promise<T | undefined>,
+		update: (key: Key, changes: Partial<T>) => Promise<boolean>,
+		remove: (key: Key) => Promise<boolean>,
+		track: <R>(operation: () => Promise<R>) => Promise<R>,
+	) {
 		this.#keys = keys
+		this.#read = read
+		this.#update = update
+		this.#remove = remove
+		this.#track = track
 	}
 
 	get value(): T | undefined {
@@ -33,16 +46,35 @@ export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
 		return this.#closed || this.#index >= this.#keys.length
 	}
 
-	async next(): Promise<void> {
+	next(): Promise<void> {
+		return this.#track(() => this.#queue(() => this.#advance()))
+	}
+
+	update(changes: Partial<T>): Promise<void> {
+		return this.#track(() => this.#queue(() => this.#revise(changes)))
+	}
+
+	remove(): Promise<void> {
+		return this.#track(() => this.#queue(() => this.#delete()))
+	}
+
+	close(): void {
+		this.#closed = true
+		this.#value = undefined
+	}
+
+	async #advance(): Promise<void> {
 		if (this.#closed) return
 		this.#index += 1
 		while (this.#index < this.#keys.length) {
+			if (this.#closed) return
 			const key = this.#keys[this.#index]
 			if (key === undefined) {
 				this.#index += 1
 				continue
 			}
-			const row = await this.#table.get(key)
+			const row = await this.#read(key)
+			if (this.#closed) return
 			if (row !== undefined) {
 				this.#value = row
 				return
@@ -52,24 +84,32 @@ export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
 		this.#value = undefined
 	}
 
-	async update(changes: Partial<T>): Promise<void> {
+	async #revise(changes: Partial<T>): Promise<void> {
 		if (this.#closed || this.#value === undefined) return
 		const key = this.#keys[this.#index]
 		if (key === undefined) return
-		await this.#table.update(key, changes)
-		this.#value = await this.#table.get(key)
+		await this.#update(key, changes)
+		if (this.#closed) return
+		const row = await this.#read(key)
+		if (this.#closed) return
+		this.#value = row
 	}
 
-	async remove(): Promise<void> {
+	async #delete(): Promise<void> {
 		if (this.#closed || this.#value === undefined) return
 		const key = this.#keys[this.#index]
 		if (key === undefined) return
-		await this.#table.remove(key)
+		await this.#remove(key)
+		if (this.#closed) return
 		this.#value = undefined
 	}
 
-	close(): void {
-		this.#closed = true
-		this.#value = undefined
+	#queue(operation: () => Promise<void>): Promise<void> {
+		const result = this.#tail.then(operation)
+		this.#tail = result.then(
+			() => undefined,
+			() => undefined,
+		)
+		return result
 	}
 }

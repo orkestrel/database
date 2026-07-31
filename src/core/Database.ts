@@ -1,272 +1,160 @@
-import type { ContractInterface } from '@orkestrel/contract'
+import type { ContractInterface, Result } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
+	ColumnMap,
 	DatabaseEventMap,
 	DatabaseInterface,
 	DatabaseOptions,
 	DatabaseStatus,
-	Columns,
-	DriverInterface,
-	DriverMeta,
+	DatabaseStorageInterface,
+	IndexMap,
 	KeyFunction,
 	Migration,
-	ReadOptions,
+	OperationOptions,
+	PrimaryMap,
 	RowOf,
-	TableExport,
-	TableIndexes,
+	TableDefinition,
 	TableInterface,
-	TableKeys,
+	TableMap,
 	TableSchema,
-	TablesShape,
 } from './types.js'
 import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
-import { Emitter } from '@orkestrel/emitter'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { checkAbort, planMigration, shapeToColumnType } from './helpers.js'
+import { shapeToColumnSchema } from './helpers.js'
+import { DatabaseContext } from './DatabaseContext.js'
+import { DatabaseTransaction } from './DatabaseTransaction.js'
 import { Table } from './Table.js'
+import { TransactionScope } from './TransactionScope.js'
 
 /**
- * A database — the ergonomic entry point over a {@link DriverInterface}.
+ * A typed database view over one shared internal lifecycle and storage context.
  *
  * @remarks
- * Owns the driver and a `tables` shape map, connecting the driver lazily on first
- * use so a freshly created database is immediately usable. `table(name)` returns
- * a table typed by that table's shape `Infer`. `import` registers more tables and
- * returns a database re-typed with them over the **same** driver and storage;
- * `export` emits a portable {@link TableExport} per table. `transaction` snapshots
- * the driver, runs the scope, and rolls every table back if it throws — an
- * optimistic model that works uniformly across backends rather than reconciling
- * SQL's and IndexedDB's incompatible native transactions.
- *
- * @remarks
- * - **Versioned (optional).** When {@link DatabaseOptions.version} is set and the driver
- *   implements both {@link DriverInterface.meta} and {@link DriverInterface.stamp},
- *   `open()` reconciles the driver's persisted {@link DriverMeta} against the declared
- *   version INSIDE the same lazy-connect chain, AFTER the `open` event fires — see
- *   {@link DatabaseOptions.version} for the full reconciliation contract.
- * - **Observable (§13).** The owned {@link emitter} ({@link DatabaseEventMap}) carries the
- *   connection + transaction lifecycle — `open` / `close` / `transaction` / `commit` /
- *   `rollback` — for fire-and-forget observers, ALONGSIDE each table's per-row events. Every
- *   event is emitted directly, strictly AFTER the relevant transition: `commit` only after
- *   the scope succeeds, `rollback` only after every table is restored. The `rollback` emit
- *   OBSERVES the propagated error — it never swallows it (the original throw propagates
- *   exactly as before). The emitter isolates a listener throw and routes it to its `error`
- *   handler (the `error` option), so observation can never reorder, throw into, or corrupt
- *   the snapshot / commit / rollback flow.
+ * Each view owns only its table contracts, primary columns, indexes, and key
+ * generator. Imported views register their physical schemas with the same
+ * internal context before opening begins, so every view observes one driver,
+ * merged schema, emitter, status, transaction boundary, and terminal close.
  */
-export class Database<T extends TablesShape = TablesShape> implements DatabaseInterface<T> {
-	readonly #driver: DriverInterface
+export class Database<T extends TableMap = TableMap> implements DatabaseInterface<T> {
+	#context: DatabaseContext
 	readonly #tables: T
-	readonly #keys: TableKeys
-	readonly #indexes: TableIndexes
-	readonly #name: string
+	readonly #primary: PrimaryMap
+	readonly #indexes: IndexMap
 	readonly #generate: KeyFunction | undefined
-	readonly #version: number | undefined
-	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
-	// listener throw (routing it to the `error` handler), so it can never escape into the
-	// transaction flow.
-	readonly #emitter: Emitter<DatabaseEventMap>
-	#status: DatabaseStatus = 'idle'
-	#ready: Promise<void> | undefined
 
 	constructor(options: DatabaseOptions<T>) {
-		this.#driver = options.driver
 		this.#tables = options.tables
-		this.#keys = options.keys ?? {}
+		this.#primary = options.primary ?? {}
 		this.#indexes = options.indexes ?? {}
-		this.#name = options.name ?? 'database'
-		this.#generate = options.key
-		this.#version = options.version
-		this.#emitter = new Emitter<DatabaseEventMap>({
-			...(options.on !== undefined ? { on: options.on } : {}),
-			...(options.error !== undefined ? { error: options.error } : {}),
-		})
+		this.#generate = options.generator
+		this.#context = new DatabaseContext(options)
+		this.#context.register(this.#schema())
 	}
 
 	get emitter(): EmitterInterface<DatabaseEventMap> {
-		return this.#emitter
+		return this.#context.emitter
 	}
 
 	get name(): string {
-		return this.#name
+		return this.#context.name
 	}
 
 	get status(): DatabaseStatus {
-		return this.#status
+		return this.#context.status
 	}
 
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
-		if (this.#status === 'closed') {
-			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, { name: this.#name })
+		if (this.#context.status === 'closed') {
+			throw new DatabaseError('CLOSED', `Database '${this.#context.name}' is closed`, {
+				name: this.#context.name,
+			})
 		}
-		// A table row is always an object, so compile its columns into a typed contract.
-		// Contract 0.0.4's non-distributive inference resolves the open columns union
-		// directly, so no seam is needed to relate the compiled contract to RowOf.
 		const columns = this.#columns(name)
 		return this.#build(name, this.#key(name), createContract(objectShape(columns)))
 	}
 
-	import<U extends TablesShape>(tables: U, keys?: TableKeys): DatabaseInterface<U> {
-		return this.#spawn(tables, { ...this.#keys, ...keys })
+	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U> {
+		return this.#spawn(tables, { ...this.#primary, ...primary })
 	}
 
-	export(): Readonly<Record<string, TableExport>> {
-		const result: Record<string, TableExport> = {}
+	export(): Readonly<Record<string, TableDefinition>> {
+		const result: Record<string, TableDefinition> = {}
 		for (const name of Object.keys(this.#tables)) {
 			const columns = this.#columns(name)
-			// `compileSchema` (not `createContract`) emits the JSON Schema without
-			// instantiating `Infer` over the broad shape — which would trip TS's
-			// instantiation-depth guard here, where the columns are the open union.
-			result[name] = { key: this.#key(name), columns, schema: compileSchema(objectShape(columns)) }
+			result[name] = {
+				primary: this.#key(name),
+				columns,
+				schema: compileSchema(objectShape(columns)),
+			}
 		}
 		return result
 	}
 
-	async open(): Promise<void> {
-		await this.#connect()
+	open(): Promise<void> {
+		return this.#context.open()
 	}
 
-	async close(): Promise<void> {
-		this.#status = 'closed'
-		this.#ready = undefined
-		await this.#driver.close()
-		// Observe the close — AFTER the driver released, so a swallowed listener throw can't
-		// perturb the teardown (a pure signal — no payload).
-		this.#emitter.emit('close')
+	close(): Promise<void> {
+		return this.#context.close()
 	}
 
-	/**
-	 * Run `scope` transactionally: commit its writes on success, roll every table
-	 * back if it throws.
-	 *
-	 * @remarks
-	 * When the driver implements the optional native {@link DriverInterface.transaction}
-	 * hook, that native `commit` / `rollback` handle drives the transaction; otherwise
-	 * the universal snapshot floor (`driver.snapshot()`) runs unchanged. Either path
-	 * emits the same `transaction` / `commit` / `rollback` lifecycle (AGENTS §13).
-	 * `options.signal` is checked ONCE at entry, before connecting or starting any
-	 * transactional work — an already-aborted signal throws `ABORTED` and neither the
-	 * native hook nor the snapshot floor is invoked. Nesting is unguarded and
-	 * unsupported exactly as before: this is a single-writer model, not reentrant.
-	 * On the native path, a `scope` throw rolls back via the native handle; a
-	 * native `commit` failure propagates as-is with no rollback attempt — the
-	 * engine owns transaction state after a failed COMMIT.
-	 *
-	 * @param scope - The transactional work to run
-	 * @param options - `{ signal }` to abort before the transaction starts
-	 * @returns The scope's resolved value
-	 * @throws An `ABORTED` {@link DatabaseError} when `options.signal` has already fired
-	 */
-	async transaction<R>(scope: () => Promise<R>, options?: ReadOptions): Promise<R> {
-		checkAbort(options?.signal)
-		await this.#connect()
-		const native = await this.#driver.transaction?.()
-		if (native !== undefined) {
-			// Observe the scope beginning — AFTER the native BEGIN, mirroring the snapshot
-			// path's `transaction` emit placement (after the floor is laid, before the scope runs).
-			this.#emitter.emit('transaction')
-			let value: R
-			try {
-				value = await scope()
-			} catch (error) {
-				// The scope threw: roll back via the native handle FIRST, then observe —
-				// mirrors the snapshot path exactly. A rollback throw is NOT caught here (the
-				// snapshot path likewise lets a failing restore propagate uncaught), so it
-				// would replace the original error as the rejection.
-				await native.rollback()
-				this.#emitter.emit('rollback', error)
-				throw error
-			}
-			// The scope succeeded: commit OUTSIDE the try — a failed commit propagates
-			// as-is, with no rollback attempt. The engine owns transaction state after a
-			// failed COMMIT; invoking rollback here could mask the commit error with a
-			// rollback error, or roll back a commit the engine actually applied.
-			await native.commit()
-			// Observe the successful commit — AFTER the native commit resolved, mirroring
-			// the snapshot path's emit-after-transition contract.
-			this.#emitter.emit('commit')
-			return value
-		}
-		const rollback = await this.#driver.snapshot()
-		// Observe the scope beginning — AFTER the store was snapshotted and BEFORE the scope
-		// runs, so a swallowed listener throw can't perturb the snapshot the scope builds on.
-		this.#emitter.emit('transaction')
-		try {
-			const value = await scope()
-			// Observe the successful commit — AFTER the scope resolved with no throw, so the
-			// transaction has already committed (there is nothing to roll back); the emit only
-			// OBSERVES it. NEVER emitted on the throw path below.
-			this.#emitter.emit('commit')
-			return value
-		} catch (error) {
-			// The scope threw: roll every table back FIRST, then observe — the `rollback` emit
-			// fires strictly AFTER the restore completes, and OBSERVES the propagated error (it
-			// carries the error but never swallows it; the original throw still propagates,
-			// exactly as before — a swallowed listener throw can't suppress or reorder it).
-			await rollback()
-			this.#emitter.emit('rollback', error)
-			throw error
-		}
-	}
-
-	/**
-	 * Diff `deployed` against this database's declared schema and apply the
-	 * resulting plan through the driver's optional `migrate` hook.
-	 *
-	 * @param deployed - The schema currently deployed, as {@link TableSchema}s
-	 * @param options - `{ signal }` to abort before the migration starts
-	 * @returns The applied {@link Migration} plan
-	 * @throws A `MIGRATION` {@link DatabaseError} when the driver does not
-	 * implement `migrate`, or when a step references an unknown table
-	 * (propagated from the driver)
-	 * @throws An `ABORTED` {@link DatabaseError} when `options.signal` has
-	 * already fired at entry
-	 */
-	async migrate(deployed: readonly TableSchema[], options?: ReadOptions): Promise<Migration> {
-		checkAbort(options?.signal)
-		await this.#connect()
-		const plan = planMigration(deployed, this.#schema())
-		if (this.#driver.migrate === undefined) {
-			throw new DatabaseError(
-				'MIGRATION',
-				`Database '${this.#name}' driver does not support migration`,
-				{
-					name: this.#name,
-				},
+	transaction<R>(
+		scope: (transaction: DatabaseStorageInterface<T>) => Promise<R>,
+		options?: OperationOptions,
+	): Promise<R> {
+		return this.#context.transaction(async (storage, lifetime) => {
+			const transaction = new DatabaseTransaction(
+				storage,
+				this.#tables,
+				this.#primary,
+				this.#generate,
+				this.#context.error,
+				lifetime,
 			)
-		}
-		await this.#apply(plan)
-		return plan
+			return this.#settle(scope, transaction, lifetime)
+		}, options)
 	}
 
-	// Construct a table over an opaque row type `R`, so the deep `Infer<T[K]>` of
-	// `table` is never expanded structurally here (it would trip TS's
-	// instantiation-depth guard — the reason `createContract` keeps its impl untyped).
+	migrate(deployed: readonly TableSchema[], options?: OperationOptions): Promise<Migration> {
+		return this.#context.migrate(deployed, options)
+	}
+
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
-		return new Table(() => this.#connect(), this.#driver, name, key, contract, this.#generate)
+		return new Table(
+			() => this.#context.connect(),
+			this.#context.driver,
+			name,
+			key,
+			contract,
+			this.#generate,
+			this.#context.error,
+			this.#context,
+		)
 	}
 
-	// Construct a sibling view over an opaque table map `X` (sharing the driver),
-	// so the deep `Infer<X[K]>` of the result's `table` is not expanded
-	// structurally here — the same instantiation-depth guard `#build` sidesteps.
-	#spawn<X extends TablesShape>(tables: X, keys: TableKeys): DatabaseInterface<X> {
-		return new Database({
-			driver: this.#driver,
-			tables,
-			keys,
-			name: this.#name,
-			...(this.#generate === undefined ? {} : { key: this.#generate }),
-		})
+	#spawn<X extends TableMap>(tables: X, primary: PrimaryMap): DatabaseInterface<X> {
+		return Database.#attach(
+			{
+				driver: this.#context.driver,
+				tables,
+				primary,
+				name: this.#context.name,
+				...(this.#context.error === undefined ? {} : { error: this.#context.error }),
+				...(this.#generate === undefined ? {} : { generator: this.#generate }),
+				...(this.#context.version === undefined ? {} : { version: this.#context.version }),
+			},
+			this.#context,
+		)
 	}
 
 	#key(name: string): string {
-		return this.#keys[name] ?? DEFAULT_PRIMARY
+		return this.#primary[name] ?? DEFAULT_PRIMARY
 	}
 
 	#columns<K extends keyof T & string>(name: K): T[K]
-	#columns(name: string): Columns
-	#columns(name: string): Columns {
+	#columns(name: string): ColumnMap
+	#columns(name: string): ColumnMap {
 		const columns = this.#tables[name]
 		if (columns === undefined) {
 			throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
@@ -274,116 +162,48 @@ export class Database<T extends TablesShape = TablesShape> implements DatabaseIn
 		return columns
 	}
 
-	// Derive each table's backend-agnostic TableSchema from its contract columns,
-	// primary key, and declared indexes — what every driver's `open` receives.
 	#schema(): readonly TableSchema[] {
 		return Object.keys(this.#tables).map((name) => {
 			const columns = this.#columns(name)
 			return {
 				name,
 				primary: this.#key(name),
-				columns: Object.entries(columns).map(([column, shape]) => {
-					return {
-						name: column,
-						type: shapeToColumnType(shape),
-						nullable: shape.type === 'optional' || shape.type === 'nullable',
-					}
-				}),
+				columns: Object.entries(columns).map(([column, shape]) =>
+					shapeToColumnSchema(column, shape),
+				),
 				indexes: this.#indexes[name] ?? [],
 			}
 		})
 	}
 
-	// Open the driver once, lazily; every table operation awaits the same promise. The
-	// `open` event fires from the one-time `.then` (so it observes the actual connect, not
-	// each cached re-await) — AFTER the driver opened and the status flipped. Version
-	// reconciliation (`#reconcile`) runs INSIDE this same one-time chain, AFTER the `open`
-	// emit, so `await db.open()` (and every cached re-await) resolves only once
-	// reconciliation has settled. A reconnect after `close()` (which clears `#ready`)
-	// re-runs this and emits `open` again.
-	#connect(): Promise<void> {
-		if (this.#status === 'closed') {
-			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, { name: this.#name })
-		}
-		if (this.#ready === undefined) {
-			this.#ready = this.#driver.open(this.#schema()).then(async () => {
-				if (this.#status === 'idle') this.#status = 'open'
-				this.#emitter.emit('open')
-				await this.#reconcile()
-			})
-		}
-		return this.#ready
-	}
-
-	// Reconcile the driver's persisted DriverMeta against the declared `#version` (AGENTS
-	// §13 emits AFTER the transition). Skips silently when versioning is not configured
-	// (no `#version`, or the driver implements neither `meta` nor `stamp`). A fresh store
-	// (`meta()` undefined) has nothing to diff against, so it just stamps for next time. A
-	// stored version newer than declared is unrecoverable here — throws MIGRATION. A stored
-	// version older than declared computes and applies the upgrade plan (throwing MIGRATION
-	// when the plan is non-empty and the driver lacks `migrate`), then stamps and emits.
-	async #reconcile(): Promise<void> {
-		if (this.#version === undefined || this.#driver.meta === undefined) return
-		const declared = this.#schema()
-		const meta = await this.#driver.meta()
-		if (meta === undefined) {
-			await this.#stamp()
-			return
-		}
-		if (meta.version > this.#version) {
-			throw new DatabaseError(
-				'MIGRATION',
-				`Database '${this.#name}' store version ${meta.version} is newer than declared version ${this.#version}`,
-				{ name: this.#name, stored: meta.version, declared: this.#version },
+	async #settle<R>(
+		scope: (transaction: DatabaseStorageInterface<T>) => Promise<R>,
+		transaction: DatabaseStorageInterface<T>,
+		lifetime: TransactionScope,
+	): Promise<Result<R, unknown>> {
+		const outcome: Result<R, unknown> = await Promise.resolve()
+			.then(() => scope(transaction))
+			.then(
+				(value) => ({ success: true, value }),
+				(error: unknown) => ({ success: false, error }),
 			)
-		}
-		if (meta.version < this.#version) {
-			const plan = planMigration(meta.schema, declared, meta.version, this.#version)
-			if (plan.steps.length > 0 && this.#driver.migrate === undefined) {
-				throw new DatabaseError(
-					'MIGRATION',
-					`Database '${this.#name}' driver does not support migration`,
-					{ name: this.#name, stored: meta.version, declared: this.#version },
-				)
-			}
-			await this.#apply(plan)
-		}
+		lifetime.stop()
+		const drained: Result<void, unknown> = await lifetime.drain().then(
+			() => ({ success: true, value: undefined }),
+			(error: unknown) => ({ success: false, error }),
+		)
+		if (!outcome.success) return outcome
+		if (!drained.success) return drained
+		return outcome
 	}
 
-	// Apply `plan` through the driver's optional `migrate` hook and persist the new meta
-	// as one unit — the shared orchestration behind both `#reconcile`'s upgrade branch and
-	// the public `migrate()`. WHEN the driver implements the optional native `transaction`
-	// hook, the migrate + stamp pair commits or rolls back atomically through that handle:
-	// a mid-plan `migrate` failure, or a failing `stamp`, rolls back cleanly, so the store
-	// never ends up with the new data under the OLD meta (which would otherwise re-trigger
-	// the same non-idempotent plan on the next `open()`). WITHOUT the hook, `migrate` then
-	// `stamp` run sequentially with a small window between them (documented on
-	// {@link DatabaseOptions.version}). Either path applies, stamps, then emits `migrate`
-	// strictly AFTER the full transition (AGENTS §13).
-	async #apply(plan: Migration): Promise<void> {
-		const native = await this.#driver.transaction?.()
-		if (native !== undefined) {
-			try {
-				await this.#driver.migrate?.(plan)
-				await this.#stamp()
-			} catch (error) {
-				await native.rollback()
-				throw error
-			}
-			await native.commit()
-			this.#emitter.emit('migrate', plan)
-			return
-		}
-		await this.#driver.migrate?.(plan)
-		await this.#stamp()
-		this.#emitter.emit('migrate', plan)
-	}
-
-	// Persist the current declared { version, schema } via the driver's optional `stamp` —
-	// a no-op when versioning is not configured (no `#version`, or no `stamp` hook).
-	async #stamp(): Promise<void> {
-		if (this.#version === undefined || this.#driver.stamp === undefined) return
-		const meta: DriverMeta = { version: this.#version, schema: this.#schema() }
-		await this.#driver.stamp(meta)
+	static #attach<X extends TableMap>(
+		options: DatabaseOptions<X>,
+		context: DatabaseContext,
+	): Database<X> {
+		const database = new Database(options)
+		database.#context = context
+		context.register(database.#schema())
+		return database
 	}
 }

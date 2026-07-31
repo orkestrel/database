@@ -12,8 +12,8 @@ import type { DatabaseErrorCode } from './types.js'
  * Carries a {@link DatabaseErrorCode} and an optional `context` bag naming the
  * offending table / key. Thrown for: operating on a closed database (`CLOSED`), a
  * `resolve` miss (`NOT_FOUND`), an `add` onto an existing key (`CONFLICT`), a
- * row that fails its table's contract (`VALIDATION`), a cancelled operation whose
- * {@link ReadOptions.signal} aborted (`ABORTED`, carrying `signal.reason` in
+ * row that fails its table's contract (`VALIDATION`), an aborted operation whose
+ * {@link OperationOptions.signal} aborted (`ABORTED`, carrying `signal.reason` in
  * `context`), an inapplicable {@link Migration} plan (`MIGRATION`), a
  * driver that violates a {@link DriverInterface} invariant, thrown by the
  * `conformDriver` helper (`CONFORMANCE`), and an unexpected infrastructure
