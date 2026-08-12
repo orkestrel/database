@@ -35,6 +35,7 @@ SCSS mirrors TypeScript centralization. Concrete token prefixes are project-spec
 
 ## Prohibitions
 
+- Verify every treatment against the shipped resolved cascade before accepting it: the compiled output plus the stylesheet of every dependency the consumer loads. A dependency's own default rules decide what a bare element renders as — not documentation, and not memory.
 - Check `_tokens.scss` before inventing a token.
 - Put global tokens in `_tokens.scss`; put truly component-scoped custom properties on the component selector.
 - Never bury tokens in unrelated partials.

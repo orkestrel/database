@@ -21,12 +21,20 @@ For each applicable seam, state the invariant, failure mode, observable result, 
 
 Test through public behavior with:
 
-- real package classes and composed managers;
-- temporary directories/files;
-- actual local sockets and protocol-faithful fixture servers;
-- actual Chromium-family browsers where the browser is the system under test;
-- actual installed dependencies;
-- actual external service/model projects when their behavior is the subject.
+| Seam                                    | The real thing it must be driven with                                    |
+| --------------------------------------- | ------------------------------------------------------------------------ |
+| Package behavior                        | Real package classes and composed managers                               |
+| Filesystem                              | Temporary directories and files                                          |
+| Network protocol                        | Actual local sockets and protocol-faithful fixture servers               |
+| Browser                                 | An actual Chromium-family browser when the browser is the system         |
+| Declared dependency                     | The actual installed dependency                                          |
+| External service or model               | The real service in its dedicated project when its behavior is the claim |
+| Third-party client or protocol consumer | One representative real foreign client, driven end to end                |
+
+A third-party seam is the one case where the package's own tests cannot close the claim:
+protocol tests prove the protocol, and only a real client of that class proves the
+integration. Drive it end to end, record the exact commands, and record what that client
+could NOT reach as an honest limit rather than an untested assumption.
 
 Never use mocks, behavioral fakes, module replacement, or framework spies. Use recorders for callbacks and customizable data factories/stubs for inert shapes.
 

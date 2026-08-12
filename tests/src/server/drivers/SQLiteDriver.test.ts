@@ -2520,10 +2520,10 @@ describe('SQLiteDriver — optional-nullable absent/present parity', () => {
 			const absent = buildCondition('note', 'absent', [])
 			const present = buildCondition('note', 'present', [])
 
-			const cases: readonly {
+			const cases: ReadonlyArray<{
 				readonly condition: Condition
 				readonly count: number
-			}[] = [
+			}> = [
 				{ condition: absent, count: 2 },
 				{ condition: present, count: 1 },
 			]

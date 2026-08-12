@@ -25,15 +25,17 @@ paths:
 - app/server uses app/core contracts, parses environment values before binding,
   defaults to loopback, emits `dist/app/server/main.cjs`, and keeps only
   `node:*` external.
-- Browser/server integration crosses a contract/transport boundary. Neither
-  environment imports the other's implementation. `.oxlintrc.json`
-  `no-restricted-imports` enforces declared package, alias, and conventional
-  relative import direction. Scoped TypeScript configurations remove Node/DOM
-  globals from the wrong environment. Vite's actual browser and server builds
-  resolve Vue, assets, CSS, workers, and runtime module graphs. Generated
-  consumers must pass lint, scoped typechecking, production builds, and real
-  integration tests. Do not introduce a custom parser or source-language
-  analyzer to duplicate the project toolchain.
+- Browser and server integrate across a contract and transport boundary. Neither
+  environment imports the other's implementation.
+- Four tools enforce that boundary, and none of them is replaceable by a custom
+  parser or source-language analyzer: `.oxlintrc.json` `no-restricted-imports`
+  enforces declared package, alias, and conventional relative import direction;
+  scoped TypeScript configurations remove Node and DOM globals from the wrong
+  environment; Vite's real browser and server builds resolve Vue, assets, CSS,
+  workers, and runtime module graphs; and generated-consumer tests exercise all
+  three.
+- Generated consumers must pass lint, scoped typechecking, production builds, and
+  real integration tests.
 - Scoped checks include `.ts`, `.tsx`, `.mts`, and `.cts`. Vue SFCs and CSS
   belong to browser environments; SCSS requires an authorized compiler dependency.
 - Published `src` environments never import private `app` modules. Src core is
@@ -43,13 +45,12 @@ paths:
 - App-only manifests are unscoped and `private: true`, with no package export
   map or publish configuration. Mixed manifests publish only `dist/src`, and
   Vue remains development-only because app output is never published.
-- app/server process signals belong to a tested, explicitly stoppable,
-  generation-safe runner whose stale failures cannot release a newer run;
-  convenience startup returns the runner so normal cleanup cannot be hidden.
-  `ApplicationServerRunner` lives alone in `ApplicationServerRunner.ts`, and the
-  `startApplicationServer` convenience factory belongs in `factories.ts`.
-  `main.ts` invokes it and owns no reusable declarations or duplicated signal
-  handling.
+- Give app/server process signals to a tested, explicitly stoppable,
+  generation-safe runner whose stale failures cannot release a newer run.
+- Return the runner from convenience startup, so normal cleanup cannot be hidden.
+- `ApplicationServerRunner` lives alone in `ApplicationServerRunner.ts`. The
+  `startApplicationServer` convenience factory belongs in `factories.ts`. `main.ts`
+  invokes it and owns no reusable declarations or duplicated signal handling.
 - Do not add showcase, auth, storage, proxy, CSS framework, or other product
   policy unless the request requires it.
 - Test repeated lifecycle, concurrent calls, malformed environment input,

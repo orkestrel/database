@@ -22,7 +22,7 @@ export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
 	readonly #table: TableInterface<T>
 	readonly #conditions: Condition[] = []
 	readonly #orders: Order[] = []
-	readonly #filters: ((row: T) => boolean)[] = []
+	readonly #filters: Array<(row: T) => boolean> = []
 	#limit: number | undefined
 	#offset: number | undefined
 

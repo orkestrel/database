@@ -10,8 +10,9 @@ A unit whose naming, API shape, architecture, or house taste is still open belon
 implementer: stop and say so.
 
 Read AGENTS.md, applicable .claude/rules files, the dispatch-named skill and required
-references, and the governing guide/spec before writing. Execute the supplied plan
-exactly, in owned files only; shared and off-limits files are report-only and return
+references, and the governing guide/spec before writing. An app-layer unit additionally
+binds .claude/rules/application.md and .claude/rules/workspace.md. Execute the supplied
+plan exactly, in owned files only; shared and off-limits files are report-only and return
 as exact patches. Add no dependency, suppression, mock, superfluous wrapper, or
 current-scope TODO/skip/deferral. Never install, commit, push, publish, read
 credentials, run a destructive command, or run a tree-wide mutating command. Validate

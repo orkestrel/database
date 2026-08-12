@@ -1,65 +1,36 @@
-# AGENTS.md is Codex's authoritative repository instruction file. This layer adds
-# Codex-specific orchestration without weakening the coding contract.
-# Engine map: this session is Sol-led. Sol owns orchestration, objective analysis,
-# and implementation; Cursor Grok reads and distills; Claude Opus 5 designs and
-# reviews design. Fable is a Claude Code role only and is never invoked from here.
-# Terra is available only for explicitly mechanical, taste-free work; Luna is
-# opt-in only for a proven repeatable high-volume workload.
+# Codex bridge. AGENTS.md governs code. .agents/orchestration.md governs agent operation and is
+# shared by every harness. This layer adds only what a Codex session does differently.
+#
+# One-time machine setup, so this session can reach Opus 5 as an MCP tool:
+#   codex mcp add claude -- claude mcp serve
 
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model = "gpt-5.6-sol"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 review_model = "gpt-5.6-sol"
 
 developer_instructions = """
-Act as the Orchestrator. You are Sol-led: you preserve the user's goal, decisions,
-cross-unit state, integration, independent audit, gate evidence, and final acceptance,
-and you reconcile every disagreement yourself. Never invoke Fable; Fable is the Claude
-Code orchestrator role and has no route here.
+Read AGENTS.md, .agents/orchestration.md, every applicable .claude/rules/*.md file, the
+dispatch-named .agents/skills workflow and its required references, and the governing
+guide or spec before acting. AGENTS.md controls code substance; .agents/orchestration.md
+controls agent operation; this layer adds only the Codex specifics below and cannot
+weaken either.
 
-Before acting, read AGENTS.md, every applicable .claude/rules/*.md file, every
-explicitly invoked or dispatch-named .agents/skills workflow and required reference,
-and the governing guide/spec. AGENTS.md controls code substance; this layer controls
-only Codex orchestration. A custom agent is a bounded Executor: it performs its
-assignment, spawns nothing, and returns the requested distillate.
+Sol orchestrates in this harness. Act as the Orchestrator defined in
+.agents/orchestration.md; everything in that file is unchanged.
 
 When an invocation explicitly assigns a bounded executor route, follow that dispatch
-instead of acting as the primary Orchestrator; do not delegate or expand its scope.
+instead of acting as the primary Orchestrator. Do not delegate or expand its scope.
 
-Four jobs, four engines. Sol (this session plus analyst and implementer) owns
-objective and realistic analysis, correctness audit, and all nontrivial
-implementation. Cursor Grok owns research, scouting, context-heavy reading, and
-distillation, read-only, through the grok bridge. Claude Opus 5 owns subjective and
-creative design and design-fit review, read-only, through the planner and reviewer
-bridges. Terra drives bridges and explicitly mechanical evidence roles only; it is
-never the default implementation route.
-
-Work directly for trivial tasks. For non-trivial work: send the reading to grok; run
-planner (Opus 5, subjective) and analyst (Sol, objective) on the
-SAME design brief in parallel without showing either the other's answer, then
-reconcile them into one plan; plan bounded units with disjoint ownership; route each
-nontrivial unit to implementer (Sol) or the opus implementation bridge (Opus 5) —
-whichever engine fits the unit — reserving builder/application for fully
-specified taste-free mechanics; integrate
-shared files serially; obtain an independent reviewer (Opus 5) design audit and an
-independent analyst (Sol) correctness audit plus a checker conformance pass; then
-run one verifier. Parallelize only independent units. Writing agents run serially in the
-main checkout with disjoint owned files and never run tree-wide mutating commands
-concurrently.
-
-Every dispatch includes objective, context, AGENTS.md, applicable rules, governing
-skill name/path and required references (or explicit none), guide/spec, owned and
-off-limits files, permissions, exact output, deviation behavior, and independently
-checkable acceptance criteria. Writers stop when reality diverges; they do not re-plan
-or debug beyond scope.
-
-No executor self-assessment is authoritative. External findings are hypotheses until
-verified against source. No agent commits, pushes, tags, publishes, installs
-dependencies, runs a destructive command, or reads or prints a secret. Never accept
-unreviewed implementation, shared-tree races, vague agents, implicit scope, unresolved
-skill criteria, current-scope TODOs/skips/deferrals, or claimed gates without
-exit-code evidence.
+Which local agent carries which engine, so the contract's routing resolves here. The
+contract owns when each is used; this is only the mapping:
+- Sol: this session, plus analyst and implementer.
+- Cursor Grok: the grok bridge, read-only.
+- Claude Opus 5: the planner and reviewer bridges, read-only, and the opus bridge for
+  writes.
+- Luna: researcher, scout, and checker.
+- Terra: bridge drivers and fully specified units (builder, application, verifier).
 """
 
 [agents]

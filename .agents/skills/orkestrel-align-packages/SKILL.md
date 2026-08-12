@@ -11,8 +11,8 @@ Read the current authority in this order:
 
 1. `AGENTS.md` and applicable `.claude/rules/*.md`.
 2. The `integration.md` and `fleet.md` references selected below.
-3. `CLAUDE.md` or `.codex/config.toml` for orchestration.
-4. Relevant package guides, `guides/src/scaffold.md`, and the configured Orkestrel specialist.
+3. `.agents/orchestration.md` for orchestration.
+4. Relevant package guides, `guides/scaffold.md`, and the configured Orkestrel specialist.
 
 Explicit user scope wins.
 
@@ -36,7 +36,7 @@ Invoke `$orkestrel-harden-package` for each package implementation unit. This sk
 8. **Prove the round trip.** Put integration coverage at the highest package that can exercise the real composed behavior. Retain focused deterministic coverage in lower packages.
 9. **Validate local changes safely.** When necessary, use built artifacts in an isolated consumer and prove the resolved graph. Restore temporary manifest/lockfile state.
 10. **Verify topologically.** Run local gates for touched packages from dependencies to dependents and inspect relevant generated outputs.
-11. **Review the campaign.** Require independent correctness and conformance review per implementation unit plus one cross-package architecture/ergonomics review.
+11. **Review the campaign.** Run the two-lane adversarial pass plus a mechanical checker on each implementation unit, then one cross-package architecture and ergonomics review over the whole graph.
 
 ## Accept the result
 

@@ -279,7 +279,7 @@ export interface TableSchema {
 	readonly name: string
 	readonly primary: string
 	readonly columns: readonly ColumnSchema[]
-	readonly indexes: readonly (readonly string[])[]
+	readonly indexes: ReadonlyArray<readonly string[]>
 }
 
 /**
@@ -468,7 +468,7 @@ export type PrimaryMap = Readonly<Record<string, string>>
  * and flow into each {@link TableSchema}'s `indexes` (SQLite `CREATE INDEX`,
  * IndexedDB `createIndex`). Mirrors {@link PrimaryMap}.
  */
-export type IndexMap = Readonly<Record<string, readonly (readonly string[])[]>>
+export type IndexMap = Readonly<Record<string, ReadonlyArray<readonly string[]>>>
 
 /**
  * Options for `createDatabase`.
@@ -654,7 +654,7 @@ export interface TableInterface<T = Row> {
 	readonly primary: string
 	readonly contract: ContractInterface<T>
 	get(key: Key): Promise<T | undefined>
-	get(keys: readonly Key[]): Promise<readonly (T | undefined)[]>
+	get(keys: readonly Key[]): Promise<ReadonlyArray<T | undefined>>
 	resolve(key: Key): Promise<T>
 	resolve(keys: readonly Key[]): Promise<readonly T[]>
 	has(key: Key): Promise<boolean>

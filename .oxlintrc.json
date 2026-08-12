@@ -1,6 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-	"plugins": ["import", "vitest"],
+	"plugins": ["import", "typescript", "vitest"],
 	"rules": {
 		"@typescript-eslint/no-explicit-any": "error",
 		"@typescript-eslint/no-non-null-assertion": "error",
@@ -43,6 +43,7 @@
 			}
 		],
 
+		"no-unused-private-class-members": "error",
 		"no-var": "error",
 		"prefer-const": "error",
 		"no-debugger": "error",

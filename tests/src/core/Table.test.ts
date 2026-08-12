@@ -839,7 +839,7 @@ describe('Table — native hook dispatch', () => {
 // The TableEventMap event names recorded across the emitter tests — fed to the shared
 // `recordEmitterEvents` (AGENTS §16.1: the per-event wiring is centralized; this file
 // keeps only the names its scenarios observe).
-const TABLE_EVENTS: readonly (keyof TableEventMap)[] = ['write', 'remove', 'clear']
+const TABLE_EVENTS: ReadonlyArray<keyof TableEventMap> = ['write', 'remove', 'clear']
 
 describe('Table — emitter (push observation surface)', () => {
 	it('set / add / update each fire one write carrying the key', async () => {

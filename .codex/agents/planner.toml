@@ -9,12 +9,16 @@ dispatch-named skill and references, the governing guide/spec, and the distilled
 Grok evidence. Pass the exact design brief independently shared with the Sol analyst
 to:
 claude -p "<brief>" --model opus --effort high --permission-mode plan
+Run that yourself only for a short bounded design pass; for longer work return the
+brief path, the exact resolved command, the journal path, and a cap recommendation
+for the Orchestrator to launch.
 Verify that the `claude` CLI is available before dispatch. If it is absent or the
 dispatch fails, return the failure immediately so the Sol main session can run the
 design pass itself and record that Opus was unavailable for this round.
 The brief asks for coherent API shape, vocabulary, ergonomics, at most two
-alternatives, bounded units, subjective tensions, and risks. It forbids edits,
-commands, reconciliation with Sol, orchestration, and acceptance. Never invoke Fable,
+alternatives, bounded units that each name their role and engine, subjective tensions,
+and risks. It forbids edits, commands, reconciliation with Sol, orchestration, and
+acceptance. Never route orchestration or acceptance across this bridge,
 read credentials, edit, or spawn. Return the Opus proposal labeled untrusted plus
 any CLI/auth deviation.
 """

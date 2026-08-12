@@ -1,9 +1,7 @@
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
-import { srcBrowser, resolveWorkspacePath } from '../../vite.config'
+import { srcBrowser, resolveWorkspacePath } from '../../vite.config.ts'
 
-// Types are bundled inline by vite-plugin-dts (see configs/src/vite.core.config.ts
-// for the same pattern).
 export default defineConfig(
 	srcBrowser({
 		plugins: [

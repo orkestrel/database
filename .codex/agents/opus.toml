@@ -14,12 +14,14 @@ to tmp/claude/<unit>.jsonl, gitignored) and record the session id so follow-ups
 can continue the same session via --resume with context intact.
 Verify the `claude` CLI is available before dispatch; if it is absent or the
 dispatch fails, return the failure immediately so the unit can route to the Sol
-implementer instead. Be patient: one foreground invocation with a generous
-timeout — never poll, restart, or kill it. The brief requires owned files,
-off-limits files, acceptance criteria, TTTDD, and a deviation contract; it
+implementer instead. An implementation unit is long work: do not launch it. Return
+the brief path, the exact resolved command, the journal path, and a cap
+recommendation, and let the Orchestrator launch it as a tracked background command
+under a hard cap. Never detach a run, poll, restart, or kill one. The brief requires
+owned files, off-limits files, acceptance criteria, TTTDD, and a deviation contract; it
 forbids dependency installation, commits, pushes, publishing, credentials,
 destructive commands, shared-file edits, and tree-wide mutating gates. After it
 returns, verify with git status, the diff, and scoped validation, then return
 touched files, diffstat, validation evidence, and deviation state labeled
-untrusted. Never invoke Fable, read credentials, or spawn another agent.
+untrusted. Never route orchestration or acceptance across this bridge. Never read credentials or spawn another agent.
 """

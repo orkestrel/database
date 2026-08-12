@@ -17,12 +17,12 @@
 > re-derives query semantics. So this is deliberately **not** an ORM and not
 > a query abstraction layer: there is no entity graph, no migration runner,
 > and no raw-SQL escape hatch — just the smallest cross-environment core that
-> earns its keep. Source: [`src/core`](../../src/core). Published through
+> earns its keep. Source: [`src/core`](../src/core). Published through
 > `@orkestrel/database`; two persistent drivers ship alongside it — a trusted-mode
-> **SQLite** driver in [`src/server`](../../src/server) (surfaced through
+> **SQLite** driver in [`src/server`](../src/server) (surfaced through
 > `@orkestrel/database/server`) with native querying, paging, aggregation, transactions, and
 > atomic migration, and a narrow-then-refine **IndexedDB** driver in
-> [`src/browser`](../../src/browser) (surfaced through `@orkestrel/database/browser`) that
+> [`src/browser`](../src/browser) (surfaced through `@orkestrel/database/browser`) that
 > pushes a key-range candidate set down to the index and lets the core engine
 > refine it to the exact result — plus the original I/O-free `MemoryDriver`
 > and file-persisted `JSONDriver`.
@@ -48,8 +48,8 @@ const db = createDatabase({
 const users = db.table('users') // hold the handle; TableInterface<{ id; name; age }>
 
 await users.set({ id: 'u1', name: 'Ada', age: 36 }) // coerced + validated through the contract
-const ada = await users.get('u1') // typed { id; name; age } | undefined — narrowed, never `as`
-const adults = await users
+await users.get('u1') // typed { id; name; age } | undefined — narrowed, never `as`
+await users
 	.query()
 	.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
 	.order({ column: 'age', direction: 'descending' })
@@ -852,6 +852,9 @@ const db = createDatabase({
 
 const users = db.table('users') // hold the handle; reuse it
 const posts = db.table('posts')
+
+users.primary // 'id' — the default primary column
+posts.primary // 'slug' — the declared override
 ```
 
 Each `indexes` entry is one (possibly compound) index of column names; they
@@ -942,11 +945,11 @@ const users = createDatabase({
 	tables: { users: { id: stringShape(), age: integerShape() } },
 }).table('users')
 
-const adults = await users.records({
+await users.records({
 	conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }],
-})
-const total = await users.count() // every row, unfiltered
-const average = await users.aggregate('average', 'age') // number | undefined
+}) // every row aged 18 or over
+await users.count() // every row, unfiltered
+await users.aggregate('average', 'age') // number | undefined
 ```
 
 ### Streaming with early exit
@@ -1100,7 +1103,7 @@ const normalized = users.contract.parse({
 	role: 'member',
 })
 if (normalized === undefined) throw new Error('Expected the row to parse')
-const id = await users.set(normalized)
+await users.set(normalized)
 ;(await users.get('u2'))?.age // 41 (a number) — the contract parsed it
 
 // A row that cannot satisfy the shape throws DatabaseError('VALIDATION').
@@ -1119,13 +1122,13 @@ const users = createDatabase({
 	},
 }).table('users')
 
-const adults = await users
+await users
 	.query()
 	.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
 	.condition({ column: 'role', operator: 'not', values: ['guest'], connector: 'and' })
 	.order({ column: 'age', direction: 'descending' })
 	.limit(10)
-	.collect()
+	.collect() // the first ten non-guest adults, oldest first
 
 await users
 	.query()
@@ -1738,7 +1741,7 @@ const db = createDatabase({
 	driver: createMemoryDriver(),
 	tables: { posts: { id: optionalShape(stringShape()), title: stringShape() } },
 })
-const key = await db.table('posts').set({ title: 'Hello' }) // a fresh UUID
+await db.table('posts').set({ title: 'Hello' }) // a fresh UUID
 
 const numbered = createDatabase({
 	driver: createMemoryDriver(),
@@ -2072,11 +2075,10 @@ const schema: TableSchema = {
 	indexes: [],
 }
 
-const { sql, parameters } = compileQuerySQL(
+compileQuerySQL(
 	{ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] },
 	schema,
-)
-// sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18]
+) // { sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18] }
 
 quoteIdentifier('order') // '"order"'
 deriveSQLiteIndexName('users', ['age']) // 'idx_5_users_3_age'
@@ -2367,30 +2369,30 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 
 ## Tests
 
-- [`tests/guides.test.ts`](../../tests/guides.test.ts) — the `## Surface` ↔ compiler-resolved public-entry bijection across `src/core`, `src/server`, and `src/browser`, including fail-closed temporary-project coverage for barrel resolution and unsupported exports, plus each interface ↔ implementing-class method bijection.
-- [`tests/src/core/cloners.test.ts`](../../tests/src/core/cloners.test.ts) — `cloneDriverMetadata` ownership: normalized deeply frozen distinct output, caller-mutation isolation, and `VALIDATION` translation for malformed, cyclic, functional, accessor, and hostile/revoked-proxy inputs without leaking raw Contract or caller errors.
-- [`tests/src/core/validators.test.ts`](../../tests/src/core/validators.test.ts) — total boundary guards for keys, columns, tables, driver schemas, migrations, inputs, and metadata, plus the strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero.
-- [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `equalsValue`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
-- [`tests/src/core/drivers/MemoryDriver.test.ts`](../../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear + `snapshot` rollback, duplicate-insert `CONFLICT`, non-JSON row isolation via native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
-- [`tests/src/core/Database.test.ts`](../../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
-- [`tests/src/core/TransactionIterator.test.ts`](../../tests/src/core/TransactionIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
-- [`tests/src/core/DriverIterator.test.ts`](../../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
-- [`tests/src/core/Table.test.ts`](../../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, coercion and error paths, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit/no-aborted-event guarantees.
-- [`tests/src/core/Query.test.ts`](../../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.
-- [`tests/src/core/Cursor.test.ts`](../../tests/src/core/Cursor.test.ts) — cursor behavior over a key snapshot: `value` / `index` / `done`, serialized overlapping `next` / `update` / `remove`, rejection recovery, synchronous runner admission, terminal close before queued work and during dispatched reads/mutations, plus transaction-ledger regressions for deleted-key skipping, unawaited normalized updates, validation rollback, and retained closed/active conflicts.
-- [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).
-- [`tests/src/server/drivers/JSONDriver.test.ts`](../../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver` persistence plus atomic insert and the exclusive point-mutation queue: queued abort/no late start, active staging restoration, cleanup-success error precedence, deterministic real-filesystem persistence-plus-cleanup dual failure with exact evidence and queue recovery, read isolation, concurrent-writer ordering, fail-closed real-filesystem coverage for non-absence reads, invalid syntax/documents/table sets/containers/rows/metadata, byte preservation, no partial publication, application-invalid row retention, payload-safe rejection, strict stream paging, and same-instance external-repair retry; synchronous root/scoped stamp and migration ownership, deeply frozen distinct copy-out, deployed-schema-first open, isolated callback/root-migration candidates whose rows/schema/metadata publish only after file replacement succeeds, transaction-time root scan/stream continuation conflicts with terminal cleanup, and post-native-rollback rejection replacement.
-- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s native surface: deployed-metadata-first open and reconciliation; fail-closed malformed metadata, physical schema disagreement, and persisted-table loss before DDL, including deterministic first-loss evidence, physical non-recreation, external repair, and same-driver retry; root/scoped stamp/migration ownership and distinct deeply frozen copy-out; atomic insert/duplicate `CONFLICT`; point-mutation abort boundaries; strict direct records/aggregate/stream paging; native exact-or-refine query and aggregate paths; repeatable schema-aware snapshot capture/replay plus real dropped-table and exclusive-lock failure containment/recovery; atomic `MigrationInput` schema/rows/metadata at the root; fixed-literal savepoint containment for a caught migration failure while its callback transaction remains active; candidate-schema publication only after commit; callback transaction barriers/invalidation including root continuation cleanup; payload-safe rejection; post-native-rollback rejection replacement; backend-fault mapping; and engine parity.
-- [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — the SQLite bridge: `quoteIdentifier`, codecs, row extraction, `deriveSQLiteIndexName` exact bytes, and the `matchesConditionExactly` / `matchesOrderExactly` / `matchesQueryExactly` / `matchesAggregateExactly` / `matchesSQLiteAffinity` predicates.
-- [`tests/src/server/compilers.test.ts`](../../tests/src/server/compilers.test.ts) — the coherent SQL-emitter cluster: column/field/aggregate compilation, table/index/migration DDL, and the strict-page `QueryInput` → SQL pipeline with exact statements and parameters.
-- [`tests/src/server/parity.test.ts`](../../tests/src/server/parity.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `SQLiteDriver` (both exact-path and refine-path queries) produce identical rows/counts/aggregates.
-- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, native narrow-then-refine queries, snapshot capture-replay, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
-- [`tests/src/browser/helpers.test.ts`](../../tests/src/browser/helpers.test.ts) — the pushdown planner: `conditionToRange` over every comparison operator, `selectPlan` index/primary selection and lossless fallbacks, backend-error mapping, and exact `deriveIndexedDBIndexName` bytes.
-- [`tests/src/browser/factories.test.ts`](../../tests/src/browser/factories.test.ts) — `createIndexedDBDriver` returns a working `DriverInterface` instance (a round-trip end to end).
-- [`tests/src/browser/parity.test.ts`](../../tests/src/browser/parity.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `IndexedDBDriver` produce identical rows/counts, including pushdown edge cases (`below`/`to` on a secondary-indexed column, a reversed `between`).
+- [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ compiler-resolved public-entry bijection across `src/core`, `src/server`, and `src/browser`, including fail-closed temporary-project coverage for barrel resolution and unsupported exports, plus each interface ↔ implementing-class method bijection.
+- [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — `cloneDriverMetadata` ownership: normalized deeply frozen distinct output, caller-mutation isolation, and `VALIDATION` translation for malformed, cyclic, functional, accessor, and hostile/revoked-proxy inputs without leaking raw Contract or caller errors.
+- [`tests/src/core/validators.test.ts`](../tests/src/core/validators.test.ts) — total boundary guards for keys, columns, tables, driver schemas, migrations, inputs, and metadata, plus the strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero.
+- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `equalsValue`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
+- [`tests/src/core/drivers/MemoryDriver.test.ts`](../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear + `snapshot` rollback, duplicate-insert `CONFLICT`, non-JSON row isolation via native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
+- [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
+- [`tests/src/core/TransactionIterator.test.ts`](../tests/src/core/TransactionIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
+- [`tests/src/core/DriverIterator.test.ts`](../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
+- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, coercion and error paths, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit/no-aborted-event guarantees.
+- [`tests/src/core/Query.test.ts`](../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.
+- [`tests/src/core/Cursor.test.ts`](../tests/src/core/Cursor.test.ts) — cursor behavior over a key snapshot: `value` / `index` / `done`, serialized overlapping `next` / `update` / `remove`, rejection recovery, synchronous runner admission, terminal close before queued work and during dispatched reads/mutations, plus transaction-ledger regressions for deleted-key skipping, unawaited normalized updates, validation rollback, and retained closed/active conflicts.
+- [`tests/src/core/factories.test.ts`](../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).
+- [`tests/src/server/drivers/JSONDriver.test.ts`](../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver` persistence plus atomic insert and the exclusive point-mutation queue: queued abort/no late start, active staging restoration, cleanup-success error precedence, deterministic real-filesystem persistence-plus-cleanup dual failure with exact evidence and queue recovery, read isolation, concurrent-writer ordering, fail-closed real-filesystem coverage for non-absence reads, invalid syntax/documents/table sets/containers/rows/metadata, byte preservation, no partial publication, application-invalid row retention, payload-safe rejection, strict stream paging, and same-instance external-repair retry; synchronous root/scoped stamp and migration ownership, deeply frozen distinct copy-out, deployed-schema-first open, isolated callback/root-migration candidates whose rows/schema/metadata publish only after file replacement succeeds, transaction-time root scan/stream continuation conflicts with terminal cleanup, and post-native-rollback rejection replacement.
+- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s native surface: deployed-metadata-first open and reconciliation; fail-closed malformed metadata, physical schema disagreement, and persisted-table loss before DDL, including deterministic first-loss evidence, physical non-recreation, external repair, and same-driver retry; root/scoped stamp/migration ownership and distinct deeply frozen copy-out; atomic insert/duplicate `CONFLICT`; point-mutation abort boundaries; strict direct records/aggregate/stream paging; native exact-or-refine query and aggregate paths; repeatable schema-aware snapshot capture/replay plus real dropped-table and exclusive-lock failure containment/recovery; atomic `MigrationInput` schema/rows/metadata at the root; fixed-literal savepoint containment for a caught migration failure while its callback transaction remains active; candidate-schema publication only after commit; callback transaction barriers/invalidation including root continuation cleanup; payload-safe rejection; post-native-rollback rejection replacement; backend-fault mapping; and engine parity.
+- [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the SQLite bridge: `quoteIdentifier`, codecs, row extraction, `deriveSQLiteIndexName` exact bytes, and the `matchesConditionExactly` / `matchesOrderExactly` / `matchesQueryExactly` / `matchesAggregateExactly` / `matchesSQLiteAffinity` predicates.
+- [`tests/src/server/compilers.test.ts`](../tests/src/server/compilers.test.ts) — the coherent SQL-emitter cluster: column/field/aggregate compilation, table/index/migration DDL, and the strict-page `QueryInput` → SQL pipeline with exact statements and parameters.
+- [`tests/src/server/integration.test.ts`](../tests/src/server/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `SQLiteDriver` (both exact-path and refine-path queries) produce identical rows/counts/aggregates.
+- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, native narrow-then-refine queries, snapshot capture-replay, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
+- [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the pushdown planner: `conditionToRange` over every comparison operator, `selectPlan` index/primary selection and lossless fallbacks, backend-error mapping, and exact `deriveIndexedDBIndexName` bytes.
+- [`tests/src/browser/factories.test.ts`](../tests/src/browser/factories.test.ts) — `createIndexedDBDriver` returns a working `DriverInterface` instance (a round-trip end to end).
+- [`tests/src/browser/integration.test.ts`](../tests/src/browser/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `IndexedDBDriver` produce identical rows/counts, including pushdown edge cases (`below`/`to` on a secondary-indexed column, a reversed `between`).
 
 ## See also
 
 - [`contract.md`](contract.md) — the shape DSL and `createContract` a table is built on.
-- [`AGENTS.md`](../../AGENTS.md) — the rules; §12 errors & `Result`, §14 totality, §21 minimal interface / one engine / native overrides, §22 documentation-as-contracts.
-- [`README.md`](../README.md) — the guides index.
+- [`AGENTS.md`](../AGENTS.md) — the rules; §12 errors & `Result`, §14 totality, §21 minimal interface / one engine / native overrides, §22 documentation-as-contracts.
+- [`README.md`](README.md) — the guides index.

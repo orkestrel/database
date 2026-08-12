@@ -492,11 +492,11 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	// index on `age` (so age queries push to a key-range) and none on `name` (so
 	// name queries fall back to a scan + the engine). Behavior is asserted through
 	// the observable Table API — rows / counts must be correct regardless of path.
-	const PEOPLE: readonly {
+	const PEOPLE: ReadonlyArray<{
 		readonly id: string
 		readonly name: string
 		readonly age: number
-	}[] = [
+	}> = [
 		{ id: 'u1', name: 'Ada', age: 36 },
 		{ id: 'u2', name: 'Bo', age: 22 },
 		{ id: 'u3', name: 'Cy', age: 41 },
@@ -1483,7 +1483,7 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 		],
 		indexes: [['age']],
 	}
-	const ROWS: readonly { readonly id: string; readonly age?: number }[] = [
+	const ROWS: ReadonlyArray<{ readonly id: string; readonly age?: number }> = [
 		{ id: 'a', age: 10 },
 		{ id: 'b' },
 	]

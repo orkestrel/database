@@ -3,3 +3,6 @@
 
 # Build output (also gitignored, listed for explicitness).
 dist/
+
+# Generated single-file application showcase.
+demo/showcase.html

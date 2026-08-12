@@ -48,6 +48,8 @@ Classify each row:
 
 “Deferred” is not a final classification for in-scope work.
 
+A defect found after its row closed is not in-scope work of this matrix. Record it against the capability it belongs to and carry it into the next matrix — unless it falsifies its row's claim through a path this package itself ships, which makes it this matrix's repair.
+
 ## Convert evidence into design
 
 Before implementation:

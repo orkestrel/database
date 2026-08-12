@@ -14,7 +14,7 @@ import { createContract, objectShape } from '@orkestrel/contract'
 import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
 import { Table } from './Table.js'
-import { TransactionScope } from './TransactionScope.js'
+import type { TransactionScope } from './TransactionScope.js'
 
 /**
  * A table-only database view bound to one driver transaction scope.

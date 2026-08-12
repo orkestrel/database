@@ -507,7 +507,7 @@ export async function createForeignKeyFixture(
  * @returns The two-table schema (`users` + `posts`)
  */
 export function driverSchema(options?: {
-	indexes?: readonly (readonly string[])[]
+	indexes?: ReadonlyArray<readonly string[]>
 }): readonly TableSchema[] {
 	return [
 		{

@@ -50,7 +50,7 @@ describe('Database lifecycle', () => {
 	it('retries a failed lazy driver open and publishes one successful open transition', async () => {
 		const memory = createMemoryDriver()
 		const failure = new Error('first open failed')
-		const opens: (readonly TableSchema[])[] = []
+		const opens: Array<readonly TableSchema[]> = []
 		const driver: DriverInterface = {
 			...createMemoryAdapter(memory),
 			async open(schema) {
@@ -690,14 +690,14 @@ describe('transaction() abort signal (snapshot floor)', () => {
 // The DatabaseEventMap event names recorded across the emitter tests — fed to the shared
 // `recordEmitterEvents` (AGENTS §16.1: the per-event wiring is centralized; this file
 // keeps only the names its scenarios observe).
-const DATABASE_EVENTS: readonly (keyof DatabaseEventMap)[] = [
+const DATABASE_EVENTS: ReadonlyArray<keyof DatabaseEventMap> = [
 	'open',
 	'close',
 	'transaction',
 	'commit',
 	'rollback',
 ]
-const MIGRATE_EVENTS: readonly (keyof DatabaseEventMap)[] = ['migrate']
+const MIGRATE_EVENTS: ReadonlyArray<keyof DatabaseEventMap> = ['migrate']
 
 describe('Database — emitter (push observation surface)', () => {
 	it('fires open once on lazy first-use connect and then fires terminal close', async () => {

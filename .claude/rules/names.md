@@ -93,18 +93,16 @@ Module helpers have no owning entity at the call site, so default to `{verb}{Nou
 
 ## General vocabulary
 
+The root design laws in `AGENTS.md` — one term per concept, boolean behavior switches, `undefined` absence, derived state, real domain states, and named discriminants — bind here. This section adds only their naming specifics:
+
 - Describe what a thing is, not its implementation.
 - Prefer short common English; avoid jargon, abbreviations, and non-universal acronyms.
-- One concept has one word project-wide. Do not alternate `count`/`length`/`size`/`total` or `abort`/`cancel`.
 - Properties are nouns; methods are verbs.
 - Booleans read as assertions: `aborted`, `exhausted`, `expired`.
-- A binary behavior switch is a boolean, such as `bail`; never model it as `'continue' | 'halt'`.
-- Genuine discriminants, multi-state lifecycles, conventional value pairs (`ascending`/`descending`, `and`/`or`), and external-spec literals remain unions.
-- Absence is `undefined`, never `'none'`, `'unset'`, `'unknown'`, `''`, `-1`, or another sentinel. Use `null` only when an external protocol distinguishes it from omission.
-- Derive facts from existing state through a getter or at the use site. Do not store a duplicate boolean/string label that can drift.
-- Use a union only for irreducible modes, phases, discriminants, or external values.
 - Accessors use bare nouns, never `get*`/`set*`.
-- A discriminant names its axis (`relationship`, `command`, `category`, `operation`, `via`), never `kind` or `type`.
+- Do not alternate `count`/`length`/`size`/`total` or `abort`/`cancel`.
+- Name the axis a discriminant varies: `relationship`, `command`, `category`, `operation`, `via`.
+- A binary switch is a boolean such as `bail`, never `'continue' | 'halt'`; genuine discriminants, multi-state lifecycles, conventional value pairs (`ascending`/`descending`, `and`/`or`), and external-spec literals remain unions.
 
 ## Acronyms
 
@@ -176,12 +174,13 @@ For `_` bindings:
 
 ## Files and folders
 
-| Kind           | Pattern                                      |
-| -------------- | -------------------------------------------- |
-| Domain folder  | lowercase plural entity: `agents/`, `tools/` |
-| Implementation | PascalCase entity: `Agent.ts`                |
-| Test           | PascalCase entity + `.test`: `Agent.test.ts` |
-| Guide          | lowercase domain: `agents.md`                |
+| Kind            | Pattern                                                                          |
+| --------------- | -------------------------------------------------------------------------------- |
+| Domain folder   | lowercase plural entity: `agents/`, `tools/`                                     |
+| Implementation  | PascalCase entity: `Agent.ts`                                                    |
+| Function module | camelCase function: `renderGrid.ts`                                              |
+| Test            | source filename without extension + `.test`: `Agent.test.ts`, `useTheme.test.ts` |
+| Guide           | lowercase domain: `agents.md`                                                    |
 
 ## Fixed lifecycle vocabulary
 

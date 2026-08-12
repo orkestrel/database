@@ -485,7 +485,10 @@ export class SQLiteDriver implements DriverInterface {
 			this.#root()
 			const replacements = new Map<
 				string,
-				{ readonly names: readonly string[]; readonly values: readonly (readonly SQLiteValue[])[] }
+				{
+					readonly names: readonly string[]
+					readonly values: ReadonlyArray<readonly SQLiteValue[]>
+				}
 			>()
 			for (const [name, capture] of captured) {
 				const schema = this.#schema.get(name)
@@ -498,7 +501,7 @@ export class SQLiteDriver implements DriverInterface {
 					})
 				}
 				const names = schema.columns.map((column) => column.name)
-				const values: (readonly SQLiteValue[])[] = []
+				const values: Array<readonly SQLiteValue[]> = []
 				for (const [index, row] of rows.entries()) {
 					const key = extractKey(row, schema.primary)
 					if (!isKey(key)) {

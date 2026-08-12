@@ -5,7 +5,7 @@
 Never work from a remembered contract version or copied API list. Read:
 
 1. `package.json` and the lockfile for the declared and resolved versions.
-2. The vendored `guides/src/contract.md` when present.
+2. The vendored `guides/contract.md` when present.
 3. The installed package's declaration file and exports.
 4. Relevant package source or current canonical guide when semantics remain unclear.
 

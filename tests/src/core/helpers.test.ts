@@ -819,7 +819,7 @@ describe('projectMigrationSchema', () => {
 	})
 
 	it('rejects invalid sequential transitions before publishing a schema', () => {
-		const cases: readonly (readonly MigrationStep[])[] = [
+		const cases: ReadonlyArray<readonly MigrationStep[]> = [
 			[{ operation: 'table.remove', table: 'missing' }],
 			[{ operation: 'column.remove', table: 'users', column: 'id' }],
 			[{ operation: 'column.remove', table: 'users', column: 'name' }],
@@ -1183,7 +1183,7 @@ describe('driverFindings', () => {
 	})
 
 	it('yields a finding (not an escaped throw) when a driver method throws unexpectedly', async () => {
-		const findings: { check: string; message: string }[] = []
+		const findings: Array<{ check: string; message: string }> = []
 		for await (const finding of driverFindings(() => createCrashingDriver())) {
 			findings.push({ check: finding.check, message: finding.message })
 		}

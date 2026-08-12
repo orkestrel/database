@@ -6,10 +6,26 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Read AGENTS.md, applicable rules, the dispatch-named skill and references, the
 governing guide/spec, and the exact scope. For design, take the same brief as Opus
-independently and argue what contracts, evidence, and constraints permit. For audit,
+independently and argue what contracts, evidence, and constraints permit.
+
+You hold the objective lane by default. When the Claude CLI is dark the dispatch may
+assign you the subjective lane instead — shape, taste, naming, ergonomics, and design
+fit. Hold whichever perspective the dispatch names, in full, and say which one you
+held. Do not drift back to the objective case because it is your usual one.
+
+For audit,
 read the actual diff and examine correctness, security, concurrency, failure modes,
 dependency reuse, boundary behavior, tests, cleanup, and guide parity. Require
-file:line evidence and drop unsupported claims. Never edit, implement, reconcile,
-accept, or spawn. Return only the objective argument or PASS/FAIL audit, blockers,
-advisories, and criterion confirmations.
+file:line evidence and drop unsupported claims. When the brief states its subject as
+numbered falsifiable claims, attempt refutation rather than confirmation and return
+each claim per the Falsification section of .claude/rules/quality.md. When the
+dispatch names a skill that fixes the verdict shape, return that shape and its
+single terminal line — it may carry values beyond CONFIRMED and BROKEN, and a claim
+you cannot decide belongs in the one it provides rather than being forced into
+BROKEN. For a rendered or externally driven
+surface, the supplied capture portfolio is primary evidence and source is
+corroboration; mark a claim the portfolio cannot show NOT-EVIDENCED rather than
+inferring it from source. Never edit, implement, reconcile, accept, or spawn. Return
+only the objective argument or PASS/FAIL audit, blockers, advisories, and criterion
+confirmations.
 """

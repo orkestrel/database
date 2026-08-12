@@ -2,20 +2,9 @@
 
 ## Map ownership
 
-Use this dependency model unless a package-specific guide narrows it:
+Dependency direction across environments is the root project model in `AGENTS.md`, detailed for placement in `.claude/rules/workspace.md` and for app composition in `.claude/rules/application.md`. Read those; this reference does not restate them. Apply the same law to a dependency's `@orkestrel/<package>/browser` and `/server` exports, whose bare export is its core API.
 
-| Surface       | May depend on                                                       | Must not depend on                     |
-| ------------- | ------------------------------------------------------------------- | -------------------------------------- |
-| `src/core`    | host-independent Orkestrel core packages                            | Node, DOM, browser/server environments |
-| `src/server`  | its core and server-capable dependencies                            | browser/app environments               |
-| `src/browser` | its core and browser-capable dependencies                           | Node/server/app environments           |
-| `app/core`    | host-independent library/core and app/core logic                    | Node, DOM, app/server, app/browser     |
-| `app/server`  | app/core plus core/server libraries                                 | browser/app/browser                    |
-| `app/browser` | app/core plus core/browser libraries and shared transport contracts | Node/app/server implementation         |
-
-Browser application code reaches server behavior through shared contracts and transports, not server implementation imports.
-
-Framework packages own reusable mechanisms. Applications own workflows, policy, presentation, users, authorization decisions, and product-specific defaults.
+Ownership across packages is what those rules leave open: framework packages own reusable mechanisms, and applications own workflows, policy, presentation, users, authorization decisions, and product-specific defaults.
 
 ## Use consumers as evidence
 
@@ -52,5 +41,7 @@ Place each proof at the highest useful layer:
 - dedicated live-service package: real model/service behavior.
 
 Use the actual packages and transports. Use temporary resources or protocol-faithful fixture servers for deterministic network boundaries. Use the real external service when its behavior is the claim. Never simulate an owned package with a mock or fake.
+
+When the claim is that a foreign client can consume the stack — an editor, an agent CLI, a third-party protocol client — one representative real client of that class drives the surface end to end before the claim ships. Record the exact commands, the authentication and approval model that client needed, and every part of the surface it could not reach. Protocol-level tests prove the protocol; only the client proves the integration.
 
 Test both successful composition and contract disagreement: invalid options, unavailable capability, partial failure, abort/cleanup, version mismatch, and lifecycle ordering where applicable.

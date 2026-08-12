@@ -25,7 +25,7 @@ import { shapeToColumnSchema } from './helpers.js'
 import { DatabaseContext } from './DatabaseContext.js'
 import { DatabaseTransaction } from './DatabaseTransaction.js'
 import { Table } from './Table.js'
-import { TransactionScope } from './TransactionScope.js'
+import type { TransactionScope } from './TransactionScope.js'
 
 /**
  * A typed database view over one shared internal lifecycle and storage context.

@@ -1,85 +1,70 @@
 # Centralization and simplification
 
-## Inventory declarations
+Placement, kind purity, the wrapper test, the no-nested-function law, and barrel law live
+in `.claude/rules/architecture.md`; shared test infrastructure and helper placement live in
+`.claude/rules/tests.md`. This reference adds only the sweep those laws assume: what to
+inventory, how to classify, and what must be proven before acceptance.
 
-Inspect every touched implementation and centralized file, then sweep the full affected environments.
+## Inventory what you touched
 
-For implementation files, inventory:
+Inspect every touched implementation and centralized file, then sweep the full affected
+environments.
 
-- interfaces and type aliases;
-- module constants and data;
-- free functions, guards, parsers, factories, and schemas;
-- function declarations or assignments inside functions/methods;
-- multiple classes;
-- imports or exports left behind after moves.
+| Where               | Inventory                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implementation file | Interfaces and type aliases, module constants and data, free functions/guards/parsers/factories/schemas, function declarations or assignments inside bodies, extra classes, imports and exports stranded by a move                                            |
+| Centralized file    | Every module declaration: does it match that file's kind, is it exported, is every intentional top-level export reachable from the correct environment barrel regardless of current consumers, does it carry direct behavioral coverage when it carries logic |
+| Environment root    | Every declaration promoted there: at least two consuming modules, or it belongs to the owning module's centralized file                                                                                                                                       |
 
-Implementation files contain imports and one class. The rare runtime-self-contained entrypoint exception must be literally required for execution and must explain why sibling imports cannot work.
+The rare runtime-self-contained entrypoint exception must be literally required for
+execution and must explain why sibling imports cannot work.
 
-For centralized files, inventory every module declaration. Each declaration must:
+## Classify every function
 
-- match that file's kind;
-- be exported;
-- be reachable from the sole public barrel when public by repository law;
-- have direct behavioral coverage when it contains logic.
+| Signal                                     | Home                                                 |
+| ------------------------------------------ | ---------------------------------------------------- |
+| Reaches instance state or a sibling method | Class method                                         |
+| Pure self-contained computation            | Exported centralized helper, parser, compiler, guard |
+| Defining recursive or compositional spine  | Class method, after extracting its pure leaves       |
+| Trivial and genuinely one-use              | Inline it into the caller                            |
 
-Promote a declaration to an environment root only when multiple modules consume it. Otherwise keep it in the owning module's centralized file.
+Never move logic into a nested function to evade centralization. An anonymous callback
+passed directly to another operation stays a callback, not a hidden helper declaration.
 
-## Apply the leaf test
+## Hunt the wrapper
 
-Classify each function:
+Search callers and callees for one-line delegates, pass-through factories, getters that
+rename another public getter, duplicate guards or parsers a declared dependency already
+supplies, compatibility aliases and re-exports, and functions whose only purpose is
+avoiding a downstream rename. The architecture rules' wrapper test decides each one; a
+survivor owns a real boundary, invariant, composition, translation, lifecycle, or
+materially narrower contract. Otherwise use or rename the real symbol and update every
+consumer.
 
-1. Instance state or sibling-method access: class method.
-2. Pure, self-contained computation: exported centralized helper/parser/compiler/etc.
-3. Defining recursive/compositional engine spine: class method after extracting its pure leaves.
-4. Trivial, genuinely one-use expression: inline it.
-
-Never move logic into a nested function to evade centralization. Anonymous callbacks passed directly to another operation remain callbacks, not hidden helper declarations.
-
-## Remove superfluous wrappers
-
-Search callers and callees for:
-
-- one-line helper delegates;
-- pass-through factories;
-- getters that merely rename another public getter;
-- duplicate guards/parsers already supplied by a declared dependency;
-- compatibility aliases and re-exports;
-- functions whose only purpose is avoiding a downstream rename.
-
-A wrapper survives only if it owns a boundary, invariant, composition, translation, lifecycle, or materially narrower contract. Otherwise use or rename the real symbol and update every consumer.
-
-Do not hollow a class into public methods that each forward to one helper. Keep meaningful orchestration on the entity and export only pure leaves.
+Do not hollow a class into public methods that each forward to one helper.
 
 ## Consolidate tests
 
-Sweep test files for repeated or reusable:
+Sweep test files for repeated or reusable input and result records, builders and
+factories, recorders and event capture, wait and readiness helpers, temporary workspace or
+fixture-server setup, browser and DOM builders, event factories, and service request
+builders or response assertions. Move each into the setup file its environment owns.
 
-- input and result records;
-- builders and factories;
-- recorders and event capture;
-- wait/readiness helpers;
-- temporary workspace or fixture-server setup;
-- browser/DOM builders and event factories;
-- service request builders and response assertions.
+Add focused tests for every exported function extracted from production code. Do not create
+isolated tests for declaration-only types, constants, barrels, or error definitions.
 
-Move host-independent helpers to `tests/setup.ts`; Node helpers to `tests/setupServer.ts`; browser helpers to `tests/setupBrowser.ts`; styles helpers to `tests/setupStyles.ts`; and live-service helpers to that project's dedicated setup.
-
-Use customizable factories and inert stubs for data shapes. A scripted boundary stub may implement the real interface/protocol minimally to drive the system under test, but must not reproduce project-owned behavior or replace the integration being claimed. Otherwise use the real implementation, a temporary resource, a protocol-faithful fixture server, or the real external service.
-
-Prefer recorders over spies. Do not use mocks or fakes.
-
-Add focused tests for every exported function extracted from production code. Do not create isolated tests for declaration-only types, constants, barrels, or error definitions.
-
-## Run the cleanup sweep
+## Prove the sweep
 
 Before acceptance, prove:
 
 - no stray declarations remain in implementation files;
 - no non-exported or wrong-kind declaration remains in centralized files;
-- no prohibited nested function declaration/assignment remains;
+- no prohibited nested function declaration or assignment remains;
 - no duplicate or rename-only wrapper remains;
 - every move updated imports, barrels, guides, and tests;
 - test helpers are consolidated without over-generalizing one-off setup;
-- files are valid UTF-8 and contain no replacement characters, mojibake, unintended control characters, or accidental trailing debris.
+- files are valid UTF-8 with no replacement characters, mojibake, unintended control
+  characters, or accidental trailing debris.
 
-Review the complete diff after formatting. Formatting cannot substitute for the structural sweep.
+Review the complete diff after formatting. Formatting cannot substitute for the structural
+sweep.

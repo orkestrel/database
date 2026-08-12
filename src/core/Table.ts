@@ -29,7 +29,7 @@ import {
 import { Cursor } from './Cursor.js'
 import { DatabaseIterator } from './DatabaseIterator.js'
 import { Query } from './Query.js'
-import { TransactionScope } from './TransactionScope.js'
+import type { TransactionScope } from './TransactionScope.js'
 import { validatePage } from './validators.js'
 
 /**
@@ -110,8 +110,8 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	get(key: Key): Promise<T | undefined>
-	get(keys: readonly Key[]): Promise<readonly (T | undefined)[]>
-	get(keys: Key | readonly Key[]): Promise<(T | undefined) | readonly (T | undefined)[]> {
+	get(keys: readonly Key[]): Promise<ReadonlyArray<T | undefined>>
+	get(keys: Key | readonly Key[]): Promise<(T | undefined) | ReadonlyArray<T | undefined>> {
 		return this.#track(async () => {
 			await this.#ready()
 			if (isArray(keys)) return this.#each(keys, (key) => this.#read(key))

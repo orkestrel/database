@@ -12,30 +12,32 @@ paths:
 
 # Workspace, environments, builds, and scripts
 
-Use only the environments a project needs, but preserve this dependency model.
+Use only the environments a project needs, and keep the root dependency model intact while doing it.
 
 ## Environments
 
-| Path           | Purpose                                            |
-| -------------- | -------------------------------------------------- |
-| `src/core/`    | Published host-independent library                 |
-| `src/browser/` | Published browser-only library                     |
-| `src/server/`  | Published Node-only library                        |
-| `src/styles/`  | Optional SCSS bundle producing `index.css`         |
-| `src/bin/`     | Optional executable entry; never a public barrel   |
-| `app/core/`    | Shared application logic with an `index.ts` barrel |
-| `app/browser/` | Browser app; `main.ts` entry, not a barrel         |
-| `app/server/`  | Node server app; `main.ts` entry                   |
-| `tests/`       | Mirrors src/app environments                       |
-| `configs/`     | Thin target wrappers around root configs           |
+| Path           | Purpose                                                       |
+| -------------- | ------------------------------------------------------------- |
+| `src/core/`    | Published host-independent library                            |
+| `src/browser/` | Published browser-only library                                |
+| `src/server/`  | Published Node-only library                                   |
+| `src/styles/`  | Optional SCSS bundle producing `index.css`                    |
+| `src/bin/`     | Optional executable; `main.ts` entry, never a public barrel   |
+| `app/core/`    | Shared application logic with an `index.ts` barrel            |
+| `app/browser/` | Browser app; `main.ts` entry, not a barrel                    |
+| `app/server/`  | Node server app; `main.ts` entry                              |
+| `tests/`       | Mirrors src/app environments; root holds cross-cutting proofs |
+| `configs/`     | Thin target wrappers around root configs                      |
 
-- Browser/server import core; core imports neither.
-- `app/core` is host-independent.
-- `app/server` may import app/core and core/server libraries; it never imports browser code.
-- `app/browser` may import app/core and core/browser libraries. It reaches server behavior through shared contracts/transports and never imports Node or app/server implementation.
-- Typical browser-app domains: `components/`, `pages/`, `composables.ts`, `controllers/`, `services/`, `stores/`.
-- Typical server-app domains: `handlers/`, `middlewares.ts`, `routes.ts`.
+- Dependency direction is the root project model in `AGENTS.md` and is not restated here; this file governs where the environments live and how they are configured.
+- Typical browser-app domains: `components/`, `pages/`, `composables/`, `controllers/`, `services/`, `stores/`.
+- Typical server-app domains: `handlers.ts`, `middlewares.ts`, `routes.ts`.
 - `src/styles/index.ts` is a side-effect entry importing `./index.scss`.
+- `src/bin/main.ts` is the executable entry, built to `dist/bin/main.js`. The name is fixed, as it
+  is for `app/browser/main.ts` and `app/server/main.ts`, so every runtime entry in a workspace is
+  found at the same name.
+- `package.json`'s `bin` key is the installed command name. The entry path is the value and does
+  not carry that name.
 
 ## Aliases
 
@@ -58,6 +60,9 @@ Define aliases in `tsconfig.json` first. `vite.config.ts` derives from `compiler
 - `*/types.ts`: public API contracts.
 - `configs/src/` and `configs/app/`: thin per-target wrappers, including optional
   `configs/src/*bin*` files. Shared logic remains in root configs.
+- `configs/helpers.ts`: the one permitted leaf under `configs/`. It imports nothing from the
+  workspace, which is what keeps it a leaf. Each `configs/src/*.config.ts` imports the root config
+  rather than the leaf, so shared build logic stays in one place.
 
 Environment rules:
 
@@ -74,7 +79,7 @@ Environment rules:
 | `dist/src/browser` | Browser library + declarations | ES              |
 | `dist/src/server`  | Server library + declarations  | ES and CJS      |
 | `dist/src/styles`  | Compiled `index.css`           | ES wrapper      |
-| `dist/bin`         | Optional executable            | ES with shebang |
+| `dist/bin`         | Optional executable `main.js`  | ES with shebang |
 | `dist/app/browser` | Browser application            | target-defined  |
 | `dist/app/server`  | Server application             | CJS             |
 | `dist/showcase`    | Single-file `index.html` demo  | self-contained  |
@@ -88,7 +93,8 @@ Environment rules:
 
 ## Test project matrix
 
-`vite.config.ts` defines one Vitest project per src/app axis × environment:
+`vite.config.ts` defines Vitest projects on two axes. The first is one project per src/app axis ×
+environment:
 
 | Project       | Files                  | Environment         | Setup                                           |
 | ------------- | ---------------------- | ------------------- | ----------------------------------------------- |
@@ -101,13 +107,37 @@ Environment rules:
 | `app:browser` | `tests/app/browser/**` | Playwright Chromium | `setup.ts`, `setupBrowser.ts`                   |
 | `app:server`  | `tests/app/server/**`  | Node                | `setup.ts`, `setupServer.ts`                    |
 
+The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
+one environment, so each is its own project:
+
+| Project       | Files                       | Proves                                                         | In `test` |
+| ------------- | --------------------------- | -------------------------------------------------------------- | --------- |
+| `policy`      | `tests/policy.test.ts`      | Every source file obeys the syntactic coding and placement law | Yes       |
+| `config`      | `tests/config.test.ts`      | Root configuration resolves its aliases, projects, and outputs | Yes       |
+| `guides`      | `tests/guides.test.ts`      | Every documented API exists and every public API is documented | Yes       |
+| `integration` | `tests/integration.test.ts` | The built package works when installed and driven from outside | No        |
+
+One project sits on neither axis. `probe` includes `tmp/probe/**/*.test.ts` so an agent can run a
+throwaway instrument against real sources, aliases and setup. Declare no proof there. Every test
+script names its project, so no gate runs it; its directory is ignored by git; and
+`.claude/rules/tests.md` governs what may live there.
+
+- Define a cross-cutting project only for a proof the package actually has.
+- A live-service project is the fifth kind. It is named for the service it drives, and
+  `.claude/rules/tests.md` governs it.
+- A project leaves the default run for one of two reasons: it drives a live external service, or it
+  is hermetic but slow — it spawns processes, packs, installs, or drives a real build.
+- Every isolated project has its own script, is excluded from `test`, and runs in `prepublishOnly`.
+
 Setup assets:
 
 - `tests/setup.css` declares cascade-layer order before `@import 'tailwindcss'` and its `@source`.
 - Browser setup wires `setup.css`.
 - Styles setup loads `setup.css` and the compiled cascade.
 
-Scope with `test:src`, `test:src:core`, `test:app`, `test:app:server`, and equivalent scripts.
+Scope with `test:src`, `test:src:core`, `test:app`, `test:app:server`, and equivalent scripts. Each
+cross-cutting project has its own script too: `test:policy`, `test:config`, `test:guides`,
+`test:integration`.
 
 ## Typechecking and environment isolation
 
@@ -130,7 +160,10 @@ then runs the configured scoped checks that prove environment isolation.
 | `src:server`, `app:server`   | `["ESNext"]`                      | `["node"]`        | Node; no DOM                                                                                                                             |
 | `src:styles`                 | `["ESNext"]`                      | `["vite/client"]` | Vite SCSS module declaration only                                                                                                        |
 
-Strict core is load-bearing. A host-dependent helper belongs in its host environment; for example, a `generateId` reading `node:crypto` belongs in server, not core. The worker-only globals — `name`, `onrtctransform`, `close`, `postMessage`, `dispatchEvent`, `location`, `onerror`, `onlanguagechange`, `onoffline`, `ononline`, `onrejectionhandled`, `onunhandledrejection`, `self`, `importScripts`, `fonts`, `caches`, `crossOriginIsolated`, `indexedDB`, `isSecureContext`, `origin`, `scheduler`, `createImageBitmap`, `reportError`, `cancelAnimationFrame`, `requestAnimationFrame`, `onmessage`, `onmessageerror`, `addEventListener`, and `removeEventListener` — are policy-fenced out of core sources, so the `WebWorker` declarations widen the interop surface without admitting a worker host.
+Strict core is load-bearing:
+
+- Put a host-dependent helper in its host environment. A `generateId` reading `node:crypto` belongs in server, not core.
+- Core declares `WebWorker` to widen the WHATWG interop surface, not to admit a worker host. Policy fences these worker-only globals out of core sources: `name`, `onrtctransform`, `close`, `postMessage`, `dispatchEvent`, `location`, `onerror`, `onlanguagechange`, `onoffline`, `ononline`, `onrejectionhandled`, `onunhandledrejection`, `self`, `importScripts`, `fonts`, `caches`, `crossOriginIsolated`, `indexedDB`, `isSecureContext`, `origin`, `scheduler`, `createImageBitmap`, `reportError`, `cancelAnimationFrame`, `requestAnimationFrame`, `onmessage`, `onmessageerror`, `addEventListener`, `removeEventListener`.
 
 Build/check config alignment:
 
@@ -156,10 +189,10 @@ Build/check config alignment:
 | `check:<scope>`         | On-demand environment-isolation pass                              |
 | `format`                | Format all files                                                  |
 | `format:check`          | Non-mutating whole-tree format gate                               |
-| `test`                  | Source/application projects, then guide parity                    |
+| `test`                  | Environment projects plus non-isolated cross-cutting proofs       |
 | `clean`                 | Remove `dist/`                                                    |
 | `copy <from> <to>`      | Copy while creating parent directories                            |
-| `prepublishOnly`        | `format:check → lint:check → check → build → test`                |
+| `prepublishOnly`        | The gate chain in `AGENTS.md`, then every isolated project        |
 
 Run `show` only **after** formatting. The committed `demo/showcase.html` is generated/minified; formatting after generation would expand its inlined bundle.
 

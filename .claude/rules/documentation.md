@@ -2,7 +2,7 @@
 paths:
   - '*.md'
   - 'guides/**/*.md'
-  - 'tests/guides/**/*.ts'
+  - 'tests/guides.test.ts'
   - 'src/**/types.ts'
   - 'src/**/index.ts'
   - 'app/**/types.ts'
@@ -14,7 +14,8 @@ paths:
 
 # Documentation and parity rules
 
-Documentation is an enforced contract, not explanatory decoration.
+Documentation is an enforced contract, not explanatory decoration. The Writing rules in
+`AGENTS.md` govern its prose and are not restated here.
 
 ## Authority and workflow
 
@@ -23,6 +24,7 @@ Documentation is an enforced contract, not explanatory decoration.
 - `guides/README.md` is the map: maintain both a concept index (`spec ↔ source ↔ tests ↔ showcase`) and directory index.
 - `ROADMAP.md` is the sequenced plan of record. Each chunk reaches green before the next.
 - A showcase is executable proof of public API. A missing demonstration is a missing feature, detectable by parity.
+- An integration surface's guide documents the validated hookup for each supported client: the exact commands run, the authentication and approval model that client needs, and the honest limit wherever a client cannot reach part of the surface.
 
 ## Parity
 
@@ -30,6 +32,8 @@ Documentation is an enforced contract, not explanatory decoration.
 - Every public export is documented.
 - TypeScript, SCSS, Markdown, tests, and showcase remain aligned.
 - A parity failure identifies drift; never suppress or weaken the test.
+- Falsify a prose claim the way you falsify a code claim. The parity test proves a name exists, never that a sentence about behavior is true, so run the example and read what it returns. A `// false` beside a call that returns `true` is a defect of the same kind as a wrong return value, and it reaches every consumer who installs the package.
+- Re-read the prose last, against what actually shipped. Where a change chose to document a limit rather than close it, the sentence was often drafted for the option that lost, or written more confidently than the code earns. Code rulings survive review because a test can break them; prose rulings survive because nothing tries.
 
 For behavioral interfaces/classes:
 

@@ -1,16 +1,10 @@
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
-import {
-	ENVIRONMENT_CSS,
-	environmentBoundary,
-	outputBoundary,
-	srcCore,
-	resolveWorkspacePath,
-} from '../../vite.config'
+import { environmentBoundary, outputBoundary } from '../helpers.js'
+import { srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
 	srcCore({
-		css: ENVIRONMENT_CSS,
 		publicDir: false,
 		plugins: [
 			outputBoundary('dist/src/core'),
@@ -35,9 +29,7 @@ export default defineConfig(
 				fileName: (format) => (format === 'es' ? 'index.js' : 'index.cjs'),
 			},
 			outDir: 'dist/src/core',
-			rolldownOptions: {
-				external: [/^node:/, /^@orkestrel\//],
-			},
+			rolldownOptions: { external: [/^node:/, /^@orkestrel\//] },
 		},
 	}),
 )
