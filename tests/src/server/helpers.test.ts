@@ -7,6 +7,7 @@ import {
 	encodeValue,
 	extractValues,
 	deriveSQLiteIndexName,
+	matchesAbsentPath,
 	matchesAggregateExactly,
 	matchesConditionExactly,
 	matchesQueryExactly,
@@ -424,5 +425,33 @@ describe('matchesSQLiteAffinity', () => {
 		expect(matchesSQLiteAffinity(null, 'text')).toBe(false)
 		expect(matchesSQLiteAffinity('NUMERIC', 'real')).toBe(false)
 		expect(matchesSQLiteAffinity('TEXT', 'integer')).toBe(false)
+	})
+})
+
+describe('matchesAbsentPath', () => {
+	it('reads both codes that mean nothing is there', () => {
+		// ENOTDIR is the one a host disagrees about: a path whose parent is a file
+		// reports it here and a plain absence elsewhere, for a name that can hold
+		// nothing either way.
+		expect(matchesAbsentPath(Object.assign(new Error('gone'), { code: 'ENOENT' }))).toBe(true)
+		expect(matchesAbsentPath(Object.assign(new Error('under a file'), { code: 'ENOTDIR' }))).toBe(
+			true,
+		)
+	})
+
+	it('reads every other failure as a real one', () => {
+		// The controls are drawn from outside the absent class: a refusal, a loop and
+		// a busy resource all name a path that exists or cannot be decided, so a
+		// predicate that answered on the presence of `code` alone fails here.
+		for (const code of ['EACCES', 'ELOOP', 'EBUSY', 'EISDIR', 'ENAMETOOLONG']) {
+			expect(matchesAbsentPath(Object.assign(new Error(code), { code }))).toBe(false)
+		}
+	})
+
+	it('answers false for a value that is not a coded error and never throws', () => {
+		for (const hostile of ['ENOENT', undefined, null, 42, {}, [], new Error('bare')]) {
+			expect(() => matchesAbsentPath(hostile)).not.toThrow()
+			expect(matchesAbsentPath(hostile)).toBe(false)
+		}
 	})
 })

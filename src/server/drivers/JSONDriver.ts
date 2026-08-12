@@ -30,6 +30,7 @@ import { isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { DriverIterator } from '../../core/DriverIterator.js'
+import { matchesAbsentPath } from '../helpers.js'
 
 /**
  * A persistent {@link DriverInterface} backed by a single JSON file — the
@@ -46,9 +47,11 @@ import { DriverIterator } from '../../core/DriverIterator.js'
  * primary (the table contract), so the key is recovered on load with
  * {@link extractKey} and the file need not store it. The parsed JSON crosses the
  * boundary as `unknown` and is narrowed with {@link isRecord} / {@link extractKey},
- * never asserted (AGENTS §14). Only an `ENOENT` read starts empty; every other
- * read failure or invalid existing document fails closed without publication,
- * mutation, or automatic repair. It is scan-only — it implements none of
+ * never asserted (AGENTS §14). A read that reports no document there starts empty —
+ * `ENOENT` for a plain absence, and `ENOTDIR` for a path whose parent is not a
+ * directory, which no later write could find either; every other read failure or
+ * invalid existing document fails closed without publication, mutation, or
+ * automatic repair. It is scan-only — it implements none of
  * the optional native `records` / `aggregate` hooks, so the core engine
  * over `scan` answers every query. For development, small datasets, and portable /
  * inspectable data; for large or concurrent workloads reach for a SQLite-backed
@@ -577,21 +580,19 @@ export class JSONDriver implements DriverInterface {
 		}
 	}
 
-	// Read and parse without publishing state. Only native ENOENT is absence;
-	// every existing unreadable or syntactically invalid file fails closed.
+	// Read and parse without publishing state. Absence is what the host reports when
+	// nothing is there to read: ENOENT for a plain absence, and ENOTDIR for a path
+	// whose parent is not a directory. The second is absence in the stronger sense —
+	// no file can exist at that name — and hosts disagree on which of the two they
+	// return for it, so reading only ENOENT made the same tree open on one host and
+	// fail closed on another. Every EXISTING unreadable or syntactically invalid file
+	// still fails closed, which is what this branch is for.
 	async #document(): Promise<unknown> {
 		let raw: string
 		try {
 			raw = await readFile(this.#path, 'utf-8')
 		} catch (error) {
-			if (
-				typeof error === 'object' &&
-				error !== null &&
-				'code' in error &&
-				error.code === 'ENOENT'
-			) {
-				return undefined
-			}
+			if (matchesAbsentPath(error)) return undefined
 			throw new DatabaseError('DRIVER', 'Failed to read the JSON database file', {
 				path: this.#path,
 				cause: error,
@@ -833,12 +834,19 @@ export class JSONDriver implements DriverInterface {
 			try {
 				await rm(temp, { force: true })
 			} catch (cleanup) {
-				throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
-					path: this.#path,
-					temp,
-					cause,
-					cleanup,
-				})
+				// A temp file that cannot exist was never left behind, so removing it did
+				// not fail in the sense this branch reports. `force` already absorbs
+				// ENOENT; ENOTDIR reaches here when the write failed before the temp was
+				// created because its parent is not a directory, and reporting `temp` and
+				// `cleanup` there would name residue that is not on disk.
+				if (!matchesAbsentPath(cleanup)) {
+					throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
+						path: this.#path,
+						temp,
+						cause,
+						cleanup,
+					})
+				}
 			}
 			if (isDatabaseError(cause) && cause.code === 'ABORTED') throw cause
 			throw new DatabaseError('DRIVER', 'Failed to persist the database file', {

@@ -24,6 +24,37 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
 // persisted-name derivation. Its SQLite import is type-only and cannot couple
 // the emitted JavaScript to the native package.
 
+// === Filesystem classification
+
+/**
+ * Whether a caught filesystem error reports that nothing is there to read.
+ *
+ * @remarks
+ * Two codes carry that meaning: `ENOENT` is a plain absence, and `ENOTDIR` is a
+ * path whose parent is not a directory — an absence in the stronger sense, since
+ * no file can exist at that name and no later write could find one. Hosts
+ * disagree about which of the two they report for the second shape, so a driver
+ * that reads only `ENOENT` opens on one host and fails closed on another over
+ * the same tree.
+ *
+ * Every other code — a permission refusal, a symlink loop, an unreadable
+ * existing file — is a real failure and stays one.
+ *
+ * @param error - The caught value to classify; any runtime is accepted
+ * @returns `true` when the error reports that the path holds nothing
+ *
+ * @example
+ * ```ts
+ * matchesAbsentPath(Object.assign(new Error('gone'), { code: 'ENOENT' })) // true
+ * matchesAbsentPath(Object.assign(new Error('denied'), { code: 'EACCES' })) // false
+ * matchesAbsentPath('ENOENT') // false
+ * ```
+ */
+export function matchesAbsentPath(error: unknown): boolean {
+	if (typeof error !== 'object' || error === null || !('code' in error)) return false
+	return error.code === 'ENOENT' || error.code === 'ENOTDIR'
+}
+
 // === Exactness (native ↔ engine parity gating)
 //
 // SQLiteDriver's `records` / `count` / `aggregate` / `stream` compile a

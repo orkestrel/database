@@ -1829,7 +1829,7 @@ renderer behind the table and blockquote work; the template engine behind every 
 artifact; and, consumed only at the executable boundary, the terminal prompt toolkit and the console
 reporter. The core face uses the first four and stays pure; the server face adds only `node:*`
 builtins. Development dependencies are the shared tooling baseline plus the guide-parity toolkit
-that drives [`parity.test.ts`](../../tests/guides/src/parity.test.ts). The engines floor is Node
+that drives [`parity.test.ts`](../../tests/guides.test.ts). The engines floor is Node
 `>=22.12.0`, and the build emits ES and CJS for both library faces plus an ES executable.
 
 ## Patterns
@@ -2510,7 +2510,7 @@ isMissingPathError(caught) // true only for an ENOENT error
   confirm, apply, and JSON paths.
 - [`tests/src/bin/e2e.test.ts`](../../tests/src/bin/e2e.test.ts) — the built executable driven end
   to end over real directories.
-- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — this guide against
+- [`tests/guides.test.ts`](../../tests/guides.test.ts) — this guide against
   the two barrels: every export documented, every documented symbol real, every interface method
   matched, every documented function exampled, and every link resolvable.
 

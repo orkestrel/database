@@ -301,7 +301,7 @@ missingSymbols(guide.surface(), source.exports()) // [] — every documented sym
 - [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) — `createGuide` / `createSource` + the compiled symbol/group/manifest contracts.
 - [`tests/src/core/Guide.test.ts`](../../tests/src/core/Guide.test.ts) — `Guide`'s five cached projections, constructed once, called repeatedly.
 - [`tests/src/core/Source.test.ts`](../../tests/src/core/Source.test.ts) — `Source`'s pure reflection against an in-memory fixture inventory, incl. `memberMethods` on every excluded shape (getters, setters, `static`, `#` privates, `constructor`).
-- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the drop-in guides-parity suite, run against THIS repo's own `guides/README.md` manifest — the self-dogfooding acceptance criterion.
+- [`tests/guides.test.ts`](../../tests/guides.test.ts) — the drop-in guides-parity suite, run against THIS repo's own `guides/README.md` manifest — the self-dogfooding acceptance criterion.
 
 ## See also
 

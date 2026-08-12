@@ -16,7 +16,7 @@ import {
 	findUnexampled,
 	isExternalLink,
 	missingSymbols,
-	moduleDirs,
+	normalizeDirectories,
 	parseManifest,
 	resolveLink,
 	symbolKey,
@@ -27,9 +27,9 @@ import {
 	removeProjectFile,
 	tempTypeScriptProject,
 	writeProjectFile,
-} from '../../setupServer.js'
+} from './setupServer.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const WALK_DIRS = ['src', 'guides', 'tests']
 const SELF_SPECIFIERS = [
 	'@orkestrel/database',
@@ -61,7 +61,7 @@ function readText(relative: string): string {
 
 const manifest = parseManifest(readText('guides/README.md'), 'guides')
 const entryDirectories = Array.from(
-	new Set(manifest.flatMap((entry) => moduleDirs(entry.source))),
+	new Set(manifest.flatMap((entry) => normalizeDirectories(entry.source))),
 ).sort()
 const entryPaths = entryDirectories.map((directory) => `${directory}/index.ts`)
 const entrySurfaces = deriveEntrySurfaces(join(ROOT, 'tsconfig.json'), entryPaths)
@@ -104,6 +104,10 @@ it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
 })
 
+// Every case below writes a real TypeScript project to disk and runs the compiler
+// over it, so the block's cost is seconds rather than milliseconds and the default
+// per-test budget cannot hold it under a full-suite run. The timeout states that
+// cost once for the block rather than inflating a unit test's.
 describe('compiler entry surfaces', () => {
 	it('resolves every supported kind through nested barrels in stable order', () => {
 		const project = tempTypeScriptProject({
@@ -256,7 +260,7 @@ describe('compiler entry surfaces', () => {
 			project.cleanup()
 		}
 	})
-})
+}, 120_000)
 
 describe('executable guide fences', () => {
 	it.each([
@@ -319,7 +323,7 @@ describe('executable guide fences', () => {
 for (const entry of manifest) {
 	const guide = createGuide(readText(entry.spec))
 	const source = createSource({ files, module: entry.source })
-	const surface = publicSurface(moduleDirs(entry.source))
+	const surface = publicSurface(normalizeDirectories(entry.source))
 
 	describe(`${entry.concept}`, () => {
 		it('extracts a non-empty documented surface', () => {

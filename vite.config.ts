@@ -1062,7 +1062,7 @@ export const guides = (config?: UserConfig): UserConfig =>
 			resolve,
 			test: {
 				name: { label: 'guides', color: 'green' },
-				include: ['tests/guides/**/*.test.ts'],
+				include: ['tests/guides.test.ts'],
 				exclude: ['tests/src/**/*.test.ts', 'tests/app/**/*.test.ts', 'tests/setup.test.ts'],
 				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',

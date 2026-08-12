@@ -208,7 +208,7 @@ feed.clear() // drop everything; `feed.destroyed` stays false
 
 ## Tests
 
-- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the `## Surface` ↔ `src/core` bijection (value + type exports) and the `EmitterInterface` ↔ `Emitter` method bijection.
+- [`tests/guides.test.ts`](../../tests/guides.test.ts) — the `## Surface` ↔ `src/core` bijection (value + type exports) and the `EmitterInterface` ↔ `Emitter` method bijection.
 - [`tests/src/core/Emitter.test.ts`](../../tests/src/core/Emitter.test.ts) — `on` / `emit` (typed args, registration order), `once` (fires once, auto-removes), `off` (by original handler, including a `once` wrapper), `count` / `clear` (total and per-event), `destroy` (clears, flips `destroyed`, then no-ops), initial `on` hooks, listener isolation (a throwing listener does not stop siblings; the throw routes to the `error` handler, never rethrown; every throwing listener surfaces; a throwing `error` handler is swallowed), and empty-tuple signals.
 - [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) — `createEmitter` returns a working `EmitterInterface` and honors initial `on` hooks.
 - [`tests/src/core/helpers.test.ts`](../../tests/src/core/helpers.test.ts) — `extractKeys` returns the typed own-enumerable-key union, including the empty-object case.
