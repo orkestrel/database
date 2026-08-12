@@ -14,7 +14,8 @@ import { DatabaseError } from '@src/core'
 import { cloneJSONValue, isBoolean, isFiniteNumber, isString } from '@orkestrel/contract'
 import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js'
 
-// The SQLite ↔ JS bridge for the driver. Every helper is pure and
+// The server environment's pure helpers: the SQLite ↔ JS bridge, and the
+// filesystem-error classification the file-backed driver reads. Every helper is pure and
 // total — it narrows with `typeof` / `instanceof`, never `as` (AGENTS §1, §14):
 // a value that does not fit its column's storage type encodes to `null` rather
 // than throwing, and `decodeValue` is the exact inverse. `encodeRow` /
@@ -40,6 +41,9 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
  * Every other code — a permission refusal, a symlink loop, an unreadable
  * existing file — is a real failure and stays one.
  *
+ * A caught value that is not a coded `Error` is not a report about a path, so it
+ * answers `false` rather than being read for a `code` any object could carry.
+ *
  * @param error - The caught value to classify; any runtime is accepted
  * @returns `true` when the error reports that the path holds nothing
  *
@@ -51,7 +55,7 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
  * ```
  */
 export function matchesAbsentPath(error: unknown): boolean {
-	if (typeof error !== 'object' || error === null || !('code' in error)) return false
+	if (!(error instanceof Error) || !('code' in error)) return false
 	return error.code === 'ENOENT' || error.code === 'ENOTDIR'
 }
 

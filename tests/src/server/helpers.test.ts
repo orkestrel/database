@@ -449,7 +449,20 @@ describe('matchesAbsentPath', () => {
 	})
 
 	it('answers false for a value that is not a coded error and never throws', () => {
-		for (const hostile of ['ENOENT', undefined, null, 42, {}, [], new Error('bare')]) {
+		// A bare object carrying the right code is the sharpest control: it satisfies
+		// every duck-typed reading of the shape and is still not a report a
+		// filesystem made, so a predicate reading `code` off any object fails here.
+		for (const hostile of [
+			'ENOENT',
+			undefined,
+			null,
+			42,
+			{},
+			[],
+			new Error('bare'),
+			{ code: 'ENOENT' },
+			{ code: 'ENOTDIR' },
+		]) {
 			expect(() => matchesAbsentPath(hostile)).not.toThrow()
 			expect(matchesAbsentPath(hostile)).toBe(false)
 		}
