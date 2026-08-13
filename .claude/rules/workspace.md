@@ -114,14 +114,14 @@ environment:
 The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
 one environment, so each is its own project:
 
-| Project       | Files                        | Proves                                                          | In `test` |
-| ------------- | ---------------------------- | --------------------------------------------------------------- | --------- |
-| `policy`      | `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law  | Yes       |
-| `config`      | `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs  | Yes       |
-| `guides`      | `tests/guides.test.ts`       | Every documented API exists and every public API is documented  | Yes       |
-| `conformance` | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks   | Yes       |
-| `integration` | `tests/integration.test.ts`  | The built package works when installed and driven from outside  | No        |
-| `service`     | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real | No        |
+| Project       | Files                        | Proves                                                              | In `test` |
+| ------------- | ---------------------------- | ------------------------------------------------------------------- | --------- |
+| `policy`      | `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law      | Yes       |
+| `config`      | `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs      | Yes       |
+| `guides`      | `tests/guides.test.ts`       | Every documented API exists and every public API is documented      | Yes       |
+| `conformance` | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks       | Yes       |
+| `integration` | `tests/integration.test.ts`  | The package's features work together end to end across environments | No        |
+| `service`     | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real     | No        |
 
 `conformance` and `service` are two subjects, not two names for one. `conformance` measures this
 package against an official artifact it stays compatible with and drives nothing external: the

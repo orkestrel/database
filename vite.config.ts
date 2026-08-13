@@ -93,6 +93,7 @@ export const srcBrowser = (options?: UserConfig): UserConfig =>
 				include: ['tests/src/browser/**/*.test.ts'],
 				exclude: ['tests/src/core/**/*.test.ts'],
 				setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
+
 				browser: {
 					enabled: true,
 					provider: playwright(browserOptions),
