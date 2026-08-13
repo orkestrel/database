@@ -115,6 +115,10 @@ kind. It reads declaration syntax and file name, never meaning.
 - The cleanup sweep and independent review prove kind purity across those files. A helper misfiled
   as a parser, a coercer misfiled as a guard, a compiler misfiled as a factory, and a shaper
   misfiled as a cloner are review findings, not red tests.
+- It does not decide barrel membership. It parses each file alone and resolves no module, so it
+  cannot tell whether a declaration is reachable from its barrel. That question belongs to each
+  package's `tests/guides.test.ts`, which imports the barrel and gets real resolution. Do not add
+  module resolution here to duplicate it.
 - The kind table is mandatory whether or not a test can see the violation.
 
 ## Wrapper test
@@ -231,6 +235,15 @@ Both obey:
 - If a declaration should not be public, make it a true local or runtime-private detail, or remove
   the capability for a substantive reason. Never leave an intentional reusable export stranded
   outside the barrel.
+- One-class-per-file evicts some classes from their only caller, and `export` on such a file is
+  structural rather than a statement of intent. Barrel that class when a consumer can construct it
+  from values they already hold. Intern it — out of the barrel, and named in the package's parity
+  `INTERNAL` list — when its constructor requires a value only its owner produces, or when the
+  public value is a projection of the instance rather than the instance. A class named in a public
+  signature is always barrelled.
+- Delete a barrel row whose class no consumer can construct, and delete its `@example` with it. A
+  row obliges a documented, runnable example, so a class kept public without one is drift that
+  parity cannot see.
 - When a symbol moves, update every import; never leave a compatibility re-export.
 
 ```ts
