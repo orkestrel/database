@@ -102,11 +102,20 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
 			})
 		}
-		for (const label of ['policy', 'config', 'guides', 'integration']) {
+		for (const label of ['policy', 'config', 'guides', 'conformance', 'integration']) {
 			if (!existsSync(resolve(root, `tests/${label}.test.ts`))) continue
 			expected.set(label, {
 				include: `tests/${label}.test.ts`,
 				setup: ['./tests/setup.ts'],
+			})
+		}
+		// The live-service project covers a directory rather than one proof, so its
+		// readiness module is the fact that selects it. A suite beneath
+		// `tests/service` with no setup module is a project nothing configures.
+		if (existsSync(resolve(root, 'tests/setupService.ts'))) {
+			expected.set('service', {
+				include: 'tests/service/**/*.test.ts',
+				setup: ['./tests/setup.ts', './tests/setupService.ts'],
 			})
 		}
 		expected.set('probe', { include: 'tmp/probe/**/*.test.ts', setup: ['./tests/setup.ts'] })
@@ -353,8 +362,35 @@ describe('root configuration', () => {
 		const test = Object.getOwnPropertyDescriptor(scripts, 'test')?.value
 		const config = Object.getOwnPropertyDescriptor(scripts, 'test:config')?.value
 		const integration = Object.getOwnPropertyDescriptor(scripts, 'test:integration')?.value
+		const conformance = Object.getOwnPropertyDescriptor(scripts, 'test:conformance')?.value
+		const service = Object.getOwnPropertyDescriptor(scripts, 'test:service')?.value
 		const publish = Object.getOwnPropertyDescriptor(scripts, 'prepublishOnly')?.value
 		const hasIntegration = existsSync(resolve(root, 'tests/integration.test.ts'))
+		// The optional proofs are read off the registered project set rather than off
+		// their files, because the defect this measures is a registered project no
+		// gate runs. A project selected by a path that is not yet there is still
+		// registered, and it is exactly the one whose script goes missing.
+		const rows = configuration.test?.projects
+		if (!Array.isArray(rows)) throw new Error('The root configuration carries no projects')
+		const registered = new Set<string>()
+		for (const row of rows) {
+			if (typeof row === 'function') {
+				registered.add(row.name)
+				continue
+			}
+			if (typeof row !== 'object' || row === null) continue
+			const block: unknown = Object.getOwnPropertyDescriptor(row, 'test')?.value
+			if (typeof block !== 'object' || block === null) continue
+			const named: unknown = Object.getOwnPropertyDescriptor(block, 'name')?.value
+			if (typeof named !== 'object' || named === null) continue
+			const label: unknown = Object.getOwnPropertyDescriptor(named, 'label')?.value
+			if (typeof label === 'string') registered.add(label)
+		}
+		// The population must be able to answer both ways before either answer counts.
+		expect(registered.has('config')).toBe(true)
+		expect(registered.has('control')).toBe(false)
+		const hasConformance = registered.has('conformance')
+		const hasService = registered.has('service')
 		expect(config).toBe(
 			'vitest run --config vite.config.ts --no-cache --reporter=dot --project config',
 		)
@@ -368,6 +404,25 @@ describe('root configuration', () => {
 		expect(typeof publish === 'string' && publish.includes('npm run test:integration')).toBe(
 			hasIntegration,
 		)
+		// A registered project no gate runs is a proof that never executes, and it
+		// never fails, so the suite reports green while carrying it. Conformance is
+		// hermetic and belongs to `test`; the live-service project drives a real
+		// service and belongs to `prepublishOnly` alone.
+		expect(conformance).toBe(
+			hasConformance
+				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project conformance'
+				: undefined,
+		)
+		expect(typeof test === 'string' && test.includes('npm run test:conformance')).toBe(
+			hasConformance,
+		)
+		expect(service).toBe(
+			hasService
+				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project service'
+				: undefined,
+		)
+		expect(typeof test === 'string' && test.includes('test:service')).toBe(false)
+		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(hasService)
 	})
 })
 

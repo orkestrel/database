@@ -67,6 +67,8 @@ A review that reads a diff finds what the diff shows. A review that tries to bre
 - State what the controls established and what they did not. An instrument certified only from the inside is trusted exactly where it has never been tested.
 - Treat a gap between what an instrument says it checks and what it actually matches as a defect in the instrument, not as a documented limit. A recorded blind spot buys trust only when everything outside it is genuinely covered.
 - Measure the product, not the harness. A recorded baseline that counts something about its own fixture is not evidence about the shipped surface, however often a guide quotes it.
+- Baseline a published-artifact claim against the published artifact. "Did my change move the surface" and "does this release differ from the last one" are different questions, and a diff against your own starting point answers only the first. A toolchain that re-emits declarations moves the artifact without any source edit, so every writer can correctly report an unmoved surface while the package's published contract has changed. Fetch what consumers actually have — the tarball, the deployed asset — and compare against that.
+- Prove a module cycle by loading the built artifact, not by a green suite. Tests import through the source graph and a bundler resolves it differently, so a cycle that is fatal at module-init in the shipped form can stay invisible under every test. Import each published entry point and read an export from it.
 - Adopt an instrument that settled a claim as a test before accepting the work it settled. The probe that proved a fix, carrying the control that proved the probe, is that fix's regression guard. A verification that runs once is a rehearsal, not a gate.
 
 ### Rounds and verdicts

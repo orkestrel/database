@@ -91,6 +91,12 @@ Record the substitution.
 - Never assign Grok to either lane in Claude Code or Codex. If the remaining native engine is also
   unavailable there, the pass cannot run: stop and report rather than substituting Grok.
 - Grok takes both lanes only in Cursor, and only when Opus 5 and Sol are both unavailable.
+- Treat a lane that returns no verdicts as a lane that did not run. A bench lane reporting that its
+  driver executed and its engine was never reached is a dark bench, not a result. Record the bench
+  dark from that report, re-run the lane on the substitute engine from the table above, and name in
+  the routing ledger which lane ran on which engine. Never accept a round with one lane empty.
+- Re-read bench liveness at dispatch, not at session start. A bench that probed live can be dark when
+  the lane launches.
 
 ## Tedious work goes to Grok
 
@@ -217,6 +223,13 @@ clobbered edits, formatter and build races, cache phantoms, and validation cross
    sharing one working tree contaminate each other's readings in both directions.
 6. After integration, clear shared caches if needed, then have one independent `verifier` run the
    authoritative tree-wide sweep. A writer's self-report never establishes green.
+7. The Orchestrator's own sweep is a writing dispatch and queues behind the units that own those
+   files. A script that fixes one thing across every target is the easiest way to break rule 1,
+   because it does not feel like a dispatch — nobody was named, no brief was written, and it
+   finishes in seconds. It still writes into trees a live unit owns, and a unit whose brief it
+   invalidates will repair the same drift the other way and report a state that is already false.
+   Run it before the units, or after them, or send the decision to every unit in flight per the
+   mid-campaign rule under **Dispatch anatomy**. Never beside them.
 
 ## Execution loop
 
@@ -610,17 +623,25 @@ flag is what stops the gate chain running a second time inside the five minutes.
 
 ### Reaching the approval
 
-- **Log in first** when the session is new or a day has passed. `npm login` and `npm publish` reach
-  the same browser approval, and a publish that has to run the login flow spends the window on it.
-- `npm login` backgrounded with stdin at EOF falls through to a legacy `Username:` prompt and exits
-  **zero** without authenticating. Confirm with `npm whoami` rather than an exit code.
-- npm offers its browser approval only when it sees a TTY. Without one it fails `EOTP` and there is
-  no way to answer it. Run the login, and the first publish of a layer, under
-  `script -qfc '<command>' <log>` with stdin read from a fifo a long `sleep` holds open.
-- npm prints `Press ENTER to open in the browser` and does not begin polling until that is
-  acknowledged. Send a newline into the fifo. The browser it tries to open does not exist in a
-  headless container, which is harmless.
-- Surface the approval URL to the user the moment it appears in the log, and say that approving it
+- Run `npm login` before any publish. `npm publish` does not open the browser flow: unauthenticated
+  it returns `E404` on `PUT`, which reads as a missing package rather than a missing credential.
+- Pass `--browser=false` to `npm login` and to every `npm publish`. Without it npm prints
+  `Press ENTER to open in the browser...` and blocks. Never answer that prompt with a newline: the
+  web flow consumes the newline on a later read, drops to a legacy `Username:` prompt, and exits
+  **zero** without authenticating. With the flag npm prints the URL and polls, and stdin stays
+  untouched.
+- Hold stdin open and write nothing to it. Use a fifo held open by a long `sleep`. EOF drops npm to
+  the same legacy prompt a stray newline does.
+- Run the login and every publish under `script -qfc '<command>' <log>`. npm offers the approval only
+  when it sees a TTY; without one it fails `EOTP` with no way to answer.
+- Expect two approvals. `npmjs.com/login/cli/<id>` authenticates the session; `npmjs.com/auth/cli/<id>`
+  authorizes the publish and opens the five-minute window. Tell the user both are coming, or the
+  second link reads as the first having failed.
+- Confirm authentication with `npm whoami`, never with an exit code. The legacy fallthrough exits
+  zero.
+- Re-probe `whoami` immediately before opening the window. A stored credential expires mid-session,
+  so a session-start answer does not hold.
+- Surface each approval URL the moment it appears in the log. Say that approving the publish one
   opens a five-minute window covering the rest of the layer.
 
 ### Spending the window

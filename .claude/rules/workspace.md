@@ -110,12 +110,21 @@ environment:
 The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
 one environment, so each is its own project:
 
-| Project       | Files                       | Proves                                                         | In `test` |
-| ------------- | --------------------------- | -------------------------------------------------------------- | --------- |
-| `policy`      | `tests/policy.test.ts`      | Every source file obeys the syntactic coding and placement law | Yes       |
-| `config`      | `tests/config.test.ts`      | Root configuration resolves its aliases, projects, and outputs | Yes       |
-| `guides`      | `tests/guides.test.ts`      | Every documented API exists and every public API is documented | Yes       |
-| `integration` | `tests/integration.test.ts` | The built package works when installed and driven from outside | No        |
+| Project       | Files                        | Proves                                                          | In `test` |
+| ------------- | ---------------------------- | --------------------------------------------------------------- | --------- |
+| `policy`      | `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law  | Yes       |
+| `config`      | `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs  | Yes       |
+| `guides`      | `tests/guides.test.ts`       | Every documented API exists and every public API is documented  | Yes       |
+| `conformance` | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks   | Yes       |
+| `integration` | `tests/integration.test.ts`  | The built package works when installed and driven from outside  | No        |
+| `service`     | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real | No        |
+
+`conformance` and `service` are two subjects, not two names for one. `conformance` measures this
+package against an official artifact it stays compatible with and drives nothing external: the
+tooling it measures against is installed, and any server it drives is one the proof starts itself.
+That is what makes it hermetic and keeps it in `test`. `service` drives the real thing, so it takes
+`tests/setupService.ts` for readiness, longer timeouts, and no file parallelism, and it leaves
+`test` for `prepublishOnly`.
 
 One project sits on neither axis. `probe` includes `tmp/probe/**/*.test.ts` so an agent can run a
 throwaway instrument against real sources, aliases and setup. Declare no proof there. Every test
@@ -123,8 +132,9 @@ script names its project, so no gate runs it; its directory is ignored by git; a
 `.claude/rules/tests.md` governs what may live there.
 
 - Define a cross-cutting project only for a proof the package actually has.
-- A live-service project is the fifth kind. It is named for the service it drives, and
-  `.claude/rules/tests.md` governs it.
+- A live-service project is the fifth kind. It is the `service` project above, `scripts/service.sh`
+  provisions what it drives, and `.claude/rules/tests.md` governs it. Name it `service` whatever it
+  drives.
 - A project leaves the default run for one of two reasons: it drives a live external service, or it
   is hermetic but slow — it spawns processes, packs, installs, or drives a real build.
 - Every isolated project has its own script, is excluded from `test`, and runs in `prepublishOnly`.
@@ -137,7 +147,7 @@ Setup assets:
 
 Scope with `test:src`, `test:src:core`, `test:app`, `test:app:server`, and equivalent scripts. Each
 cross-cutting project has its own script too: `test:policy`, `test:config`, `test:guides`,
-`test:integration`.
+`test:conformance`, `test:integration`, `test:service`.
 
 ## Typechecking and environment isolation
 
@@ -211,3 +221,4 @@ Run `show` only **after** formatting. The committed `demo/showcase.html` is gene
 - Store text as UTF-8.
 - Before accepting broad generated or migrated edits, scan changed text for replacement characters, mojibake, unintended control characters, and accidental trailing debris.
 - Preserve intentional Unicode punctuation and symbols; do not “clean” valid text merely because it is non-ASCII.
+- Never renormalize Unicode while rewriting a file. Retyping a line can silently fold a decomposed sequence into its precomposed form — `e` + U+0301 becoming U+00E9 — and the two render identically, so the diff reads as a no-op and review sees nothing. Where the exact code points are the subject, as in an encoding or transport proof, that fold deletes the case the test exists for while leaving it green and named. Move such a line rather than retyping it, and compare bytes with `od -c` or a code-point dump rather than by eye.

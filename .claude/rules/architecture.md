@@ -67,6 +67,25 @@ Use only the centralized files an environment needs.
   creates a directory rather than an entity and `isVacant` is a predicate rather than a `Guard<T>`,
   so both stay in `helpers.ts`. Placement follows what the function is; the name form follows
   placement.
+- Repair a violation of those forms by deciding what the function **is** first, then moving or
+  renaming to match. Both repairs exist and picking the wrong one does real damage.
+  - Wrong file, right name → **move it**. A `scan*` in `parsers.ts` is a pure lexical leaf that
+    belongs in `helpers.ts`. The barrel star-exports both, so the move leaves the published surface
+    identical.
+  - Right file, wrong name → **rename it in place**. A function returning a live entity is an entity
+    factory and belongs in `factories.ts` whatever it is called, so `restoreThing` there is misnamed,
+    not misplaced. Renaming moves the published surface and earns a version bump; that cost is the
+    correct one to pay, and it is smaller than the alternative.
+  - Never let the name choose. Relocating a correctly-placed function to escape a rename drags its
+    dependencies with it — an entity factory moved into `helpers.ts` makes that file import an
+    implementation class, and a leaf file that imports a class stops being a leaf for every module
+    beneath it.
+- Keep the leaf pair class-free. `helpers.ts` and `validators.ts` sit at the bottom of a module's
+  graph: they import types, constants, errors, and each other, and they import no implementation
+  class. Every file that constructs or drives a class — `cloners.ts`, `compilers.ts`, `factories.ts`,
+  `shapers.ts` — sits above them, consumes them, and is never consumed by them. One cycle between
+  the two leaves is the shape this produces and is acceptable; an edge running downward from a
+  class-importing file into the leaf pair is not.
 - `templates.ts` and `contracts.ts` hold data only — shipped template definitions and compiled
   contracts. A function that builds either belongs in the kind file for what it builds.
 - `handlers.ts` holds request handlers, which are functions. `routes.ts` holds data only: a route is

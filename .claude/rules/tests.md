@@ -36,12 +36,14 @@ paths:
 A proof that covers the workspace instead of one module has a fixed location, so no package invents
 its own:
 
-| Path                        | Proves                                                         |
-| --------------------------- | -------------------------------------------------------------- |
-| `tests/policy.test.ts`      | Every source file obeys the syntactic coding and placement law |
-| `tests/config.test.ts`      | Root configuration resolves its aliases, projects, and outputs |
-| `tests/guides.test.ts`      | Every documented API exists and every public API is documented |
-| `tests/integration.test.ts` | The built package works when installed and driven from outside |
+| Path                         | Proves                                                          |
+| ---------------------------- | --------------------------------------------------------------- |
+| `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law  |
+| `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs  |
+| `tests/guides.test.ts`       | Every documented API exists and every public API is documented  |
+| `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks   |
+| `tests/integration.test.ts`  | The built package works when installed and driven from outside  |
+| `tests/service/**/*.test.ts` | The live external services this package drives, driven for real |
 
 - `.claude/rules/workspace.md` names the Vitest project each location belongs to.
 - `integration.test.ts` is a reserved filename at any level. It names a scope rather than a module,
@@ -80,9 +82,11 @@ Three rules bind every probe:
 
 Live external services/models are the deliberate exception to fast hermetic defaults:
 
-- Put them in a dedicated isolated Vitest project with its own setup and longer timeout.
+- Put them in the `service` project, under `tests/service/`, with `tests/setupService.ts` for setup
+  and a longer timeout. That module's presence is what registers the project, so a live proof with
+  no readiness setup is a project nothing configures.
 - Keep them out of the default run.
-- Warm and verify service readiness in setup.
+- Warm and verify service readiness in `tests/setupService.ts`.
 - Hard-require readiness: throw loudly; never silently skip.
 - Verify service-dependent logic through that service's project, not unrelated module tests or scattered conditional skips.
 - Tune each request to the smallest input/context/output that proves one behavior without becoming brittle or expensive.
@@ -193,6 +197,14 @@ Coverage rules:
 Before acceptance:
 
 - prove every intended test file is discovered by the correct project;
+- prove every declared project is reachable from a gate. A project registered in the root
+  configuration with no script, or with a script no chain runs, is a proof that never executes — and
+  because it never executes it never fails, so the suite reports green while carrying it. Read the
+  chain, not the exit code: run each project directly once and compare that list against what `test`
+  actually invokes. The gate that would report this gap is the gate that is missing.
+- prove a declared project's include resolves to a real file. An empty project is not a passing
+  project: Vitest exits non-zero on "no test files found", so a project aimed at a path that was
+  never created stays invisible until something finally runs it.
 - inspect actual test counts and environments;
 - audit `.todo`, `.skip`, conditional skips, retries, and inflated timeouts;
 - confirm each assertion would fail for the defect it claims to catch, and that it fails rather than passes when its population is empty;

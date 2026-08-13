@@ -14,7 +14,7 @@ export default defineConfig(
 				bundleTypes: true,
 				beforeWriteFile: (path, content) => ({
 					content: /[\\/]dist[\\/]src[\\/]server[\\/]index\.d\.ts$/.test(path)
-						? content.replaceAll(/(?:\.\.\/)+core\/index\.ts/g, '@orkestrel/database')
+						? content.replaceAll(/(?:\.\.\/)+core\/index\.[jt]s/g, '@orkestrel/database')
 						: content,
 				}),
 			}),
