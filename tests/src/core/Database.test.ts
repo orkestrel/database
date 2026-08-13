@@ -14,13 +14,13 @@ import type {
 import type { UserRow } from '../../setup.js'
 import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase as userDatabase,
 	createErrorRecorder,
 	createMemoryAdapter,
 	createReconciliationDriver,
-	createRecorder,
 	IteratorSource,
 	RecordingIterator,
 	recordEmitterEvents,

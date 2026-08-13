@@ -5,8 +5,8 @@ import {
 	isDatabaseError,
 } from '@src/core'
 import { isContractError } from '@orkestrel/contract'
+import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { captureError } from '../../setup.js'
 
 describe('cloneDriverMetadata', () => {
 	it('returns a distinct normalized deeply frozen snapshot isolated from its source', () => {

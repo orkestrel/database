@@ -1,19 +1,21 @@
-// The consumer-side guides-parity drop-in (PROPOSAL §6): runs `@orkestrel/guide`'s
-// checks against this repo's own `guides/README.md` manifest — one row (Database)
-// spanning the core/server faces as a multi-dir `GuideModule` (AGENTS §22 —
-// one guide per package).
+// The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
+// this repo's own `guides/README.md` manifest — one row (Database) spanning the
+// core/browser/server faces as a multi-dir `GuideModule` (AGENTS §22 — one guide per
+// package). The five constants below are this package's own.
 
 import type { SurfaceSymbol } from '@orkestrel/guide'
 import { describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
 	createGuide,
 	createSource,
+	createSourceManager,
 	fenceImports,
 	findMissing,
 	findUnexampled,
+	findUnlisted,
 	isExternalLink,
 	missingSymbols,
 	normalizeDirectories,
@@ -21,6 +23,8 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
+import { requireValue } from '@orkestrel/test'
+import { readInventory } from '@orkestrel/test/server'
 import {
 	checkGuideFences,
 	deriveEntrySurfaces,
@@ -29,37 +33,53 @@ import {
 	writeProjectFile,
 } from './setupServer.js'
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const WALK_DIRS = ['src', 'guides', 'tests']
-const SELF_SPECIFIERS = [
-	'@orkestrel/database',
-	'@orkestrel/database/server',
-	'@orkestrel/database/browser',
-]
+/** Every fence language this package's guides are allowed to use. */
+const FENCE_LANGUAGES = Object.freeze(['ts'])
+/** The fence language whose blocks count as worked examples. */
+const EXAMPLE_LANGUAGE = 'ts'
+/** Each import specifier this package's own guides may resolve against, mapped to its face. */
+const MODULES = Object.freeze({
+	'@orkestrel/database': 'src/core',
+	'@orkestrel/database/server': 'src/server',
+	'@orkestrel/database/browser': 'src/browser',
+})
+/**
+ * Declarations deliberately kept out of the barrel, as `symbolKey` strings.
+ *
+ * `Cursor`, `DatabaseContext`, `DatabaseIterator`, `DatabaseTransaction`, `DriverIterator`,
+ * `Query`, `Table`, `TransactionIterator`, and `TransactionScope` are each exported from their
+ * own implementation file (one-class-per-file) but never star-exported from their face's
+ * `index.ts`, so they are unreachable through the published barrel — only their `*Interface`
+ * counterparts are. Naming them here is what makes that intentional rather than forgotten — and
+ * the second assertion below fails when a name here stops being stranded, so the list cannot rot.
+ */
+const INTERNAL: readonly string[] = Object.freeze([
+	'class Cursor',
+	'class DatabaseContext',
+	'class DatabaseIterator',
+	'class DatabaseTransaction',
+	'class DriverIterator',
+	'class Query',
+	'class Table',
+	'class TransactionIterator',
+	'class TransactionScope',
+])
 
-function walk(dir: string, acc: Record<string, string>): void {
-	for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
-		const relative = `${dir}/${entry.name}`
-		if (entry.isDirectory()) {
-			walk(relative, acc)
-			continue
-		}
-		if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.md')) continue
-		acc[relative] = readFileSync(join(ROOT, relative), 'utf8')
-	}
+/** Root-level files this package's guides link to. `readInventory` walks directories only. */
+const ROOT_FILES = Object.freeze(['AGENTS.md'])
+
+const root = new URL('../', import.meta.url)
+const ROOT = fileURLToPath(root)
+const files: Record<string, string> = {
+	...readInventory(root, ['src', 'guides', 'tests'], { extensions: ['.ts', '.md'] }),
 }
+for (const name of ROOT_FILES) files[name] = readFileSync(new URL(name, root), 'utf8')
+const manifest = parseManifest(
+	requireValue(files['guides/README.md'], 'Missing file: guides/README.md'),
+	'guides',
+)
+const sources = createSourceManager({ files, modules: MODULES })
 
-const files: Record<string, string> = {}
-for (const dir of WALK_DIRS) walk(dir, files)
-files['AGENTS.md'] = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
-
-function readText(relative: string): string {
-	const text = files[relative]
-	if (text === undefined) throw new Error(`Missing file: ${relative}`)
-	return text
-}
-
-const manifest = parseManifest(readText('guides/README.md'), 'guides')
 const entryDirectories = Array.from(
 	new Set(manifest.flatMap((entry) => normalizeDirectories(entry.source))),
 ).sort()
@@ -74,30 +94,6 @@ function requireDirectorySurface(directory: string): readonly SurfaceSymbol[] {
 	const surface = surfaceForDirectory(directory)
 	if (surface === undefined) throw new Error(`Missing compiler surface for '${directory}'`)
 	return surface
-}
-
-function publicSurface(directories: readonly string[]): readonly SurfaceSymbol[] {
-	const surfaces = directories.flatMap((directory) => requireDirectorySurface(directory))
-	const unique = new Map<string, (typeof surfaces)[number]>()
-	for (const symbol of surfaces) unique.set(symbolKey(symbol), symbol)
-	return Array.from(unique.values()).sort((left, right) =>
-		symbolKey(left).localeCompare(symbolKey(right)),
-	)
-}
-
-// Cross-face imports are real in this multi-face package (database.md fences import
-// `createJSONDriver` from the server subpath alongside core exports) — so the fence-import
-// check resolves each specifier to ITS OWN face's exports rather than only the current
-// manifest entry's, per the specifier → module map below.
-const SPECIFIER_MODULES: Readonly<Record<string, string>> = {
-	'@orkestrel/database': 'src/core',
-	'@orkestrel/database/server': 'src/server',
-	'@orkestrel/database/browser': 'src/browser',
-}
-function exportsFor(specifier: string): readonly string[] {
-	const module = SPECIFIER_MODULES[specifier]
-	if (module === undefined) return []
-	return requireDirectorySurface(module).map((symbol) => symbol.name)
 }
 
 it('manifest lists at least one guide', () => {
@@ -313,40 +309,50 @@ describe('executable guide fences', () => {
 		},
 	])('rejects $label with fence provenance', ({ line, source }) => {
 		const document = ['```ts', source, '```'].join('\n')
-		const patterns = createGuide(document).patterns()
-		expect(() => checkGuideFences(join(ROOT, 'tsconfig.json'), document, patterns)).toThrow(
+		const fences = createGuide(document)
+			.fences()
+			.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+			.map((fence) => fence.code)
+		expect(() => checkGuideFences(join(ROOT, 'tsconfig.json'), document, fences)).toThrow(
 			`Fence 1 (guide line ${line})`,
 		)
 	})
 })
 
 for (const entry of manifest) {
-	const guide = createGuide(readText(entry.spec))
+	const guide = createGuide(requireValue(files[entry.spec], `Missing file: ${entry.spec}`))
 	const source = createSource({ files, module: entry.source })
-	const surface = publicSurface(normalizeDirectories(entry.source))
+	const surface = Array.from(
+		new Map(
+			normalizeDirectories(entry.source)
+				.flatMap((directory) => requireDirectorySurface(directory))
+				.map((symbol) => [symbolKey(symbol), symbol] as const),
+		).values(),
+	).sort((left, right) => symbolKey(left).localeCompare(symbolKey(right)))
 
 	describe(`${entry.concept}`, () => {
+		it('uses only listed fence languages', () => {
+			expect(findUnlisted(guide.fences(), FENCE_LANGUAGES)).toEqual([])
+		})
+
 		it('extracts a non-empty documented surface', () => {
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
-		it('documents every source export', () => {
+
+		it('documents every published entry export', () => {
 			expect(missingSymbols(surface, guide.surface())).toEqual([])
 		})
-		it('documents only real exports', () => {
+		it('documents only real entry exports', () => {
 			expect(missingSymbols(guide.surface(), surface)).toEqual([])
 		})
 
-		it('keeps table, query, and transaction implementations internal', () => {
-			const names = surface.map((symbol) => symbol.name)
-			expect(names).not.toContain('Table')
-			expect(names).not.toContain('Query')
-			expect(names).not.toContain('DatabaseTransaction')
-			expect(names).not.toContain('TransactionIterator')
-			expect(names).not.toContain('TransactionScope')
-			expect(names).toContain('TableInterface')
-			expect(names).toContain('QueryInterface')
-			expect(source.methods('TableInterface')).toContain('count')
-			expect(source.methods('QueryInterface')).toContain('count')
+		it('re-exports every direct declaration that is not named internal', () => {
+			const stranded = missingSymbols(source.exports(), source.surface())
+			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
+		})
+		it('names no symbol internal that the barrel already exports', () => {
+			const stranded = missingSymbols(source.exports(), source.surface())
+			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
@@ -375,7 +381,10 @@ for (const entry of manifest) {
 		}
 
 		it('documents an example for every Surface function', () => {
-			const fences = guide.patterns()
+			const fences = guide
+				.fences()
+				.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+				.map((fence) => fence.code)
 			const names = guide
 				.surface()
 				.filter((symbol) => symbol.kind === 'function')
@@ -385,7 +394,14 @@ for (const entry of manifest) {
 
 		it('compiles every TypeScript fence against the published entry specifiers', () => {
 			expect(() =>
-				checkGuideFences(join(ROOT, 'tsconfig.json'), readText(entry.spec), guide.patterns()),
+				checkGuideFences(
+					join(ROOT, 'tsconfig.json'),
+					requireValue(files[entry.spec], `Missing file: ${entry.spec}`),
+					guide
+						.fences()
+						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+						.map((fence) => fence.code),
+				),
 			).not.toThrow()
 		}, 60_000)
 
@@ -393,7 +409,10 @@ for (const entry of manifest) {
 			const entity = group.interface.replace(/Interface$/, '')
 			describe(`${group.interface} examples`, () => {
 				it('documents an example for every method', () => {
-					const fences = guide.patterns()
+					const fences = guide
+						.fences()
+						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+						.map((fence) => fence.code)
 					const examples =
 						entity === group.interface
 							? source.examples(group.interface)
@@ -404,12 +423,28 @@ for (const entry of manifest) {
 		}
 
 		it('imports only real exports in every ```ts fence', () => {
-			for (const fence of guide.patterns()) {
-				for (const { specifier, names } of fenceImports(fence)) {
-					if (!SELF_SPECIFIERS.includes(specifier)) continue
-					expect(findMissing(names, exportsFor(specifier))).toEqual([])
+			const fences = guide.fences().filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+			for (const fence of fences) {
+				for (const { specifier, names } of fenceImports(fence.code)) {
+					const imported = sources.source(specifier)
+					if (imported === undefined) continue
+					const exported = imported.surface().map((symbol) => symbol.name)
+					expect(findMissing(names, exported)).toEqual([])
 				}
 			}
+		})
+
+		it('keeps table, query, and transaction implementations internal', () => {
+			const names = surface.map((symbol) => symbol.name)
+			expect(names).not.toContain('Table')
+			expect(names).not.toContain('Query')
+			expect(names).not.toContain('DatabaseTransaction')
+			expect(names).not.toContain('TransactionIterator')
+			expect(names).not.toContain('TransactionScope')
+			expect(names).toContain('TableInterface')
+			expect(names).toContain('QueryInterface')
+			expect(source.methods('TableInterface')).toContain('count')
+			expect(source.methods('QueryInterface')).toContain('count')
 		})
 
 		it('resolves every relative link', () => {

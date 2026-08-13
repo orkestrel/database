@@ -7,13 +7,13 @@ import {
 	optionalShape,
 	stringShape,
 } from '@orkestrel/contract'
+import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	collectRows,
 	createConstrainedUsersDatabase,
 	createErrorRecorder,
 	createMemoryAdapter,
-	createRecorder,
 	createRecordingDriver,
 	createUserRow,
 	INTEGRATION_TABLES,

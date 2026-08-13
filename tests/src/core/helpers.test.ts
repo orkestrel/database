@@ -43,8 +43,9 @@ import {
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
+import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { buildCondition, captureError } from '../../setup.js'
+import { buildCondition } from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
 // — the connector is irrelevant for a single-condition match (it only matters
