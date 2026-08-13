@@ -60,9 +60,13 @@ Define aliases in `tsconfig.json` first. `vite.config.ts` derives from `compiler
 - `*/types.ts`: public API contracts.
 - `configs/src/` and `configs/app/`: thin per-target wrappers, including optional
   `configs/src/*bin*` files. Shared logic remains in root configs.
-- `configs/helpers.ts`: the one permitted leaf under `configs/`. It imports nothing from the
-  workspace, which is what keeps it a leaf. Each `configs/src/*.config.ts` imports the root config
-  rather than the leaf, so shared build logic stays in one place.
+- `configs/helpers.ts` and `configs/browsers.ts`: the only permitted leaves under `configs/`. Each
+  imports nothing from the workspace, which is what keeps it a leaf. Each `configs/src/*.config.ts`
+  imports the root config rather than a leaf, so shared build logic stays in one place.
+- Keep `configs/helpers.ts` free of any dependency a core-only workspace does not declare. It is
+  vendored byte-identical to every workspace, so an import there must resolve in all of them.
+  `configs/browsers.ts` exists for that reason: it imports `playwright` and
+  `@vitest/browser-playwright`, and only a workspace with a browser environment is given it.
 
 Environment rules:
 
