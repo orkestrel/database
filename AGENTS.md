@@ -101,7 +101,7 @@ configs/  thin target wrappers around root Vite/TypeScript configuration
 7. **Document:** update the guide, examples, and parity contract.
 8. **Verify:** audit discovery, deferrals, and package contents as applicable. Run the required gates and read their actual output before claiming success.
 
-Quality gates before commit, in order. The acceptance gate is the non-mutating variant; run the mutating `format` and `lint` first only to converge, then prove with the checks:
+Quality gates before commit, in order. The acceptance gate is the non-mutating variant; run the mutating `lint` and then `format` first only to converge, then prove with the checks. `lint --fix` rewrites code and its output is not formatter-clean, so a `format` that ran before it leaves `format:check` failing on the file `lint` just rewrote:
 
 ```text
 npm run format:check → npm run lint:check → npm run check → npm run build → npm test

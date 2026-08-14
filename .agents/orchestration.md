@@ -421,7 +421,7 @@ The harness bridge names the concrete mechanism for each of these.
 
 ### Check the brief before you send it
 
-Run these nine checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
+Run these eleven checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
 that produces no work, because a unit given a brief that is internally consistent and factually
 wrong is right to stop.
 
@@ -461,6 +461,15 @@ wrong is right to stop.
   be read, and say in the brief that a test is named for what it proves, never for the control that
   specified it. An implementer writing one test per control otherwise takes the label as the obvious
   name, and a private brief vocabulary becomes a permanent test name.
+- Check the brief's output mechanism and its verification method against the executor's tool
+  allowlist. A read-only role cannot write a report file, cannot write a probe, and cannot run a
+  sandbox that writes, so naming any of those stops the unit on arrival over a detail the allowlist
+  already settled. Where a read-only lane needs executed evidence, produce it separately and hand it
+  over: the Orchestrator supplies the evidence and the lane rules on it.
+- Scope a fleet-wide refactor by the files that **consume** a symbol, not by the files that declare
+  it. A criterion to delete or rename anything closes only when every importer is owned, so a brief
+  scoped to the declaration alone sends the unit into a typecheck break in a file it cannot edit.
+  Count the importers before writing the owned list.
 
 ### Carry every finding
 
@@ -632,6 +641,11 @@ and propagates as files rather than as a cascade.
   prove that target's gates still green. `repair` restores `tests/setupPolicy.ts` and
   `tests/policy.test.ts`, so a vendored-only release can turn a green target red. A target bumps
   only when its own published surface moved.
+- Never edit a vendored file inside a target. `repair` restores it, so the edit is reverted and
+  reports as drift in `scaffold audit`. In this repository those same files are the published
+  `dist/host` surface, so editing one forces a bump, a publish, and a re-propagation across every
+  target. Scope a fleet-wide refactor to the files each target owns, and record the vendored
+  exclusion in the brief rather than letting each unit rediscover it.
 
 ### Preparing
 
