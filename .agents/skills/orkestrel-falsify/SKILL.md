@@ -92,6 +92,10 @@ nobody claimed.
   the orchestrator too:** a tree-wide gate run while a round is live sees the auditors' in-flight probes
   and reports a failure nobody caused. Wait for the round, or scope the command to paths no auditor
   owns. Never delete another executor's working file to make your own command pass.
+- **Tell a lane when its own engine wrote the half it is auditing, and tell it to attack that half
+  harder.** A fix round reviewed by the engine that wrote it is the case the round exists to avoid,
+  and where the pass cannot avoid it, naming it is what recovers the round. A clean pass on its own
+  engine's work is the least valuable result a lane can return.
 - Supply the evidence the subject type requires, per the table above.
 - Auditors are read-only and spawn nothing.
 - Blind reports are **immutable**. Nothing an auditor returns is edited, merged, or revised — by
@@ -143,6 +147,14 @@ Follow `references/reconcile.md`. The obligations that are not delegable:
 
 - **Reproduce every sharp finding yourself** before acting on it. An auditor's finding is a
   hypothesis until the orchestrator has run it.
+- **Build before you pack.** `npm pack` runs no build, so it ships whatever `dist/` is on disk. An
+  auditor who packs an artifact to inspect it is reading the last build, not the current source, and
+  will report deleted exports as still shipping. Run the package's build first, and say in the brief
+  that the tarball was built from the commit under audit.
+- **Check the subject before acting on a finding, not only the reasoning.** A brief that names attack
+  vectors teaches the lane those vectors matter, and a lane can hand back the brief's own questions as
+  the subject's claims — demanding coverage for a property the subject never documented. Grep the
+  subject for the claim the finding rests on. Where it is not there, the finding is against the brief.
 - **A disagreement between auditors is rarely a tie to average.** It is usually two correct answers
   to two different questions. Find the question each one answered.
 - **Bound every finding**: state what is _not_ broken, and why the adjacent behaviour that looks the

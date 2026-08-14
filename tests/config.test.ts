@@ -42,7 +42,7 @@ describe('root configuration', () => {
 			for (const key of required.keys()) {
 				if (!absent.has(key)) throw new Error('The alias population carries no required entry')
 			}
-		}).toThrowError('The alias population carries no required entry')
+		}).toThrow('The alias population carries no required entry')
 		for (const [key, expected] of required) {
 			const values = declared.get(key)
 			if (values === undefined) throw new Error(`${key} is not declared`)
@@ -102,7 +102,14 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
 			})
 		}
-		for (const label of ['policy', 'config', 'guides', 'conformance', 'integration']) {
+		for (const label of [
+			'policy',
+			'config',
+			'guides',
+			'conformance',
+			'distribution',
+			'integration',
+		]) {
 			if (!existsSync(resolve(root, `tests/${label}.test.ts`))) continue
 			expected.set(label, {
 				include: `tests/${label}.test.ts`,
@@ -218,7 +225,7 @@ describe('root configuration', () => {
 		expect(missing.delete('probe')).toBe(true)
 		expect(() => {
 			for (const [label, project] of expected) expect(missing.get(label)).toStrictEqual(project)
-		}).toThrowError(/strictly equal/u)
+		}).toThrow(/strictly equal/u)
 
 		const misconfigured = new Map(configured)
 		const probe = misconfigured.get('probe')
@@ -227,7 +234,7 @@ describe('root configuration', () => {
 		expect(() => {
 			for (const [label, project] of expected)
 				expect(misconfigured.get(label)).toStrictEqual(project)
-		}).toThrowError(/strictly equal/u)
+		}).toThrow(/strictly equal/u)
 	})
 
 	it('requires and validates every selected target wrapper', async () => {
@@ -344,10 +351,10 @@ describe('root configuration', () => {
 		const controlFound = ['configs/app/vite.server.config.ts']
 		expect(() => {
 			for (const wrapper of controlRequired) expect(controlFound).toContain(wrapper)
-		}).toThrowError(/vite\.browser/u)
-		expect(() =>
-			expect(resolve(root, 'dist/actual')).toBe(resolve(root, 'dist/control')),
-		).toThrowError(/expected/u)
+		}).toThrow(/vite\.browser/u)
+		expect(() => expect(resolve(root, 'dist/actual')).toBe(resolve(root, 'dist/control'))).toThrow(
+			/expected/u,
+		)
 	})
 
 	it('registers proof scripts in the correct gate', () => {
@@ -359,8 +366,10 @@ describe('root configuration', () => {
 		if (typeof scripts !== 'object' || scripts === null) {
 			throw new Error('The package manifest carries no scripts')
 		}
+		const publishes = Object.getOwnPropertyDescriptor(manifest, 'private')?.value !== true
 		const test = Object.getOwnPropertyDescriptor(scripts, 'test')?.value
 		const config = Object.getOwnPropertyDescriptor(scripts, 'test:config')?.value
+		const distribution = Object.getOwnPropertyDescriptor(scripts, 'test:distribution')?.value
 		const integration = Object.getOwnPropertyDescriptor(scripts, 'test:integration')?.value
 		const conformance = Object.getOwnPropertyDescriptor(scripts, 'test:conformance')?.value
 		const service = Object.getOwnPropertyDescriptor(scripts, 'test:service')?.value
@@ -390,24 +399,39 @@ describe('root configuration', () => {
 		expect(registered.has('config')).toBe(true)
 		expect(registered.has('control')).toBe(false)
 		const hasConformance = registered.has('conformance')
+		const hasDistribution = registered.has('distribution')
 		const hasService = registered.has('service')
 		expect(config).toBe(
 			'vitest run --config vite.config.ts --no-cache --reporter=dot --project config',
 		)
 		expect(typeof test === 'string' && test.includes('npm run test:config')).toBe(true)
+		expect(distribution).toBe(
+			hasDistribution
+				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution'
+				: undefined,
+		)
+		expect(typeof test === 'string' && test.includes('test:distribution')).toBe(false)
+		expect(typeof publish === 'string' && publish.includes('npm run test:distribution')).toBe(
+			hasDistribution && publishes,
+		)
+		expect(typeof publish === 'string').toBe(publishes)
 		expect(integration).toBe(
 			hasIntegration
 				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project integration'
 				: undefined,
 		)
-		expect(typeof test === 'string' && test.includes('test:integration')).toBe(false)
-		expect(typeof publish === 'string' && publish.includes('npm run test:integration')).toBe(
+		// The integration seed composes barrels and starts no process, so it runs in
+		// `test` like any other hermetic proof. `prepublishOnly` reaches it through
+		// `npm test` rather than through a second direct invocation.
+		expect(typeof test === 'string' && test.includes('npm run test:integration')).toBe(
 			hasIntegration,
 		)
+		expect(typeof publish === 'string' && publish.includes('npm run test:integration')).toBe(false)
 		// A registered project no gate runs is a proof that never executes, and it
 		// never fails, so the suite reports green while carrying it. Conformance is
-		// hermetic and belongs to `test`; the live-service project drives a real
-		// service and belongs to `prepublishOnly` alone.
+		// hermetic and belongs to `test`. A publishing workspace isolates the
+		// live-service project in `prepublishOnly`; a private workspace reaches it
+		// from `test`, because npm never runs a private package's publish lifecycle.
 		expect(conformance).toBe(
 			hasConformance
 				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project conformance'
@@ -421,8 +445,12 @@ describe('root configuration', () => {
 				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project service'
 				: undefined,
 		)
-		expect(typeof test === 'string' && test.includes('test:service')).toBe(false)
-		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(hasService)
+		expect(typeof test === 'string' && test.includes('npm run test:service')).toBe(
+			hasService && !publishes,
+		)
+		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(
+			hasService && publishes,
+		)
 	})
 })
 
@@ -562,9 +590,9 @@ describe('configuration helpers', () => {
 		expect(() => configHelpers.enforceOutputPath(expected, expected)).not.toThrow()
 		expect(() =>
 			configHelpers.enforceOutputPath(resolve(root, 'dist/outside-control'), expected),
-		).toThrowError('Build output must use its exact configured workspace directory')
+		).toThrow('Build output must use its exact configured workspace directory')
 		const outside = resolve(dirname(root), 'outside-config-control')
-		expect(() => configHelpers.enforceOutputPath(outside, outside)).toThrowError(
+		expect(() => configHelpers.enforceOutputPath(outside, outside)).toThrow(
 			'Build output must remain inside the workspace',
 		)
 	})
@@ -611,7 +639,7 @@ describe('configuration helpers', () => {
 				error: expect.unreachable,
 				resolve: Promise.resolve.bind(Promise, { id: source }),
 			}
-			await expect(Reflect.apply(hook, context, ['@src/server', source])).rejects.toThrowError(
+			await expect(Reflect.apply(hook, context, ['@src/server', source])).rejects.toThrow(
 				'Browser modules cannot depend on Node or server-only modules',
 			)
 			await expect(Reflect.apply(hook, context, ['@src/core', source])).resolves.toBeNull()

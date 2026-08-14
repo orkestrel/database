@@ -230,6 +230,16 @@ clobbered edits, formatter and build races, cache phantoms, and validation cross
    invalidates will repair the same drift the other way and report a state that is already false.
    Run it before the units, or after them, or send the decision to every unit in flight per the
    mid-campaign rule under **Dispatch anatomy**. Never beside them.
+8. A fleet pass that records a per-target status commits only the targets it recorded green. Reading
+   "is the tree dirty" instead of "did this target pass" pushes a red target the moment one exists,
+   and a flake makes that look like it worked. Refuse the failed row, name it, and re-run it alone
+   before deciding what it was.
+9. Run a fleet pass in slices that report as they finish, never as one block. A block hides its first
+   failure behind every target that follows, so the failure surfaces after the work it should have
+   stopped. A slice hands control back while most of the fleet is still unstarted.
+10. Re-run a timing or resource failure alone before believing it. Concurrent slices, builds, and
+    suites make a container miss deadlines it meets when idle, so a red result under load is a
+    question rather than an answer.
 
 ## Execution loop
 
@@ -411,7 +421,7 @@ The harness bridge names the concrete mechanism for each of these.
 
 ### Check the brief before you send it
 
-Run these seven checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
+Run these nine checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
 that produces no work, because a unit given a brief that is internally consistent and factually
 wrong is right to stop.
 
@@ -439,9 +449,18 @@ wrong is right to stop.
 - Ask what the change will do to the facts you just measured. A criterion fixed to a measured set is
   unreachable if the change alters that set, and a file marked off-limits is wrong if the change
   writes to it. Measure the state the unit will finish in, not only the state it starts from.
+- Grant both halves of a template change where the package generates the configuration it runs on.
+  The template and the repository's own materialized copy of that template's output are one change:
+  adding a fixed Vitest project moves the template, `vite.config.ts`, `package.json`, and the proof
+  file that project includes. Withhold either half and no edit to the owned files can reach the
+  gates the brief requires.
 - Name the property the unit must change, and stop. A consequence you expect to follow from it is an
   observation for the report, not a criterion. Bundled together, the unit can satisfy neither and
   cannot tell which half you meant.
+- Keep the brief's control identifiers inside the brief. Label controls so the brief's own table can
+  be read, and say in the brief that a test is named for what it proves, never for the control that
+  specified it. An implementer writing one test per control otherwise takes the label as the obvious
+  name, and a private brief vocabulary becomes a permanent test name.
 
 ### Carry every finding
 
@@ -604,6 +623,16 @@ layering would report a cycle that does not exist. Each package builds against t
 `scaffold`, never against an unpublished one, and a `scaffold` release therefore publishes on its own
 and propagates as files rather than as a cascade.
 
+`scaffold` also carries a second published surface beside `dist/src`: `package.json` ships
+`dist/host`, the vendored file set every target receives through `repair`.
+
+- Bump and publish `scaffold` when any vendored byte changes, or when the set of vendored paths
+  changes. That surface moved on its own account, and `dist/src` need not move with it.
+- Re-pin `@orkestrel/scaffold` in each target after a vendored-only release, run `repair` there, and
+  prove that target's gates still green. `repair` restores `tests/setupPolicy.ts` and
+  `tests/policy.test.ts`, so a vendored-only release can turn a green target red. A target bumps
+  only when its own published surface moved.
+
 ### Preparing
 
 1. **Bump from what the registry serves, not from the local manifest.** A repository's `version`
@@ -641,17 +670,30 @@ flag is what stops the gate chain running a second time inside the five minutes.
   zero.
 - Re-probe `whoami` immediately before opening the window. A stored credential expires mid-session,
   so a session-start answer does not hold.
-- Surface each approval URL the moment it appears in the log. Say that approving the publish one
-  opens a five-minute window covering the rest of the layer.
+- Surface each approval URL the moment it appears in the log, and take the **last** one in log order.
+  npm mints a new URL whenever an attempt restarts, and the log accumulates every one, so a URL
+  chosen by sorting rather than by position is already dead when the user opens it.
+- Re-read the log before treating an approval as failed. The chain is usually still alive on a newer
+  URL, so surface that one rather than relaunching.
+- A `404` on an approval URL usually means the publish already succeeded and consumed it. Read the
+  registry before calling it a failure.
+- Say that approving the publish one opens a five-minute window covering the rest of the layer.
 
 ### Spending the window
 
 - The window opens when the user approves, not when the first publish starts. Chain every remaining
   publish inside the same process as the gate package, so no human turn sits inside it.
 - Publish serially. Concurrent publishes collide on the auth handshake and fail each other.
-- `EOTP` inside the window is intermittent contention rather than the window closing. Retry each
-  package about three times before recording it failed, and retry a failed set once the layer ends;
-  packages have landed on the third attempt and on a later pass with no new approval.
+- **Never retry a publish that is still waiting for its authorization.** Each `npm publish` attempt
+  mints a new `authId` and invalidates the previous one, so a retry loop makes the URL a moving
+  target the user cannot approve in time. The abandoned poll then reports
+  `403 Forbidden - GET /-/v1/done?authId=…`, which reads as a permissions problem and is two attempts
+  colliding. Publish the first package of a layer with exactly one attempt.
+- Retry only an upload that failed **inside** an already-open window. `EOTP` there is intermittent
+  contention rather than the window closing: retry about three times, and retry a failed set once the
+  layer ends. Packages have landed on the third attempt and on a later pass with no new approval.
+  These are two different failures wearing similar codes; a retry fixes the second and causes the
+  first.
 - Expect a large layer to outlast one window. Size batches to what uploads in five minutes and tell
   the user how many approvals to expect, rather than discovering it mid-run.
 - Read the result from the registry, not from an exit code: a piped `npm publish` reports the exit

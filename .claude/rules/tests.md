@@ -10,8 +10,15 @@ paths:
 
 ## Test contract
 
-- Mirror source/application structure:
-  `tests/{src,app}/[environment]/[domain]/[source].test.ts`.
+- Mirror module/application structure:
+  `tests/{src,app}/[environment]/[domain]/[module].test.ts`.
+- The mirrored population is `src` and `app` alone. `configs/` is a source directory and is
+  deliberately not a mirrored root: its leaves produce the workspace's configuration rather than ship
+  in it, and they are proved from `tests/config.test.ts` beside the configuration they produce. Do
+  not add `tests/configs/`.
+- Resolve a mirrored module through `.ts`, `.tsx`, `.mts`, `.cts`, `.vue`, `.scss`, or `.css`.
+- Resolve a Sass or CSS partial through the module's leading underscore.
+- Resolve a `setup*` module test against its sibling `setup*.ts` module inside `tests/`.
 - Prefer test filenames matching entrypoints: `index.test.ts` for `index.ts`, `main.test.ts` for `main.ts`.
 - Tests are deterministic: identical inputs produce identical results.
 - Keep default suites fast: timers normally use 10–50 ms and tests make no network calls.
@@ -25,6 +32,7 @@ paths:
 - Never assert an implementation against itself. Compare the answer to a declaration, a fixture, or a second mechanism that could disagree with it. Re-deriving the answer the same way the source derives it produces a test that passes for every value the source ever returns, and it reads exactly like a real one.
 - Probe a host-varying property at runtime, on the host the test is running on, and assert against what the probe returned. Filesystem case folding, path separators, permission bits, and rename semantics differ per host, so a fixture built on one host describes that host and silently measures something else on the next.
 - Assert a runtime-chosen result as the property it must have, not as the number one run produced. Compression, timing, and buffer sizing are the runtime's choice, so pin the relationship the test depends on — that the encoded form is larger, that the second call is faster — and let the assertion fail when the input drifts out of the range where that relationship holds.
+- Measure an elapsed interval with `performance.now()`, never `Date.now()`. `Date.now()` returns whole milliseconds, so an interval built from two of its readings truncates at both ends and can under-report by a millisecond — enough to fail a boundary assertion against a timer that behaved correctly. `performance.now()` is monotonic and sub-millisecond, and it does not move when the wall clock does.
 - Give a conditional skip the mechanism that makes it inapplicable, cited, not the platform name alone. A test skipped on a platform is a test nobody re-examines; a test skipped because a named API rejects a named case is one anybody can re-check.
 - A regression test records the exact command and its failing count before the fix, and the same command's passing count after.
 - Use `it.todo()` only for explicitly out-of-scope roadmap work, never to complete the current request. Every `.skip` or conditional skip has a narrow verifiable applicability reason.
@@ -36,16 +44,20 @@ paths:
 A proof that covers the workspace instead of one module has a fixed location, so no package invents
 its own:
 
-| Path                         | Proves                                                              |
-| ---------------------------- | ------------------------------------------------------------------- |
-| `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law      |
-| `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs      |
-| `tests/guides.test.ts`       | Every documented API exists and every public API is documented      |
-| `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks       |
-| `tests/integration.test.ts`  | The package's features work together end to end across environments |
-| `tests/service/**/*.test.ts` | The live external services this package drives, driven for real     |
+| Path                         | Proves                                                                                                |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law                                        |
+| `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs, and the `configs/` leaves behind them |
+| `tests/guides.test.ts`       | Every documented API exists and every public API is documented                                        |
+| `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks                                         |
+| `tests/distribution.test.ts` | The packed package installs and resolves through its public exports                                   |
+| `tests/integration.test.ts`  | The package's features work together end to end across environments                                   |
+| `tests/service/**/*.test.ts` | The live external services this package drives, driven for real                                       |
 
 - `.claude/rules/workspace.md` names the Vitest project each location belongs to.
+- The `guides` project runs in Node with the browser disabled. Its subject is
+  documented-name-to-real-export. A proof that renders a component and compares it against a
+  definition is a composition and belongs in an `integration.test.ts` scoped to its directory.
 - `integration.test.ts` is a reserved filename at any level. It names a scope rather than a module,
   so the mirror rule does not reach it; its scope is the directory it sits in.
 - An integration test is an end-to-end test: it composes the package's own features and drives them
@@ -57,9 +69,13 @@ its own:
 - Do not put a packaging, install, or distribution check in an integration test. What the tarball
   contains is a different question from whether the features compose.
 - A test the mirror rule flags is a misplaced test until its placement is checked. Move it to the
-  location its scope names. Never widen the rule to accept it.
-- Give every nested `integration.test.ts` its own exact-path project entry. A glob such as
-  `tests/src/**/integration.test.ts` double-claims a file another project already owns.
+  location its scope names. Widen the rule only when that check shows the test already sits at the
+  location its scope names and the rule's population omits a module this ruleset mandates, and then
+  widen the population rather than admitting the individual case.
+- A nested `tests/{src,app}/<environment>/**/integration.test.ts` runs in that environment's project,
+  whose existing glob collects it exactly once. Give it a separate exact-path project entry only when
+  the proof needs different setup or a different runtime, and exclude that exact path from the
+  environment project when you do.
 
 ## Probes
 
@@ -95,7 +111,8 @@ Live external services/models are the deliberate exception to fast hermetic defa
 - Put them in the `service` project, under `tests/service/`, with `tests/setupService.ts` for setup
   and a longer timeout. That module's presence is what registers the project, so a live proof with
   no readiness setup is a project nothing configures.
-- Keep them out of the default run.
+- `.claude/rules/workspace.md` fixes which gate runs the `service` project, and that gate is not the
+  same one in a publishing and a `private: true` workspace.
 - Warm and verify service readiness in `tests/setupService.ts`.
 - Hard-require readiness: throw loudly; never silently skip.
 - Verify service-dependent logic through that service's project, not unrelated module tests or scattered conditional skips.
@@ -107,13 +124,21 @@ Live external services/models are the deliberate exception to fast hermetic defa
 A test that spawns a process, packs, installs, or drives a real build is a proof, not a unit test.
 
 - Give it its own Vitest project with its own setup and timeout.
-- Keep it out of the default run and require it in `prepublishOnly`.
+- Keep it out of the default run where the workspace has a gate that can hold it.
+  `.claude/rules/workspace.md` fixes which gate each isolated project runs from, and that placement
+  differs between a publishing and a `private: true` workspace.
+- The fixed expensive-proof projects are `distribution` and `service`.
+- A `distribution` proof reads `import.meta.env.MODE` and fails, rather than skips, on an unreachable
+  registry under `--mode release`. The publish gate invokes it that way, so a proof that skips there
+  passes the gate without ever proving the artifact installs. An ordinary local run may still skip.
 - Slow and hermetic is reason enough to isolate a proof; it need not touch an external service.
 - Where such a proof stays in a shared project, size its budget from a full contended run rather than from an isolated one. A budget that clears the isolated cost by a thin margin turns contention into a red gate reporting a timeout, which carries no diagnostic about the code and costs a full investigation to dismiss.
 
 ## Shared test infrastructure
 
 Test helpers are shared infrastructure, not local test-file clutter.
+
+`@orkestrel/test` owns the helpers every workspace repeats: the call recorder, the real delay, the JSON and async collectors, and the owned scratch directory. Import them from `@orkestrel/test`, and its Node-only helpers from `@orkestrel/test/server`. Write a helper of your own only where the package exports none for the job. The shapes below are the contract a workspace codes against, not source to copy.
 
 - Extract a fixture, recorder, event factory, async wait, renderer, scenario/data builder, protocol fixture, or DOM builder as soon as it could serve another test.
 - Any duplicate or near-duplicate helper is a defect; consolidate it into one general form.
@@ -123,7 +148,7 @@ Test helpers are shared infrastructure, not local test-file clutter.
 - Test files import shared infrastructure rather than declaring local fixture factories.
 - Never reimplement a framework helper in tests or fixtures; import the real parser, signer, flattener, or other helper.
 - Prefer small customizable factories/stubs that seed inert data for a real scenario over repeated inline setup.
-- Helper names follow module-helper naming: `createRecorder`, `buildElement`, `appendItems`, `renderRows`, `waitForDelay`, `extractDetail`.
+- Helper names follow module-helper naming: `createFixtureServer`, `buildElement`, `appendItems`, `renderRows`, `waitForReady`, `extractDetail`.
 
 Place helpers by environment:
 
@@ -134,10 +159,10 @@ Place helpers by environment:
 
 ### Recorder
 
-Use a real recorder callback instead of a framework spy when only calls/arguments matter:
+Import `createRecorder` from `@orkestrel/test` instead of a framework spy when only calls and arguments matter. It returns:
 
 ```ts
-interface TestRecorderInterface<TArgs extends readonly unknown[]> {
+interface RecorderInterface<TArgs extends readonly unknown[]> {
 	readonly calls: readonly TArgs[]
 	readonly count: number
 	readonly handler: (...args: TArgs) => void
@@ -147,11 +172,23 @@ interface TestRecorderInterface<TArgs extends readonly unknown[]> {
 
 ### Delay
 
-Use the shared delay helper; never repeat inline timeout promises:
+Import `waitForDelay` from `@orkestrel/test`; never repeat an inline timeout promise. It waits for one host timer and defaults to `0`:
 
 ```ts
-export function waitForDelay(ms = 0): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms))
+function waitForDelay(ms?: number): Promise<void>
+```
+
+### Scratch
+
+Import `createScratch` from `@orkestrel/test/server` when a proof needs real files. It allocates a temporary directory it owns, contains every path against escape, and removes the directory on `destroy`:
+
+```ts
+interface ScratchInterface {
+	readonly path: string
+	write(target: string, text: string): void
+	read(target: string): string | undefined
+	exists(target: string): boolean
+	destroy(): void
 }
 ```
 

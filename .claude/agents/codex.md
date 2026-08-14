@@ -73,6 +73,16 @@ endpoint — lockfile generation, real installs, live fetches — belongs to the
 Orchestrator's own tracked commands or a network-capable native agent. Never put it in a
 brief. A Sol exec hanging on `npm` until its cap fires is this misroute, not a slow bench.
 
+## The exec sandbox mounts `.git` read-only
+
+A `workspace-write` exec can write the working tree and cannot write `.git`. Every command
+that takes the index lock fails, `git checkout -- <file>` included.
+
+Never write a git command into a brief as a mechanism. A unit that must restore a file it
+mutated restores it by rewriting the original text, and proves it with
+`git diff --exit-code -- <file>`, which reads the index without locking it. Reading commands
+— `status`, `diff`, `log` — are unaffected and stay available.
+
 ## Recovery ladder
 
 On any interruption or missing result, in order:

@@ -95,8 +95,21 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 	'validators.ts',
 ])
 
+/**
+ * Files excluded from the module-data rule because their namespace values hold helper behavior.
+ * This exclusion also permits unrelated module data such as `export const RETRIES = 3`.
+ */
+export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts'])
+
 /** Fleet-registered folders whose direct modules each contain one named function. */
 export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze(['app/browser/composables'])
+
+/** Every ambient declaration suffix the source glob collects and the parsed population excludes. */
+export const POLICY_AMBIENT_SUFFIXES: readonly string[] = Object.freeze([
+	'.d.cts',
+	'.d.mts',
+	'.d.ts',
+])
 
 /** TypeScript source extensions whose declaration syntax the sweep reads. */
 export const POLICY_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
@@ -106,8 +119,31 @@ export const POLICY_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
 	'tsx',
 ])
 
-/** The complete TypeScript source population inspected under either workspace axis. */
+/** Every extension through which a mirrored test can name a module. */
+export const POLICY_MODULE_EXTENSIONS: readonly string[] = Object.freeze([
+	'cts',
+	'mts',
+	'ts',
+	'tsx',
+	'vue',
+	'scss',
+	'css',
+])
+
+/** Module extensions whose extensionless stem can resolve a leading-underscore partial. */
+export const POLICY_PARTIAL_EXTENSIONS: readonly string[] = Object.freeze(['scss', 'css'])
+
+/** The reserved stem prefix whose mirrored module can resolve inside the tests axis. */
+export const POLICY_TESTS_MODULE_PREFIX = 'setup'
+
+/** The complete parsed TypeScript source population under either workspace axis. */
 export const POLICY_SOURCE_GLOB = `{app,src}/**/*.{${POLICY_SOURCE_EXTENSIONS.join(',')}}`
+
+/** The complete module population available to mirrored tests under either workspace axis. */
+export const POLICY_MODULE_GLOB = `{app,src}/**/*.{${POLICY_MODULE_EXTENSIONS.join(',')}}`
+
+/** The tests-axis setup module population available to mirrored tests. */
+export const POLICY_TESTS_MODULE_GLOB = `tests/**/${POLICY_TESTS_MODULE_PREFIX}*.ts`
 
 /** The mirrored module-test population inspected under either workspace axis. */
 export const POLICY_TEST_GLOB = 'tests/{app,src}/**/*.test.ts'
@@ -166,35 +202,114 @@ export function isFunctionDomainPath(path: string): boolean {
 }
 
 /**
+ * Read the function expression an expression holds directly, through any parentheses.
+ *
+ * @param expression - The expression to unwrap.
+ * @returns The arrow or function expression it holds directly, or `undefined` for anything else.
+ */
+export function expressionToPolicyFunction(
+	expression: ts.Expression | undefined,
+): ts.ArrowFunction | ts.FunctionExpression | undefined {
+	let current = expression
+	while (current !== undefined && ts.isParenthesizedExpression(current)) {
+		current = current.expression
+	}
+	if (current === undefined) return undefined
+	return ts.isArrowFunction(current) || ts.isFunctionExpression(current) ? current : undefined
+}
+
+/**
  * Whether a variable initializer is directly a function expression.
  *
  * @param initializer - The initializer to inspect.
  * @returns `true` for a direct arrow or function expression.
  */
 export function isPolicyFunctionInitializer(initializer: ts.Expression | undefined): boolean {
-	let expression = initializer
-	while (expression !== undefined && ts.isParenthesizedExpression(expression)) {
-		expression = expression.expression
-	}
-	return (
-		expression !== undefined &&
-		(ts.isArrowFunction(expression) || ts.isFunctionExpression(expression))
-	)
+	return expressionToPolicyFunction(initializer) !== undefined
 }
 
 /**
- * Whether an expression contains module-level function syntax.
+ * Whether a module region holds a module policy function.
  *
- * @param node - The initializer subtree to inspect.
- * @returns `true` when the subtree contains an arrow or function expression.
+ * A module region is syntax outside every permitted function. A permitted function's parameters and
+ * the arguments of a call sitting inside one are read under this same rule, because the law grants
+ * those positions nothing extra.
+ *
+ * @param node - The module region to inspect.
+ * @returns `true` when the region holds an arrow or function expression the law does not permit.
+ * An arrow or function expression passed directly as a call or `new` argument is exempt itself, and
+ * reports only for what its parameters and body nest. A class expression is never function syntax.
  */
-export function hasPolicyFunctionExpression(node: ts.Node | undefined): boolean {
+export function hasModulePolicyFunction(node: ts.Node | undefined): boolean {
 	if (node === undefined) return false
 	if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true
 	if (ts.isClassExpression(node)) return false
+	if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+		if (hasModulePolicyFunction(node.expression)) return true
+		if (node.arguments !== undefined) {
+			for (const argument of node.arguments) {
+				const permitted = expressionToPolicyFunction(argument)
+				if (permitted === undefined) {
+					if (hasModulePolicyFunction(argument)) return true
+				} else if (nestsPolicyFunction(permitted)) return true
+			}
+		}
+		return false
+	}
 	let found = false
 	ts.forEachChild(node, (child) => {
-		if (!found && hasPolicyFunctionExpression(child)) found = true
+		if (!found && hasModulePolicyFunction(child)) found = true
+	})
+	return found
+}
+
+/**
+ * Whether a permitted function nests a policy function the law does not permit.
+ *
+ * The function is exempt in its own right. Its parameters read as a module region, and its body
+ * reads as the region inside a permitted function, where a nested function keeps permission only by
+ * qualifying independently as a direct callback or result.
+ *
+ * @param node - The permitted callback or returned function to inspect.
+ * @returns `true` when its parameters or body nest function syntax the law does not permit.
+ */
+export function nestsPolicyFunction(node: ts.ArrowFunction | ts.FunctionExpression): boolean {
+	for (const parameter of node.parameters) {
+		if (hasModulePolicyFunction(parameter)) return true
+	}
+	if (!ts.isBlock(node.body)) {
+		const returned = expressionToPolicyFunction(node.body)
+		if (returned !== undefined) return nestsPolicyFunction(returned)
+	}
+	return hasNestedPolicyFunction(node.body)
+}
+
+/**
+ * Whether a region inside a permitted function holds a nested policy function.
+ *
+ * A direct return keeps its permission through control flow. Every other nested function reports
+ * unless it independently qualifies as a direct callback. Class-expression members stay outside
+ * the instrument's reach.
+ *
+ * @param node - The region inside a permitted function to inspect.
+ * @returns `true` when the region holds function syntax the law does not permit.
+ */
+export function hasNestedPolicyFunction(node: ts.Node): boolean {
+	if (ts.isFunctionDeclaration(node)) return true
+	if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true
+	if (ts.isClassExpression(node)) return false
+	if (ts.isReturnStatement(node)) {
+		const returned = expressionToPolicyFunction(node.expression)
+		return returned === undefined
+			? hasModulePolicyFunction(node.expression)
+			: nestsPolicyFunction(returned)
+	}
+	if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+		return hasModulePolicyFunction(node)
+	}
+	let found = false
+	ts.forEachChild(node, (child) => {
+		if (!found && hasNestedPolicyFunction(child)) found = true
 	})
 	return found
 }
@@ -302,8 +417,8 @@ export function inspectPolicyVariables(
 	const violations: PolicyViolation[] = []
 	for (const declaration of statement.declarationList.declarations) {
 		const directFunction = isPolicyFunctionInitializer(declaration.initializer)
-		const containsFunction = hasPolicyFunctionExpression(declaration.initializer)
-		if (!directFunction && !DATA_SOURCE_FILES.includes(file)) {
+		const containsFunction = hasModulePolicyFunction(declaration.initializer)
+		if (!directFunction && !DATA_SOURCE_FILES.includes(file) && !DATA_EXEMPT_FILES.includes(file)) {
 			violations.push(
 				createPolicyViolation('data', path, 'module data sits in a data-kind file', declaration),
 			)
@@ -488,7 +603,7 @@ export function inspectPolicySource(source: PolicySource): readonly PolicyViolat
 }
 
 /**
- * Inspect an explicit source population through the same per-file route as the workspace sweep.
+ * Inspect an explicit parsed population through the same per-file route as the workspace sweep.
  *
  * @param sources - The TypeScript files to inspect.
  * @returns Every syntactic placement violation in source order.
@@ -500,51 +615,77 @@ export function inspectPolicySources(sources: readonly PolicySource[]): readonly
 }
 
 /**
- * Read the complete TypeScript source population beneath one workspace.
+ * Read the parsed TypeScript source population beneath one workspace.
  *
  * @param root - The workspace root to read.
- * @returns Every TypeScript source under the src and app axes, sorted by path.
+ * @returns Every non-ambient TypeScript source under the src and app axes, sorted by path.
  */
 export function readPolicySources(root: string): readonly PolicySource[] {
 	return globSync(POLICY_SOURCE_GLOB, { cwd: root })
+		.map(normalizePolicyPath)
+		.filter((path) => !POLICY_AMBIENT_SUFFIXES.some((suffix) => basename(path).endsWith(suffix)))
 		.sort()
 		.map((path) => ({
-			path: normalizePolicyPath(path),
+			path,
 			content: readFileSync(join(root, path), 'utf8'),
 		}))
 }
 
 /**
- * Derive the required source module for one mirrored module test.
+ * Derive the extensionless module stem for one mirrored module test.
  *
  * @param path - The workspace-relative test path.
- * @returns The required TypeScript source path, or `undefined` for a reserved scope test.
+ * @returns The extensionless module stem, or `undefined` for a reserved scope test.
  */
-export function testToPolicySource(path: string): string | undefined {
+export function testToPolicyStem(path: string): string | undefined {
 	const normalized = normalizePolicyPath(path)
 	if (basename(normalized) === 'integration.test.ts') return undefined
 	if (!normalized.startsWith('tests/') || !normalized.endsWith('.test.ts')) return undefined
-	return `${normalized.slice('tests/'.length, -'.test.ts'.length)}.ts`
+	return normalized.slice('tests/'.length, -'.test.ts'.length)
 }
 
 /**
- * Inspect mirrored test paths against an explicit source-path population.
+ * The candidate set is every module name a registered language resolves for a stem.
+ *
+ * @param stem - The extensionless workspace-relative module stem.
+ * @returns Direct modules, partial modules, then a matching tests-axis setup module.
+ */
+export function stemToPolicyCandidates(stem: string): readonly string[] {
+	const normalized = normalizePolicyPath(stem)
+	const directory = dirname(normalized).replaceAll('\\', '/')
+	const name = basename(normalized)
+	const candidates = POLICY_MODULE_EXTENSIONS.map((extension) => `${normalized}.${extension}`)
+	for (const extension of POLICY_PARTIAL_EXTENSIONS) {
+		candidates.push(`${directory}/_${name}.${extension}`)
+	}
+	if (name.startsWith(POLICY_TESTS_MODULE_PREFIX)) candidates.push(`tests/${normalized}.ts`)
+	return candidates
+}
+
+/**
+ * Inspect mirrored test paths against an explicit module-path population.
  *
  * @param tests - The module-test paths to inspect.
- * @param sources - The existing TypeScript source paths.
+ * @param modules - The existing module paths in every registered language.
  * @returns Every missing mirror violation in test-path order.
  */
 export function inspectPolicyMirrorPaths(
 	tests: readonly string[],
-	sources: ReadonlySet<string>,
+	modules: ReadonlySet<string>,
 ): readonly PolicyViolation[] {
 	const violations: PolicyViolation[] = []
 	for (const test of tests) {
 		const path = normalizePolicyPath(test)
-		const source = testToPolicySource(path)
-		if (source !== undefined && !sources.has(source)) {
+		const stem = testToPolicyStem(path)
+		if (stem === undefined) continue
+		const candidates = stemToPolicyCandidates(stem)
+		if (!candidates.some((candidate) => modules.has(candidate))) {
 			violations.push(
-				createPolicyViolation('mirror', path, `module test requires matching source ${source}`),
+				createPolicyViolation(
+					'mirror',
+					path,
+					`module test requires one matching module: ${candidates.join(', ')}`,
+				),
 			)
 		}
 	}
@@ -559,10 +700,11 @@ export function inspectPolicyMirrorPaths(
  */
 export function inspectPolicyMirrors(root: string): readonly PolicyViolation[] {
 	const tests = globSync(POLICY_TEST_GLOB, { cwd: root }).sort().map(normalizePolicyPath)
-	const sources = new Set(
-		globSync('{app,src}/**/*.ts', { cwd: root }).sort().map(normalizePolicyPath),
-	)
-	return inspectPolicyMirrorPaths(tests, sources)
+	const modules = new Set([
+		...globSync(POLICY_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
+		...globSync(POLICY_TESTS_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
+	])
+	return inspectPolicyMirrorPaths(tests, modules)
 }
 
 /**
@@ -695,6 +837,127 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 			{
 				path: 'tests/app/worker/jobs/probe.test.ts',
 				content: "import { it } from 'vitest'\nit('runs', () => {})\n",
+			},
+		],
+	},
+	{
+		label: 'rejects a module whose stem only prefixes the test stem',
+		membership: 'module paths whose exact extensionless stem differs from the test stem',
+		rule: 'mirror',
+		files: [
+			{ path: 'app/browser/WidgetPanel.vue', content: '<template></template>\n' },
+			{ path: 'tests/app/browser/Widget.test.ts', content: '' },
+		],
+	},
+	{
+		label: 'rejects a partial whose stem differs from the test stem',
+		membership: 'partial module paths whose exact underscore-free stem differs from the test stem',
+		rule: 'mirror',
+		files: [
+			{ path: 'app/browser/styles/_token.scss', content: '' },
+			{ path: 'tests/app/browser/styles/tokens.test.ts', content: '' },
+		],
+	},
+	{
+		label: 'rejects a test with no module candidate',
+		membership: 'module tests with no matching module path in any registered form',
+		rule: 'mirror',
+		files: [{ path: 'tests/app/browser/Widget.test.ts', content: '' }],
+	},
+	{
+		label: 'rejects a non-setup module inside tests',
+		membership: 'tests-axis modules whose stem does not start with setup',
+		rule: 'mirror',
+		files: [
+			{ path: 'tests/app/core/widget.ts', content: '' },
+			{ path: 'tests/app/core/widget.test.ts', content: '' },
+		],
+	},
+	{
+		label: 'rejects a type in a non-ambient env module',
+		membership: 'non-ambient TypeScript modules whose filename is not types.ts',
+		rule: 'type',
+		files: [{ path: 'app/browser/env.ts', content: 'export interface EnvironmentInterface {}\n' }],
+	},
+	{
+		label: 'rejects a property-held arrow in constants.ts',
+		membership: 'module-level function syntax not passed directly as an argument',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content: 'export const HANDLERS = Object.freeze({ run: () => undefined })\n',
+			},
+		],
+	},
+	{
+		label: 'rejects a callback parameter default function',
+		membership: 'function expressions in callback parameter defaults',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content: 'export const VALUES = Object.freeze(C.map((c = () => 1) => c))\n',
+			},
+		],
+	},
+	{
+		label: 'rejects a destructured callback parameter default function',
+		membership: 'function expressions in destructured callback parameter defaults',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content: 'export const VALUES = Object.freeze(C.map(({ f = () => 1 }) => f))\n',
+			},
+		],
+	},
+	{
+		label: 'rejects an assignment inside callback control flow',
+		membership: 'function assignments inside callback control-flow branches',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content:
+					'export const VALUES = Object.freeze(C.map((c) => { if (c) { const f = () => 1; return f() } return 2 }))\n',
+			},
+		],
+	},
+	{
+		label: 'rejects an assignment inside a direct callback',
+		membership: 'function assignments inside the body of a callback passed directly as an argument',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content:
+					'export const VALUES = Object.freeze(C.map((c) => { const f = () => c; return f() }))\n',
+			},
+		],
+	},
+	{
+		label: 'rejects a declaration inside a direct callback',
+		membership:
+			'function declarations inside the body of a callback passed directly as an argument',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content:
+					'export const LABELS = Object.freeze(COLUMNS.map((column) => { function format() { return column.label } return format() }))\n',
+			},
+		],
+	},
+	{
+		label: 'rejects an assignment two direct callbacks down',
+		membership: 'function assignments inside a callback the outer callback passes directly',
+		rule: 'function',
+		files: [
+			{
+				path: 'app/edge/constants.ts',
+				content:
+					'export const VALUES = Object.freeze(C.map((c) => wrap((d) => { const g = () => d; return g() })))\n',
 			},
 		],
 	},

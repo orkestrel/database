@@ -49,6 +49,7 @@
 		"no-debugger": "error",
 		"no-underscore-dangle": "warn",
 
+		"vitest/no-alias-methods": "error",
 		"vitest/warn-todo": "off"
 	},
 	"categories": {

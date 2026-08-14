@@ -114,21 +114,26 @@ environment:
 The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
 one environment, so each is its own project:
 
-| Project       | Files                        | Proves                                                              | In `test` |
-| ------------- | ---------------------------- | ------------------------------------------------------------------- | --------- |
-| `policy`      | `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law      | Yes       |
-| `config`      | `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs      | Yes       |
-| `guides`      | `tests/guides.test.ts`       | Every documented API exists and every public API is documented      | Yes       |
-| `conformance` | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks       | Yes       |
-| `integration` | `tests/integration.test.ts`  | The package's features work together end to end across environments | No        |
-| `service`     | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real     | No        |
+| Project        | Files                        | Proves                                                              | Gate                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------- | ------------------------------------- |
+| `policy`       | `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law      | `test`                                |
+| `config`       | `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs      | `test`                                |
+| `guides`       | `tests/guides.test.ts`       | Every documented API exists and every public API is documented      | `test`                                |
+| `conformance`  | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks       | `test`                                |
+| `distribution` | `tests/distribution.test.ts` | The packed package installs and resolves through its public exports | `prepublishOnly`; absent when private |
+| `integration`  | `tests/integration.test.ts`  | The package's features work together end to end across environments | `test`                                |
+| `service`      | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real     | `prepublishOnly`; `test` when private |
 
-`conformance` and `service` are two subjects, not two names for one. `conformance` measures this
-package against an official artifact it stays compatible with and drives nothing external: the
-tooling it measures against is installed, and any server it drives is one the proof starts itself.
-That is what makes it hermetic and keeps it in `test`. `service` drives the real thing, so it takes
-`tests/setupService.ts` for readiness, longer timeouts, and no file parallelism, and it leaves
-`test` for `prepublishOnly`.
+`conformance`, `integration`, `distribution`, and `service` are four subjects, not four names for
+one.
+Keep `conformance` in `test`: measure this package against an installed official artifact, and start
+any server the proof drives itself. Keep `integration` in `test`: compose the workspace's public
+surfaces without packing, installing, or driving an external service. In a publishing workspace,
+run `distribution` and `service` from `prepublishOnly`: pack and install the package in
+`distribution`, and drive the real service with `tests/setupService.ts`, longer timeouts, and no file
+parallelism in `service`. In a `private: true` workspace, never declare `prepublishOnly`; omit
+`distribution`, reach `service` from `test`, and retain the service project's isolated
+configuration.
 
 One project sits on neither axis. `probe` includes `tmp/probe/**/*.test.ts` so an agent can run a
 throwaway instrument against real sources, aliases and setup. Declare no proof there. Every test
@@ -139,9 +144,9 @@ script names its project, so no gate runs it; its directory is ignored by git; a
 - A live-service project is the fifth kind. It is the `service` project above, `scripts/service.sh`
   provisions what it drives, and `.claude/rules/tests.md` governs it. Name it `service` whatever it
   drives.
-- A project leaves the default run for one of two reasons: it drives a live external service, or it
-  is hermetic but slow — it spawns processes, packs, installs, or drives a real build.
-- Every isolated project has its own script, is excluded from `test`, and runs in `prepublishOnly`.
+- In a publishing workspace, a project leaves the default run when it drives a live external
+  service or is hermetic but slow — it spawns processes, packs, installs, or drives a real build.
+- Give every isolated project its own script, and place that script by the paragraph above.
 
 Setup assets:
 
@@ -151,7 +156,7 @@ Setup assets:
 
 Scope with `test:src`, `test:src:core`, `test:app`, `test:app:server`, and equivalent scripts. Each
 cross-cutting project has its own script too: `test:policy`, `test:config`, `test:guides`,
-`test:conformance`, `test:integration`, `test:service`.
+`test:conformance`, `test:distribution`, `test:integration`, `test:service`.
 
 ## Typechecking and environment isolation
 
@@ -206,7 +211,7 @@ Build/check config alignment:
 | `test`                  | Environment projects plus non-isolated cross-cutting proofs       |
 | `clean`                 | Remove `dist/`                                                    |
 | `copy <from> <to>`      | Copy while creating parent directories                            |
-| `prepublishOnly`        | The gate chain in `AGENTS.md`, then every isolated project        |
+| `prepublishOnly`        | Publishing workspaces only: the gate chain, then isolated proofs  |
 
 Run `show` only **after** formatting. The committed `demo/showcase.html` is generated/minified; formatting after generation would expand its inlined bundle.
 

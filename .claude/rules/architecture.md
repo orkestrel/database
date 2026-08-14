@@ -49,6 +49,7 @@ Use only the centralized files an environment needs.
 - Extract local declarations by kind. “Only used here” and “not exported” are not exemptions.
 - Every declaration in a centralized file is exported. Fold away a trivial single-use declaration or export/test it; never leave it hidden.
 - The only permitted non-exported module-scope declarations are in a runtime entrypoint that must be self-contained and cannot import siblings, such as raw source loaded in a worker. Explain that necessity in a comment.
+- A runtime entry—`src/bin/main.ts`, `app/browser/main.ts`, `app/server/main.ts`—is a fixed name, not a centralized kind file. Both the data rule and the function rule reach it, so it declares no module-scope constant and no module-scope function: it imports what it needs and runs. The self-contained exception above covers only an entrypoint that cannot import siblings.
 - Perform a cleanup sweep after implementation: no stray implementation-file declarations, non-exported/wrong-kind centralized declarations, prohibited nested declarations, duplicate implementations, compatibility aliases, superfluous wrappers, stale imports/barrel rows, or untested extracted functions.
 
 ## Kind purity
@@ -112,6 +113,15 @@ kind. It reads declaration syntax and file name, never meaning.
   `middlewares.ts`, `parsers.ts`, `relations.ts`, `schemas.ts`, `seeders.ts`, `shapers.ts`, and
   `validators.ts`. That list is exhaustive, a new function kind joins it, and no later version of
   the sweep claims more.
+- It reports no `data` violation in `helpers.ts`. The kind rules place a camelCase namespace of
+  functions there, and a namespace of callables is not separable from a data table by declaration
+  syntax, so `DATA_EXEMPT_FILES` in `tests/setupPolicy.ts` excludes the file. Ordinary module data
+  there — `export const RETRIES = 3` — is unreported; the constants rule above binds regardless.
+- It inspects no ambient declaration file: `.d.ts`, `.d.mts`, and `.d.cts` are all outside its
+  reach. An ambient declaration file is not a module in the kind table, so it sits outside the
+  parsed population entirely rather than being exempted from the `type` rule.
+- It does not inspect class-expression members. A function assigned inside a class-expression
+  method is unreported; the functions rule above still binds, and cleanup and review enforce it.
 - The cleanup sweep and independent review prove kind purity across those files. A helper misfiled
   as a parser, a coercer misfiled as a guard, a compiler misfiled as a factory, and a shaper
   misfiled as a cloner are review findings, not red tests.
@@ -194,6 +204,8 @@ Store child managers in `#` fields and expose readonly getters typed as their in
   fixes the declaration shape checked there; it judges nothing about what a module does.
 - Never infer a function domain from a folder's name; a camelCase module inside an unregistered
   folder is misplaced.
+- Register a folder only when its direct modules are camelCase single-function `.ts` modules. A
+  folder of PascalCase single-file components, or of entity classes, never qualifies.
 - Request a new domain through a fleet-canon change. There is no workspace-local registration path.
 
 ### Extension categories
