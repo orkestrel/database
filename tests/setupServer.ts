@@ -8,8 +8,8 @@ import type { ExportKind, SurfaceSymbol } from '@orkestrel/guide'
 import type { Diagnostic, Symbol as CompilerSymbol, TypeChecker } from 'typescript'
 import { createSQLiteDriver } from '@src/server'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { createScratch } from '@orkestrel/test/server'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import * as ts from 'typescript'
 
@@ -116,11 +116,11 @@ export function checkGuideFences(
 	const root = dirname(configPath)
 	const temp = join(root, 'tmp')
 	mkdirSync(temp, { recursive: true })
-	const directory = mkdtempSync(join(temp, 'database-guide-'))
+	const scratch = createScratch({ parent: temp, prefix: 'database-guide-' })
 	try {
-		const modules = locateGuideFences(document, fences, directory)
+		const modules = locateGuideFences(document, fences, scratch.path)
 		for (const fence of modules) {
-			writeProjectFile(directory, relative(directory, fence.path), `${fence.source}\nexport {}\n`)
+			scratch.write(relative(scratch.path, fence.path), `${fence.source}\nexport {}\n`)
 		}
 		const configSource = ts.readJsonConfigFile(configPath, ts.sys.readFile)
 		const parsed = ts.parseJsonSourceFileConfigFileContent(
@@ -157,7 +157,7 @@ export function checkGuideFences(
 			throw new Error(`Guide TypeScript fences failed:\n${messages.join('\n')}`)
 		}
 	} finally {
-		rmSync(directory, { recursive: true, force: true })
+		scratch.destroy()
 	}
 }
 
@@ -365,28 +365,26 @@ export function tempTypeScriptProject(files: Readonly<Record<string, string>>): 
 	readonly config: string
 	readonly cleanup: () => void
 } {
-	const directory = mkdtempSync(join(tmpdir(), 'database-typescript-'))
-	writeProjectFile(
-		directory,
-		'tsconfig.json',
-		JSON.stringify({
-			compilerOptions: {
-				strict: true,
-				target: 'ESNext',
-				module: 'ESNext',
-				moduleResolution: 'bundler',
-				noEmit: true,
-			},
-			include: ['src/**/*.ts'],
-		}),
-	)
-	for (const [file, source] of Object.entries(files)) {
-		writeProjectFile(directory, file, source)
-	}
+	const scratch = createScratch({
+		prefix: 'database-typescript-',
+		files: {
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: {
+					strict: true,
+					target: 'ESNext',
+					module: 'ESNext',
+					moduleResolution: 'bundler',
+					noEmit: true,
+				},
+				include: ['src/**/*.ts'],
+			}),
+			...files,
+		},
+	})
 	return {
-		directory,
-		config: join(directory, 'tsconfig.json'),
-		cleanup: () => rmSync(directory, { recursive: true, force: true }),
+		directory: scratch.path,
+		config: join(scratch.path, 'tsconfig.json'),
+		cleanup: () => scratch.destroy(),
 	}
 }
 
@@ -431,10 +429,10 @@ export function replaceTransactionFailure(
 // across a close / reopen. Call `cleanup` in `afterEach` so no temp file leaks
 // (AGENTS §16.1).
 export function tempDatabasePath(): { readonly path: string; readonly cleanup: () => void } {
-	const directory = mkdtempSync(join(tmpdir(), 'database-json-'))
+	const scratch = createScratch({ prefix: 'database-json-' })
 	return {
-		path: join(directory, 'database.json'),
-		cleanup: () => rmSync(directory, { recursive: true, force: true }),
+		path: join(scratch.path, 'database.json'),
+		cleanup: () => scratch.destroy(),
 	}
 }
 
