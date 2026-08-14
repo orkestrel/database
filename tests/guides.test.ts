@@ -25,13 +25,7 @@ import {
 } from '@orkestrel/guide'
 import { requireValue } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
-import {
-	checkGuideFences,
-	deriveEntrySurfaces,
-	removeProjectFile,
-	tempTypeScriptProject,
-	writeProjectFile,
-} from './setupServer.js'
+import { checkGuideFences, deriveEntrySurfaces, tempTypeScriptProject } from './setupServer.js'
 
 /** Every fence language this package's guides are allowed to use. */
 const FENCE_LANGUAGES = Object.freeze(['ts'])
@@ -132,7 +126,7 @@ describe('compiler entry surfaces', () => {
 				{ name: 'Value', kind: 'type' },
 			])
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 
@@ -145,21 +139,21 @@ describe('compiler entry surfaces', () => {
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
 				{ name: 'Added', kind: 'const' },
 			])
-			writeProjectFile(project.directory, 'src/extra.ts', 'export class Renamed {}')
+			project.scratch.write('src/extra.ts', 'export class Renamed {}')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
 				{ name: 'Renamed', kind: 'class' },
 			])
-			writeProjectFile(project.directory, 'src/extra.ts', 'export function Renamed(): void {}')
+			project.scratch.write('src/extra.ts', 'export function Renamed(): void {}')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
 				{ name: 'Renamed', kind: 'function' },
 			])
-			writeProjectFile(project.directory, 'src/index.ts', 'export const Local = true')
-			removeProjectFile(project.directory, 'src/extra.ts')
+			project.scratch.write('src/index.ts', 'export const Local = true')
+			project.scratch.remove('src/extra.ts')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
 				{ name: 'Local', kind: 'const' },
 			])
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 
@@ -173,7 +167,7 @@ describe('compiler entry surfaces', () => {
 				{ name: 'Public', kind: 'const' },
 			])
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 
@@ -187,12 +181,12 @@ describe('compiler entry surfaces', () => {
 			expect(() => deriveEntrySurfaces(project.config, ['src/index.ts'])).toThrow(
 				'TypeScript semantics failed',
 			)
-			writeProjectFile(project.directory, 'src/index.ts', "export * from './missing.js'")
+			project.scratch.write('src/index.ts', "export * from './missing.js'")
 			expect(() => deriveEntrySurfaces(project.config, ['src/index.ts'])).toThrow(
 				'TypeScript semantics failed',
 			)
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 
@@ -232,7 +226,7 @@ describe('compiler entry surfaces', () => {
 				/unsupported|type-only/,
 			)
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 
@@ -244,16 +238,16 @@ describe('compiler entry surfaces', () => {
 			expect(() => deriveEntrySurfaces(project.config, ['src/missing.ts'])).toThrow(
 				"Missing TypeScript entry 'src/missing.ts'",
 			)
-			writeProjectFile(project.directory, 'src/index.ts', 'const Internal = true')
+			project.scratch.write('src/index.ts', 'const Internal = true')
 			expect(() => deriveEntrySurfaces(project.config, ['src/index.ts'])).toThrow(
 				"Missing TypeScript module 'src/index.ts'",
 			)
-			writeProjectFile(project.directory, 'src/index.ts', 'export const = true')
+			project.scratch.write('src/index.ts', 'export const = true')
 			expect(() => deriveEntrySurfaces(project.config, ['src/index.ts'])).toThrow(
 				'TypeScript syntax failed',
 			)
 		} finally {
-			project.cleanup()
+			project.scratch.destroy()
 		}
 	})
 }, 120_000)

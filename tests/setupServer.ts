@@ -5,11 +5,12 @@
 
 import type { DriverInterface, TableSchema } from '@src/core'
 import type { ExportKind, SurfaceSymbol } from '@orkestrel/guide'
+import type { ScratchInterface } from '@orkestrel/test/server'
 import type { Diagnostic, Symbol as CompilerSymbol, TypeChecker } from 'typescript'
 import { createSQLiteDriver } from '@src/server'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import { createScratch } from '@orkestrel/test/server'
-import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import * as ts from 'typescript'
 
@@ -332,38 +333,14 @@ export function deriveEntrySurfaces(
 }
 
 /**
- * Write one source file in a real temporary TypeScript project.
- *
- * @param directory - The temporary project root
- * @param file - The project-relative file path
- * @param source - The file's source text
- */
-export function writeProjectFile(directory: string, file: string, source: string): void {
-	const path = join(directory, file)
-	mkdirSync(dirname(path), { recursive: true })
-	writeFileSync(path, source, 'utf8')
-}
-
-/**
- * Remove one source file from a real temporary TypeScript project.
- *
- * @param directory - The temporary project root
- * @param file - The project-relative file path
- */
-export function removeProjectFile(directory: string, file: string): void {
-	unlinkSync(join(directory, file))
-}
-
-/**
  * Create a real source-backed temporary TypeScript project.
  *
  * @param files - Project-relative source paths and their contents
- * @returns Its root, config path, and cleanup operation
+ * @returns Its owned scratch directory and config path
  */
 export function tempTypeScriptProject(files: Readonly<Record<string, string>>): {
-	readonly directory: string
+	readonly scratch: ScratchInterface
 	readonly config: string
-	readonly cleanup: () => void
 } {
 	const scratch = createScratch({
 		prefix: 'database-typescript-',
@@ -382,9 +359,8 @@ export function tempTypeScriptProject(files: Readonly<Record<string, string>>): 
 		},
 	})
 	return {
-		directory: scratch.path,
+		scratch,
 		config: join(scratch.path, 'tsconfig.json'),
-		cleanup: () => scratch.destroy(),
 	}
 }
 
