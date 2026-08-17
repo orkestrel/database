@@ -71,8 +71,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `HostArtifact`      | interface | A file byte-copied from the vendored data root, planned before its bytes are read.      |
 | `HydratedArtifact`  | interface | A vendored file whose exact bytes have been read, so its content can be compared.       |
 | `Override`          | interface | One artifact override.                                                                  |
-| `PlanSummary`       | interface | The tally of one plan by artifact origin.                                               |
 | `Plan`              | interface | The compiled, ordered artifact list and the selection it covers.                        |
+| `PlanSummary`       | interface | The tally of one plan by artifact origin.                                               |
 | `Question`          | interface | One validation issue raised against a blueprint or a plan.                              |
 | `Scaffolding`       | interface | The replayable outcome of one compile.                                                  |
 | `SrcDefinition`     | interface | The build and export settings one published `src` environment contributes.              |
@@ -92,21 +92,24 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `BIN_ENTRY_PATH`                  | const | The executable entry whose presence makes a workspace `bin`.                                     |
 | `CATALOG_AGENT_PATH`              | const | The agent file whose marker-bounded package table the catalog verb alone owns.                   |
 | `CONFIG_TEMPLATES`                | const | Formatter-stable template text for every configuration artifact.                                 |
+| `CONFORMANCE_TEST_PATH`           | const | The official-tooling drift proof whose presence makes a workspace `conformance`.                 |
 | `CONTROL_CHARACTER_PATTERN`       | const | Unicode controls, formatting controls, and line and paragraph separators rejected in text.       |
+| `DECLARATION_DEV_DEPENDENCIES`    | const | The development dependencies that emit declarations for published source or an executable.       |
 | `DEFAULT_ENGINES`                 | const | The `engines.node` range a workspace starts with.                                                |
 | `DEFAULT_VERSION`                 | const | The version a workspace starts at.                                                               |
 | `DEPENDENCY_NAME_PATTERN`         | const | The runtime dependency name syntax: the `@orkestrel` scope and a bare name.                      |
+| `DISTRIBUTION_TEST_PATH`          | const | The packed-package proof whose presence makes a workspace `distribution`.                        |
 | `ENGINES_PATTERN`                 | const | The minimum-Node engine syntax a blueprint declares.                                             |
 | `ENVIRONMENTS`                    | const | The three `Environment` values, frozen.                                                          |
+| `EXECUTABLE_PATHS`                | const | The vendored paths a target receives with its executable bit set, frozen.                        |
 | `EXTRA_NAME_PATTERN`              | const | The development extra name syntax: any valid npm package name.                                   |
 | `EXTRA_RANGE_PATTERN`             | const | The registry-only semver subset accepted for a development extra's range.                        |
 | `GLOBAL_SETUP_PATH`               | const | The shared Vitest global-setup module whose presence makes a workspace `global`.                 |
-| `GUIDES_TEST_PATH`                | const | The guide-parity proof whose physical file selects the fixed `guides` project.                   |
-| `EXECUTABLE_PATHS`                | const | The vendored paths a target receives with its executable bit set, frozen.                        |
 | `GROUPS`                          | const | The seven `Group` values in plan order, frozen.                                                  |
+| `GUIDES_TEST_PATH`                | const | The guide-parity proof whose presence selects the planned `guides` project.                      |
 | `HEX_PATTERN`                     | const | Exact lowercase hexadecimal bytes: two digits per byte, and empty content is valid.              |
 | `HOST_PATHS`                      | const | The paths byte-copied from the vendored data root, frozen.                                       |
-| `INTEGRATION_TEST_PATH`           | const | The installed-package proof whose presence makes a workspace `integration`.                      |
+| `INTEGRATION_TEST_PATH`           | const | The cross-environment composition proof whose presence makes a workspace `integration`.          |
 | `INVALID_PATH_CHARACTER_PATTERN`  | const | Visible characters a target-relative path and a Markdown path cell both forbid.                  |
 | `MAX_ARTIFACT_BYTES`              | const | Maximum bytes accepted for one artifact.                                                         |
 | `MAX_ARTIFACT_HEX_LENGTH`         | const | Maximum length of the hexadecimal string carrying one artifact's bytes.                          |
@@ -123,12 +126,17 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ORCHESTRATION_PATH_NAMES`        | const | The exact root filenames that wire an agent bench rather than the toolchain, frozen.             |
 | `ORCHESTRATION_PATH_PREFIXES`     | const | The path prefixes whose contents instruct or wire an agent, frozen.                              |
 | `ORKESTREL_RANGE_PATTERN`         | const | The exact caret-pinned pre-1.0 range accepted for an `@orkestrel/*` runtime dependency.          |
+| `PRINT_WIDTH`                     | const | Columns one emitted line may occupy, matching `printWidth` in `.oxfmtrc.json`.                   |
 | `SERVICE_SCRIPT_PATH`             | const | The provisioner skeleton a workspace with declared service vendors is given once.                |
+| `SERVICE_SETUP_PATH`              | const | The live-service readiness module whose presence makes a workspace `service`.                    |
+| `SERVICE_TEST_INCLUDE`            | const | The include the live-service project covers, which is a directory rather than one proof.         |
 | `SHOWCASE_CONFIG_PATH`            | const | The Vite wrapper whose presence makes a workspace `showcase`.                                    |
 | `SHOWCASE_DEV_DEPENDENCIES`       | const | The development dependency used only by the optional single-file showcase build.                 |
 | `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | The development dependencies a published browser `src` environment adds.                         |
 | `SRC_MATRIX`                      | const | The build and export settings each published `src` environment contributes, frozen.              |
+| `TAB_WIDTH`                       | const | Columns one tab occupies when the formatter measures a line, matching `tabWidth`.                |
 | `VERSION_PATTERN`                 | const | The exact three-component version syntax a blueprint declares.                                   |
+| `WORKSPACE_OWNED_PATHS`           | const | The vendored paths whose present bytes belong to each workspace, frozen.                         |
 
 #### Guards
 
@@ -142,8 +150,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `isCompilerHooks`   | const    | Narrow a value to the compiler's initial listener record.                        |
 | `isCompilerOptions` | const    | Narrow a value to `CompilerOptions`.                                             |
 | `isContent`         | const    | Narrow a value to text this package will accept as one artifact's content.       |
-| `isDependencyName`  | const    | Narrow a value to the scoped package name a runtime dependency carries.          |
 | `isDependency`      | const    | Narrow a value to a `Dependency`.                                                |
+| `isDependencyName`  | const    | Narrow a value to the scoped package name a runtime dependency carries.          |
 | `isEnvironment`     | const    | Narrow a value to one `Environment` a workspace may select.                      |
 | `isFinding`         | const    | Narrow a value to a `Finding`.                                                   |
 | `isGroup`           | const    | Narrow a value to one `Group` a plan selects over.                               |
@@ -186,8 +194,10 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `matchesDriftReachability`  | function | Test whether `inferDrift` could have produced a finding for an ownership.     |
 | `matchesEngines`            | function | Test whether a declared engines floor is at or above the supported minimum.   |
 | `matchesOrchestrationPath`  | function | Test whether a path instructs or wires an agent rather than the toolchain.    |
+| `matchesPrintWidth`         | function | Test whether one emitted line fits the vendored formatter width.              |
 | `matchesRange`              | function | Test whether a declared range already admits a published version.             |
 | `nameToGuide`               | function | Derive the guide mirror path a package name answers for.                      |
+| `nameToRewrite`             | function | Derive the declaration rewrite a published face's `beforeWriteFile` applies.  |
 | `planToSummary`             | function | Project a plan into its tally by artifact origin.                             |
 | `selectGroups`              | function | Select the groups a compile covers, in plan order.                            |
 | `selectHostPaths`           | function | Select the host paths a named workspace vendors.                              |
@@ -454,48 +464,74 @@ An option a verb does not list is refused by name rather than parsed and ignored
 the registry, so `new` fails when the registry names no release for a package it was given: the
 workspace would otherwise declare a dependency that does not resolve.
 
-`new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers.
-The other structural facts do not need creation flags. Add `tests/integration.test.ts` for
-`integration`, `tests/setupGlobal.ts` for `global`, and
-`configs/app/vite.showcase.config.ts` for `showcase`; reading verbs detect each exact-case file and
-register its fixed machinery. Add `scripts/service.sh` for `services`. Reading verbs preserve and
-protect that birth-owned script, but do not infer its service list from edited text.
+`new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
+other structural facts do not need creation flags. Add `tests/guides.test.ts` for `guides`,
+`tests/distribution.test.ts` for `distribution`, `tests/integration.test.ts` for `integration`,
+`tests/conformance.test.ts` for `conformance`, `tests/setupService.ts` for `service`,
+`tests/setupGlobal.ts` for `global`, and `configs/app/vite.showcase.config.ts` for `showcase`;
+reading verbs detect each exact-case file and register its fixed machinery. Add `scripts/service.sh`
+for `vendors`. Reading verbs preserve and protect that birth-owned script, but do not infer its
+vendor list from edited text.
 
 ### Reading a target
 
 `audit`, `repair`, `catalog`, and `overwrite` derive the blueprint from the target itself. The name
 and the declared `@orkestrel/*` packages come from `package.json`. The two environment axes come
 from the directories the target actually ships, because a directory is the fact and a declaration
-beside it could disagree. Four more facts come from exact-case files: `src/bin/main.ts` selects
-`bin`, `tests/integration.test.ts` selects `integration`, `tests/setupGlobal.ts` selects `global`,
+beside it could disagree. Eight more facts come from exact-case files: `src/bin/main.ts` selects
+`bin`, `tests/guides.test.ts` selects `guides`, `tests/distribution.test.ts` selects `distribution`,
+`tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
+`conformance`, `tests/setupService.ts` selects `service`, `tests/setupGlobal.ts` selects `global`,
 and `configs/app/vite.showcase.config.ts` selects `showcase`. A containing directory does not select
 the fact by itself.
 
-`services` is not reconstructed. Its only artifact, `scripts/service.sh`, is birth-owned, so edited
-script text is not a trustworthy declaration of a service list. A present script remains in the
+`vendors` is not reconstructed. Its only artifact, `scripts/service.sh`, is birth-owned, so edited
+script text is not a trustworthy declaration of a vendor list. A present script remains in the
 target and remains protected from deletion through the owned scripts inventory, but a reading verb
-does not infer services from it.
+does not infer vendors from it.
 
-The root Vite configuration always defines the fixed `guides` project and selects it at
-configuration load only when `tests/guides.test.ts` is a physical file with that exact path case. A
-directory or a case-folded spelling does not select it. A fresh workspace therefore carries no
-guides project. A workspace that later adds the proof keeps the project through `repair`. The
-birth-owned manifest still gains no `test:guides` script automatically; the developer who adds the
-proof adds that script too.
+That is why the live-service project follows `service` rather than `vendors`. A reading verb has to
+plan the project before it can say anything about a target that runs one, and a vendor list it
+cannot recover would leave every such workspace unplannable. `tests/setupService.ts` is recoverable,
+is the module the root configuration names by path, and is what a live proof needs anyway, so it
+carries the fact and the vendor list keeps its own separate job.
 
-The three plan-reading verbs compare every Vitest project named by the target manifest's scripts
-with the project set the planned root configuration will load. One shell-token pass reads quoted and
-unquoted `--project value` and `--project=value` forms. A shell expansion or malformed quote that
-prevents a project value from being resolved statically produces a question instead of licensing a
-write. The classifier is deliberately bounded to manifest script text that names `vitest`; an
-external wrapper whose name does not identify its runner supplies no static Vitest fact to infer.
+The root Vite configuration defines and registers the fixed `guides` project only when the derived
+blueprint carries `guides`. Reading verbs set that fact only when `tests/guides.test.ts` is a
+physical file with that exact path case. A directory or a case-folded spelling does not select it. A
+fresh workspace therefore carries no guides project or script. A developer who adds the proof must
+also add the exact `test:guides` script line that the plan reports; the manifest remains
+birth-owned.
+
+The three plan-reading verbs compare the Vitest project set named by the target manifest with the
+project set the planned root configuration registers. Every planned proof project must also be
+reachable from the manifest's `test` chain. A target whose manifest does not set `private: true` may
+also reach it from `prepublishOnly`. A private target cannot use that chain, because npm refuses the
+package before a publish lifecycle script runs, so crediting it would report a dead gate as a live
+one. Generated integration runs from `test`. One shell-token pass reads quoted and unquoted
+`--project value` and `--project=value` forms and follows literal `npm run` calls. A shell expansion
+or malformed quote that prevents a project or script name from being resolved statically produces a
+question instead of licensing a write. The classifier is deliberately bounded to manifest script
+text that names `vitest`; an external wrapper whose name does not identify its runner supplies no
+static Vitest fact to infer.
 
 `audit` still completes the comparison and reports one non-blocking `projects` question. For a
 literal absent project, its advisory tells the developer to register the project or remove the
-script. `repair` and `overwrite` refuse instead. Their refusal tells the developer to remove the
+script. For a planned project absent from both gate chains, the advisory gives the exact direct
+script line to add to `package.json`. `repair` and `overwrite` refuse either mismatch and do not
+write the manifest or configuration. Their absent-project refusal tells the developer to remove the
 script or not use scaffold writing verbs for a workspace that needs custom Vitest projects. It does
 not recommend editing the content-owned configuration that the refusing verb would restore. An
 advisory alone does not make an aligned target drift.
+
+The same three plan-reading verbs compare the tooling set the derived blueprint plans against
+`dependencies` and `devDependencies` together. A missing planned package produces one non-blocking
+`dependencies` question naming every missing package and the exact manifest lines to add, in stable
+order. The comparison measures membership only: range differences and workspace-owned extras are
+outside it, and a planned tool may live in either section. A present section that is not an object
+produces a question instead of a crash. `audit` reports the question without changing its exit
+semantics. `repair` and `overwrite` refuse before writing configuration, and no verb edits the
+birth-owned `package.json`.
 
 ### Exit codes
 
@@ -560,15 +596,50 @@ because the shape is chosen once and read afterwards: `new` refuses the advisory
 `repair` need the plan to describe and restore a target that already has that shape. A library
 caller creating a workspace holds the same refusal, and the Compile section below states it.
 
-`bin`, `integration`, `services`, `global`, and `showcase` are structural facts. Each is set only
-when the workspace physically ships the directory or exact-case file that defines it, never because
-of the workspace's name and never because a sibling fact is set.
+`bin`, `guides`, `distribution`, `integration`, `conformance`, `service`, `vendors`, `global`, and
+`showcase` are structural facts. Each is set only when the workspace physically ships the directory
+or exact-case file that defines it, never because of the workspace's name and never because a
+sibling fact is set.
 
-An axis-dependent structural fact projects only when its required axis exists. `integration`
-projects a published `src`, and `showcase` projects the browser `app` environment. When that axis is
-absent the flag adds no artifact, configuration, script, or dependency, and the gate reports a
-non-blocking question on that field so the caller who set it learns it emitted nothing. The same
-rule applies to both facts.
+A structural fact is read when a verb runs, not when the file appears. Writing
+`tests/integration.test.ts` into a workspace sets the fact, but the root configuration on disk was
+generated before that file existed and still registers no `integration` project, so `test:config`
+fails with `integration has no project factory or configuration` until a plan-writing verb
+regenerates it.
+
+`repair` alone does not close that, and refusing is correct rather than a gap. `package.json` is
+birth-owned, so the verb cannot add the project's script, and it will not register a project the
+manifest reaches from no gate. It exits 1 naming the target and writes nothing.
+
+Adding a structural proof is therefore three steps, in order: write the file; declare its
+`test:<project>` script and invoke that script from a gate chain; then run `repair`, which
+regenerates the root configuration and registers the project. `audit` reports whichever piece is
+still outstanding at each step.
+
+`distribution` projects only when the workspace also publishes at least one `src` environment. It
+packs and installs the published artifact, so without that axis there is nothing to pack, and the
+declared flag alone adds no project, no `test:distribution` script, and no gate entry.
+
+`service` says the workspace runs a live-service Vitest project over `tests/service`, and it alone
+registers that project, its `test:service` script, and the `tests/setupService.ts` readiness module
+the project names. A publishing workspace invokes it from `prepublishOnly`; a `private: true`
+workspace invokes it from `test`, which is the only gate it has. Its longer timeouts and disabled
+file parallelism are the same in both. `vendors` names each external service the workspace drives
+and emits `scripts/service.sh`, the provisioner that starts them. Neither is derivable from the
+other: a workspace may declare vendors before it writes a suite, and a suite may drive a service the
+skeleton does not start.
+
+`integration` projects a cross-environment composition proof for any workspace, independently of
+whether it has a published `src`. Its generated seed imports every selected `src` and `app`
+environment through its public barrel. It starts no process and does not pack or install the
+workspace. The proof composes across environments, so when `src` and `app` together declare fewer
+than two the gate reports a non-blocking `integration` question: the project, the script, and the
+`test` entry are all still registered, and the advisory reports that the seed composes nothing
+rather than withholding it.
+
+`showcase` projects only when the browser `app` environment exists. Without that axis the flag adds
+no artifact, configuration, script, or dependency, and the gate reports a non-blocking question on
+that field so the caller who set it learns it emitted nothing.
 
 `createBlueprint` enforces shape only. Whether the name is a name, the version a version, and the
 axis combination one this package can generate are the gate's laws, and the gate answers them with
@@ -669,14 +740,21 @@ content is produced. `Ownership` says what scaffold claims at the path.
 | `presence`  | Existence only | Restore an absent file, never touch present bytes |
 | `birth`     | Nothing        | Create the file only while it is absent           |
 
+Presence ownership has two separate mechanisms, and a reader needs to know which applies:
+
+| Mechanism       | Paths                                             | Bytes belong to       | Cost                                                    |
+| --------------- | ------------------------------------------------- | --------------------- | ------------------------------------------------------- |
+| Verb-owned      | `CATALOG_AGENT_PATH` and dependency guide mirrors | `catalog` or `mirror` | The owning verb is the only route for a later update.   |
+| Workspace-owned | `WORKSPACE_OWNED_PATHS`, currently `.gitignore`   | The target workspace  | Present bytes receive no later canonical ignore update. |
+
 Birth ownership is what makes a generated workspace the consumer's. `package.json`, the source
 barrels, the tests, `README.md`, and `guides/README.md` are written once and are never rewritten by
 a later verb.
 
 Content ownership does not preserve an arbitrary custom Vitest project. Fixed optional proofs are
-selected by their defining paths, as `guides` is. A workspace that needs other local configuration
-must keep those edits outside a content-owned file; `repair` restores that file to the canonical
-project set.
+selected by their defining paths, as `guides`, `distribution`, `integration`, `conformance`, and
+`service` are. A workspace that needs other local configuration must keep those edits outside a
+content-owned file; `repair` restores that file to the canonical project set.
 
 An audit reports one `Finding` per planned path, followed by any foreign path beneath the groups
 the plan covers. Every planned finding carries its artifact's `ownership`. A foreign finding has
@@ -807,9 +885,23 @@ except the manifest.
 - One template artifact per configuration file the selection needs: the root `tsconfig.json` and
   `vite.config.ts`, plus a Vite config and a scoped TypeScript config per selected environment, and
   two more when `bin` is set.
+- One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either axis.
+  It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
+  once into `browserOptions` and passes that to every `playwright()` provider it configures. The
+  precedence is `PLAYWRIGHT_EXECUTABLE_PATH`, `PLAYWRIGHT_WS_ENDPOINT`, `PLAYWRIGHT_CHANNEL`, the
+  managed Playwright Chromium, the container's bundled Chromium, a verified system channel, then the
+  platform default. An installed pinned revision returns empty options, so Playwright keeps its own
+  launch defaults. A pinned revision that is not installed falls through to a `chromium` alias or a
+  sibling `chromium-*` revision under the same browsers directory, because a managed container ships
+  one usable build for many Playwright versions. It is its own file rather than a block in the
+  vendored `configs/helpers.ts`, which every workspace receives byte-identical while only a browser
+  selection declares the `playwright` this module imports.
 - One template artifact per source and test file the selection needs: an `index.ts` barrel per
   selected environment, `main.ts` and `index.html` for an application browser, `tests/setup.ts`
-  plus the host setup modules the selection reaches, and one entry test per axis project.
+  plus the host setup modules the selection reaches, and one entry test per axis project. An
+  integration selection also emits a birth-owned `tests/integration.test.ts` seed that imports each
+  selected public barrel and records its initial empty exports for the consumer to replace with an
+  observable cross-environment flow.
 - One template artifact each for `README.md` and `guides/README.md`.
 - One host artifact per vendored path the workspace selects. A vendored directory is one planned
   path that expands into the files the data root stores beneath it.
@@ -967,7 +1059,7 @@ proves that every fence imports only real exports of the two barrels, and that e
 in this file resolves to one. It neither runs a fence nor typechecks one, so a trailing `// value`
 comment inside a fence states what this guide claims rather than what the build answered. The
 verdicts that are measured are the ones a consumer hovers:
-[`tests/integration.test.ts`](../tests/integration.test.ts) drives every `@example` the built
+[`tests/distribution.test.ts`](../tests/distribution.test.ts) drives every `@example` the built
 declarations print against the installed package, scores each verdict it can read as a value, and
 names exactly the ones it cannot. Fences are not added to that instrument, because most of them
 cannot be run: several declare an ambient value that has no runtime, and several write to a
@@ -1012,31 +1104,43 @@ nothing. This is deliberate: a generated sample entity is repeatedly mistaken fo
 implementation. What a consumer does first is write the module's `types.ts`, then the
 implementation that conforms to it, then export both from the barrel — the order `AGENTS.md` fixes.
 
-**`services` stops at the script and never reaches a Vitest project, so a workspace that drives a
-live service cannot be written.** The project set a plan registers is fixed: the environment
-projects the axes select, plus `policy`, `config`, `probe`, and `guides`. `Blueprint.services`
-carries the service names and emits `scripts/service.sh`, the service inventory — and stops there.
-Nothing registers a project that runs against what the script starts.
+**A selected distribution, conformance, or live-service proof is registered, but none is written for
+you.** Scaffold registers `conformance` and `service` when their structural facts are set, and
+registers `distribution` only when the workspace also publishes `src`. In a publishing workspace,
+`distribution` and `service` run from `prepublishOnly` and `conformance` stays in `test`. In a
+`private: true` workspace, `distribution` is absent, `service` runs from `test`, and there is no
+`prepublishOnly` at all. Scaffold emits no proof into any registered project, because each names
+something only the package knows: the behavior its own packed artifact must hold once installed, the
+official artifact a conformance check measures against, and the service a live proof drives. A
+generated placeholder would read as a proof while measuring nothing, so the file a consumer writes
+is the file that selects the project.
 
-`.claude/rules/workspace.md` calls a live-service project the fifth kind and names it for the
-service it drives, so this is a field built halfway rather than a concept the package declines to
-have. The consequence is a refusal: a workspace whose manifest names that project gets "the manifest
-names a Vitest project the planned configuration does not register" from every writing verb, because
-the plan omits what the manifest names. The refusal is raised before group selection, so `--groups`
-does not narrow past it.
+A distribution proof carries one contract scaffold does enforce from the outside. The generated
+`prepublishOnly` invokes it as `npm run test:distribution -- --mode release`, and a proof that reads
+`import.meta.env.MODE === 'release'` must **fail** on an unreachable registry rather than skip. An
+ordinary local run may skip that case, because a developer offline is not a defect; a release run
+may not, because skipping there passes the publish gate without ever proving the artifact installs.
+Scaffold writes no proof, so honouring the flag is the consumer's, and a proof that ignores it
+reports green on exactly the runs that matter.
 
-Two fleet packages sit here, and they are one case rather than two. `@orkestrel/ollama` drives a
-real Ollama through a `service` project; `@orkestrel/mcp` drives its server with
-`@modelcontextprotocol/conformance` through a `conformance` project — the specification's own
-runner, fetched at run time and deliberately not a dependency, so the package proves compatibility
-without taking on the coupling. Both are the fifth kind, and both are named for what they drive.
-Neither folds into `integration`, which means something narrower: the built package works when
-installed and driven from outside.
+The consequence is one empty-project case per registered proof. A publishing blueprint carrying
+`distribution` with no `tests/distribution.test.ts`, or any blueprint carrying `conformance` with no
+`tests/conformance.test.ts`, registers a project whose include resolves to nothing, and Vitest exits
+non-zero on it. A blueprint carrying `service` gets `tests/setupService.ts` — the root configuration
+names that module by path, so an absent one fails the project's load rather than its run — and still
+no suite beneath `tests/service`, so `test:service` reports no test files until the consumer writes
+the first one. Every case is visible the first time the script runs, which is why none is silent.
 
-Reading verbs are unaffected, so the route through is to reconcile against `audit`, which reports
-byte-level drift per path, and to hand-merge the one configuration file that carries the project.
-Deleting the script that names the project is the other way through, and it deletes the capability
-with it.
+None of the three folds into `integration`, which measures a different axis rather than a smaller
+one: the workspace's selected environments compose through their public barrels. The generated seed
+proves only that those barrels load together and expose the initial empty surfaces; the consumer
+replaces it with an observable cross-environment flow. The seed starts no process and does not pack
+or install the workspace, so the project stays in `test`. Two fleet packages hold the distinction.
+`@orkestrel/ollama` drives a real Ollama daemon through a `service` project, so a real service
+answers it and it runs from `prepublishOnly`. `@orkestrel/mcp` measures its server against the
+specification's own runner, `@modelcontextprotocol/conformance`, through a `conformance` project. It pins that runner as a development dependency and resolves it out
+of `node_modules`, and the server the runner drives is one the fixture starts itself on a loopback
+port, so the run drives nothing external and stays in `test`.
 
 ## Tests
 
