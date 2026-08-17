@@ -7,12 +7,10 @@ import {
 	optionalShape,
 	stringShape,
 } from '@orkestrel/contract'
-import { createRecorder } from '@orkestrel/test'
+import { collect, createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
-	collectRows,
 	createConstrainedUsersDatabase,
-	createErrorRecorder,
 	createMemoryAdapter,
 	createRecordingDriver,
 	createUserRow,
@@ -494,7 +492,7 @@ describe('Table — records / count / aggregate (engine path)', () => {
 	it('accepts zero paging while count and aggregate retain unpaged semantics', async () => {
 		const users = await createSeededUsersTable()
 		expect(await users.records({ limit: 0 })).toEqual([])
-		expect(await collectRows(users.scan({ limit: 0 }))).toEqual([])
+		expect(await collect(users.scan({ limit: 0 }))).toEqual([])
 		expect(await users.count({ limit: 0, offset: 0 })).toBe(3)
 		expect(await users.aggregate('sum', 'age', { limit: 0, offset: 0 })).toBe(99)
 	})
@@ -527,9 +525,7 @@ describe('Table — records / count / aggregate (engine path)', () => {
 		await driver.write('users', 'b', { id: 'b', name: 'Valid', age: 2 })
 
 		expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid', age: 2 }])
-		expect(await collectRows(users.scan({ limit: 1 }))).toEqual([
-			{ id: 'b', name: 'Valid', age: 2 },
-		])
+		expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid', age: 2 }])
 		expect(await users.count()).toBe(1)
 	})
 
@@ -558,13 +554,13 @@ describe('Table — records / count / aggregate (engine path)', () => {
 describe('Table — scan (lazy streaming)', () => {
 	it('yields all rows in driver key-order (order is ignored)', async () => {
 		const users = await createSeededUsersTable()
-		const rows = await collectRows(users.scan())
+		const rows = await collect(users.scan())
 		expect(rows.map((row) => row.id)).toEqual(['u1', 'u2', 'u3'])
 	})
 
 	it('applies input conditions lazily', async () => {
 		const users = await createSeededUsersTable()
-		const rows = await collectRows(
+		const rows = await collect(
 			users.scan({
 				conditions: [{ column: 'age', operator: 'above', values: [30], connector: 'and' }],
 			}),
@@ -574,7 +570,7 @@ describe('Table — scan (lazy streaming)', () => {
 
 	it('applies offset and limit via lazy counting', async () => {
 		const users = await createSeededUsersTable()
-		const rows = await collectRows(users.scan({ offset: 1, limit: 1 }))
+		const rows = await collect(users.scan({ offset: 1, limit: 1 }))
 		expect(rows.map((row) => row.id)).toEqual(['u2'])
 	})
 
@@ -669,7 +665,7 @@ describe('Table — scan (lazy streaming)', () => {
 			offset: 2,
 			limit: 1,
 		}
-		const rows = await collectRows(users.scan(input))
+		const rows = await collect(users.scan(input))
 		expect(rows).toEqual([])
 		expect(streamCalls).toEqual([{ conditions: input.conditions }])
 	})
@@ -949,7 +945,7 @@ describe('Table — emitter (push observation surface)', () => {
 	})
 
 	it('routes root, imported, and transaction table listener throws to the shared handler', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: { users: { id: stringShape(), name: stringShape() } },

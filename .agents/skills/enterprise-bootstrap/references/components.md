@@ -112,6 +112,8 @@ Variants: `.accordion-flush` (edge-to-edge, no outer borders); omit `data-bs-par
 
 `role="alert"` announces immediately when the element is injected into the DOM — right for errors and warnings. For calm status messages injected dynamically, prefer a polite live region (`role="status"`). Anything that _looks_ like an alert carries the alert role: styling and semantics disagree the moment a notice wears `.alert` chrome with no role, and an accessibility snapshot is what catches it. When to use alert vs toast vs banner: [bootstrap-reference.md](bootstrap-reference.md) → Feedback discipline.
 
+An alert is a subtle fill — apply the subtle-fill degradation rule to everything inside it ([SKILL.md](../SKILL.md) → Surfaces, color, contrast).
+
 ### Badge
 
 ```html
@@ -185,6 +187,8 @@ The current page is `aria-current="page"` and not a link. Use breadcrumbs only f
 ```
 
 Icon-only buttons need `aria-label` and a ≥24×24 px target (WCAG 2.2) — `btn-sm` icon clusters in toolbars are the common violation; pad rather than shrink.
+
+Choose the variant by contrast rather than by taste ([SKILL.md](../SKILL.md) → Hierarchy & actions).
 
 ### Button Group
 
@@ -400,6 +404,29 @@ Multiple targets: give each panel `.multi-collapse` and point separate triggers 
 
 ### Modal
 
+**Build a blocking dialog on the native `<dialog>`.** `showModal()` brings focus containment, Esc, an inert background, and top-layer stacking from the platform — nothing to construct, nothing to dispose when the view unmounts, and no JS instance for a virtual-DOM framework to fight with over the same nodes. Leave the element itself unpainted and put Bootstrap chrome inside it:
+
+```html
+<dialog class="p-0 border-0 bg-transparent" role="alertdialog" aria-labelledby="confirmHeading">
+	<div class="card shadow">
+		<div class="card-header">
+			<h2 id="confirmHeading" class="h5 mb-0">Delete invoice</h2>
+		</div>
+		<div class="card-body">
+			<p class="card-text mb-0">This permanently deletes INV-1042.</p>
+		</div>
+		<div class="card-footer d-flex flex-wrap justify-content-end gap-2">
+			<button type="button" class="btn btn-secondary">Keep</button>
+			<button type="button" class="btn btn-danger">Delete invoice</button>
+		</div>
+	</div>
+</dialog>
+```
+
+`role="alertdialog"` for a destructive confirm, `role="dialog"` otherwise; `aria-labelledby` points at the heading. The element's own `close` event is where the host clears the state that opened it, so Esc and the buttons all close by one path. The scrim is the UA's `::backdrop`, which no Bootstrap class touches — restyling it is a rung-4 decision.
+
+Bootstrap's `.modal` is the answer when the project already drives its dialogs through Bootstrap's JS:
+
 ```html
 <div
 	class="modal fade"
@@ -467,7 +494,7 @@ Bootstrap's modal enforces focus, adds `role="dialog"`/`aria-modal="true"`, clos
 			</ul>
 			<form class="d-flex" role="search">
 				<input class="form-control me-2" type="search" placeholder="Search" aria-label="Search" />
-				<button class="btn btn-outline-success" type="submit">Search</button>
+				<button class="btn btn-success" type="submit">Search</button>
 			</form>
 		</div>
 	</div>
@@ -941,7 +968,7 @@ The textless mark that survives both themes — dots, ticks, rings, pulses — i
 <span class="bi bi-circle fs-6 lh-1 text-body-secondary" role="img" aria-label="Not started"></span>
 ```
 
-- **Color from the emphasis tokens.** `text-*-emphasis` is the mode-adaptive tier built for marks on subtle surfaces; the plain `text-*` colors are tuned for light and thin out in dark. Measure every mark at **≥ 3:1** against the surface it sits on, **in both themes**, against the compiled cascade — a skin's token values are its own.
+- **Color from the emphasis tokens.** `text-*-emphasis` is the mode-adaptive tier built for marks on subtle surfaces; the plain `text-*` colors are tuned for light and thin out in dark. On a filled surface — `.active`, `.bg-primary`, `text-bg-*` — drop the tone class instead and let the fill's contrast color take the glyph ([Selection fills](#selection-fills)). Measure every mark at **≥ 3:1** against the surface it sits on, **in both themes**, against the compiled cascade — a skin's token values are its own.
 - **Filled and hollow say different things** — done vs pending, live vs idle — so pair glyphs that share one advance width (a filled/hollow pair from the same icon family). Mixed widths make a column of marks jitter row to row.
 - **Size with `fs-*` _and_ `lh-1`.** A glyph inherits the row's line-height, so an `fs-*` bump without `lh-1` grows the line box and pushes the row taller than its neighbors.
 - Give the mark an accessible name (`role="img"` + `aria-label`, or a `.visually-hidden` word next to an `aria-hidden` glyph) — a mark whose only meaning is its color and shape is color-only status.
@@ -961,7 +988,7 @@ The textless mark that survives both themes — dots, ticks, rings, pulses — i
 | Long documentation in-product                  | `accordion` or scrollable `modal`                                          | One infinite tinted card stack                 |
 | Dense data                                     | `table` + `table-responsive` (+ `table-sm` when appropriate)               | Non-semantic grids of text                     |
 | Choosing a form value                          | `form-select` (or native input)                                            | A `dropdown` menu posing as an input           |
-| Confirmations / focused tasks                  | `modal` with header, body, footer actions                                  | Nested modals                                  |
+| Confirmations / focused tasks                  | native `<dialog>` with header, body, footer actions                        | Nested modals                                  |
 | Secondary filters on small screens             | `offcanvas`                                                                | Permanent wide sidebars that crush content     |
 | Transient success feedback                     | `toast`                                                                    | `alert()`; toasts for errors                   |
 | Loading a known layout                         | `placeholder` skeleton                                                     | Layout-collapsing centered spinner             |
@@ -977,7 +1004,7 @@ The textless mark that survives both themes — dots, ticks, rings, pulses — i
 
 A selected row, pill, or filter chip repaints everything inside it — marks included. Two traps, both invisible until the selected state is captured in both themes:
 
-- **A mark on an active fill of the same family disappears.** `.active` on a `list-group-item`, `nav-pill`, or `page-item` sets the item's own color, and a `text-bg-primary`-family mark inside it inherits or loses to that fill — the mark is there in the markup and gone on screen. `text-body-emphasis` (or an outline glyph that keeps its own token) survives the fill; verify by capturing the selected row, not by reading the class list.
+- **A mark on an active fill of the same family disappears.** `.active` on a `list-group-item`, `nav-pill`, or `page-item` sets the item's own color, and a `text-bg-primary`-family mark inside it inherits or loses to that fill — present in the markup, gone on screen. Carry no tone class inside the fill ([SKILL.md](../SKILL.md) → Surfaces, color, contrast). Verify by capturing the selected row, not by reading the class list.
 - **`btn-check` filter labels invert in dark.** A `btn-outline-secondary` label reads as "chosen" in light and as "muted" in dark, because the checked fill and the surface swap relative weight. Give chosen filters an accent variant (a real theme color) rather than the neutral outline, so "chosen" reads the same way in both modes.
 
 Exactly one item in a selection carries `aria-current` — the visual fill and the announced state must be the same item.

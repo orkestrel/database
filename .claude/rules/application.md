@@ -48,9 +48,11 @@ paths:
 - Give app/server process signals to a tested, explicitly stoppable,
   generation-safe runner whose stale failures cannot release a newer run.
 - Return the runner from convenience startup, so normal cleanup cannot be hidden.
-- `ApplicationServerRunner` lives alone in `ApplicationServerRunner.ts`. The
-  `startApplicationServer` convenience factory belongs in `factories.ts`. `main.ts`
-  invokes it and owns no reusable declarations or duplicated signal handling.
+- `ApplicationServerRunner` lives alone in `ApplicationServerRunner.ts`.
+  `startApplicationServer` belongs in `handlers.ts` beside the other process-lifecycle
+  functions, because `factories.ts` admits only `create`-prefixed construction and this
+  one starts a signal-owning resource. `main.ts` invokes it and owns no reusable
+  declarations or duplicated signal handling.
 - Do not add showcase, auth, storage, proxy, CSS framework, or other product
   policy unless the request requires it.
 - Test repeated lifecycle, concurrent calls, malformed environment input,

@@ -4,24 +4,20 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Act only as a cheap bridge to Claude Opus 5. Read AGENTS.md, applicable rules, the
-dispatch-named skill and references, and the governing guide/spec. Pass the exact
-bounded implementation brief to:
-claude -p "<brief>" --model opus --effort high --permission-mode acceptEdits
-in the main checkout as the sole serial writer from a clean committed baseline.
-Journal progress where the CLI supports it (--output-format stream-json redirected
-to tmp/claude/<unit>.jsonl, gitignored) and record the session id so follow-ups
-can continue the same session via --resume with context intact.
-Verify the `claude` CLI is available before dispatch; if it is absent or the
-dispatch fails, return the failure immediately so the unit can route to the Sol
-implementer instead. An implementation unit is long work: do not launch it. Return
-the brief path, the exact resolved command, the journal path, and a cap
-recommendation, and let the Orchestrator launch it as a tracked background command
-under a hard cap. Never detach a run, poll, restart, or kill one. The brief requires
-owned files, off-limits files, acceptance criteria, TTTDD, and a deviation contract; it
-forbids dependency installation, commits, pushes, publishing, credentials,
-destructive commands, shared-file edits, and tree-wide mutating gates. After it
-returns, verify with git status, the diff, and scoped validation, then return
-touched files, diffstat, validation evidence, and deviation state labeled
-untrusted. Never route orchestration or acceptance across this bridge. Never read credentials or spawn another agent.
+`.codex/agents/claude.toml` owns the Claude transport contract in full; read it and
+follow it.
+
+This route pins `--permission-mode acceptEdits`, in the main checkout, as the sole
+serial writer from a clean committed baseline.
+
+The brief requires owned files, off-limits files, acceptance criteria, TTTDD, and a
+deviation contract. It forbids dependency installation, commits, pushes, publishing,
+credentials, destructive commands, shared-file edits, and tree-wide mutating gates.
+
+If the CLI is absent or the dispatch fails, return the failure immediately so the unit
+can route to the Sol implementer instead.
+
+After the run returns, verify it with git status, the diff, and scoped validation, then
+return touched files, diffstat, validation evidence, and deviation state labeled
+untrusted, plus any CLI/auth deviation.
 """

@@ -28,8 +28,9 @@ import {
 	stringShape,
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
+import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, collectRows, conformDriver, recordEmitterEvents } from '../../../setup.js'
+import { buildCondition, conformDriver, recordEmitterEvents } from '../../../setup.js'
 import {
 	createForeignKeyFixture,
 	driverSchema,
@@ -96,7 +97,7 @@ async function collectEngineRows(
 	target: DriverInterface,
 	input: QueryInput,
 ): Promise<readonly Row[]> {
-	return applyQuery(await collectRows(target.scan('users')), input)
+	return applyQuery(await collect(target.scan('users')), input)
 }
 
 async function collectSQLiteIds(
@@ -177,7 +178,7 @@ describe('SQLiteDriver — open', () => {
 			await firstDriver.write('users', 'b', { id: 'b', name: 'Valid' })
 			await logs.table('logs').set({ id: 'l1', message: 'started' })
 			expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
-			expect(await collectRows(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
+			expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
 			expect(await users.count()).toBe(1)
 			const diagnostic = await users
 				.set({ id: 'payload-secret', name: '' })
@@ -888,7 +889,7 @@ describe('SQLiteDriver — native aggregate', () => {
 				await memory.write('values', row.id, row)
 				await target.write('values', row.id, row)
 			}
-			const rows = await collectRows(memory.scan('values'))
+			const rows = await collect(memory.scan('values'))
 			const operations: readonly AggregateOperation[] = ['sum', 'average', 'minimum', 'maximum']
 			for (const operation of operations) {
 				const expected = computeAggregate(rows, operation, 'value')
@@ -957,7 +958,7 @@ describe('SQLiteDriver — native aggregate', () => {
 					await memory.write(entry.table, row.id, row)
 					await target.write(entry.table, row.id, row)
 				}
-				const rows = await collectRows(memory.scan(entry.table))
+				const rows = await collect(memory.scan(entry.table))
 				const operations: readonly AggregateOperation[] = ['sum', 'average']
 				for (const operation of operations) {
 					const expected = computeAggregate(rows, operation, 'value')
@@ -2235,7 +2236,7 @@ describe('SQLiteDriver — stream laziness', () => {
 		)
 		const empty = driver.stream?.('users', { limit: 0 })
 		if (empty === undefined) throw new Error('Expected stream capability')
-		expect(await collectRows(empty)).toEqual([])
+		expect(await collect(empty)).toEqual([])
 	})
 
 	it('breaking out of a stream early yields only the consumed rows and leaves the driver usable', async () => {
@@ -2264,7 +2265,7 @@ describe('SQLiteDriver — stream laziness', () => {
 			native.exec('DROP TABLE "users"')
 			const stream = onDisk.stream?.('users', {})
 			if (stream === undefined) throw new Error('Expected stream capability')
-			const error = await collectRows(stream).catch((caught: unknown) => caught)
+			const error = await collect(stream).catch((caught: unknown) => caught)
 			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
 			expect(error.code).toBe('DRIVER')
 			expect(isSQLiteError(error.context?.cause)).toBe(true)
@@ -2292,7 +2293,7 @@ describe('SQLiteDriver — stream laziness', () => {
 			native.prepare('UPDATE "users" SET "meta" = ? WHERE "id" = ?').run(['{bad', 'u1'])
 			const stream = onDisk.stream?.('users', {})
 			if (stream === undefined) throw new Error('Expected stream capability')
-			expect(await collectRows(stream)).toEqual([{ id: 'u1', name: 'Ada', age: 36, active: true }])
+			expect(await collect(stream)).toEqual([{ id: 'u1', name: 'Ada', age: 36, active: true }])
 		} finally {
 			native.close()
 			await onDisk.close()
@@ -2533,14 +2534,14 @@ describe('SQLiteDriver — optional-nullable absent/present parity', () => {
 				expect(await exact.aggregate?.('entries', 'count', 'note', input)).toBe(count)
 				const direct = exact.stream?.('entries', input)
 				if (direct === undefined) throw new Error('Expected stream capability')
-				expect(await collectRows(direct)).toHaveLength(count)
+				expect(await collect(direct)).toHaveLength(count)
 				expect(await entries.records(input)).toHaveLength(count)
 				expect(await entries.count(input)).toBe(count)
-				expect(await collectRows(entries.scan(input))).toHaveLength(count)
+				expect(await collect(entries.scan(input))).toHaveLength(count)
 				const query = entries.query().condition(condition)
 				expect(await query.collect()).toHaveLength(count)
 				expect(await query.count()).toBe(count)
-				expect(await collectRows(query.stream())).toHaveLength(count)
+				expect(await collect(query.stream())).toHaveLength(count)
 			}
 		} finally {
 			await database.close()

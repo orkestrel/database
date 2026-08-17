@@ -14,8 +14,7 @@ claim by hand, against the built output, before it enters a fix brief.
 **Build the hostile input outside the `try`.** A probe that wraps construction and invocation in one
 catch cannot distinguish _the subject threw_ from _my harness threw_ — a missing import, a wrong
 arity, a `require` in an ESM context all surface as the finding you were hoping to see. Construct
-first, let harness failures crash loudly, and only guard the call under test. Every campaign that has
-run this process has produced at least one finding that was the instrument failing.
+first, let harness failures crash loudly, and only guard the call under test.
 
 Reproduction produces three outcomes, and all three matter:
 
@@ -23,6 +22,10 @@ Reproduction produces three outcomes, and all three matter:
   auditor did not try;
 - the finding **confirms but is bounded smaller** — real, and not where the auditor thought;
 - the finding **evaporates**, because the auditor's input could not exercise what it claimed to test.
+
+Separate a dead finding from a dead vector before evaporating anything. A reported vector the
+compiler rejects refutes the vector alone; re-derive one the types admit, and record which vector
+was actually tested.
 
 The same reproduction discipline applies to your own probes. A probe whose input cannot reach the
 code under test reports a pass that means nothing, and it will read exactly like a real pass.
@@ -100,6 +103,11 @@ are usually wrong:
 Find the rule that fits both. It is usually about **agreement** rather than about categories — what
 a reader reads, its answer must carry — and it dissolves the special cases rather than enumerating
 them.
+
+Measure a proposed fix before adopting it; it is itself a claim. Run it against the set it must
+not break, including every case an earlier round pinned. Where it fails that set, document the
+limit on the helper that owns it and pin the limit with a test that names it as one. A heuristic
+that trades one wrong answer for another fails quietly; a stated boundary does not.
 
 Where the choice is genuinely open, it is a design judgement with a subjective and an objective
 half, and it goes to a blind design pass before code. Ruling it unilaterally is how a fix round

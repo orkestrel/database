@@ -11,6 +11,8 @@ follows it. This file adds only what Claude Code does differently, and cannot we
 - Use the Agent tool for a single dispatch, including when later control flow depends on its result.
 - Use a Workflow for a deterministic fan-out, staged pipeline, or loop. Serialize writing nodes.
 - Recover an interrupted Workflow with `resumeFromRunId`.
+- Foreground Bash is hard-capped at 10 minutes regardless of its timeout parameter. Launch anything
+  that can exceed it as a harness-tracked background command.
 - Never dispatch an adversarial lane with a context-inheriting subagent type such as `fork`. A lane
   must start clean, or it inherits the Orchestrator's framing and stops being independent.
 

@@ -128,3 +128,13 @@ Use four orthogonal contract mechanisms:
   - guard-valid input is never rejected by its parser;
   - every parsed result satisfies its guard.
 - Derive parser and guard from one source or test the round trip.
+
+### Foreign contracts
+
+A value returned by an interface another package publishes is FOREIGN data. Own it, validate what you dereference, and narrow nothing.
+
+- Enforce the published contract and no more: accept unknown members, accept any implementation the interface admits including a class instance, and check each member as its published type declares it. A member typed `number` is not checked as an integer.
+- Reserve the exact-record guard for a record this package owns. Over a foreign interface it refuses values the interface permits and fails closed on a valid implementation.
+- Narrow nothing in an ownership transform. Where the published contract is wider than the copy mechanism, seal the value in place rather than refusing it.
+- Own a foreign value at arrival, validate the owned copy, and read the foreign object exactly once. Read count is this package's decision, so no result may depend on it.
+- Validate only what the package dereferences from a union it must narrow. Own a wide foreign record it merely carries and leave it unvalidated. State that asymmetry on the option that admits the implementation.

@@ -10,8 +10,9 @@ import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, collectRows, conformDriver, recordEmitterEvents } from '../../../setup.js'
+import { buildCondition, conformDriver, recordEmitterEvents } from '../../../setup.js'
 import { driverSchema, replaceTransactionFailure, tempDatabasePath } from '../../../setupServer.js'
 
 conformDriver('JSONDriver', () => createJSONDriver(tempDatabasePath().path))
@@ -160,7 +161,7 @@ describe('JSONDriver — Database integration', () => {
 		await logs.table('logs').set({ id: 'l1', message: 'started' })
 
 		expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
-		expect(await collectRows(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
+		expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
 		expect(await users.count()).toBe(1)
 		const diagnostic = await users
 			.set({ id: 'payload-secret', name: '' })
@@ -981,7 +982,7 @@ describe('JSONDriver — stream', () => {
 		expect(() => driver.stream('users', { offset: -1 })).toThrow(
 			'Query offset must be a nonnegative integer',
 		)
-		expect(await collectRows(driver.stream('users', { limit: 0 }))).toEqual([])
+		expect(await collect(driver.stream('users', { limit: 0 }))).toEqual([])
 	})
 })
 

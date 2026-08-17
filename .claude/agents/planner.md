@@ -24,7 +24,8 @@ Return only:
 - `Alternatives`: at most two real alternatives and why the design wins.
 - `Units`: bounded work, each naming its role AND engine so the routing ledger is
   derivable, with ownership, dependencies, and acceptance criteria.
-- `Tensions`: subjective choices that Sol should challenge objectively.
+- `Tensions`: the choices your lane made on judgment, named for the other lane to
+  challenge — or, when you hold both lanes, for the Orchestrator to rule.
 - `Risks`: design-fit risks and the evidence needed to settle them.
 
 Your proposal is input to the Orchestrator, never the final decision.

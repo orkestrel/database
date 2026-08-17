@@ -18,7 +18,6 @@ import { createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase as userDatabase,
-	createErrorRecorder,
 	createMemoryAdapter,
 	createReconciliationDriver,
 	IteratorSource,
@@ -830,7 +829,7 @@ describe('Database — emitter (push observation surface)', () => {
 	})
 
 	it('EMIT SAFETY: a throwing commit listener cannot corrupt the committed state, and routes to the error handler', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const { db, users } = userDatabase(errors.handler)
 		// A buggy `commit` observer that throws on the audited transaction path. It must NOT
 		// undo the commit nor escape the transaction.
@@ -856,7 +855,7 @@ describe('Database — emitter (push observation surface)', () => {
 	})
 
 	it('EMIT SAFETY: a throwing rollback listener cannot suppress the propagated txn error', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const { db, users } = userDatabase(errors.handler)
 		await users.set({ id: 'u1', name: 'Ada', age: 36 })
 		db.emitter.on('rollback', () => {
@@ -876,7 +875,7 @@ describe('Database — emitter (push observation surface)', () => {
 	})
 
 	it('EMIT SAFETY: a throwing error handler neither escapes nor recurses', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const { db, users } = userDatabase((error, event) => {
 			errors.handler(error, event)
 			throw new Error('error handler blew up too')

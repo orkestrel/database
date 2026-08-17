@@ -24,11 +24,9 @@ paths:
 - Never end a row as "hardened further." Replace any evaluative phrase with the concrete condition that closes the row.
 - Record a finding outside the matrix against the row that owns it, for the next matrix. Do not reopen this one.
 
-## Run it, don't argue it
+## Probes before arguments
 
 A question a probe can settle is settled by the probe, whether or not anyone has disputed it. Reasoning decides what to run and what the result means. It does not replace the run.
-
-This is a habit for your own work first, and a rule about disagreements second. Most unverified beliefs are never challenged by anyone — they are simply built on.
 
 - Test your own assumptions before you rely on them. You do not need a disagreement to justify a probe. If you are about to depend on what a function returns, what a config resolves to, what a flag does, or whether a path is even reached, run it and find out.
 - Treat a long deliberation about behaviour as the signal to stop and run something. Deliberation that a ten-line probe would have ended is the most expensive habit in this process, and it is invisible because it feels like rigour.
@@ -39,10 +37,11 @@ This is a habit for your own work first, and a rule about disagreements second. 
 - Bound the search before starting it, and put the bound in the brief. Name the benchmark, the population, or the row that ends it. An investigation with no stated stopping condition runs until attention runs out. This includes the case where the honest answer is that the limit is inherent and belongs in documentation rather than in code.
 - Treat a negative probe as evidence about the probe until its input is shown to reach the code under test. A pass proves nothing if the vector never arrived. Instrument the path, assert an observable side effect, or drive it through a door you can see.
 - When a report names a defect and your reproduction comes back clean, assume first that your vector was weaker than theirs, and go get their exact vector. Treating a failed reproduction as a disproof is the most common way a true finding is lost.
+- A reported vector the compiler rejects refutes the VECTOR, never the finding. Where a claim asserts reachability through a typed API, compile the exact vector under the project's own settings; re-derive one the types admit before dropping the finding, and record which vector was actually tested.
 - Reproduce a reported defect's cause before instructing a fix from it. A real symptom can carry a wrong diagnosis, and a fix aimed at the stated cause edits the wrong file while the defect survives.
 - Do not read a result into a tool's failure to find your probe. "No tests found", an empty match, a skipped file, a runner that resolved nothing — these report on the harness, not the subject. Confirm the probe was collected and executed first.
 - Prefer an observation over a derivation, including your own. When a measurement and an argument disagree, the argument is wrong until the measurement is shown to be broken.
-- Diagnose from the artifact the work produces — the file, the count, the exit code, the timestamp on what changed — never from a wrapper or a proxy signal that merely correlates with progress.
+- Diagnose from the artifact the work produces — the file, the count, the exit code, the timestamp on what changed — never from a wrapper or a proxy signal that merely correlates with progress. Read a gate bare: a pipeline stage after it (`| tail`, `| grep`) reports the stage's exit status and hides the gate's failing lines.
 - Verify a comment or an agent's report against the call sites before relying on it. A code comment is not evidence. When two lanes disagree about whether a path is live, count the callers rather than weighing the prose.
 - What a round proves is what it ran. A conclusion carried from one door to another is a hypothesis at the second door. Re-run it there.
 
@@ -63,6 +62,7 @@ A review that reads a diff finds what the diff shows. A review that tries to bre
 - Draw the negative control from outside the population the instrument covers. Name the instrument's membership rule first, then pick a control that rule excludes. A control sampled from constructs the instrument already handles proves only that it discriminates among those constructs, and says nothing about the class it silently cannot reach.
 - State an instrument's coverage beside its result. A conclusion inherits the instrument's scope, not the question's. An unstated coverage claim is read as complete, and it never is. A search proves something about the paths it walked, so name them.
 - Match the instrument to the question. A text search reports on text, so a claim about declarations, call sites, or structure needs the compiler or a parser instead. A pattern written for one spelling of a construct reports on that spelling alone. A path check answers relative to the directory it runs from, so resolve the inputs against their own base before reading a miss as a finding.
+- Name the rival reading the instrument must exclude, and show it reports differently under that reading. Give independent measurements independent state: one counter shared across members reports read order and per-member read count identically, so a result consistent with both measured neither.
 - Report a question unanswered rather than answering it with a weaker instrument. A fallback that measures something adjacent returns a confident wrong answer, and nothing downstream can tell that answer from the real one — searching commit messages for a release when the question is where a version changed will match some release, just not the one asked about. Name the substitute and what it actually measures, or say the question is open.
 - State what the controls established and what they did not. An instrument certified only from the inside is trusted exactly where it has never been tested.
 - Treat a gap between what an instrument says it checks and what it actually matches as a defect in the instrument, not as a documented limit. A recorded blind spot buys trust only when everything outside it is genuinely covered.
@@ -77,10 +77,12 @@ A review that reads a diff finds what the diff shows. A review that tries to bre
 - Name the claims you could not break either way, so the next round knows what has already been attacked.
 - Never tell an auditor that a clean round means it did not try. That instructs it to manufacture a finding, and a manufactured finding costs a fix unit, an argument, and the credibility of the true findings beside it.
 - Treat a repaired claim as a new claim, not a settled one. Re-ask it at every entry point that reaches the same rule, not only the door the defect arrived through. The engine that wrote the fix is least able to see this, because re-verifying where the fix is feels like verifying the fix.
+- A fix that adopts the auditor's prescription verbatim may close with a mutation probe in place of a fresh audit round: disable the load-bearing line, watch the adopted pin fail, restore it, and commit the pin as the regression guard. A fix that departs from the prescription gets the cross-engine round.
 - Let reachability bound the fix. A defect reachable through the package's own shipped code or a documented extension seam falsifies its claim and is repaired now.
 - Document the obligation instead when a defect is reachable only through a hypothetical foreign implementation of a contract this package publishes. State it on the interface that owns it and prove the documentation. Do not build coordination machinery against a requirement nobody wrote down. Attacks are unlimited; reachable ones are not, and only the reachable set is a work list.
 - **Three rounds at one seam is the budget.** Repeated rounds against one seam are evidence about the design, not evidence of diligence. At the third round the next unit is a ruling — on the threat model, the mechanism, or the boundary — taken with the same adversarial pass a design gets, not a fourth repair.
-- Write the round count down when the seam opens, so it is a fact rather than a feeling. A seam that has consumed more rounds than the rest of the matrix combined has already answered the question.
+- Write the round count down in the capability/defect matrix row that owns the seam, when the seam opens, so it is a fact rather than a feeling. A seam that has consumed more rounds than the rest of the matrix combined has already answered the question.
+- State the ruling that ends a seam as three things: the invariant the code will obey, the constraint bounding it against over-correction, and the interface where a consumer meets the obligation. A ruling that names only the defect it replaces produces the opposite defect next round.
 - Give every behavioural audit the means to run its attacks. An auditor that cannot execute cannot falsify a behavioural claim: it returns derivations, and a derivation reads exactly like a verdict while being a different thing — it will confirm a claim one probe would break. Treat a report with no executed evidence as a review of the source, and label it as such.
 
 ## Ecosystem reuse

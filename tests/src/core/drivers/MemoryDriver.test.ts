@@ -1,8 +1,9 @@
 import type { Condition, Migration, TableSchema } from '@src/core'
 import { createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
+import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { collectRows, conformDriver, tableSchemas } from '../../../setup.js'
+import { conformDriver, tableSchemas } from '../../../setup.js'
 
 conformDriver('MemoryDriver', () => createMemoryDriver())
 
@@ -11,7 +12,7 @@ describe('MemoryDriver', () => {
 		const driver = createMemoryDriver()
 		await driver.open(tableSchemas('users', 'posts'))
 		expect(await driver.keys('users')).toEqual([])
-		expect(await collectRows(driver.scan('posts'))).toEqual([])
+		expect(await collect(driver.scan('posts'))).toEqual([])
 	})
 
 	it('reads back what it writes, and misses return undefined / false', async () => {
@@ -93,7 +94,7 @@ describe('MemoryDriver', () => {
 		await driver.write('t', 'a', { id: 'a' })
 		await driver.write('t', 'b', { id: 'b' })
 		expect(await driver.keys('t')).toEqual(['a', 'b'])
-		expect((await collectRows(driver.scan('t'))).map((row) => row.id)).toEqual(['a', 'b'])
+		expect((await collect(driver.scan('t'))).map((row) => row.id)).toEqual(['a', 'b'])
 		await driver.clear('t')
 		expect(await driver.keys('t')).toEqual([])
 	})
@@ -109,7 +110,7 @@ describe('MemoryDriver', () => {
 		await driver.write('t', 'a', { id: 'a' })
 		await driver.write('t', 'b', { id: 'b' })
 		expect(await driver.keys('t')).toEqual(['a', 'b', 'c'])
-		expect((await collectRows(driver.scan('t'))).map((row) => row.id)).toEqual(['a', 'b', 'c'])
+		expect((await collect(driver.scan('t'))).map((row) => row.id)).toEqual(['a', 'b', 'c'])
 	})
 
 	it('orders numeric keys numerically (not lexicographically)', async () => {
@@ -121,7 +122,7 @@ describe('MemoryDriver', () => {
 		await driver.write('t', 2, { id: 2 })
 		await driver.write('t', 1, { id: 1 })
 		expect(await driver.keys('t')).toEqual([1, 2, 10])
-		expect((await collectRows(driver.scan('t'))).map((row) => row.id)).toEqual([1, 2, 10])
+		expect((await collect(driver.scan('t'))).map((row) => row.id)).toEqual([1, 2, 10])
 	})
 
 	it('isolates stored rows from caller mutation (copy in, copy out)', async () => {
@@ -224,9 +225,7 @@ describe('MemoryDriver', () => {
 			const conditions: readonly Condition[] = [
 				{ column: 'n', operator: 'above', values: [1], connector: 'and' },
 			]
-			const rows = await collectRows(
-				driver.stream?.('t', { conditions }) ?? (async function* () {})(),
-			)
+			const rows = await collect(driver.stream?.('t', { conditions }) ?? (async function* () {})())
 			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
 		})
 
@@ -237,7 +236,7 @@ describe('MemoryDriver', () => {
 			await driver.write('t', 'b', { id: 'b' })
 			await driver.write('t', 'c', { id: 'c' })
 			await driver.write('t', 'd', { id: 'd' })
-			const rows = await collectRows(
+			const rows = await collect(
 				driver.stream?.('t', { offset: 1, limit: 2 }) ?? (async function* () {})(),
 			)
 			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
@@ -255,7 +254,7 @@ describe('MemoryDriver', () => {
 			)
 			const empty = driver.stream?.('t', { limit: 0 })
 			if (empty === undefined) throw new Error('Expected stream capability')
-			expect(await collectRows(empty)).toEqual([])
+			expect(await collect(empty)).toEqual([])
 		})
 
 		it('ignores input.order (yields key order regardless)', async () => {
@@ -263,7 +262,7 @@ describe('MemoryDriver', () => {
 			await driver.open(tableSchemas('t'))
 			await driver.write('t', 'b', { id: 'b', n: 2 })
 			await driver.write('t', 'a', { id: 'a', n: 1 })
-			const rows = await collectRows(
+			const rows = await collect(
 				driver.stream?.('t', { order: [{ column: 'n', direction: 'descending' }] }) ??
 					(async function* () {})(),
 			)
@@ -274,7 +273,7 @@ describe('MemoryDriver', () => {
 			const driver = createMemoryDriver()
 			await driver.open(tableSchemas('t'))
 			await driver.write('t', 'a', { id: 'a', n: 1 })
-			const [row] = await collectRows(driver.stream?.('t', {}) ?? (async function* () {})())
+			const [row] = await collect(driver.stream?.('t', {}) ?? (async function* () {})())
 			if (row) row.n = 999
 			expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
 		})
@@ -299,11 +298,9 @@ describe('MemoryDriver', () => {
 		it('yields nothing for an empty declared table and rejects an unknown table', async () => {
 			const driver = createMemoryDriver()
 			await driver.open(tableSchemas('users'))
-			expect(await collectRows(driver.stream?.('users', {}) ?? (async function* () {})())).toEqual(
-				[],
-			)
+			expect(await collect(driver.stream?.('users', {}) ?? (async function* () {})())).toEqual([])
 			await expect(
-				collectRows(driver.stream?.('missing', {}) ?? driver.scan('missing')),
+				collect(driver.stream?.('missing', {}) ?? driver.scan('missing')),
 			).rejects.toMatchObject({
 				code: 'NOT_FOUND',
 			})

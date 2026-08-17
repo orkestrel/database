@@ -35,8 +35,8 @@ include app/core so shared transport contracts have one host-independent owner.
 - Types, constants, helpers, validators, parsers, and factories live in their
   centralized kind files; an implementation file holds one class plus imports.
   `ApplicationServerRunner` lives alone in `ApplicationServerRunner.ts` and
-  `startApplicationServer` in `factories.ts`; `main.ts` owns no reusable
-  declarations.
+  `startApplicationServer` in `handlers.ts`, because `factories.ts` admits only
+  `create`-prefixed construction; `main.ts` owns no reusable declarations.
 - Enforcement is layered, and each layer owns exactly what it can express:
   - `.oxlintrc.json` `no-restricted-imports` owns **literal-string** declared
     package, alias, and conventional relative imports, in both directions.

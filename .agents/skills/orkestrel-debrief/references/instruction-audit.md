@@ -11,8 +11,14 @@ seeing the other's answer before both return:
 
 - **Subjective** (design-fit engine): coherence of the role model, charter voice, whether
   each role's job is one job, whether the skill family reads as one system.
+- The subjective lenses, so the lane can state its coverage: role-job singularity;
+  charter voice against dispatched usage; lane-swap residue; bridge minimalism;
+  vocabulary drift across mirrored files; skill-family seams.
 - **Objective** (correctness engine): evidence-only sweeps of the actual files and the
   campaign record — the lanes below.
+
+Each lane returns numbered findings, most severe first, and exactly one terminal line:
+`INSTRAUDIT <LANE>: <n> findings`.
 
 Reconcile into rulings; every divergence gets a ruled row with the reason. Convergent
 findings adopt without contest; a finding neither lane can substantiate dies on the

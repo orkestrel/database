@@ -73,3 +73,6 @@ delta from the prior round. A tier passes when its models complete the goal with
 failed calls and no out-of-band reading (no source excavation, no filesystem search —
 watch for it in the transcript; it means the surface leaked its teaching job to the
 repository).
+
+A re-film that drives the surface with live models is a field pass: it carries the
+scoreboard and each lane's journal path like any other round.

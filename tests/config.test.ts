@@ -11,10 +11,10 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, loadConfigFromFile } from 'vite'
+import { createScratch } from '@orkestrel/test/server'
 import * as configHelpers from '../configs/helpers.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
@@ -490,8 +490,9 @@ describe('configuration helpers', () => {
 	})
 
 	it('resolves contained workspace paths and refuses a real outside sibling', () => {
-		const outside = mkdtempSync(join(tmpdir(), 'orkestrel-config-outside-'))
+		const scratch = createScratch({ prefix: 'orkestrel-config-outside-' })
 		try {
+			const outside = scratch.path
 			const importer = resolve(root, 'tests/config.test.ts')
 			expect(configHelpers.WORKSPACE_ROOT).toBe(realpathSync.native(root))
 			expect(configHelpers.fileSystemPath(`/@fs/${root}`)).toBe(root)
@@ -507,13 +508,14 @@ describe('configuration helpers', () => {
 			expect(configHelpers.isOutsideWorkspacePath(outside)).toBe(true)
 			expect(configHelpers.isOutsideWorkspacePath('src/core/index.ts')).toBe(false)
 		} finally {
-			rmSync(outside, { recursive: true, force: true })
+			scratch.destroy()
 		}
 	})
 
 	it('reads bounded files and resolves package roots from real manifests', () => {
-		const workspace = mkdtempSync(join(tmpdir(), 'orkestrel-config-package-'))
+		const scratch = createScratch({ prefix: 'orkestrel-config-package-' })
 		try {
+			const workspace = scratch.path
 			const packageRoot = resolve(workspace, 'node_modules/@sample/package')
 			const source = resolve(packageRoot, 'src/index.ts')
 			mkdirSync(dirname(source), { recursive: true })
@@ -544,13 +546,14 @@ describe('configuration helpers', () => {
 				configHelpers.trustedPackageRootFor(source, new Set([realpathSync.native(packageRoot)])),
 			).toBe(realpathSync.native(packageRoot))
 		} finally {
-			rmSync(workspace, { recursive: true, force: true })
+			scratch.destroy()
 		}
 	})
 
 	it('classifies module boundaries and extracts static asset sources', async () => {
-		const workspace = mkdtempSync(join(tmpdir(), 'orkestrel-config-assets-'))
+		const scratch = createScratch({ prefix: 'orkestrel-config-assets-' })
 		try {
+			const workspace = scratch.path
 			const source = resolve(workspace, 'entry.ts')
 			const code =
 				"const module = import('./module.js')\nconst asset = new URL('./asset%20name.png', import.meta.url)\nvoid module\nvoid asset\n"
@@ -573,7 +576,7 @@ describe('configuration helpers', () => {
 				configHelpers.environmentAssetSources(readFileSync(source, 'utf8'), source, true),
 			).resolves.toStrictEqual([])
 		} finally {
-			rmSync(workspace, { recursive: true, force: true })
+			scratch.destroy()
 		}
 	})
 

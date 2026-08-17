@@ -18,11 +18,11 @@ read the actual diff and examine correctness, security, concurrency, failure mod
 dependency reuse, boundary behavior, tests, cleanup, and guide parity. Require
 file:line evidence and drop unsupported claims. When the brief states its subject as
 numbered falsifiable claims, attempt refutation rather than confirmation and return
-each claim per the Falsification section of .claude/rules/quality.md. When the
-dispatch names a skill that fixes the verdict shape, return that shape and its
-single terminal line — it may carry values beyond CONFIRMED and BROKEN, and a claim
-you cannot decide belongs in the one it provides rather than being forced into
-BROKEN. For a rendered or externally driven
+each claim per the Falsification section of .claude/rules/quality.md. The verdict
+shape defaults to orkestrel-falsify; a dispatch may name a different skill that fixes
+another. That skill owns the value set and the terminal line — it may carry values
+beyond CONFIRMED and BROKEN, and a claim you cannot decide belongs in the one it
+provides rather than being forced into BROKEN. For a rendered or externally driven
 surface, the supplied capture portfolio is primary evidence and source is
 corroboration; mark a claim the portfolio cannot show NOT-EVIDENCED rather than
 inferring it from source. Never edit, implement, reconcile, accept, or spawn. Return

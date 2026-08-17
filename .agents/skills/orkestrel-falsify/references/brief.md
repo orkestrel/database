@@ -1,7 +1,7 @@
 # Writing the claims brief
 
-The brief decides the round. Every weak audit this process has produced was a weak brief read
-faithfully; every finding worth having came from a claim written sharply enough to be attacked.
+The brief decides the round. An auditor reads it faithfully, so a claim too vague to attack
+returns a confirmation that proves nothing. Write every claim sharply enough to be broken.
 
 ## Anatomy
 
@@ -48,11 +48,11 @@ A successor brief:
 - **states what changed in the brief itself**, so a reader can see which claims are new;
 - **adds claims that attack the previous round's own rulings.**
 
-That last one is the highest-yield idea in this process. A fix round makes _decisions_ — it rules
-that some input should be refused rather than carried, that some widening is deliberate, that some
-site is sound and needs no change. Those rulings are the freshest and least-examined surface in the
-package, and they were made by the engine least able to see their consequences. Write a claim for
-each one.
+Attack the previous round's rulings first. A fix round makes _decisions_ — that some input is
+refused rather than carried, that some widening is deliberate, that some site is sound and needs no
+change. Those rulings are the freshest and least-examined surface in the package, and the engine
+that made them is least able to see their consequences. Write a claim for each one. Expect a
+repair to carry the next defect; a round that finds them is converging, not failing.
 
 ## Claims that repeatedly find things
 

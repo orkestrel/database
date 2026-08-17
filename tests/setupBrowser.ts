@@ -62,40 +62,6 @@ export function putIndexedDBValue(
 	})
 }
 
-/** Register a database cleanup with the caller's teardown — the per-file `cleanups`
- *  push, decoupled from the array so a seed helper need not know its shape. */
-export type CleanupRegistrar = (cleanup: () => Promise<void>) => void
-
-/** A teardown registrar: push disposers as a test sets them up, execute them all in
- *  registration order. Its `push` IS a {@link CleanupRegistrar}, so a seed helper
- *  composes with `register: registrar.push`. */
-export interface CleanupRegistrarInterface {
-	/** Register a disposer (sync or async) to execute at teardown. */
-	push(disposer: () => void | Promise<void>): void
-	/** Execute every registered disposer once, in registration order, then forget them. */
-	execute(): Promise<void>
-}
-
-/**
- * Build a teardown registrar replacing a hand-rolled per-file `cleanups[]` +
- * `afterEach` loop (AGENTS §16.1). Push disposers as a test opens resources; wire
- * `registrar.execute` into an `afterEach`. Disposers execute in REGISTRATION order and are
- * forgotten after, so the registrar is reused across cases.
- *
- * @returns A registrar with `push(disposer)` and `execute()`
- */
-export function createCleanups(): CleanupRegistrarInterface {
-	const disposers: Array<() => void | Promise<void>> = []
-	return {
-		push(disposer) {
-			disposers.push(disposer)
-		},
-		async execute() {
-			for (const disposer of disposers.splice(0)) await disposer()
-		},
-	}
-}
-
 // ── Cross-driver database fixture (the core stack over the IndexedDB driver) ──
 
 /** A core `Database` over the IndexedDB driver plus the boilerplate to name and

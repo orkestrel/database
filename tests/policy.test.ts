@@ -6,7 +6,12 @@ import {
 	inspectPolicyMirrorPaths,
 	inspectPolicySources,
 	inspectPolicyWorkspace,
+	inspectSkillFamily,
 	POLICY_CONTROLS,
+	readSkillFamily,
+	SKILL_POLICY_APOSTROPHE,
+	SKILL_POLICY_CONTROLS,
+	SKILL_POLICY_EXCLUSION,
 	stemToPolicyCandidates,
 	testToPolicyStem,
 } from './setupPolicy.js'
@@ -289,6 +294,34 @@ describe('instrument negative controls', () => {
 			expect(violations.some((violation) => violation.rule === control.rule)).toBe(true)
 		})
 	}
+})
+
+describe('skill family policy', () => {
+	it('discovers a non-empty family containing orkestrel-falsify', () => {
+		const family = readSkillFamily(process.cwd())
+		expect(family.length).toBeGreaterThan(0)
+		expect(family).toContain('orkestrel-falsify')
+	})
+
+	it('requires every discovered skill file, metadata token, and reference', () => {
+		expect(inspectSkillFamily(process.cwd())).toEqual([])
+	})
+
+	for (const control of SKILL_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+		})
+	}
+
+	it(`${SKILL_POLICY_APOSTROPHE.label} [membership: ${SKILL_POLICY_APOSTROPHE.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_APOSTROPHE)).toEqual([])
+	})
+
+	it(`${SKILL_POLICY_EXCLUSION.label} [membership: ${SKILL_POLICY_EXCLUSION.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_EXCLUSION)).toEqual([])
+	})
 })
 
 describe('repository policy', () => {

@@ -1,7 +1,8 @@
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
+import { collect } from '@orkestrel/test'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { collectRows, seedUsersTable } from '../../setup.js'
+import { seedUsersTable } from '../../setup.js'
 
 // `Query`'s own surface — portable conditions and ordering, the post-fetch
 // `filter`, `limit` / `offset` paging, the
@@ -115,7 +116,7 @@ describe('Query — ordering, paging, filter', () => {
 
 	it('accepts zero paging for eager and streamed queries', async () => {
 		expect(await users.query().limit(0).collect()).toEqual([])
-		expect(await collectRows(users.query().limit(0).stream())).toEqual([])
+		expect(await collect(users.query().limit(0).stream())).toEqual([])
 		expect(await users.query().offset(0).limit(1).collect()).toHaveLength(1)
 	})
 
@@ -192,7 +193,7 @@ describe('Query — stream (lazy streaming)', () => {
 	})
 
 	it('yields lazily honoring conditions plus limit/offset', async () => {
-		const rows = await collectRows(
+		const rows = await collect(
 			users
 				.query()
 				.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
@@ -200,7 +201,7 @@ describe('Query — stream (lazy streaming)', () => {
 		)
 		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u3', 'u4'])
 
-		const paged = await collectRows(
+		const paged = await collect(
 			users.query().order({ column: 'age', direction: 'ascending' }).offset(1).limit(2).stream(),
 		)
 		// order is ignored by stream — paging counts over unsorted (insertion) order.
@@ -208,7 +209,7 @@ describe('Query — stream (lazy streaming)', () => {
 	})
 
 	it('applies a post-fetch filter per row', async () => {
-		const rows = await collectRows(
+		const rows = await collect(
 			users
 				.query()
 				.filter((user) => user.name.length === 2)

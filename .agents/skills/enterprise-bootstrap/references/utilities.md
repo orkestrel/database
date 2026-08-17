@@ -301,7 +301,7 @@ Helpers are single-purpose classes that sit alongside utilities.
 
 - **Spacing scale:** prefer `gap-*` on flex/grid parents over scattering `m-*` on every child — the parent owns rhythm, children stay reorderable. Use `p-3` / `p-4` for panel padding; reserve `p-5` for sparse marketing-like empty states.
 - **Body surfaces:** `bg-body`, `bg-body-secondary`, `bg-body-tertiary` track `data-bs-theme` — raw `bg-white` / `bg-light` freeze the surface in light mode.
-- **Text hierarchy:** `text-body` for content, `text-body-secondary` for meta, `text-*-emphasis` when a status must stay readable on subtle backgrounds. `text-body-tertiary` is the decoration tier — it misses the 4.5:1 bar for information-bearing small text, so anything a user must read is `text-body-secondary` or better.
+- **Text hierarchy:** `text-body` for content, `text-body-secondary` for meta, `text-*-emphasis` for any status a reader acts on. The plain `text-success` / `text-danger` / `text-warning` colors and `text-body-tertiary` are the decoration tier ([SKILL.md](../SKILL.md) → Surfaces, color, contrast).
 - **Opacity traps:** `text-white-50` / `text-black-50` often fail contrast — prefer `text-opacity-75` on a known solid, or `text-body-secondary`. Every one of these pairings is measured against the shipped cascade in both themes; a skin retunes the same token names.
 - **Flex floors:** a flex column gives its items an automatic minimum size, and `text-truncate` removes it. Titles and marks that must keep their height carry `flex-shrink-0`; only the growing sibling absorbs the slack.
 - **Flex toolbars:** `d-flex align-items-center gap-2 flex-wrap` (or `flex-nowrap overflow-auto` for dense bars). Equal-height siblings: `align-items-stretch` + `h-100` on cards.

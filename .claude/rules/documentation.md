@@ -22,7 +22,7 @@ Documentation is an enforced contract, not explanatory decoration. The Writing r
 - Read the matching spec/guide before code, form the intended design, then compare implementation. Existing code is a verification target, not ground truth.
 - `AGENTS.md` and its linked rules are the sole convention source. Do not create competing instruction copies in guides.
 - `guides/README.md` is the map: maintain both a concept index and a directory index. The concept index runs `spec ↔ source ↔ tests ↔ showcase` minus every column whose subject this workspace lacks, so an app-only workspace that publishes no library and builds no showcase still owes a full index over the columns it has.
-- `ROADMAP.md` is the sequenced plan of record. Each chunk reaches green before the next.
+- Where the repository keeps one, `ROADMAP.md` is the sequenced plan of record. Each chunk reaches green before the next.
 - A showcase is executable proof of public API. A missing demonstration is a missing feature, detectable by parity.
 - An integration surface's guide documents the validated hookup for each supported client: the exact commands run, the authentication and approval model that client needs, and the honest limit wherever a client cannot reach part of the surface.
 
@@ -33,7 +33,7 @@ Documentation is an enforced contract, not explanatory decoration. The Writing r
 - TypeScript, SCSS, Markdown, tests, and showcase remain aligned.
 - A parity failure identifies drift; never suppress or weaken the test.
 - A vendored dependency guide is a mirror. Its relative links address the upstream tree and resolve to nothing here, so they are outside local-link parity. Refresh a mirror rather than rewriting it: a rewritten copy is a translation, and no comparison against the fetched bytes can check it.
-- Falsify a prose claim the way you falsify a code claim. The parity test proves a name exists, never that a sentence about behavior is true, so run the example and read what it returns. A `// false` beside a call that returns `true` is a defect of the same kind as a wrong return value, and it reaches every consumer who installs the package.
+- Falsify a prose claim the way you falsify a code claim. The parity test proves a name exists, never that a sentence about behavior is true, so run the example and read what it returns. A `// false` beside a call that returns `true` is a defect of the same kind as a wrong return value, and it reaches every consumer who installs the package. That proof has a home: `tests/guides.test.ts` executes the flagship fences, per `.claude/rules/tests.md`. An ordered behaviour with no gate is not a gate.
 - Re-read the prose last, against what actually shipped. Where a change chose to document a limit rather than close it, the sentence was often drafted for the option that lost, or written more confidently than the code earns. Code rulings survive review because a test can break them; prose rulings survive because nothing tries.
 
 For behavioral interfaces/classes:
@@ -65,5 +65,8 @@ Never use in-repository `@src/*` aliases in public guide examples; reserve them 
 - Keep `SKILL.md` concise and route conditional detail to one-level `references/`.
 - Frontmatter contains only `name` and a trigger-focused `description`.
 - Do not put model routing or package version catalogs in a skill.
-- Validate every referenced resource and `agents/openai.yaml`; do not leave template TODOs or auxiliary README/changelog files.
+- Validate every referenced resource; do not leave template TODOs or auxiliary README/changelog files.
+- Write `agents/openai.yaml` as one root `interface:` mapping over exactly `display_name`, `short_description`, and `default_prompt`, in that order, each on its own two-space-indented line.
+- Give every one of those keys a non-empty single-quoted scalar, and write an apostrophe inside it as `''`.
+- Name the skill's own `$<directory>` token in `default_prompt`.
 - Keep provider bridges minimal: they load one canonical workflow and add no competing instructions.

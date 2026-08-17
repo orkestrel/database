@@ -9,8 +9,9 @@ import {
 import { createIndexedDBDriver, deriveIndexedDBIndexName, schemaToStore } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
+import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, collectRows, conformDriver, tableSchemas } from '../../../setup.js'
+import { buildCondition, conformDriver, tableSchemas } from '../../../setup.js'
 import { deleteDatabase, putIndexedDBValue, uniqueName } from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
@@ -122,7 +123,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		await driver.write('users', 'a', { id: 'a' })
 		await driver.write('users', 'b', { id: 'b' })
 		expect(await driver.keys('users')).toEqual(['a', 'b'])
-		expect((await collectRows(driver.scan('users'))).map((row) => row.id)).toEqual(['a', 'b'])
+		expect((await collect(driver.scan('users'))).map((row) => row.id)).toEqual(['a', 'b'])
 		await driver.clear('users')
 		expect(await driver.keys('users')).toEqual([])
 	})
@@ -429,7 +430,7 @@ describe('IndexedDBDriver — Database integration', () => {
 			await firstDriver.write('users', 'b', { id: 'unbound-b', name: 'Valid' })
 			await logs.table('logs').set({ id: 'l1', message: 'started' })
 			expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
-			expect(await collectRows(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
+			expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
 			expect(await users.count()).toBe(1)
 			const diagnostic = await users
 				.set({ id: 'payload-secret', name: '' })
@@ -485,7 +486,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 			}),
 		)
 		expect(await records.call(driver, 'users', { limit: 0 })).toEqual([])
-		expect(await collectRows(stream.call(driver, 'users', { limit: 0 }))).toEqual([])
+		expect(await collect(stream.call(driver, 'users', { limit: 0 }))).toEqual([])
 	})
 
 	// A real database over the IndexedDB driver, with a single-column secondary
@@ -601,9 +602,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 			const input = { conditions: [condition] }
 			expect(await people.records(input)).toEqual(await reference.records(input))
 			expect(await people.count(input)).toBe(await reference.count(input))
-			expect(await collectRows(people.scan(input))).toEqual(
-				await collectRows(reference.scan(input)),
-			)
+			expect(await collect(people.scan(input))).toEqual(await collect(reference.scan(input)))
 		}
 		await memory.close()
 	})
@@ -1522,13 +1521,13 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 		const toRows =
 			repro.stream === undefined
 				? []
-				: await collectRows(
+				: await collect(
 						repro.stream('people', { conditions: [buildCondition('age', 'to', [100])] }),
 					)
 		const belowRows =
 			repro.stream === undefined
 				? []
-				: await collectRows(
+				: await collect(
 						repro.stream('people', { conditions: [buildCondition('age', 'below', [100])] }),
 					)
 		expect(toRows.map((row) => row.id).sort()).toEqual(['a', 'b'])
@@ -1536,7 +1535,7 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 	})
 
 	it('matches a plain engine-over-scan for both operators (superset contract holds)', async () => {
-		const scanned = await collectRows(repro.scan('people'))
+		const scanned = await collect(repro.scan('people'))
 		const expectedTo = applyQuery(scanned, { conditions: [buildCondition('age', 'to', [100])] })
 		const expectedBelow = applyQuery(scanned, {
 			conditions: [buildCondition('age', 'below', [100])],
@@ -1594,7 +1593,7 @@ describe('IndexedDBDriver — reversed between bounds', () => {
 		const rows =
 			reversed.stream === undefined
 				? []
-				: await collectRows(
+				: await collect(
 						reversed.stream('people', {
 							conditions: [buildCondition('age', 'between', [100, 1])],
 						}),

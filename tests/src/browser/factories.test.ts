@@ -1,8 +1,9 @@
 import { createDatabase } from '@src/core'
 import { stringShape } from '@orkestrel/contract'
 import { createIndexedDBDriver } from '@src/browser'
+import { collect } from '@orkestrel/test'
 import { afterEach, describe, expect, it } from 'vitest'
-import { collectRows, tableSchemas } from '../../setup.js'
+import { tableSchemas } from '../../setup.js'
 import { deleteDatabase, uniqueName } from '../../setupBrowser.js'
 
 // `createIndexedDBDriver` (`src/browser/factories.ts`) in real Chromium: the
@@ -29,7 +30,7 @@ describe('createIndexedDBDriver', () => {
 		await driver.write('items', 'b', { id: 'b', n: 2 })
 		expect(await driver.read('items', 'a')).toEqual({ id: 'a', n: 1 })
 		expect(await driver.read('items', 'missing')).toBeUndefined()
-		expect((await collectRows(driver.scan('items'))).map((row) => row.id)).toEqual(['a', 'b'])
+		expect((await collect(driver.scan('items'))).map((row) => row.id)).toEqual(['a', 'b'])
 		await driver.close()
 	})
 

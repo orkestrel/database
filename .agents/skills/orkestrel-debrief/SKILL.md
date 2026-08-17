@@ -16,7 +16,8 @@ Read the current files in this order:
    before auditing the agent/rule/skill/process layer;
    [field-testing.md](references/field-testing.md) before running or judging a live field
    pass of an agent-facing surface.
-4. `guides/README.md`, the governing guides for what the campaign built, and `ROADMAP.md`.
+4. `guides/README.md`, the governing guides for what the campaign built, and `ROADMAP.md` when
+   the repository keeps one.
 
 The user's current instruction wins. The debrief judges the artifact and the process that
 produced it; neither is exempt. Capture successes as deliberately as mistakes, and codify
@@ -57,8 +58,13 @@ a practice that worked so it repeats.
    src, does src carry application policy, does either duplicate a declared ecosystem
    primitive? Package promotion: what grew into a reusable mechanism that belongs in an
    existing package or justifies a new one — mapped dependency-first so promotion order
-   is executable. Every row ends implement, repair, retain, or intentionally exclude,
-   with evidence.
+   is executable. Sweep test infrastructure both ways: name every local test helper or
+   fixture whose semantics an installed shared-package export already covers (compare
+   against the declarations each repository compiles with, and adopt rather than keep),
+   and name every instrument two or more packages built independently (count a value set
+   fed through one proof loop as one implementation, whether the set sits beside the
+   loop or its assertions are spelled out one by one). Every row ends implement, repair,
+   retain, or intentionally exclude, with evidence.
 4. **Process retrospective.** Walk the campaign record for both failure and success:
    dispatches that deviated and why; recoveries that worked (codify the mechanism that
    saved them); estimates versus observed durations; audit rounds that caught real

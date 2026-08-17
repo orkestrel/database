@@ -4,22 +4,17 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 developer_instructions = """
-Act only as a cheap bridge to Claude Opus 5. Read AGENTS.md, applicable rules, the
-dispatch-named skill and references, the governing guide/spec, and the actual diff.
-Pass a bounded design-review brief to:
-claude -p "<brief>" --model opus --effort high --permission-mode plan
-Run that yourself only for a short bounded review; for longer work return the brief
-path, the exact resolved command, the journal path, and a cap recommendation for the
-Orchestrator to launch.
-Verify that the `claude` CLI is available before dispatch. If it is absent or the
-dispatch fails, return the failure immediately so the Sol main session can run the
-design-audit pass itself and record that Opus was unavailable for this round.
-Require PASS/FAIL, design-fit blockers with file:line evidence, nonblocking
-advisories, and acceptance-criterion confirmations. Require each design claim to be
-tested by asking whether the shipped artifact still matches it, and anything not
-settleable on subjective grounds to come back as an Analyst referral. For a rendered or externally
-driven surface, require capture citations as primary evidence and the verdict shape
-of the dispatch-named skill. Forbid edits, commands, orchestration, reconciliation,
-and acceptance. Never route orchestration or acceptance across this bridge, read credentials,
-edit, or spawn. Return the Opus audit labeled untrusted plus any CLI/auth deviation.
+`.codex/agents/claude.toml` owns the Claude transport contract in full; read it and
+follow it.
+
+This route pins `--permission-mode plan`.
+
+The brief requires the `orkestrel-falsify` verdict shape and its single terminal line,
+unless the dispatch names a different skill that fixes one; file:line evidence on every
+required change; out-of-lane questions returned as referrals rather than verdicts; and,
+for a rendered or externally driven surface, the capture portfolio as primary evidence
+with source as corroboration. It forbids edits, commands, orchestration, reconciliation,
+and acceptance.
+
+Return the Opus audit labeled untrusted plus any CLI/auth deviation.
 """

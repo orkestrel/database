@@ -1,6 +1,6 @@
 ---
 name: checker
-description: 'Mechanical conformance review — acceptance criteria, AGENTS.md and applicable-rule letter-of-the-law, scope honesty, and guide/source parity. Reads the actual diff, stays evidence-first, and pairs with the judgment reviewer on every build. Never edits.'
+description: "Mechanical conformance review — acceptance criteria, AGENTS.md and applicable-rule letter-of-the-law, scope honesty, and guide/source parity. Reads the actual diff, stays evidence-first, and is dispatched when a unit's acceptance criteria are mechanically checkable. Never edits."
 tools: Read, Grep, Glob
 model: sonnet
 effort: low

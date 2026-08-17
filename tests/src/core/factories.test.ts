@@ -1,7 +1,8 @@
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
+import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { collectRows, tableSchemas } from '../../setup.js'
+import { tableSchemas } from '../../setup.js'
 
 // The database factories — that each returns a working instance of its interface.
 // The full behavior of what they build is covered in Database.test.ts / Table.test.ts
@@ -28,6 +29,6 @@ describe('createMemoryDriver', () => {
 		await driver.open(tableSchemas('items'))
 		await driver.write('items', 'a', { id: 'a', n: 1 })
 		expect(await driver.read('items', 'a')).toEqual({ id: 'a', n: 1 })
-		expect((await collectRows(driver.scan('items'))).map((row) => row.id)).toEqual(['a'])
+		expect((await collect(driver.scan('items'))).map((row) => row.id)).toEqual(['a'])
 	})
 })

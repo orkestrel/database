@@ -79,8 +79,6 @@ CDN (5.3.8 is the current — and final — 5.3.x patch before 5.4):
 <div class="row gx-5 gy-3">Independent horizontal/vertical gutters</div>
 ```
 
-Mobile first: write for the smallest screen, add `sm`/`md`/`lg`/`xl`/`xxl` modifiers upward. Test every breakpoint you claim.
-
 ## Color Modes (light / dark / custom)
 
 The 5.3 color-mode system replaces the old per-component dark variants.
@@ -90,7 +88,7 @@ The 5.3 color-mode system replaces the old per-component dark variants.
 - `data-bs-theme="light|dark"` on `<html>` sets the mode globally; on any element it scopes the mode to that subtree (nested scopes win over ancestors). Default is light.
 - Mode switching works by re-pointing root CSS variables — components never change their own rules. Core variables swapped per mode: `--bs-body-bg`, `--bs-body-color`, `--bs-emphasis-color`, `--bs-secondary-color`, `--bs-secondary-bg`, `--bs-tertiary-color`, `--bs-tertiary-bg`, `--bs-border-color`, `--bs-heading-color`, `--bs-link-color`.
 - Each theme color also gets a mode-adaptive triplet — `--bs-{color}-text-emphasis`, `--bs-{color}-bg-subtle`, `--bs-{color}-border-subtle` — surfaced as `.text-{color}-emphasis`, `.bg-{color}-subtle`, `.border-{color}-subtle`. These are the workhorses for status UI that must read in both modes.
-- **The triplet is a recipe, not a guarantee.** `text-{color}-emphasis` on `bg-{color}-subtle` is _designed_ to pass, and it usually does in stock Bootstrap — but the values are tokens, and a compatible skin redefines them. Resolve the actual computed values from the compiled cascade the page loads (the shipped CSS, dependency stylesheets included) and measure each pairing once per theme before you rely on it. A class with no rule of its own may still inherit one; documentation memory decides nothing.
+- **The triplet is a recipe, not a guarantee.** `text-{color}-emphasis` on `bg-{color}-subtle` is _designed_ to pass, and it usually does in stock Bootstrap — but the values are tokens, and a compatible skin redefines them. Resolve the actual computed values from the compiled cascade the page loads (the shipped CSS, dependency stylesheets included) and measure each pairing once per theme before you rely on it. A class with no rule of its own may still inherit one; never accept a value from documentation.
 - Deprecated by this system: `.navbar-dark`, `.dropdown-menu-dark`, `.btn-close-white`, `.carousel-dark` → put `data-bs-theme="dark"` on the component or an ancestor instead.
 
 ### Author rules
@@ -337,19 +335,28 @@ Dropdowns, tooltips, and popovers require Popper — load `bootstrap.bundle.min.
 
 ### Baseline (every screen)
 
-- Skip link (`.visually-hidden-focusable`) to `<main>`; landmarks (`nav`, `main`, `aside`); heading order `h1 → h2 → h3` without skips.
-- `aria-label` on icon-only controls; `aria-current="page"` on active nav; `aria-selected` on active tabs; `aria-expanded` + `aria-controls` on disclosure triggers; `aria-describedby` for help/errors.
-- Visible focus everywhere — keep Bootstrap's rings; use the `.focus-ring` helper on custom interactive elements instead of removing outlines.
-- Meaning never by color alone: pair status color with text, an icon, or a visually-hidden word.
-- Body text contrast ≥ 4.5:1 (3:1 for large text and UI graphics). Bootstrap's own docs warn parts of the default palette can fall short — verify your combinations; don't assume framework colors pass.
+Hold the baseline in [SKILL.md](../SKILL.md) → Accessibility baseline. Its Bootstrap-specific parts:
 
-**Measuring the bars (the part that gets skipped):**
+- Skip link: `.visually-hidden-focusable` to `<main>`. Landmarks: `nav`, `main`, `aside`. Heading order `h1 → h2 → h3` without skips.
+- Keep Bootstrap's focus rings; use the `.focus-ring` helper on custom interactive elements instead of removing outlines.
+- `.visually-hidden` for screen-reader-only text; `.visually-hidden-focusable` for skip links. Never combine the two.
+- Verify every color pairing against the shipped cascade. Bootstrap's own docs warn that parts of the default palette fall short.
 
-- Measure in **both themes**, from the compiled cascade, not from the token names. A pairing that passes in light routinely fails in dark, and a skin's values are its own.
-- **≥ 4.5:1** for everything information-bearing — including `small`, captions, meta lines, and timestamps. Small size is not a licence for a lower tier; `text-body-tertiary` is decoration, `text-body-secondary` is the floor for text a user must read.
-- **≥ 3:1** for textless marks and state indicators — status glyphs, rings, dividers that carry meaning — and for the hover/focus chrome that signals state. Focus rings and hover fills are UI graphics: they are in scope, and they are the ones nobody measures.
-- Disabled controls are exempt from the bars by the spec. That exemption is about legibility, not about meaning: see [Destructive actions](#destructive-actions) for the one disabled state that still has to change color.
-- `.visually-hidden` for SR-only text; `.visually-hidden-focusable` for skip links (never combine the two).
+**Measuring the bars:**
+
+- Hold the bars from [SKILL.md](../SKILL.md) → Surfaces, color, contrast: **≥ 4.5:1** for everything information-bearing, **≥ 3:1** for textless marks and state chrome. WCAG 2.2 permits 3:1 for large text; this package does not — size grants no lower tier.
+- Measure in **both themes**, from the compiled cascade, never from the token names. A pairing that passes in light routinely fails in dark, and a skin's values are its own.
+- Focus rings and hover fills are UI graphics: they are in scope for the 3:1 bar.
+- Disabled controls are exempt from the bars by the spec. That exemption covers legibility, not meaning — see [Destructive actions](#destructive-actions) for the one disabled state that still has to change color.
+
+**The instrument.** Bootstrap paints in translucent layers: a card header and footer are a 3% tint of the body color over the card's own background. A reader that stops at the first painted ancestor and drops its alpha treats that tint as full-strength paint, and is then wrong in **both** directions — it green-lights a pairing nobody can read, and it red-flags one that reads fine. Use a reader that:
+
+- collects every painted layer from the element upward to the first opaque one, then composites them top over bottom (Porter-Duff `over`) onto that opaque base;
+- composites a translucent foreground over that result before taking the ratio, rather than reading the declared color;
+- measures both themes in one run, since the theme swap re-points the tokens under every layer;
+- carries a negative control drawn from outside the population it covers — a pairing known to fail — and voids the run if that control passes.
+
+Wire the reader into the suite once it has settled a question.
 
 ### WCAG 2.2 deltas that bite dense app UI
 
@@ -398,7 +405,7 @@ The Bootstrap implementation — a responsive offcanvas that renders inline abov
 	<header class="navbar bg-body-tertiary border-bottom sticky-top">
 		<div class="container-fluid">
 			<button
-				class="btn btn-outline-secondary d-lg-none"
+				class="btn btn-secondary d-lg-none"
 				type="button"
 				data-bs-toggle="offcanvas"
 				data-bs-target="#appSidebar"
@@ -506,20 +513,20 @@ Give header cells an **opaque background** (`bg-body-secondary` or a table varia
 ### Wizards & multi-step forms
 
 - Show step progress: current position, total, and step names ("Step 2 of 4 — Billing"); `list-group-numbered` or a simple nav renders it honestly.
-- Validate per-step before advancing — failing forward compounds; failing at the end is worse.
+- Validate per step before advancing; never let a step advance carrying invalid data.
 - Back never loses data. Persist partial state (save-and-resume) for anything beyond ~3 steps or that crosses sessions.
 - Never re-ask what a previous step collected (Redundant Entry, 3.3.7) — carry it forward or offer "same as above".
 - Last step: a review summary with per-section edit links, then one clearly-named commit action ("Create account", not "Submit").
 
 ### The five states
 
-Design **all five** for every data surface: ideal (populated), empty, loading, partial, error. A component isn't done until all five exist — empty and error are where trust is won or lost.
+Design **all five** for every data surface: ideal (populated), empty, loading, partial, error. A component isn't done until all five exist.
 
 - **Skeleton vs spinner:** skeleton (`placeholder` + `placeholder-glow`) when you know the content's shape and it fills a region — tables, cards, detail panes — because it holds layout and shortens perceived wait. Spinner for short, indeterminate, or in-control waits (inside a button, a small inline fetch).
 - **Thresholds (guidance):** under ~1s show nothing — a flashed loader is worse than none; ~1–10s show a spinner or skeleton; beyond ~10s show determinate progress (percent or step) so it doesn't feel hung.
 - **Optimistic vs pessimistic:** apply UI immediately and reconcile (rolling back loudly on failure) for reversible high-frequency actions — toggles, stars, reorders. Await confirmation for money, audited records, and anything a rollback would confuse.
-- **Empty states** invite the next action (button + one line of why), and filtered-empty differs from never-had-data.
-- **Every error state carries a keyboard-reachable retry** and preserves surrounding context — a body fetch failure must not blow away the toolbar and filters.
+- **Empty states** invite the next action (button + one line of why). Never-had-data and filtered-empty are different states with different escapes — never ship one generic "nothing here".
+- **Every error state states what failed and how to fix it**, carries a keyboard-reachable retry in place, and preserves surrounding context — a body fetch failure must not blow away the toolbar and filters.
 
 ### Feedback discipline
 
@@ -540,9 +547,9 @@ Match friction to reversibility × blast radius:
 2. **Confirm dialog** for irreversible-but-scoped operations. Restate the specific consequence ("This permanently deletes 3 invoices"), verb-labeled buttons ("Delete invoices" / "Cancel" — never Yes/No), destructive action visually separated from safe; `alertdialog` semantics; focus lands on the safe action.
 3. **Type-to-confirm** (type the entity name) only for high-blast-radius irreversible operations — delete an org, drop a dataset.
 
-Don't type-gate a single-row delete; don't one-tap a tenant wipe. Overused confirmations train the click-through reflex that defeats them.
+Don't type-gate a single-row delete; don't one-tap a tenant wipe. Confirm only where this ladder calls for it — a confirmation on every action gets clicked through.
 
-**A disabled destructive control stops looking destructive.** `btn-danger` at full saturation reads as armed and available whatever the `disabled` attribute says — the loudest control on the screen is the one the user cannot use, and the contrast exemption for disabled controls does not excuse it. While the action is unavailable, neutralize the variant (drop to the neutral/outline variant, or let the disabled state mute the fill) so the color stops promising an action, and say _why_ it is unavailable in text the assistive layer reaches: `aria-describedby` pointing at the reason, with `title` only as the pointer-user convenience on top. A `title` alone is not an explanation — it never reaches a keyboard or screen-reader user, and it disappears on touch.
+**Neutralize a disabled destructive control.** `btn-danger` at full saturation reads as armed whatever the `disabled` attribute says, and the contrast exemption for disabled controls does not excuse it. While the action is unavailable, drop to the neutral or outline variant (or let the disabled state mute the fill) so the color stops promising an action, and say _why_ it is unavailable in text the assistive layer reaches: `aria-describedby` pointing at the reason, with `title` only as the pointer-user convenience on top. Never use `title` alone — it never reaches a keyboard or screen-reader user, and it disappears on touch.
 
 ## RTL
 
@@ -570,7 +577,7 @@ Bootstrap has **no** combobox/autocomplete, date picker, multi-select tags input
 
 - **Reach for native first:** `<input type="date">`, `<datalist>` for light autocomplete, `<select multiple>` where acceptable. Native widgets bring keyboard and AT behavior free.
 - **Reach for an established accessible library second** when the product genuinely needs the richer widget (combobox with async search, spreadsheet grid, drag-reorder tree). Budget for auditing it against the APG contract.
-- **Hand-roll last**, only with the APG contract in hand ([Accessibility](#accessibility) → Pattern contracts) and time to implement the _keyboard_ half — the visual half is the easy 20%.
+- **Hand-roll last**, only with the APG contract in hand ([Accessibility](#accessibility) → Pattern contracts) and budget for the _keyboard_ half, which is most of the work.
 - Never fake it: a `.dropdown-menu` posing as a select, a `<div>` grid with click handlers, or a scroll-anchor "wizard" each break keyboard and AT users in ways a demo never shows.
 
 ## Common Layout Patterns
