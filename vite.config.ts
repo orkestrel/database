@@ -1,6 +1,7 @@
 import type { UserConfig } from 'vite'
 import { playwright } from '@vitest/browser-playwright'
 import { defineConfig, mergeConfig } from 'vitest/config'
+import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
 import { environmentBoundary, outputBoundary } from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
@@ -11,6 +12,18 @@ const browserOptions = resolveBrowser(resolvePinnedBrowser(), process.platform, 
 export function resolveWorkspacePath(relativePath: string): string {
 	return fileURLToPath(new URL(relativePath, import.meta.url))
 }
+
+const peerDependencies = 'peerDependencies' in manifest ? manifest.peerDependencies : undefined
+if (
+	peerDependencies !== undefined &&
+	(typeof peerDependencies !== 'object' ||
+		peerDependencies === null ||
+		Array.isArray(peerDependencies))
+) {
+	throw new Error('package peerDependencies must be an object')
+}
+export const peers: readonly string[] =
+	peerDependencies === undefined ? [] : Object.keys(peerDependencies)
 
 const resolve = {
 	alias: Object.entries(tsconfig.compilerOptions.paths).reduce((aliases, [key, values]) => {
@@ -58,7 +71,10 @@ export const srcBrowser = (options?: UserConfig): UserConfig =>
 				},
 				outDir: 'dist/src/browser',
 				rolldownOptions: {
-					external: (id: string) => id === '@src/core' || id.startsWith('@orkestrel/'),
+					external: (id: string) =>
+						id === '@src/core' ||
+						id.startsWith('@orkestrel/') ||
+						peers.some((peer) => id === peer || id.startsWith(peer + '/')),
 					output: { paths: { '@src/core': '../core/index.js' } },
 				},
 			},
@@ -99,7 +115,10 @@ export const srcServer = (options?: UserConfig): UserConfig =>
 				rolldownOptions: {
 					platform: 'node',
 					external: (id: string) =>
-						id === '@src/core' || id.startsWith('node:') || id.startsWith('@orkestrel/'),
+						id === '@src/core' ||
+						id.startsWith('node:') ||
+						id.startsWith('@orkestrel/') ||
+						peers.some((peer) => id === peer || id.startsWith(peer + '/')),
 					output: [
 						{
 							format: 'es',

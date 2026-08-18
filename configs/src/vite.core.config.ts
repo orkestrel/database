@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 import { environmentBoundary, outputBoundary } from '../helpers.js'
-import { srcCore, resolveWorkspacePath } from '../../vite.config.ts'
+import { peers, srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
 	srcCore({
@@ -29,7 +29,12 @@ export default defineConfig(
 				fileName: (format) => (format === 'es' ? 'index.js' : 'index.cjs'),
 			},
 			outDir: 'dist/src/core',
-			rolldownOptions: { external: [/^node:/, /^@orkestrel\//] },
+			rolldownOptions: {
+				external: (id: string) =>
+					id.startsWith('node:') ||
+					id.startsWith('@orkestrel/') ||
+					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+			},
 		},
 	}),
 )

@@ -588,7 +588,13 @@ blueprint.engines // '>=22.12.0'
 `src` selects published library environments and `app` selects private application environments.
 The two axes are independent, so a library-only, an application-only, and a mixed workspace are all
 first class. `dependencies` and `peers` are runtime `@orkestrel/*` packages; `extras` are
-development dependencies and may carry any valid npm name.
+development dependencies and may carry any valid npm name. A peer therefore reaches the generated
+workspace through two sets with different membership rules: `Blueprint.peers`, which a blocking
+question closes to `@orkestrel/*`, and the `peers` binding the generated `vite.config.ts` derives
+from the target's own `peerDependencies`, which carries every name that manifest declares. Each
+published build face — core, browser, server, and `bin` — externalizes every name in that binding,
+so a peer the workspace declares by hand, such as `vitest`, is left as an import in the emitted
+bundle rather than inlined into it.
 
 One published environment owns the package root directly. Several published environments require
 `core`, which owns that root while each other environment keeps its subpath. A multi-environment
