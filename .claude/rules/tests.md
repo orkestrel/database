@@ -18,7 +18,9 @@ paths:
   not add `tests/configs/`.
 - Resolve a mirrored module through `.ts`, `.tsx`, `.mts`, `.cts`, `.vue`, `.scss`, or `.css`.
 - Resolve a Sass or CSS partial through the module's leading underscore.
-- Resolve a `setup*` module test against its sibling `setup*.ts` module inside `tests/`.
+- Resolve each root `tests/setup*.test.ts` proof against its sibling `tests/setup*.ts` module. A
+  root `tests/setup.test.ts` file can prove several setup modules when their helpers serve
+  several projects.
 - Prefer test filenames matching entrypoints: `index.test.ts` for `index.ts`, `main.test.ts` for `main.ts`.
 - Tests are deterministic: identical inputs produce identical results.
 - Keep default suites fast: timers normally use 10–50 ms and tests make no network calls.
@@ -54,8 +56,12 @@ its own:
 | `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks                                                                  |
 | `tests/distribution.test.ts` | The packed package installs and resolves through its public exports                                                            |
 | `tests/integration.test.ts`  | The package's features work together end to end across environments                                                            |
+| `tests/setup*.test.ts`       | Reusable behavior exported from sibling `tests/setup*.ts` modules works as the workspace's suites require                      |
 | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real                                                                |
 
+- Put each root `tests/setup*.test.ts` proof in the `setup` project. Keep its assertions on
+  exported test-infrastructure behavior: do not duplicate production behavior there, and do not
+  move setup-helper assertions into another cross-cutting proof.
 - `.claude/rules/workspace.md` names the Vitest project each location belongs to.
 - The `guides` project runs in Node with the browser disabled. Its subject is what the guide
   claims: that every documented name resolves, and that every fence asserting a value returns

@@ -465,7 +465,8 @@ the registry, so `new` fails when the registry names no release for a package it
 workspace would otherwise declare a dependency that does not resolve.
 
 `new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
-other structural facts do not need creation flags. Add `tests/guides.test.ts` for `guides`,
+other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
+`setup`, `tests/guides.test.ts` for `guides`,
 `tests/distribution.test.ts` for `distribution`, `tests/integration.test.ts` for `integration`,
 `tests/conformance.test.ts` for `conformance`, `tests/setupService.ts` for `service`,
 `tests/setupGlobal.ts` for `global`, and `configs/app/vite.showcase.config.ts` for `showcase`;
@@ -478,8 +479,9 @@ vendor list from edited text.
 `audit`, `repair`, `catalog`, and `overwrite` derive the blueprint from the target itself. The name
 and the declared `@orkestrel/*` packages come from `package.json`. The two environment axes come
 from the directories the target actually ships, because a directory is the fact and a declaration
-beside it could disagree. Eight more facts come from exact-case files: `src/bin/main.ts` selects
-`bin`, `tests/guides.test.ts` selects `guides`, `tests/distribution.test.ts` selects `distribution`,
+beside it could disagree. Nine more facts come from exact-case files: `src/bin/main.ts` selects
+`bin`, each root `tests/setup*.test.ts` match selects `setup`, `tests/guides.test.ts` selects
+`guides`, `tests/distribution.test.ts` selects `distribution`,
 `tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
 `conformance`, `tests/setupService.ts` selects `service`, `tests/setupGlobal.ts` selects `global`,
 and `configs/app/vite.showcase.config.ts` selects `showcase`. A containing directory does not select
@@ -596,10 +598,14 @@ because the shape is chosen once and read afterwards: `new` refuses the advisory
 `repair` need the plan to describe and restore a target that already has that shape. A library
 caller creating a workspace holds the same refusal, and the Compile section below states it.
 
-`bin`, `guides`, `distribution`, `integration`, `conformance`, `service`, `vendors`, `global`, and
-`showcase` are structural facts. Each is set only when the workspace physically ships the directory
-or exact-case file that defines it, never because of the workspace's name and never because a
-sibling fact is set.
+`bin`, `setup`, `guides`, `distribution`, `integration`, `conformance`, `service`, `vendors`,
+`global`, and `showcase` are structural facts. Each is set only when the workspace physically ships
+the directory or exact-case file that defines it, never because of the workspace's name and never
+because a sibling fact is set.
+
+`setup` registers every root `tests/setup*.test.ts` proof in one Node project that loads
+`tests/setup.ts`. A nested or wrong-case match does not set the fact. The generated manifest emits
+`test:setup` and invokes it from `test` only while the fact is set.
 
 A structural fact is read when a verb runs, not when the file appears. Writing
 `tests/integration.test.ts` into a workspace sets the fact, but the root configuration on disk was
