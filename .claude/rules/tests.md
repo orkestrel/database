@@ -146,6 +146,10 @@ Test helpers are shared infrastructure, not local test-file clutter.
 
 `@orkestrel/test` owns the helpers every workspace repeats: the call recorder, the real delay, the JSON and async collectors, and the owned scratch directory. Import them from `@orkestrel/test`, and its Node-only helpers from `@orkestrel/test/server`. Write a helper of your own only where the package exports none for the job. The shapes below are the contract a workspace codes against, not source to copy.
 
+- For the vendored test set (`tests/setupPolicy.ts`, `tests/policy.test.ts`, and
+  `tests/config.test.ts`), keep shared helpers within that set instead of importing them from
+  `@orkestrel/test`; follow the vendored-file import law in `.claude/rules/workspace.md`.
+
 - Extract a fixture, recorder, event factory, async wait, renderer, scenario/data builder, protocol fixture, or DOM builder as soon as it could serve another test.
 - Any duplicate or near-duplicate helper is a defect; consolidate it into one general form.
 - Export every reusable helper, fixture type, factory, constant, and guard from setup files.

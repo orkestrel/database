@@ -400,7 +400,7 @@ Multiple targets: give each panel `.multi-collapse` and point separate triggers 
 </ul>
 ```
 
-(The `list-group-checkable` / `list-group-item-check` classes seen in Bootstrap's _examples gallery_ are custom CSS, not core — don't ship them without their styles.)
+(The `list-group-checkable` / `list-group-item-check` classes seen in Bootstrap's _examples gallery_ are custom CSS, not core — do not ship them without their styles.)
 
 ### Modal
 
@@ -625,7 +625,7 @@ Real switchable tab panels (JS-driven — buttons, not scroll anchors):
 </div>
 ```
 
-**Responsive offcanvas** — the canonical sidebar-that-becomes-a-drawer: replace `.offcanvas` with `.offcanvas-{sm|md|lg|xl|xxl}`. Content renders **inline above** that breakpoint and as an **offcanvas below** it. Close buttons inside a responsive offcanvas need an explicit `data-bs-target`. Always set `aria-labelledby` (it's conceptually a dialog; `role="dialog"` is added by JS). Width/height via `--bs-offcanvas-width` (400px) / `--bs-offcanvas-height` (30vh). Full app-shell pattern: [bootstrap-reference.md](bootstrap-reference.md) → App shell.
+**Responsive offcanvas** — the canonical sidebar-that-becomes-a-drawer: replace `.offcanvas` with `.offcanvas-{sm|md|lg|xl|xxl}`. Content renders **inline above** that breakpoint and as an **offcanvas below** it. Close buttons inside a responsive offcanvas need an explicit `data-bs-target`. Always set `aria-labelledby` (it is conceptually a dialog; `role="dialog"` is added by JS). Width/height via `--bs-offcanvas-width` (400px) / `--bs-offcanvas-height` (30vh). Full app-shell pattern: [bootstrap-reference.md](bootstrap-reference.md) → App shell.
 
 ### Pagination
 
@@ -1012,7 +1012,7 @@ Exactly one item in a selection carries `aria-current` — the visual fill and t
 ### Navigation & overlays
 
 - Active nav items need `aria-current="page"` (or `aria-selected="true"` for tabs).
-- Modals and offcanvas: set `aria-labelledby`; Bootstrap traps focus and restores it on close — don't fight it; `dispose()` instances when the host unmounts in SPAs.
+- Modals and offcanvas: set `aria-labelledby`; Bootstrap traps focus and restores it on close — do not fight it; `dispose()` instances when the host unmounts in SPAs.
 - Icon-only controls always need an accessible name (`aria-label` or visually-hidden text) and a ≥24px target.
 
 ### Theming

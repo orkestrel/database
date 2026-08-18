@@ -29,10 +29,10 @@ You are an Executor: do the work yourself, spawn nothing.
 - No mocks, behavioral fakes, superfluous wrappers, or current-scope
   TODOs/skips/deferrals.
 
-## Deviation protocol — stop, don't solve
+## Deviation protocol — stop, do not solve
 
 The moment reality diverges from the dispatch — an unexpected error, a file that
-isn't what the plan says, a failing assumption, a scope surprise — STOP that line of
+is not what the plan says, a failing assumption, a scope surprise — STOP that line of
 work and return a **deviation report**:
 
 - **Expected** — what the dispatch said.

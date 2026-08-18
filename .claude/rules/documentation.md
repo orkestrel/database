@@ -63,10 +63,16 @@ Never use in-repository `@src/*` aliases in public guide examples; reserve them 
 
 - Skills prescribe reusable process; they do not copy naming, placement, syntax, lifecycle, or test laws from `AGENTS.md` and rules.
 - Keep `SKILL.md` concise and route conditional detail to one-level `references/`.
+- Name every Markdown file in a skill's `references/` from its `SKILL.md`, and delete a reference nothing names.
 - Frontmatter contains only `name` and a trigger-focused `description`.
+- Set `name` to the skill's own directory name.
+- Write `description` as a single-line scalar or a folded `>-` block, and no other shape. Include in it a sentence beginning `Use ` that names when to invoke the skill.
 - Do not put model routing or package version catalogs in a skill.
 - Validate every referenced resource; do not leave template TODOs or auxiliary README/changelog files.
 - Write `agents/openai.yaml` as one root `interface:` mapping over exactly `display_name`, `short_description`, and `default_prompt`, in that order, each on its own two-space-indented line.
 - Give every one of those keys a non-empty single-quoted scalar, and write an apostrophe inside it as `''`.
 - Name the skill's own `$<directory>` token in `default_prompt`.
 - Keep provider bridges minimal: they load one canonical workflow and add no competing instructions.
+- Give a provider bridge its canonical skill's `name` and `description` verbatim, name the `.agents/skills/<name>/SKILL.md` path it loads, and give it no references of its own.
+- Give every canonical skill exactly one provider bridge directory of the same name, and give every bridge directory a canonical twin.
+- Review a bridge body's remaining instructions yourself: the policy sweep proves `name` and `description` parity, the named canonical path, and the absence of bridge-owned references, and nothing else about the body.

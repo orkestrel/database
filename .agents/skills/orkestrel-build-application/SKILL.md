@@ -69,11 +69,16 @@ includes app/core so the shared transport contracts have one host-independent ow
      template-literal specifiers, declaration placement, and the barrel law.
    - Scoped TypeScript projects — host-global isolation.
    - Vite's real builds and environment-boundary plugin — Vue, CSS, assets, workers,
-     runtime resolution, and physical workspace containment.
+     runtime resolution, and physical workspace containment. Its parsed HTML asset
+     callbacks reject forced inlining before any direct asset read, and non-inlined
+     output assets are audited by physical source path.
 
    Then hold these four limits:
    - Add no standalone boundary script, and no second parser or source-language analyzer
-     duplicating those layers.
+     duplicating those layers. Reach for the toolchain's own facilities instead: Vite's
+     Oxc/Rolldown AST for TypeScript and JavaScript asset references, the official Vue SFC
+     compiler for `.vue` blocks, Vite's HTML parser callbacks, its bundled Lightning CSS
+     dependency analyzer, and the TypeScript compiler API for the narrow coding-law pass.
    - Disable the browser application's public directory, so an unmanaged file copy cannot
      bypass the module graph.
    - Keep browser-only runtime tooling development-only.

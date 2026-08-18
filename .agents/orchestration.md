@@ -643,9 +643,14 @@ either publishes packages nobody needed to publish or leaves a consumer pinned t
   downstream of it re-pins, re-runs its gates, bumps, and republishes, in layer order.
 - A **development** `devDependencies` bump reaches nobody. Re-pin it, prove the gates still green,
   and commit to `main`. Do not bump the version and do not publish.
-- A development bump that forces a change to `src` or `app` is no longer a development bump. The
-  published types or runtime moved, so that package bumps and publishes on its own account, and
-  its own dependents follow the runtime rule above.
+- A development bump that moves the published artifact is no longer a development bump. Prove the
+  direction with the build, not the diff of sources: rebuild after the re-pin and compare `dist/`
+  against the published tarball. Compare material content only — exclude sourcemaps and ignore
+  whitespace-only differences; a superfluous diff (formatting, blank lines, map noise) moves
+  nothing and obliges nothing. A material diff — tokens, declarations, logic — means the published
+  surface moved — a forced `src` or `app` edit and a toolchain-changed emit both surface here — so
+  that package bumps and publishes on its own account, and its own dependents follow the runtime
+  rule above.
 
 Every package is `0.0.x`, where a caret pins one exact release. A dependent therefore sees a new
 version only after it re-pins and republishes, so the fleet publishes in topological layer order
@@ -683,6 +688,29 @@ and propagates as files rather than as a cascade.
   target. Scope a fleet-wide refactor to the files each target owns, and record the vendored
   exclusion in the brief rather than letting each unit rediscover it.
 
+### The release wave
+
+Close a fleet-wide "everything on latest" goal as a release wave in layer order: visit every repo
+once per round with one procedure, publish each layer in one window, and only then prepare the next.
+
+- The visit, in order: re-pin the target's `@orkestrel/scaffold` devDependency and install, so the
+  overwrite runs the current vendored host; `scaffold overwrite`; force-verify every `@orkestrel`
+  range against a registry sweep taken after the previous layer published; full install; mutating
+  `format` to converge generated writes; the five gates; the material-dist comparison against the
+  published tarball.
+- Bump on either trigger: the rebuilt dist differs materially from the published tarball, or the
+  final runtime dependency set differs from the published packument. Test the final set against the
+  packument, never "did my step move a pin" — overwrite's `declare` re-pins before any later check,
+  so the step-local reading reports nothing moved while the manifest surface did. A re-pinned
+  runtime range is published surface: without the bump a consumer installs two copies of the moved
+  dependency.
+- A dist built before the version bump is the release artifact; the bump edits no emitted byte.
+- Refresh the registry evidence between layers and derive each round's pins from it. A pin can only
+  name a version the registry already serves, so a dependency shipping in the same window keeps the
+  resolvable previous pin and takes its dev-only re-pin after the window closes.
+- Run visits in parallel slices of disjoint repos, each slice strictly serial inside itself,
+  reporting per-target. Refuse a failed target, name it, repair, and re-run it alone.
+
 ### Preparing
 
 1. **Bump from what the registry serves, not from the local manifest.** A repository's `version`
@@ -718,6 +746,10 @@ flag is what stops the gate chain running a second time inside the five minutes.
   prompt to answer: kill it by process id and mint a fresh flow.
 - Run the login and every publish under `script -qfc '<command>' <log>`. npm offers the approval only
   when it sees a TTY; without one it fails `EOTP` with no way to answer.
+- Git Bash on Windows ships no `script` binary, so the upload step there is operator-driven: prepare
+  the layer, prove the gates, surface the exact `npm publish` command, and the operator runs it in a
+  real terminal. Everything before and after the upload — bumps, re-pins, gates, registry reads —
+  stays with the Orchestrator. The fifo stdin law still binds on that host.
 - Expect two approvals. `npmjs.com/login/cli/<id>` authenticates the session; `npmjs.com/auth/cli/<id>`
   authorizes the publish and opens the five-minute window. Tell the user both are coming, or the
   second link reads as the first having failed.
@@ -736,8 +768,16 @@ flag is what stops the gate chain running a second time inside the five minutes.
 
 ### Spending the window
 
-- The window opens when the user approves, not when the first publish starts. Chain every remaining
-  publish inside the same process as the gate package, so no human turn sits inside it.
+- The window opens when the user approves, not when the first publish starts. Open each layer with
+  one package: publish it alone, surface its approval URL the moment the journal shows it, and
+  confirm the upload from the registry before starting the rest. Then chase the remaining uploads
+  back-to-back in one process with no gap — an upload started within seconds of an approval
+  frequently rides that approval, and each one that does not mints its own URL. Relay every new URL
+  to the user the moment it appears, through a journal watcher, and never pause the chain to wait
+  for a click: a poll outlives the relay.
+- A click on a superseded URL poisons the live attempt — the current poll fails
+  `403 Forbidden - GET /-/v1/done` mid-flight. Tell the user to click only the newest URL. After
+  any such 403, confirm no publish process is live, then mint one fresh attempt.
 - Publish serially. Concurrent publishes collide on the auth handshake and fail each other.
 - **Never retry a publish that is still waiting for its authorization.** Each `npm publish` attempt
   mints a new `authId` and invalidates the previous one, so a retry loop makes the URL a moving
@@ -754,6 +794,11 @@ flag is what stops the gate chain running a second time inside the five minutes.
 - Read the result from the registry, not from an exit code: a piped `npm publish` reports the exit
   status of the pipeline, and a CDN read straight after a publish can still serve the previous
   version.
+- A first publish creates the packument and can serve 404 for minutes after success. For a package
+  with no prior version treat 404 as pending, not failed, and re-read on an interval before
+  reporting either way. A bump serving the old version is CDN lag, same rule.
+- Rule on a pack-time manifest-rewriting warning by fetching the registry's copy of the manifest,
+  never by the warning's own text.
 - Re-read the registry before telling the user a package failed. A chain still running, a retry that
   landed, and CDN lag all produce a failure reading that the registry contradicts, and a false
   failure report costs a needless approval and a needless republish.

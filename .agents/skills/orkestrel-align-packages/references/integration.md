@@ -2,7 +2,7 @@
 
 ## Map ownership
 
-Dependency direction across environments is the root project model in `AGENTS.md`, detailed for placement in `.claude/rules/workspace.md` and for app composition in `.claude/rules/application.md`. Read those; this reference does not restate them. Apply the same law to a dependency's `@orkestrel/<package>/browser` and `/server` exports, whose bare export is its core API.
+Dependency direction across environments is the root project model in `AGENTS.md`, detailed for placement in `.claude/rules/workspace.md` and for app composition in `.claude/rules/application.md`. Read those; this reference does not restate them. Apply the same law to a dependency's `@orkestrel/<package>/browser` and `/server` exports.
 
 Ownership across packages is what those rules leave open: framework packages own reusable mechanisms, and applications own workflows, policy, presentation, users, authorization decisions, and product-specific defaults.
 

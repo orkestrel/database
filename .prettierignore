@@ -6,3 +6,6 @@ dist/
 
 # Generated single-file application showcase.
 demo/showcase.html
+
+# Campaign records under the orchestration folder are verbatim evidence, not formatted source.
+.orkestrel/

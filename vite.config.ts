@@ -151,6 +151,9 @@ export const config = (options?: UserConfig): UserConfig =>
 				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },
+				// A config test validates every target wrapper and runs the real linter twice with
+				// 15-second child caps, so this budget clears both caps and reports their diagnostics.
+				testTimeout: 45_000,
 			},
 		},
 		options ?? {},

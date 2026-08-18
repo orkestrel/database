@@ -60,13 +60,22 @@ Define aliases in `tsconfig.json` first. `vite.config.ts` derives from `compiler
 - `*/types.ts`: public API contracts.
 - `configs/src/` and `configs/app/`: thin per-target wrappers, including optional
   `configs/src/*bin*` files. Shared logic remains in root configs.
-- `configs/helpers.ts` and `configs/browsers.ts`: the only permitted leaves under `configs/`. Each
-  imports nothing from the workspace, which is what keeps it a leaf. Each `configs/src/*.config.ts`
-  imports the root config rather than a leaf, so shared build logic stays in one place.
+- `configs/helpers.ts`, `configs/browsers.ts`, and `configs/policy.ts`: the only permitted leaves
+  under `configs/`. Each imports nothing from the workspace, which is what keeps it a leaf. Each
+  `configs/src/*.config.ts` imports the root config rather than a leaf, so shared build logic stays
+  in one place.
 - Keep `configs/helpers.ts` free of any dependency a core-only workspace does not declare. It is
   vendored byte-identical to every workspace, so an import there must resolve in all of them.
   `configs/browsers.ts` exists for that reason: it imports `playwright` and
   `@vitest/browser-playwright`, and only a workspace with a browser environment is given it.
+- Keep `configs/policy.ts` free of imports entirely. It is the workspace's oxlint plugin, the lint
+  instrument of the policy law, and it is vendored byte-identical to every workspace including a
+  core-only one, so a module that imports nothing at all is the only form that resolves in all of
+  them. Because it may import nothing, keep its own types, data, and functions in that one file: the
+  centralized-kind placement in `.claude/rules/architecture.md` does not reach it.
+- When a file is vendored byte-identical, import nothing that fails to resolve in any target. Import
+  no `@orkestrel/*` package from it: every such package is itself a target and cannot depend on
+  itself.
 
 Environment rules:
 
@@ -224,6 +233,22 @@ Run `show` only **after** formatting. The committed `demo/showcase.html` is gene
 - Tests: Vitest; `@vitest/browser-playwright` for browser projects.
 - Node build targets derive from the package's declared supported runtime. Keep `engines`, bundler targets, scoped configs, tests, and documentation aligned; never hard-code one Node version line-wide.
 - Browser framework: Vue 3 when present.
+
+Policy instruments:
+
+- Put every rule of the policy law in exactly one of two instruments. `configs/policy.ts` — the
+  oxlint plugin, namespace `policy` — takes the rules a single file's AST decides. The policy sweep
+  (`tests/setupPolicy.ts`) takes the rules that are path- or text-shaped, and every rule whose
+  subject is suppression itself.
+- Choose between them by what can defeat the rule: an instrument must not be suppressible by the
+  thing it polices. A file-level `oxlint-disable` silently defeats every lint rule in its file,
+  plugin rules included, and nothing inside a file can suppress the sweep.
+- Write each visitor in the plugin's visitor table as a one-line context-binding arrow delegating to
+  a named module-scope `report{Noun}` function. Never write rule logic inline in the table. That
+  arrow is the sanctioned exception to the in-body function-expression limits in
+  `.claude/rules/architecture.md` for exactly that table.
+- Name no individual rule id here. This section fixes the two instruments and how work is assigned
+  between them; each rule's substance stays with the law it enforces.
 
 ## Text integrity
 

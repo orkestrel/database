@@ -1,12 +1,15 @@
 {
 	"$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
 	"plugins": ["import", "typescript", "vitest"],
+	"jsPlugins": [{ "name": "policy", "specifier": "./configs/policy.ts" }],
 	"rules": {
 		"@typescript-eslint/no-explicit-any": "error",
 		"@typescript-eslint/no-non-null-assertion": "error",
 		"typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }],
 		"typescript/no-require-imports": "error",
 		"typescript/array-type": ["error", { "default": "array-simple" }],
+		"typescript/parameter-properties": "error",
+		"typescript/explicit-member-accessibility": ["error", { "accessibility": "no-public" }],
 		"typescript/ban-ts-comment": [
 			"error",
 			{
@@ -50,7 +53,10 @@
 		"no-underscore-dangle": "warn",
 
 		"vitest/no-alias-methods": "error",
-		"vitest/warn-todo": "off"
+		"vitest/warn-todo": "off",
+
+		"policy/no-mocking": "error",
+		"policy/no-keyword-privacy": "error"
 	},
 	"categories": {
 		"correctness": "error",
@@ -63,6 +69,12 @@
 	"overrides": [
 		{
 			"files": ["*.config.ts", "*.config.js"],
+			"rules": {
+				"import/no-default-export": "off"
+			}
+		},
+		{
+			"files": ["configs/policy.ts"],
 			"rules": {
 				"import/no-default-export": "off"
 			}

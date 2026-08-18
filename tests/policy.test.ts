@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+	BRIDGE_POLICY_CONTROLS,
+	createPolicyScratch,
 	FUNCTION_SOURCE_FILES,
 	GENERIC_POLICY_SOURCES,
 	inspectPolicyControl,
@@ -7,14 +9,35 @@ import {
 	inspectPolicySources,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
+	inspectSkillBridges,
+	matchesSkillTrigger,
+	parseSkillFrontmatter,
 	POLICY_CONTROLS,
+	POLICY_SUPPRESSION_DIRECTIVE,
 	readSkillFamily,
 	SKILL_POLICY_APOSTROPHE,
+	SKILL_POLICY_BACKTICKED,
 	SKILL_POLICY_CONTROLS,
 	SKILL_POLICY_EXCLUSION,
+	SKILL_POLICY_FOLDED,
+	SKILL_POLICY_PARAGRAPHS,
 	stemToPolicyCandidates,
 	testToPolicyStem,
 } from './setupPolicy.js'
+
+describe('policy scratch', () => {
+	it('contains every write within its root', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-containment-' })
+		try {
+			expect(() => scratch.write('inside/fixture.ts', '')).not.toThrow()
+			expect(() => scratch.write('../escape', '')).toThrow(
+				'Scratch target must stay within its root',
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
 
 describe('fleet policy register', () => {
 	it('keeps handlers in the function set and routes out', () => {
@@ -285,6 +308,22 @@ describe('policy population controls', () => {
 			}),
 		).toEqual([])
 	})
+
+	it('excludes documentation from the suppression population', () => {
+		expect(
+			inspectPolicyControl({
+				label: 'excludes documentation from the suppression population',
+				membership: 'files outside source, test, config, and script code',
+				rule: 'suppression',
+				files: [
+					{
+						path: 'guides/sample.md',
+						content: `<!-- ${POLICY_SUPPRESSION_DIRECTIVE} -->\n`,
+					},
+				],
+			}),
+		).toEqual([])
+	})
 })
 
 describe('instrument negative controls', () => {
@@ -307,11 +346,20 @@ describe('skill family policy', () => {
 		expect(inspectSkillFamily(process.cwd())).toEqual([])
 	})
 
+	it('parses a folded description containing a colon as exactly two frontmatter keys', () => {
+		const skill = SKILL_POLICY_FOLDED.files.find((file) => file.path.endsWith('/SKILL.md'))
+		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
+		expect(frontmatter?.keys).toEqual(['name', 'description'])
+		expect(frontmatter?.name).toBe('sample')
+		expect(frontmatter?.description).toBe('Use this skill when a continuation contains: a colon.')
+	})
+
 	for (const control of SKILL_POLICY_CONTROLS) {
 		it(`${control.label} [membership: ${control.membership}]`, () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
 			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
 		})
 	}
 
@@ -319,9 +367,43 @@ describe('skill family policy', () => {
 		expect(inspectPolicyControl(SKILL_POLICY_APOSTROPHE)).toEqual([])
 	})
 
+	it(`${SKILL_POLICY_FOLDED.label} [membership: ${SKILL_POLICY_FOLDED.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_FOLDED)).toEqual([])
+	})
+
+	it(`${SKILL_POLICY_BACKTICKED.label} [membership: ${SKILL_POLICY_BACKTICKED.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_BACKTICKED)).toEqual([])
+	})
+
+	it('parses a folded description containing two paragraphs', () => {
+		const skill = SKILL_POLICY_PARAGRAPHS.files.find((file) => file.path.endsWith('/SKILL.md'))
+		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
+		expect(frontmatter?.keys).toEqual(['name', 'description'])
+		expect(frontmatter?.description).toBe(
+			'First paragraph.\nUse `--app` when a policy fixture needs it.',
+		)
+		expect(matchesSkillTrigger(frontmatter?.description ?? '')).toBe(true)
+		expect(inspectPolicyControl(SKILL_POLICY_PARAGRAPHS)).toEqual([])
+	})
+
 	it(`${SKILL_POLICY_EXCLUSION.label} [membership: ${SKILL_POLICY_EXCLUSION.membership}]`, () => {
 		expect(inspectPolicyControl(SKILL_POLICY_EXCLUSION)).toEqual([])
 	})
+})
+
+describe('skill bridge policy', () => {
+	it('matches every real provider bridge to its canonical skill', () => {
+		expect(inspectSkillBridges(process.cwd())).toEqual([])
+	})
+
+	for (const control of BRIDGE_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
+		})
+	}
 })
 
 describe('repository policy', () => {

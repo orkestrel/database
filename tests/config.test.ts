@@ -1,6 +1,7 @@
 // P1: Every checked population must exist and be non-empty; absence fails instead of passing vacuously.
 // P2: Required items are checked strictly; extra items are ignored before their shape is read.
 
+import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
 	globSync,
@@ -14,10 +15,12 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, loadConfigFromFile } from 'vite'
-import { createScratch } from '@orkestrel/test/server'
+import { RuleTester } from 'oxlint/plugins-dev'
 import * as configHelpers from '../configs/helpers.js'
+import { MOCKING_RULE, PRIVACY_RULE } from '../configs/policy.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
+import { createPolicyScratch, inspectPolicyConfiguration } from './setupPolicy.js'
 import { describe, expect, it } from 'vitest'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -452,6 +455,194 @@ describe('root configuration', () => {
 			hasService && publishes,
 		)
 	})
+
+	it('keeps policy rules active across every linted workspace path', () => {
+		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
+		expect(inspectPolicyConfiguration(parsed)).toEqual([])
+		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+			throw new Error('The Oxlint configuration is not a record')
+		}
+		const controlled = structuredClone(parsed)
+		const overrides: unknown = Object.getOwnPropertyDescriptor(controlled, 'overrides')?.value
+		if (!Array.isArray(overrides)) throw new Error('The Oxlint configuration has no overrides')
+		Object.defineProperty(controlled, 'overrides', {
+			value: overrides.concat({
+				files: ['src/**'],
+				rules: { 'policy/no-mocking': 'off' },
+			}),
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+		expect(inspectPolicyConfiguration(controlled)).toEqual([
+			'overrides must not configure policy/no-mocking',
+		])
+	})
+
+	it('omits the audit-confirmed dead policy type exports', () => {
+		const source = readFileSync(resolve(root, 'configs/policy.ts'), 'utf8')
+		expect(source).not.toMatch(/\bPolicy(?:Call|ClassMember)\b/u)
+	})
+})
+
+describe('policy plugin', () => {
+	RuleTester.describe = describe
+	RuleTester.it = it
+
+	const tester = new RuleTester({ languageOptions: { parserOptions: { lang: 'ts' } } })
+	tester.run('no-mocking', MOCKING_RULE, {
+		valid: [
+			{ name: 'accepts recorders', code: 'createRecorder()' },
+			{ name: 'accepts non-framework members', code: "registry.mock('./x')" },
+			{ name: 'accepts unlisted framework members', code: 'vi.clearAllMocks()' },
+		],
+		invalid: [
+			{
+				name: 'rejects module mocking [membership: named vi and jest module APIs]',
+				code: "vi.mock('./x')",
+				errors: [{ messageId: 'mock' }],
+			},
+			{
+				name: 'rejects computed module mocking [membership: named vi and jest module APIs]',
+				code: `vi['mock']('./x')`,
+				errors: [{ messageId: 'mock' }],
+			},
+			{
+				name: 'rejects template module mocking [membership: named vi and jest module APIs]',
+				code: `vi[\`mock\`]('./x')`,
+				errors: [{ messageId: 'mock' }],
+			},
+			{
+				name: 'rejects spy factories [membership: named vi and jest spy APIs]',
+				code: 'jest.fn()',
+				errors: [{ messageId: 'spy' }],
+			},
+			{
+				name: 'rejects fake clocks [membership: named vi and jest clock APIs]',
+				code: 'vi.useFakeTimers()',
+				errors: [{ messageId: 'clock' }],
+			},
+			{
+				name: 'rejects environment stubs [membership: named vi and jest stub APIs]',
+				code: "vi.stubEnv('A', '1')",
+				errors: [{ messageId: 'stub' }],
+			},
+		],
+	})
+
+	tester.run('no-keyword-privacy', PRIVACY_RULE, {
+		valid: [
+			{ name: 'accepts runtime-private fields', code: 'class Example { #value = 1 }' },
+			{
+				name: 'accepts unannotated members',
+				code: 'class Example { value = 1; read() { return this.value } }',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects private properties [membership: keyword-annotated class members]',
+				code: 'class Example { private value = 1 }',
+				errors: [{ messageId: 'keyword' }],
+			},
+			{
+				name: 'rejects private methods [membership: keyword-annotated class members]',
+				code: 'class Example { private read() { return 1 } }',
+				errors: [{ messageId: 'keyword' }],
+			},
+			{
+				name: 'rejects protected properties [membership: keyword-annotated class members]',
+				code: 'class Example { protected value = 1 }',
+				errors: [{ messageId: 'keyword' }],
+			},
+			{
+				name: 'rejects protected methods [membership: keyword-annotated class members]',
+				code: 'class Example { protected read() { return 1 } }',
+				errors: [{ messageId: 'keyword' }],
+			},
+		],
+	})
+
+	it('loads every configured policy rule through the real binary', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-policy-' })
+		try {
+			scratch.write(
+				'violations/fixture.ts',
+				[
+					"vi.mock('./x')",
+					'class PrivateMember { private value = 1 }',
+					'class ParameterMember { constructor(readonly value: string) {} }',
+					'class PublicMember { public value = 1 }',
+					'void PrivateMember',
+					'void ParameterMember',
+					'void PublicMember',
+				].join('\n'),
+			)
+			scratch.write(
+				'clean/fixture.ts',
+				[
+					'class CleanMember {',
+					'\t#value = 1',
+					'\tvalue(): number { return this.#value }',
+					'}',
+					'void CleanMember',
+				].join('\n'),
+			)
+
+			const binary = resolve(root, 'node_modules/.bin/oxlint')
+			const config = resolve(root, '.oxlintrc.json')
+			const violations = spawnSync(
+				binary,
+				['--config', config, '--format', 'json', resolve(scratch.path, 'violations')],
+				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
+			)
+			const clean = spawnSync(
+				binary,
+				['--config', config, '--format', 'json', resolve(scratch.path, 'clean')],
+				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
+			)
+			const reports: string[][] = []
+			for (const result of [violations, clean]) {
+				if (result.error !== undefined) throw result.error
+				const report: unknown = JSON.parse(result.stdout)
+				if (typeof report !== 'object' || report === null) {
+					throw new Error('Oxlint returned no JSON report')
+				}
+				const diagnostics: unknown = Object.getOwnPropertyDescriptor(report, 'diagnostics')?.value
+				if (!Array.isArray(diagnostics)) throw new Error('Oxlint returned no diagnostic list')
+				const codes: string[] = []
+				for (const diagnostic of diagnostics) {
+					if (typeof diagnostic !== 'object' || diagnostic === null) {
+						throw new Error('Oxlint returned a malformed diagnostic')
+					}
+					const code: unknown = Object.getOwnPropertyDescriptor(diagnostic, 'code')?.value
+					if (typeof code !== 'string') {
+						throw new Error('Oxlint returned a diagnostic without a rule id')
+					}
+					codes.push(code)
+				}
+				reports.push(codes)
+			}
+
+			const violationCodes = reports[0]
+			const cleanCodes = reports[1]
+			if (violationCodes === undefined || cleanCodes === undefined) {
+				throw new Error('Oxlint returned no fixture reports')
+			}
+			expect(violations.status).toBe(1)
+			for (const rule of [
+				'policy(no-mocking)',
+				'policy(no-keyword-privacy)',
+				'typescript(parameter-properties)',
+				'typescript(explicit-member-accessibility)',
+			]) {
+				expect(violationCodes).toContain(rule)
+			}
+			expect(clean.status).toBe(0)
+			expect(cleanCodes).toHaveLength(0)
+		} finally {
+			scratch.destroy()
+		}
+	})
 })
 
 describe('configuration helpers', () => {
@@ -490,7 +681,7 @@ describe('configuration helpers', () => {
 	})
 
 	it('resolves contained workspace paths and refuses a real outside sibling', () => {
-		const scratch = createScratch({ prefix: 'orkestrel-config-outside-' })
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-outside-' })
 		try {
 			const outside = scratch.path
 			const importer = resolve(root, 'tests/config.test.ts')
@@ -513,7 +704,7 @@ describe('configuration helpers', () => {
 	})
 
 	it('reads bounded files and resolves package roots from real manifests', () => {
-		const scratch = createScratch({ prefix: 'orkestrel-config-package-' })
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-package-' })
 		try {
 			const workspace = scratch.path
 			const packageRoot = resolve(workspace, 'node_modules/@sample/package')
@@ -551,7 +742,7 @@ describe('configuration helpers', () => {
 	})
 
 	it('classifies module boundaries and extracts static asset sources', async () => {
-		const scratch = createScratch({ prefix: 'orkestrel-config-assets-' })
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-assets-' })
 		try {
 			const workspace = scratch.path
 			const source = resolve(workspace, 'entry.ts')
