@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/database",
-	"version": "0.0.10",
+	"version": "0.0.11",
 	"description": "A typed database abstraction for the @orkestrel line — a single core engine over pluggable storage drivers. Part of the @orkestrel line.",
 	"keywords": [
 		"database",
@@ -94,17 +94,17 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
 		"@orkestrel/guide": "^0.0.12",
-		"@orkestrel/scaffold": "^0.0.41",
-		"@orkestrel/test": "^0.0.6",
-		"@types/node": "^26.1.2",
-		"@vitest/browser-playwright": "^4.1.10",
-		"oxfmt": "^0.61.0",
-		"oxlint": "^1.76.0",
+		"@orkestrel/scaffold": "^0.0.42",
+		"@orkestrel/test": "^0.0.7",
+		"@types/node": "^26.2.0",
+		"@vitest/browser-playwright": "^4.1.11",
+		"oxfmt": "^0.64.0",
+		"oxlint": "^1.79.0",
 		"playwright": "^1.62.1",
 		"typescript": "^6.0.3",
-		"vite": "^8.2.0",
+		"vite": "^8.2.1",
 		"vite-plugin-dts": "^5.0.3",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"engines": {
 		"node": ">=22.12.0"

@@ -172,6 +172,38 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
+ * Match a query against a value as a case-insensitive ordered subsequence.
+ *
+ * @remarks
+ * Every query character must appear in order in the value, but the characters
+ * do not need to be contiguous. Query characters are literal, including
+ * whitespace. Matching applies JavaScript `toLowerCase()` to both inputs
+ * without locale-specific folding or Unicode normalization. An empty query
+ * matches every value.
+ *
+ * @param value - The text searched for the query's characters
+ * @param query - The characters that must all appear in order
+ * @returns Whether the case-folded query is a subsequence of the case-folded value
+ *
+ * @example
+ * ```ts
+ * matchesFuzzy('Database', 'dbe') // true
+ * matchesFuzzy('Database', 'abd') // false
+ * ```
+ */
+export function matchesFuzzy(value: string, query: string): boolean {
+	const folded = value.toLowerCase()
+	const wanted = query.toLowerCase()
+	let cursor = 0
+	for (const char of wanted) {
+		const found = folded.indexOf(char, cursor)
+		if (found === -1) return false
+		cursor = found + 1
+	}
+	return true
+}
+
+/**
  * Match a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *

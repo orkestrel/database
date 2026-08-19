@@ -12,6 +12,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, loadConfigFromFile } from 'vite'
@@ -588,16 +589,37 @@ describe('policy plugin', () => {
 				].join('\n'),
 			)
 
-			const binary = resolve(root, 'node_modules/.bin/oxlint')
+			// Run oxlint's real Node entry through the current interpreter rather than the
+			// `node_modules/.bin/oxlint` shim. That shim is a POSIX `sh` script — a symlink to one on
+			// Linux, a `.cmd`/`.ps1` pair on Windows — and Windows `CreateProcess` cannot execute the
+			// extensionless form; spawning the `.cmd` would need `shell: true`, which breaks on paths
+			// containing spaces. Resolving through `createRequire` reads oxlint's own `bin` field, so
+			// the entry survives hoisting, a nested `node_modules` layout, and a future rename.
+			const manifestPath = createRequire(join(root, 'package.json')).resolve('oxlint/package.json')
+			const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
+			if (typeof manifest !== 'object' || manifest === null) {
+				throw new Error('The oxlint package manifest is not an object')
+			}
+			const bin: unknown = Object.getOwnPropertyDescriptor(manifest, 'bin')?.value
+			const entry: unknown =
+				typeof bin === 'string'
+					? bin
+					: typeof bin === 'object' && bin !== null
+						? Object.getOwnPropertyDescriptor(bin, 'oxlint')?.value
+						: undefined
+			if (typeof entry !== 'string') {
+				throw new Error('The oxlint package declares no bin.oxlint entry')
+			}
+			const binary = resolve(dirname(manifestPath), entry)
 			const config = resolve(root, '.oxlintrc.json')
 			const violations = spawnSync(
-				binary,
-				['--config', config, '--format', 'json', resolve(scratch.path, 'violations')],
+				process.execPath,
+				[binary, '--config', config, '--format', 'json', resolve(scratch.path, 'violations')],
 				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
 			)
 			const clean = spawnSync(
-				binary,
-				['--config', config, '--format', 'json', resolve(scratch.path, 'clean')],
+				process.execPath,
+				[binary, '--config', config, '--format', 'json', resolve(scratch.path, 'clean')],
 				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
 			)
 			const reports: string[][] = []

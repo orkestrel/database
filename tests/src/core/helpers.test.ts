@@ -12,6 +12,7 @@ import {
 	driverFindings,
 	extractKey,
 	filterRows,
+	matchesFuzzy,
 	matchesGlobPattern,
 	isDatabaseError,
 	isDriverMetadata,
@@ -142,6 +143,50 @@ describe('matchesCondition', () => {
 	it('keeps scalar equality behavior unchanged (cross-type equals still false)', () => {
 		expect(matchesCondition(row, buildCondition('age', 'equals', ['30']))).toBe(false)
 		expect(matchesCondition(row, buildCondition('name', 'equals', ['Alice']))).toBe(true)
+	})
+})
+
+describe('matchesFuzzy', () => {
+	it('matches query characters in order, including a non-contiguous subsequence', () => {
+		expect(matchesFuzzy('database', 'data')).toBe(true)
+		expect(matchesFuzzy('database', 'dbe')).toBe(true)
+		expect(matchesFuzzy('database', 'abd')).toBe(false)
+		expect(matchesFuzzy('database', 'dbz')).toBe(false)
+	})
+
+	it('folds case on both the candidate and query', () => {
+		expect(matchesFuzzy('Ada Lovelace', 'aL')).toBe(true)
+		expect(matchesFuzzy('OpenAI Supervisor', 'OaSv')).toBe(true)
+	})
+
+	it('matches an empty query against every candidate', () => {
+		expect(matchesFuzzy('database', '')).toBe(true)
+		expect(matchesFuzzy('', '')).toBe(true)
+	})
+
+	it('does not match a non-empty query against an empty candidate', () => {
+		expect(matchesFuzzy('', 'a')).toBe(false)
+	})
+
+	it('requires repeated characters and preserves query order', () => {
+		expect(matchesFuzzy('balloon', 'lloo')).toBe(true)
+		expect(matchesFuzzy('balloon', 'llll')).toBe(false)
+		expect(matchesFuzzy('balloon', 'nob')).toBe(false)
+	})
+
+	it('treats pattern metacharacters as literal query characters', () => {
+		expect(matchesFuzzy('a.*[b]', '.*[')).toBe(true)
+		expect(matchesFuzzy('a.*[b]', '[*.')).toBe(false)
+		expect(matchesFuzzy('alpha beta', 'a b')).toBe(true)
+		expect(matchesFuzzy('alphabeta', 'a b')).toBe(false)
+	})
+
+	it('uses JavaScript Unicode lowercasing without expansion or normalization', () => {
+		expect(matchesFuzzy('STRAẞE', 'straße')).toBe(true)
+		expect(matchesFuzzy('Straße', 'strasse')).toBe(false)
+		expect(matchesFuzzy('İstanbul', 'i\u0307s')).toBe(true)
+		expect(matchesFuzzy('Éclair', 'e\u0301')).toBe(false)
+		expect(matchesFuzzy('A😀B', '😀b')).toBe(true)
 	})
 })
 

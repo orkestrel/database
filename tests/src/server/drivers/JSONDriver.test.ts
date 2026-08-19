@@ -554,16 +554,15 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 	})
 
 	it('rejects an incompatible replay before changing memory or file and permits retry', async () => {
-		const incompatible = SCHEMA.map(
-			(table): TableSchema =>
-				table.name === 'users'
-					? {
-							...table,
-							columns: table.columns.map((column) =>
-								column.name === 'age' ? { ...column, storage: 'text' } : column,
-							),
-						}
-					: table,
+		const incompatible = SCHEMA.map((table): TableSchema =>
+			table.name === 'users'
+				? {
+						...table,
+						columns: table.columns.map((column) =>
+							column.name === 'age' ? { ...column, storage: 'text' } : column,
+						),
+					}
+				: table,
 		)
 		await driver.write('users', 'u1', {
 			id: 'u1',
