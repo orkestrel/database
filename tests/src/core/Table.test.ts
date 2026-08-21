@@ -7,7 +7,7 @@ import {
 	optionalShape,
 	stringShape,
 } from '@orkestrel/contract'
-import { collect, createRecorder } from '@orkestrel/test'
+import { collect, createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase,
@@ -15,7 +15,6 @@ import {
 	createRecordingDriver,
 	createUserRow,
 	INTEGRATION_TABLES,
-	recordEmitterEvents,
 	RECORDING_AGGREGATE,
 	RECORDING_ROW,
 } from '../../setup.js'
@@ -225,7 +224,7 @@ describe('Table — keyed CRUD (single)', () => {
 			generator: () => Number.NaN,
 		})
 		const events = db.table('events')
-		const observed = recordEmitterEvents(events.emitter, ['write'])
+		const observed = createRecorders<TableEventMap, 'write'>(events.emitter, ['write'])
 		await expect(events.set({ kind: 'click' })).rejects.toMatchObject({ code: 'VALIDATION' })
 		expect(await events.keys()).toEqual([])
 		expect(observed.write.count).toBe(0)
@@ -241,7 +240,7 @@ describe('Table — keyed CRUD (single)', () => {
 			},
 		})
 		const events = db.table('events')
-		const observed = recordEmitterEvents(events.emitter, ['write'])
+		const observed = createRecorders<TableEventMap, 'write'>(events.emitter, ['write'])
 		const error = await events.set({ kind: 'click' }).catch((caught: unknown) => caught)
 		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
 		expect(error.code).toBe('VALIDATION')
@@ -437,7 +436,7 @@ describe('Table — coercion and validation', () => {
 
 	it('reports only bounded contract faults and never the rejected row payload', async () => {
 		const users = userTable()
-		const events = recordEmitterEvents(users.emitter, ['write'])
+		const events = createRecorders<TableEventMap, 'write'>(users.emitter, ['write'])
 		const error = await users
 			.set({ id: 'u1', name: 'payload-secret', age: Number.NaN })
 			.catch((caught: unknown) => caught)
@@ -832,15 +831,18 @@ describe('Table — native hook dispatch', () => {
 // `set` / `add` / `update` all emit one `write`; a no-op delete / update emits nothing; and
 // the emit-safety guarantee — a throwing observer cannot corrupt the written state.
 
-// The TableEventMap event names recorded across the emitter tests — fed to the shared
-// `recordEmitterEvents` (AGENTS §16.1: the per-event wiring is centralized; this file
-// keeps only the names its scenarios observe).
-const TABLE_EVENTS: ReadonlyArray<keyof TableEventMap> = ['write', 'remove', 'clear']
+// The TableEventMap event names recorded across the emitter tests — fed to the shipped
+// `createRecorders` (AGENTS §16.1: the per-event wiring lives in `@orkestrel/test`; this file
+// keeps only the names its scenarios observe). The list carries its own exact union rather
+// than `keyof TableEventMap`, because a name in the type argument that the array omits reads
+// `undefined` at runtime under a non-optional recorder type.
+type TableEvent = 'write' | 'remove' | 'clear'
+const TABLE_EVENTS: readonly TableEvent[] = ['write', 'remove', 'clear']
 
 describe('Table — emitter (push observation surface)', () => {
 	it('set / add / update each fire one write carrying the key', async () => {
 		const users = userTable()
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		await users.set(createUserRow()) // set → write
 		await users.add({ id: 'u2', name: 'Bo', age: 41 }) // add → write
 		await users.update('u1', { age: 37 }) // update → write
@@ -851,7 +853,7 @@ describe('Table — emitter (push observation surface)', () => {
 	it('fires remove on a real delete; a delete of an absent key emits nothing', async () => {
 		const users = userTable()
 		await users.set(createUserRow())
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		expect(await users.remove('u1')).toBe(true)
 		expect(await users.remove('missing')).toBe(false) // no row → no event
 		expect(events.remove.calls).toEqual([['u1']])
@@ -859,7 +861,7 @@ describe('Table — emitter (push observation surface)', () => {
 
 	it('a no-op update (absent key) emits no write', async () => {
 		const users = userTable()
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		expect(await users.update('missing', { age: 1 })).toBe(false)
 		expect(events.write.count).toBe(0)
 	})
@@ -870,14 +872,14 @@ describe('Table — emitter (push observation surface)', () => {
 			{ id: 'u1', name: 'Ada', age: 36 },
 			{ id: 'u2', name: 'Bo', age: 41 },
 		])
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		await users.clear()
 		expect(events.clear.calls).toEqual([[]])
 	})
 
 	it('a batch write fires one write per row, in order', async () => {
 		const users = userTable()
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		await users.set([
 			{ id: 'u1', name: 'Ada', age: 36 },
 			{ id: 'u2', name: 'Bo', age: 41 },
@@ -890,7 +892,7 @@ describe('Table — emitter (push observation surface)', () => {
 
 	it('a VALIDATION failure (the row never reaches the driver) emits no write', async () => {
 		const users = userTable()
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		await expect(users.set({ id: 'u1', name: '', age: 36 })).rejects.toMatchObject({
 			code: 'VALIDATION',
 		})
@@ -900,7 +902,7 @@ describe('Table — emitter (push observation surface)', () => {
 	it('aborted point mutations emit no success event and leave state unchanged', async () => {
 		const users = userTable()
 		await users.set(createUserRow())
-		const events = recordEmitterEvents(users.emitter, TABLE_EVENTS)
+		const events = createRecorders<TableEventMap, TableEvent>(users.emitter, TABLE_EVENTS)
 		const controller = new AbortController()
 		controller.abort('stop')
 		await expect(

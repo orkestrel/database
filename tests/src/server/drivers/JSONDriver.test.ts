@@ -1,4 +1,5 @@
 import type {
+	DatabaseEventMap,
 	QueryInput,
 	DriverMetadata,
 	MigrationInput,
@@ -10,9 +11,9 @@ import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { collect } from '@orkestrel/test'
+import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, conformDriver, recordEmitterEvents } from '../../../setup.js'
+import { buildCondition, conformDriver } from '../../../setup.js'
 import { driverSchema, replaceTransactionFailure, tempDatabasePath } from '../../../setupServer.js'
 
 conformDriver('JSONDriver', () => createJSONDriver(tempDatabasePath().path))
@@ -1024,7 +1025,7 @@ describe('JSONDriver — transaction', () => {
 			driver: replaceTransactionFailure(driver, replacement),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(database.emitter, ['rollback'])
+		const events = createRecorders<DatabaseEventMap, 'rollback'>(database.emitter, ['rollback'])
 		const error = await database
 			.transaction(async (transaction) => {
 				await transaction.table('users').set({ id: 'u1', name: 'Ada' })

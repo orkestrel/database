@@ -1,7 +1,8 @@
 // Server-test setup — node-only helpers, loaded after `setup.ts` for the node
 // `src:server` test project. `node:fs` / `node:path` imports belong here, never
-// in `setup.ts`, which browser projects also load. Anchor every path to
-// `WORKSPACE_ROOT` so the runner's cwd never matters (AGENTS §16.1).
+// in `setup.ts`, which browser projects also load. Anchor every path to a
+// `createScratch` directory or to a caller-supplied config path, so the runner's
+// cwd never matters (AGENTS §16.1).
 
 import type { DriverInterface, TableSchema } from '@src/core'
 import type { ExportKind, SurfaceSymbol } from '@orkestrel/guide'

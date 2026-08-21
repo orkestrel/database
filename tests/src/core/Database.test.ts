@@ -14,7 +14,7 @@ import type {
 import type { UserRow } from '../../setup.js'
 import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
-import { createRecorder } from '@orkestrel/test'
+import { createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase as userDatabase,
@@ -22,7 +22,6 @@ import {
 	createReconciliationDriver,
 	IteratorSource,
 	RecordingIterator,
-	recordEmitterEvents,
 	tableSchemas,
 } from '../../setup.js'
 
@@ -62,7 +61,7 @@ describe('Database lifecycle', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, ['open'])
+		const events = createRecorders<DatabaseEventMap, 'open'>(db.emitter, ['open'])
 
 		await expect(db.open()).rejects.toBe(failure)
 		expect(db.status).toBe('idle')
@@ -98,7 +97,7 @@ describe('Database lifecycle', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 1,
 		})
-		const events = recordEmitterEvents(db.emitter, ['open'])
+		const events = createRecorders<DatabaseEventMap, 'open'>(db.emitter, ['open'])
 
 		await expect(db.open()).rejects.toMatchObject({ code: 'MIGRATION' })
 		expect(db.status).toBe('open')
@@ -230,7 +229,7 @@ describe('import / export', () => {
 		const sessions = db.import({ sessions: { id: stringShape(), user: stringShape() } })
 		expect(logs.emitter).toBe(db.emitter)
 		expect(sessions.emitter).toBe(db.emitter)
-		const events = recordEmitterEvents(db.emitter, ['close'])
+		const events = createRecorders<DatabaseEventMap, 'close'>(db.emitter, ['close'])
 
 		await users.set({ id: 'u1', name: 'Ada', age: 36 })
 		await logs.table('logs').set({ id: 'l1', message: 'started' })
@@ -686,22 +685,26 @@ describe('transaction() abort signal (snapshot floor)', () => {
 // neither the committed state nor the propagation of the original transaction error, yet the
 // `error` handler fires.
 
-// The DatabaseEventMap event names recorded across the emitter tests — fed to the shared
-// `recordEmitterEvents` (AGENTS §16.1: the per-event wiring is centralized; this file
-// keeps only the names its scenarios observe).
-const DATABASE_EVENTS: ReadonlyArray<keyof DatabaseEventMap> = [
+// The DatabaseEventMap event names recorded across the emitter tests — fed to the shipped
+// `createRecorders` (AGENTS §16.1: the per-event wiring lives in `@orkestrel/test`; this file
+// keeps only the names its scenarios observe). Each list carries its own exact union rather
+// than `keyof DatabaseEventMap`, because a name in the type argument that the array omits
+// reads `undefined` at runtime under a non-optional recorder type.
+type DatabaseEvent = 'open' | 'close' | 'transaction' | 'commit' | 'rollback'
+const DATABASE_EVENTS: readonly DatabaseEvent[] = [
 	'open',
 	'close',
 	'transaction',
 	'commit',
 	'rollback',
 ]
-const MIGRATE_EVENTS: ReadonlyArray<keyof DatabaseEventMap> = ['migrate']
+type MigrateEvent = 'migrate'
+const MIGRATE_EVENTS: readonly MigrateEvent[] = ['migrate']
 
 describe('Database — emitter (push observation surface)', () => {
 	it('fires open once on lazy first-use connect and then fires terminal close', async () => {
 		const { db, users } = userDatabase()
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		expect(events.open.count).toBe(0) // idle — nothing connected yet
 		await users.set({ id: 'u1', name: 'Ada', age: 36 })
 		expect(events.open.count).toBe(1) // the lazy connect fired `open` once
@@ -713,14 +716,14 @@ describe('Database — emitter (push observation surface)', () => {
 
 	it('fires open on an explicit open() with no operation', async () => {
 		const { db } = userDatabase()
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		await db.open()
 		expect(events.open.calls).toEqual([[]])
 	})
 
 	it('fires transaction then commit on a successful scope (no rollback)', async () => {
 		const { db } = userDatabase()
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		await db.transaction(async (transaction) => {
 			await transaction.table('users').set({ id: 'u1', name: 'Ada', age: 36 })
 		})
@@ -732,7 +735,7 @@ describe('Database — emitter (push observation surface)', () => {
 	it('fires transaction then rollback (with the error) on a throwing scope; commit never fires', async () => {
 		const { db, users } = userDatabase()
 		await users.set({ id: 'u1', name: 'Ada', age: 36 })
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		const boom = new Error('boom')
 		await expect(
 			db.transaction(async (transaction) => {
@@ -764,7 +767,7 @@ describe('Database — emitter (push observation surface)', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		const error = await db
 			.transaction(async (transaction) => {
 				await transaction.table('users').set({ id: 'u1', name: 'Ada', age: 36 })
@@ -799,7 +802,7 @@ describe('Database — emitter (push observation surface)', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, DATABASE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, DatabaseEvent>(db.emitter, DATABASE_EVENTS)
 		const error = await db
 			.transaction(async (transaction) => {
 				await transaction.table('users').set({ id: 'u1', name: 'Ada', age: 36 })
@@ -925,7 +928,7 @@ describe('migrate()', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		const plan = await db.migrate(deployed)
 		expect(plan.steps).toEqual([{ operation: 'column.remove', table: 'users', column: 'legacy' }])
 		expect(events.migrate.calls).toEqual([[plan]])
@@ -949,7 +952,7 @@ describe('migrate()', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		await expect(db.migrate([])).rejects.toMatchObject({ code: 'MIGRATION' })
 		expect(events.migrate.count).toBe(0)
 	})
@@ -967,7 +970,7 @@ describe('migrate()', () => {
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		const controller = new AbortController()
 		controller.abort('too slow')
 		await expect(db.migrate([], { signal: controller.signal })).rejects.toMatchObject({
@@ -994,7 +997,11 @@ describe('migrate()', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
 		const users = db.table('users')
-		const events = recordEmitterEvents(db.emitter, ['open', 'migrate', 'close'])
+		const events = createRecorders<DatabaseEventMap, 'open' | 'migrate' | 'close'>(db.emitter, [
+			'open',
+			'migrate',
+			'close',
+		])
 
 		await expect(db.migrate([])).rejects.toBe(failure)
 		expect(db.status).toBe('idle')
@@ -1019,7 +1026,7 @@ describe('migrate()', () => {
 			driver: createMemoryDriver(),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		const deployed: readonly TableSchema[] = [
 			{
 				name: 'users',
@@ -1077,7 +1084,7 @@ describe('version reconciliation (open())', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 1,
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		await db.open()
 		expect(events.migrate.count).toBe(0)
 		const metadata = await driver.metadata?.()
@@ -1108,7 +1115,7 @@ describe('version reconciliation (open())', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 2,
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		await db.open()
 		expect(events.migrate.count).toBe(1)
 		expect(events.migrate.calls[0]?.[0]?.steps).toEqual([
@@ -1223,7 +1230,7 @@ describe('version reconciliation (open())', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 1,
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		await expect(db.open()).resolves.toBeUndefined()
 		expect(metadataCalls).toEqual([])
 		expect(stampCalls).toEqual([])
@@ -1242,7 +1249,7 @@ describe('version reconciliation (open())', () => {
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 1,
 		})
-		const events = recordEmitterEvents(db.emitter, MIGRATE_EVENTS)
+		const events = createRecorders<DatabaseEventMap, MigrateEvent>(db.emitter, MIGRATE_EVENTS)
 		await expect(db.open()).resolves.toBeUndefined()
 		expect(metadataCalls).toEqual([])
 		expect(stampCalls).toEqual([])

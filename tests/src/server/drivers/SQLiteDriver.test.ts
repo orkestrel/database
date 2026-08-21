@@ -2,6 +2,7 @@ import type {
 	AggregateOperation,
 	ColumnSchema,
 	Condition,
+	DatabaseEventMap,
 	DriverInterface,
 	QueryInput,
 	DriverMetadata,
@@ -28,9 +29,9 @@ import {
 	stringShape,
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
-import { collect } from '@orkestrel/test'
+import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, conformDriver, recordEmitterEvents } from '../../../setup.js'
+import { buildCondition, conformDriver } from '../../../setup.js'
 import {
 	createForeignKeyFixture,
 	driverSchema,
@@ -1875,7 +1876,7 @@ describe('SQLiteDriver — native transaction', () => {
 				},
 			},
 		})
-		const events = recordEmitterEvents(database.emitter, ['rollback'])
+		const events = createRecorders<DatabaseEventMap, 'rollback'>(database.emitter, ['rollback'])
 		const error = await database
 			.transaction(async (transaction) => {
 				await transaction.table('users').set({ id: 'u1', name: 'Ada', age: 36, active: true })
