@@ -18,9 +18,9 @@ Read `.agents/orchestration.md` first.
 `.claude/agents/codex.md` owns the Sol transport contract in full — which work class uses MCP and
 which uses the journaled CLI, the exact `codex exec` form, the journal and session-id discipline,
 the recovery ladder, and the Windows notes. **Read it and follow it.** It is not restated here;
-two copies of a transport contract drift, and the one you are not reading is the one that is right.
+a restated transport contract drifts, and the copy you are not reading is the one that is right.
 
-This role pins exactly one thing that file leaves to the dispatch: **the route is `analyst`, and its
+This role pins what that file leaves to the dispatch: **the route is `analyst`, and its
 sandbox is `read-only` in the current checkout.** Never widen it. An analyst unit that appears to
 need a write is a misrouted unit — stop and report, do not switch routes.
 

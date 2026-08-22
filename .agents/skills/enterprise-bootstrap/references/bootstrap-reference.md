@@ -14,7 +14,7 @@
 - [Forms in production](#forms-in-production)
 - [JavaScript lifecycle](#javascript-lifecycle)
 - [Accessibility](#accessibility)
-- [Enterprise patterns](#enterprise-patterns) — [App shell](#app-shell) · [Dense data tables](#dense-data-tables) · [Filter & search bars](#filter--search-bars) · [Wizards & multi-step forms](#wizards--multi-step-forms) · [The five states](#the-five-states) · [Feedback discipline](#feedback-discipline) · [Destructive actions](#destructive-actions)
+- [Enterprise patterns](#enterprise-patterns) — [App shell](#app-shell) · [Dense data tables](#dense-data-tables) · [Filter & search bars](#filter--search-bars) · [Wizards & multi-step forms](#wizards--multi-step-forms) · [The data states](#the-data-states) · [Feedback discipline](#feedback-discipline) · [Destructive actions](#destructive-actions)
 - [RTL](#rtl)
 - [Print](#print)
 - [Performance](#performance)
@@ -129,7 +129,7 @@ In Sass: `$enable-dark-mode` (default true), `$color-mode-type: data` (attribute
 
 ## Theming & Design Tokens
 
-### The three-tier token model
+### The tiered token model
 
 Enterprise theming survives rebrands and dark mode only when tokens are tiered:
 
@@ -211,7 +211,7 @@ Remove with `map-remove($utilities, "width")` or set the key to `null`. This is 
 
 - **Top-aligned labels by default** — the evidence (eye-tracking form research) shows fastest completion and the cleanest single-column scan, and they survive narrow screens without reflow. Reserve left-aligned labels for dense read-back forms where vertical compression matters more than speed.
 - Visible label or `.form-floating` — never placeholder-only (disappears on input, fails accessibility).
-- **Do not say the same thing twice.** When the host already names the request — a card heading, a dialog title, a section header stating the question — the form associates with that name via `aria-labelledby` instead of repeating the prompt in its own label. Repetition reads as two different questions to a screen-reader user and as clutter to everyone else.
+- **Do not say the same thing twice.** When the host already names the request — a card heading, a dialog title, a section header stating the question — the form associates with that name via `aria-labelledby` instead of repeating the prompt in its own label. Repetition reads as separate questions to a screen-reader user and as clutter to everyone else.
 - One column beats multi-column for completion; use the form grid (`row g-3` + `col-md-*`) only for genuinely paired fields (city/state/zip).
 
 ```html
@@ -508,19 +508,21 @@ Give header cells an **opaque background** (`bg-body-secondary` or a table varia
 - One toolbar above the table: search input first (`role="search"` on the form), then the 2–4 highest-value filters as `form-select`/segmented controls, overflow filters behind a "Filters" button (offcanvas on mobile, dropdown/collapse on desktop).
 - **Active filters must be visible and dismissible** — chips/badges with an ✕ and a "Clear all" — users must see _why_ the list is short. A filtered-empty state repeats the escape hatch.
 - Debounce live search; show result counts ("128 results") so feedback is immediate; filter state belongs in the URL when views are shareable.
-- Toolbars that overflow: `flex-nowrap overflow-auto` beats wrapping into a two-row toolbar mid-task — do not crush icon targets below 24px.
+- Toolbars that overflow: `flex-nowrap overflow-auto` beats wrapping the toolbar onto a second row mid-task — do not crush icon targets below 24px.
 
 ### Wizards & multi-step forms
 
-- Show step progress: current position, total, and step names ("Step 2 of 4 — Billing"); `list-group-numbered` or a simple nav renders it honestly.
+- Show step progress: current position, total, and step name (for example, "Billing — step ⟨n⟩ of
+  ⟨total⟩", where the wizard fills in its own runtime position and total); `list-group-numbered` or
+  a simple nav renders it honestly.
 - Validate per step before advancing; never let a step advance carrying invalid data.
 - Back never loses data. Persist partial state (save-and-resume) for anything beyond ~3 steps or that crosses sessions.
 - Never re-ask what a previous step collected (Redundant Entry, 3.3.7) — carry it forward or offer "same as above".
-- Last step: a review summary with per-section edit links, then one clearly-named commit action ("Create account", not "Submit").
+- Review step: a review summary with per-section edit links, then one clearly-named commit action ("Create account", not "Submit").
 
-### The five states
+### The data states
 
-Design **all five** for every data surface: ideal (populated), empty, loading, partial, error. A component is not done until all five exist.
+Design **every one** for every data surface: ideal (populated), empty, loading, partial, error. A component is not done until all of them exist.
 
 - **Skeleton vs spinner:** skeleton (`placeholder` + `placeholder-glow`) when you know the content's shape and it fills a region — tables, cards, detail panes — because it holds layout and shortens perceived wait. Spinner for short, indeterminate, or in-control waits (inside a button, a small inline fetch).
 - **Thresholds (guidance):** under ~1s show nothing — a flashed loader is worse than none; ~1–10s show a spinner or skeleton; beyond ~10s show determinate progress (percent or step) so it does not feel hung.
@@ -565,7 +567,7 @@ Do not type-gate a single-row delete; do not one-tap a tenant wipe. Confirm only
 
 ## Performance
 
-- **Ship one CSS system, not two.** Bootstrap plus a second framework (or a parallel bespoke layer) doubles payload and guarantees specificity fights.
+- **Ship one CSS system and no more.** Bootstrap plus a second framework (or a parallel bespoke layer) doubles payload and guarantees specificity fights.
 - **Compressed, the full build is cheap; incomplete builds are not.** Trimming via a Sass-subset build (import only the parts used — see [Theming](#theming--design-tokens)) is the sanctioned diet. Aggressive purge tools are the risky one: Bootstrap adds classes **at runtime** (`show`, `showing`, `fade`, `collapsing`, `modal-open`, `modal-backdrop`, `offcanvas-backdrop`, tooltip/popover generated markup) — purging without safelisting them ships UIs whose modals silently stop rendering. If you purge, safelist every JS-toggled class and test every overlay.
 - **Icons:** Bootstrap Icons is a separate package — prefer inline SVG or an SVG sprite (crisp, styleable via `currentColor`, no font flash) over the icon font; load only the icons used.
 - **JS:** the bundle is small, but only load it where behavior exists; per-component ESM imports (`bootstrap/js/dist/modal`) trim further in bundlers.

@@ -78,15 +78,15 @@ placement and scope `.claude/rules/tests.md` fixes.
   announced location.
 - Assert the whole page's perception never matches the vocabulary the product does not speak —
   engine, schema, and implementation words the interface is supposed to translate.
-- Report a bare accessible name that answers for two reachable elements on one screen as a surface
+- Report a bare accessible name that answers for more than one reachable element on one screen as a surface
   finding, and target through role or region until the surface is fixed.
 
 ## Prove the refusals
 
 - Give every surface a refusal family: the controls a person must not reach in the state the
   journey has put the surface in.
-- Assert the exact failure voice the case means. Never write an assertion that accepts either of
-  two voices.
+- Assert the exact failure voice the case means. Never write an assertion that accepts more than
+  one voice.
 - Cover the restrictions the interface imposes on itself: a collapsed panel's field, a verb
   belonging to another kind of object, a control disabled until its precondition lands.
 - When a refusal changes voice after a markup change, read it as a role or reachability change

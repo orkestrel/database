@@ -3,7 +3,7 @@ import { playwright } from '@vitest/browser-playwright'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
-import { environmentBoundary, outputBoundary } from './configs/helpers.js'
+import { enforceBuildLog, environmentBoundary, outputBoundary } from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -42,6 +42,7 @@ export const srcCore = (options?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
+				rolldownOptions: { onLog: enforceBuildLog },
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
@@ -71,6 +72,7 @@ export const srcBrowser = (options?: UserConfig): UserConfig =>
 				},
 				outDir: 'dist/src/browser',
 				rolldownOptions: {
+					onLog: enforceBuildLog,
 					external: (id: string) =>
 						id === '@src/core' ||
 						id.startsWith('@orkestrel/') ||
@@ -113,6 +115,7 @@ export const srcServer = (options?: UserConfig): UserConfig =>
 				outDir: 'dist/src/server',
 				target: 'node22',
 				rolldownOptions: {
+					onLog: enforceBuildLog,
 					platform: 'node',
 					external: (id: string) =>
 						id === '@src/core' ||
@@ -194,7 +197,11 @@ export const guides = (options?: UserConfig): UserConfig =>
 		options ?? {},
 	)
 
-// A workbench, not a proof. No gate selects this project.
+// A workbench, not a proof. No gate selects this project. Run in test mode by the
+// `test:probe` script, it collects `tmp/probe/**/*.test.ts`. Run in benchmark mode by the
+// `test:bench` script, the same workbench also collects `tests/**/*.test.ts` for a `bench` block,
+// so a suite may carry a bench beside its ordinary tests without a second project. The mode
+// guard around each `bench` call keeps it out of test mode, so it never executes there.
 export const probe = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
@@ -205,6 +212,9 @@ export const probe = (options?: UserConfig): UserConfig =>
 				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },
+				fileParallelism: false,
+				pool: 'threads',
+				benchmark: { include: ['tmp/probe/**/*.test.ts', 'tests/**/*.test.ts'] },
 			},
 		},
 		options ?? {},

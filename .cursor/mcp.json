@@ -7,6 +7,10 @@
 		"claude": {
 			"command": "claude",
 			"args": ["mcp", "serve"]
+		},
+		"probe": {
+			"command": "node",
+			"args": ["node_modules/@orkestrel/probe/dist/bin/main.js"]
 		}
 	}
 }

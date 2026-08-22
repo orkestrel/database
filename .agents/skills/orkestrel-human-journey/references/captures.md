@@ -21,7 +21,7 @@ capture(state: string): Promise<string | undefined>
 
 ## The registry
 
-Declare two frozen lists in the journey file: the state names, and the variants.
+Declare a frozen list of state names and a frozen list of variants in the journey file.
 
 - Name a state for its surface and its condition — `answer-partial`, `start-storage-failure`,
   `case-delete-confirmation`.
@@ -35,12 +35,12 @@ Declare two frozen lists in the journey file: the state names, and the variants.
 ## Variants
 
 - Name a variant as one value carrying both the theme and the viewport, such as `dark-390`. Never
-  split them into two selectors: a split lets a run write a filename describing a combination it
+  split them into separate selectors: a split lets a run write a filename describing a combination it
   did not render.
 - Render one variant per run, and produce the portfolio — the registry times the variants — by
   repeating the run once per variant.
 
-## The two proofs
+## The proofs
 
 | Proof                | Runs                        | Asserts                                                                                        |
 | -------------------- | --------------------------- | ---------------------------------------------------------------------------------------------- |

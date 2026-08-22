@@ -57,17 +57,17 @@ product's, and keep the data surfaces disciplined and conventional enough to rea
 
 ## Process: brainstorm, explore, plan, critique, build, critique again
 
-Calibrate against the three looks AI-generated design currently clusters around: (1) a warm cream
+Calibrate against the looks AI-generated design currently clusters around: (1) a warm cream
 background (near #F4F1EA) with a high-contrast serif display and a terracotta accent; (2) a
 near-black background with a single bright acid-green or vermilion accent; (3) a broadsheet-style
-layout with hairline rules, zero border-radius, and dense newspaper-like columns. All three are
+layout with hairline rules, zero border-radius, and dense newspaper-like columns. Each is
 legitimate for some briefs; they are defaults rather than choices, and they appear regardless of
 subject. Follow the brief exactly where it pins a visual direction — the brief's own words always
 win, including when they ask for one of these looks. Where the brief leaves an axis free, spend that
 freedom somewhere other than these defaults. Balance the moves you have already proven against
 experimenting where the brief invites it.
 
-Work in two passes. First, brainstorm a short design plan from the brief: a compact token system
+Work in passes. First, brainstorm a short design plan from the brief: a compact token system
 with color, type, layout, and signature. Color: describe the palette as 4–6 named hex values. Type:
 name the typefaces for 2+ roles — a characterful display face used with restraint, a complementary
 body face, and a utility face for captions or data where one is needed. Layout: state a layout

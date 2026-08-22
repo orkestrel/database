@@ -73,7 +73,7 @@ includes app/core so the shared transport contracts have one host-independent ow
      callbacks reject forced inlining before any direct asset read, and non-inlined
      output assets are audited by physical source path.
 
-   Then hold these four limits:
+   Then hold these limits:
    - Add no standalone boundary script, and no second parser or source-language analyzer
      duplicating those layers. Reach for the toolchain's own facilities instead: Vite's
      Oxc/Rolldown AST for TypeScript and JavaScript asset references, the official Vue SFC
@@ -98,7 +98,7 @@ includes app/core so the shared transport contracts have one host-independent ow
 8. **Document and prove parity** for every app export and behavioral method: guide,
    examples, manifest index, and the parity specifiers walking the existing `src` and
    `app` roots and every selected alias.
-9. **Verify.** Run the rules' cleanup sweeps over source and tests. Then run the two-lane
+9. **Verify.** Run the rules' cleanup sweeps over source and tests. Then run the
    adversarial pass, a mechanical conformance pass, and the repository gates in their
    required order. Generated CI runs those gates on the declared minimum Node release and
    on the current major.

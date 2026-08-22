@@ -51,7 +51,7 @@ Examples: `timeout(id)`/`timeouts()`, `agent(id)`/`agents()`.
 
 ### Batch operations
 
-One single-word verb carries three overloads:
+One single-word verb carries these overloads:
 
 ```ts
 method(): void
@@ -108,7 +108,7 @@ Choose one event model per environment. `Emitter<TMap>` remains the default outs
 
 ## Validation and contracts
 
-Use four orthogonal contract mechanisms:
+Use these orthogonal contract mechanisms:
 
 | Surface          | Contract                                                                      |
 | ---------------- | ----------------------------------------------------------------------------- |
@@ -118,7 +118,7 @@ Use four orthogonal contract mechanisms:
 | Shape DSL        | One `ContractShape` compiled into schema, guard, parser, and seeded generator |
 
 - Use plain guards/parsers for small contracts.
-- Use the shape DSL only when four-way validation/serialization/generation parity earns its complexity.
+- Use the shape DSL only when validation, serialization, and generation parity earns its complexity.
 - When `@orkestrel/contract` is declared, use its exact installed guards, parsers, combinators, outcomes, `attempt` boundary, and shape DSL wherever their semantics match. Do not maintain a local copy of those primitives.
 - A guard never throws for adversarial input, cycles, deep nesting, or hostile prototypes; return false.
 - Recursive guards track ancestors and cap depth.

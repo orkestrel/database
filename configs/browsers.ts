@@ -215,7 +215,7 @@ export function resolveBundledBrowser(platform: NodeJS.Platform, root: string): 
 /**
  * Resolve the first installed stable system Chromium channel.
  *
- * @param platform - The Node platform whose standard layouts should be probed.
+ * @param platform - The Node platform whose standard layouts this call probes.
  * @param environment - The process environment supplying Windows installation roots.
  * @returns `chrome`, then `msedge`, or `undefined` when neither is executable.
  *
@@ -260,7 +260,7 @@ export function resolveSystemBrowser(
  * Resolve Playwright provider options for whatever browser this host can actually launch.
  *
  * @param pinned - The executable path for Playwright's pinned Chromium revision, when it has one.
- * @param platform - The Node platform whose standard layouts should be probed.
+ * @param platform - The Node platform whose standard layouts this call probes.
  * @param environment - The process environment supplying operator overrides and Windows roots.
  * @param root - The managed-container bundled browsers directory to search.
  * @returns Provider options naming an executable, a WebSocket endpoint, or a channel.
@@ -269,7 +269,7 @@ export function resolveSystemBrowser(
  * Precedence, most important first: `PLAYWRIGHT_EXECUTABLE_PATH`, `PLAYWRIGHT_WS_ENDPOINT`,
  * `PLAYWRIGHT_CHANNEL`, the managed Playwright Chromium, the container's bundled Chromium, a
  * verified system channel, then the platform default channel. An operator override outranks
- * discovery and is returned exactly as given: none of those three environment values is checked
+ * discovery and is returned exactly as given: none of those environment values is checked
  * against the filesystem, because verifying an override would defeat the override. The pinned
  * managed revision outranks anything found on the host because it is deterministic. The installed
  * pinned revision returns empty options so Playwright keeps its own default launch semantics. Only

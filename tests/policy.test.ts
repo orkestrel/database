@@ -19,6 +19,7 @@ import {
 	SKILL_POLICY_BACKTICKED,
 	SKILL_POLICY_CONTROLS,
 	SKILL_POLICY_EXCLUSION,
+	SKILL_POLICY_FENCED,
 	SKILL_POLICY_FOLDED,
 	SKILL_POLICY_PARAGRAPHS,
 	stemToPolicyCandidates,
@@ -346,7 +347,7 @@ describe('skill family policy', () => {
 		expect(inspectSkillFamily(process.cwd())).toEqual([])
 	})
 
-	it('parses a folded description containing a colon as exactly two frontmatter keys', () => {
+	it('parses a folded description containing a colon as exactly the name and description keys', () => {
 		const skill = SKILL_POLICY_FOLDED.files.find((file) => file.path.endsWith('/SKILL.md'))
 		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
 		expect(frontmatter?.keys).toEqual(['name', 'description'])
@@ -359,6 +360,7 @@ describe('skill family policy', () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
 			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.line === undefined || violations[0]?.line === control.line).toBe(true)
 			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
 		})
 	}
@@ -375,7 +377,11 @@ describe('skill family policy', () => {
 		expect(inspectPolicyControl(SKILL_POLICY_BACKTICKED)).toEqual([])
 	})
 
-	it('parses a folded description containing two paragraphs', () => {
+	it(`${SKILL_POLICY_FENCED.label} [membership: ${SKILL_POLICY_FENCED.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_FENCED)).toEqual([])
+	})
+
+	it('parses a folded description containing more than one paragraph', () => {
 		const skill = SKILL_POLICY_PARAGRAPHS.files.find((file) => file.path.endsWith('/SKILL.md'))
 		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
 		expect(frontmatter?.keys).toEqual(['name', 'description'])
@@ -401,6 +407,7 @@ describe('skill bridge policy', () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
 			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.line === undefined || violations[0]?.line === control.line).toBe(true)
 			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
 		})
 	}

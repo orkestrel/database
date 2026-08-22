@@ -1,13 +1,26 @@
-/** The expression fields inspected by the policy rules. */
-export interface PolicyExpression {
+/** The syntax-node fields supplied to every policy visitor. */
+export interface PolicyNode {
 	readonly type: string
 	readonly range: [number, number]
+}
+
+/** The expression fields inspected by the policy rules. */
+export interface PolicyExpression extends PolicyNode {
+	readonly parent?: PolicyExpression | null
 	readonly name?: unknown
 	readonly value?: unknown
+	readonly key?: PolicyExpression
+	readonly id?: unknown
+	readonly method?: boolean
+	readonly kind?: 'get' | 'init' | 'set'
+	readonly expression?: boolean
 	readonly object?: PolicyExpression
 	readonly property?: PolicyExpression
 	readonly computed?: boolean
 	readonly callee?: PolicyExpression
+	readonly argument?: PolicyExpression | null
+	readonly arguments?: readonly PolicyExpression[]
+	readonly body?: PolicyExpression
 	readonly quasis?: readonly PolicyExpression[]
 	readonly expressions?: readonly PolicyExpression[]
 	readonly accessibility?: 'private' | 'protected' | 'public' | null
@@ -40,20 +53,145 @@ export interface PolicyMeta {
 
 /** The Oxlint visitor entries used by the policy rules. */
 export interface PolicyVisitor {
-	readonly [key: string]: ((node: PolicyExpression) => void) | undefined
-	readonly CallExpression?: (node: PolicyExpression) => void
-	readonly MethodDefinition?: (node: PolicyExpression) => void
-	readonly PropertyDefinition?: (node: PolicyExpression) => void
-	readonly AccessorProperty?: (node: PolicyExpression) => void
-	readonly TSAbstractMethodDefinition?: (node: PolicyExpression) => void
-	readonly TSAbstractPropertyDefinition?: (node: PolicyExpression) => void
-	readonly TSAbstractAccessorProperty?: (node: PolicyExpression) => void
+	readonly [key: string]: ((node: PolicyNode) => void) | undefined
+	readonly CallExpression?: (node: PolicyNode) => void
+	readonly FunctionDeclaration?: (node: PolicyNode) => void
+	readonly FunctionExpression?: (node: PolicyNode) => void
+	readonly ArrowFunctionExpression?: (node: PolicyNode) => void
+	readonly MethodDefinition?: (node: PolicyNode) => void
+	readonly PropertyDefinition?: (node: PolicyNode) => void
+	readonly AccessorProperty?: (node: PolicyNode) => void
+	readonly TSAbstractMethodDefinition?: (node: PolicyNode) => void
+	readonly TSAbstractPropertyDefinition?: (node: PolicyNode) => void
+	readonly TSAbstractAccessorProperty?: (node: PolicyNode) => void
 }
 
 /** The complete behavior exposed by one policy rule. */
 export interface PolicyRuleInterface {
 	readonly meta: PolicyMeta
 	create(context: PolicyContext): PolicyVisitor
+}
+
+/** Whether a policy expression is runtime function syntax. */
+export function isPolicyFunction(node: PolicyExpression): boolean {
+	return (
+		node.type === 'FunctionDeclaration' ||
+		node.type === 'FunctionExpression' ||
+		node.type === 'ArrowFunctionExpression'
+	)
+}
+
+/** Whether a policy function is anonymous. */
+export function isPolicyAnonymous(node: PolicyExpression): boolean {
+	return node.type === 'ArrowFunctionExpression' || node.id === null
+}
+
+/** Return the outermost parenthesized expression holding a policy function. */
+export function functionToPolicyPosition(node: PolicyExpression): PolicyExpression {
+	let position = node
+	while (position.parent?.type === 'ParenthesizedExpression') {
+		position = position.parent
+	}
+	return position
+}
+
+/** Whether a policy function is an anonymous callback passed directly as an argument. */
+export function isPolicyCallback(node: PolicyExpression): boolean {
+	if (!isPolicyAnonymous(node)) return false
+	const position = functionToPolicyPosition(node)
+	const parent = position.parent
+	return (
+		(parent?.type === 'CallExpression' || parent?.type === 'NewExpression') &&
+		parent.arguments?.includes(position) === true
+	)
+}
+
+/** Whether a policy function is an anonymous function returned directly as a result. */
+export function isPolicyResult(node: PolicyExpression): boolean {
+	if (!isPolicyAnonymous(node)) return false
+	const position = functionToPolicyPosition(node)
+	const parent = position.parent
+	return (
+		(parent?.type === 'ReturnStatement' && parent.argument === position) ||
+		(parent?.type === 'ArrowFunctionExpression' && parent.body === position)
+	)
+}
+
+/** Whether an Oxlint function expression represents method syntax. */
+export function isPolicyMethod(node: PolicyExpression): boolean {
+	const parent = node.parent
+	return (
+		node.type === 'FunctionExpression' &&
+		parent?.value === node &&
+		(parent.type === 'MethodDefinition' ||
+			(parent.type === 'Property' &&
+				(parent.method === true || parent.kind === 'get' || parent.kind === 'set')))
+	)
+}
+
+/** Whether a policy function sits inside another function before any class-expression boundary. */
+export function hasPolicyFunctionAncestor(node: PolicyExpression): boolean {
+	let parent = node.parent
+	let method = false
+	while (parent !== undefined && parent !== null) {
+		if (parent.type === 'ClassExpression') return false
+		if (parent.type === 'ClassDeclaration' && method) return true
+		if (isPolicyFunction(parent)) {
+			if (!isPolicyMethod(parent)) return true
+			method = true
+		}
+		parent = parent.parent
+	}
+	return method
+}
+
+/** Whether an arrow is the policy plugin's sanctioned visitor-table delegation. */
+export function isPolicyVisitor(node: PolicyExpression): boolean {
+	if (
+		node.type !== 'ArrowFunctionExpression' ||
+		node.expression !== true ||
+		node.body?.type !== 'CallExpression' ||
+		node.body.callee?.type !== 'Identifier' ||
+		typeof node.body.callee.name !== 'string' ||
+		!node.body.callee.name.startsWith('report')
+	) {
+		return false
+	}
+	const property = node.parent
+	const object = property?.parent
+	const returned = object?.parent
+	const block = returned?.parent
+	const create = block?.parent
+	const definition = create?.parent
+	return (
+		property?.type === 'Property' &&
+		property.method === false &&
+		property.value === node &&
+		object?.type === 'ObjectExpression' &&
+		returned?.type === 'ReturnStatement' &&
+		returned.argument === object &&
+		block?.type === 'BlockStatement' &&
+		create?.type === 'FunctionExpression' &&
+		definition?.type === 'Property' &&
+		definition.method === true &&
+		definition.value === create &&
+		definition.key?.type === 'Identifier' &&
+		definition.key.name === 'create'
+	)
+}
+
+/** Report function syntax nested inside another function body. */
+export function reportNested(context: PolicyContext, node: PolicyExpression): void {
+	if (
+		!hasPolicyFunctionAncestor(node) ||
+		isPolicyMethod(node) ||
+		isPolicyCallback(node) ||
+		isPolicyResult(node) ||
+		isPolicyVisitor(node)
+	) {
+		return
+	}
+	context.report({ node, messageId: 'nested' })
 }
 
 /** Report banned calls on the named Vitest and Jest framework objects. */
@@ -128,6 +266,27 @@ export function reportPrivacy(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
+/** Ban function declarations and assignments inside another function body. */
+export const NESTED_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description: 'Disallow function declarations and assignments inside another function body.',
+		},
+		messages: {
+			nested:
+				'Extract the function to module scope or make instance-bound work a method; only direct anonymous callbacks and returned anonymous functions may stay in a function body.',
+		},
+	},
+	create(context) {
+		return {
+			FunctionDeclaration: (node) => reportNested(context, node),
+			FunctionExpression: (node) => reportNested(context, node),
+			ArrowFunctionExpression: (node) => reportNested(context, node),
+		}
+	},
+}
+
 /** Ban framework mocking, spying, fake clocks, and global or environment stubs. */
 export const MOCKING_RULE: PolicyRuleInterface = {
 	meta: {
@@ -181,5 +340,6 @@ export default {
 	rules: {
 		'no-mocking': MOCKING_RULE,
 		'no-keyword-privacy': PRIVACY_RULE,
+		'no-nested-functions': NESTED_RULE,
 	},
 }

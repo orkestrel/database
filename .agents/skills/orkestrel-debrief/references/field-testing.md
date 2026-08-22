@@ -1,7 +1,7 @@
 # Field testing an agent-facing surface
 
-The method for producing the live evidence a debrief judges by. Proven across a five-model
-roster and portable to any surface a model consumes.
+The method for producing the live evidence a debrief judges by. It ports to any surface a
+model consumes.
 
 ## The tier ladder
 

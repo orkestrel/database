@@ -38,7 +38,7 @@ supposed to produce it. Source-reading review passes a component that renders no
 Choose the smallest scope that satisfies the request:
 
 - **Verdict:** one portfolio, one lane, no fixes.
-- **Round:** portfolio → three independent verdicts → reconciliation → fix units →
+- **Round:** portfolio → independent verdicts → reconciliation → fix units →
   recapture.
 - **Campaign:** rounds repeated until one terminal converged line, then independent gates.
 
@@ -53,8 +53,8 @@ confirmed finding in scope and rebuilding the harness gaps the verdicts expose.
 2. **Seed candidates.** Turn your own mid-integration observations into numbered
    confirm-or-refute candidates inside the verdict brief. Observations that stay in your
    head are neither evidence nor findings.
-3. **Take three independent verdicts** on the SAME portfolio, in the fixed shape below. The
-   three lanes are subjective design fit; objective state truth; and mechanical inventory of
+3. **Take independent verdicts** on the SAME portfolio, in the fixed shape below. The
+   lanes are subjective design fit; objective state truth; and mechanical inventory of
    copy, classes, icons, and accessibility attributes. This is the surface variant of the
    adversarial pass in `.agents/orchestration.md`, so its rules bind: each lane is a fresh
    subagent with a clean context, run in parallel, blind to the others until all have

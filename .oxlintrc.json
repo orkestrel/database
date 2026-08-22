@@ -80,6 +80,15 @@
 			}
 		},
 		{
+			"files": [
+				"src/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"app/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"
+			],
+			"rules": {
+				"policy/no-nested-functions": "error"
+			}
+		},
+		{
 			"files": ["*.vue"],
 			"rules": {
 				"import/no-default-export": "off",

@@ -36,3 +36,11 @@ Executor: run the gates yourself, spawn nothing.
 
 You never edit files and never "quick-fix" a failure — you report it. Return only
 the gate report, never your process.
+
+## Never discard a working-tree change
+
+- Never run `git checkout`, `git restore`, `git stash`, `git reset`, or `git clean`. Each discards
+  a working-tree change silently.
+- Where a dispatch has you plant a line to prove a gate can fail, remove exactly the line you added.
+  Never revert the file it sits in.
+- Read a dirty `git status` as the expected state.

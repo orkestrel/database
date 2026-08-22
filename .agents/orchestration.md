@@ -16,9 +16,10 @@ Read in this order before acting:
 `CLAUDE.md`, `.codex/config.toml`, and `.cursor/rules/` are bridges. Each points here and adds
 only what its harness needs. None of them restates this file.
 
-Every dispatch tells its executor to read items 2 through 5 before acting.
+Every dispatch tells its executor to read every item after the user's current instruction before
+acting.
 
-## The three engines
+## The engines
 
 One workflow runs across all providers. Each engine has one job and never takes another's.
 
@@ -31,7 +32,7 @@ One workflow runs across all providers. Each engine has one job and never takes 
 - Route each nontrivial implementation unit to Opus or Sol. Objective, constraint-heavy,
   mechanical-precision work goes to Sol. API-shape, naming, and documentation-voice work goes to
   Opus. Cursor Composer is not an implementation route, and no `composer` role exists.
-- Design and audit always run the two-lane adversarial pass below.
+- Design and audit always run the adversarial pass.
 
 ## Orchestration by harness
 
@@ -54,15 +55,15 @@ reasoning effort.
 
 ## The adversarial pass
 
-Two lanes run on every design round; an audit round runs the lanes the execution loop's step 5
-names, on the same clean-context terms.
+The subjective lane and the objective lane run on every design round; an audit round runs the lanes
+the execution loop's audit step names, on the same clean-context terms.
 
 | Lane           | Argues                                                                      |
 | -------------- | --------------------------------------------------------------------------- |
 | **Subjective** | Shape, taste, naming, ergonomics, design fit, what the API should feel like |
 | **Objective**  | Correctness, constraints, and what the code and contracts actually permit   |
 
-**A required lane always runs.** Never collapse two required lanes into one. Never let an engine's
+**A required lane always runs.** Never collapse required lanes into one. Never let an engine's
 absence stand in for a required lane.
 
 ### Clean contexts
@@ -73,25 +74,25 @@ absence stand in for a required lane.
 - A lane run in the Orchestrator's context is the Orchestrator assessing itself, whatever model
   name it carries. The clean context is what makes the lane independent and unbiased, and it is
   what keeps the main context at decision level.
-- Run both lanes in parallel, blind to each other. Reconcile them yourself.
+- Run the lanes in parallel, blind to each other. Reconcile them yourself.
 
 ### Engine assignment
 
 By default Opus 5 holds the subjective lane and Sol holds the objective lane.
 
-When one engine is unavailable, the remaining engine runs **both** lanes — still two separate
+When one engine is unavailable, the remaining engine runs **every** lane — still separate
 subagents, still clean contexts, still blind to each other, each told which perspective it holds.
 Record the substitution.
 
-| Harness     | Engine unavailable       | Runs both lanes |
-| ----------- | ------------------------ | --------------- |
-| Claude Code | Sol (Codex bench dark)   | Opus 5          |
-| Codex       | Opus 5 (Claude CLI dark) | GPT-5.6 Sol     |
-| Cursor      | Both (MCP servers dark)  | Cursor Grok     |
+| Harness     | Engine unavailable                | Runs every lane |
+| ----------- | --------------------------------- | --------------- |
+| Claude Code | Sol (Codex bench dark)            | Opus 5          |
+| Codex       | Opus 5 (Claude CLI dark)          | GPT-5.6 Sol     |
+| Cursor      | Opus 5 and Sol (MCP servers dark) | Cursor Grok     |
 
 - Never assign Grok to either lane in Claude Code or Codex. If the remaining native engine is also
   unavailable there, the pass cannot run: stop and report rather than substituting Grok.
-- Grok takes both lanes only in Cursor, and only when Opus 5 and Sol are both unavailable.
+- Grok takes every lane only in Cursor, and only when Opus 5 and Sol are both unavailable.
 - Treat a lane that returns no verdicts as a lane that did not run. A bench lane reporting that its
   driver executed and its engine was never reached is a dark bench, not a result. Record the bench
   dark from that report, re-run the lane on the substitute engine from the table above, and name in
@@ -184,6 +185,11 @@ Every role honours this floor. No dispatch may widen it.
   from a clean committed baseline, each owning disjoint files.
 - Treat every shared file as report-only.
 - No role commits, pushes, tags, publishes, installs dependencies, or runs a destructive command.
+- No role runs `git checkout`, `git restore`, `git stash`, `git reset`, or `git clean`. Each discards
+  a working-tree change silently. A role that must undo its own edit undoes exactly that edit.
+- A dispatch that has a unit plant a line to prove an instrument can fail names a file the unit under
+  verification did not touch, and names how the plant is removed. Check the tree's status before
+  choosing the file.
 - No role reads, prints, copies, uploads, or packages a secret — `CURSOR_API_KEY`, Codex auth
   files, `.env*`, `.npmrc`, `auth.json`, keys, or tokens.
 - Concurrent executors never run tree-wide `format`, lint `--fix`, or `build`. They validate
@@ -205,8 +211,16 @@ Every role honours this floor. No dispatch may widen it.
   same class of defect through a new door, the search is following the frame rather than the
   defect. Bound the scope, then fan out independent lenses over disjoint slices in one pass.
   Parallelism is worth more here for the framing it breaks than for the wall-clock it saves.
-- Two lanes is the adversarial pass's FLOOR, not its shape. Where a subject has more seams than
-  two lanes can attack, fan out one lens per seam over disjoint slices, keep every lens blind and
+- When the recurring class has a direction — each fix relocates it along one stream: a dependency
+  chain, a data path, a call chain — the source sits elsewhere on that stream, and deepening the
+  current station cannot reach it. Switch from depth to breadth: fan probes over the stream's
+  stations in parallel, blind and clean-contexted, as far up and down as the stream runs, to locate
+  the source. Then plan downstream from the source with the sweep's map of how far the defect
+  reaches, so the remaining work carries a measured bound instead of an open count of rounds. The
+  seam budget in `.claude/rules/quality.md` § Rounds and verdicts states when this fires.
+- The subjective and objective lanes are the adversarial pass's FLOOR, not its shape. Where a
+  subject has more seams than that pass can attack, fan out one lens per seam over disjoint slices,
+  keep every lens blind and
   clean-contexted, and number every slice's claims in one shared sequence. Change the lenses in a
   successor round rather than repeating them.
 - Decompose by required context and independently verifiable acceptance criteria, not by task type.
@@ -217,8 +231,8 @@ Every role honours this floor. No dispatch may widen it.
 
 ## Writing concurrency
 
-Concurrent executors share a filesystem unless isolated. Follow these six rules to prevent
-clobbered edits, formatter and build races, cache phantoms, and validation cross-talk.
+Concurrent executors share a filesystem unless isolated. Follow these rules to prevent clobbered
+edits, formatter and build races, cache phantoms, and validation cross-talk.
 
 1. Serialize writing executors in the main checkout. Commit a checkpoint before each writing
    dispatch so git is the rollback mechanism.
@@ -226,12 +240,13 @@ clobbered edits, formatter and build races, cache phantoms, and validation cross
 3. Keep shared files report-only. Executors return exact patches for serial integration.
 4. Restrict concurrent executors to read-only, scoped validation. A tree-wide result may contain a
    sibling's in-flight failure, so an executor reports only its owned scope.
-5. Give concurrent audit lanes worktree isolation whenever the campaign is uncommitted. Two lanes
+5. Give concurrent audit lanes worktree isolation whenever the campaign is uncommitted. Lanes
    sharing one working tree contaminate each other's readings in both directions.
 6. After integration, clear shared caches if needed, then have one independent `verifier` run the
    authoritative tree-wide sweep. A writer's self-report never establishes green.
 7. The Orchestrator's own sweep is a writing dispatch and queues behind the units that own those
-   files. A script that fixes one thing across every target is the easiest way to break rule 1,
+   files. A script that fixes one thing across every target is the easiest way to break the
+   serialization rule,
    because it does not feel like a dispatch — nobody was named, no brief was written, and it
    finishes in seconds. It still writes into trees a live unit owns, and a unit whose brief it
    invalidates will repair the same drift the other way and report a state that is already false.
@@ -246,7 +261,18 @@ clobbered edits, formatter and build races, cache phantoms, and validation cross
    stopped. A slice hands control back while most of the fleet is still unstarted.
 10. Re-run a timing or resource failure alone before believing it. Concurrent slices, builds, and
     suites make a container miss deadlines it meets when idle, so a red result under load is a
-    question rather than an answer.
+    question rather than an answer. A unit re-running the file alone is not alone: its own exec,
+    code-mode host, and sandbox stay resident throughout, and on a small container that residue
+    alone misses a deadline the same file meets on an idle one. So the deciding re-run belongs to
+    the Orchestrator after the unit exits, never to the unit, and a timing failure a unit cannot
+    clear is carried to that reading rather than diagnosed by the unit. This makes a writer's own
+    gate evidence systematically pessimistic on timing, which is another reason the independent
+    `verifier` runs the authoritative gates.
+11. While any unit is live, the Orchestrator's own instruments go in its scratchpad, never in the
+    subject repository's `tmp/`. A probe that both writes and deletes inside the subject tree can
+    remove a file it did not create, and a cleanup keyed to a caller-supplied path list is how. The
+    same directory is where dispatched units build their instruments, so removing it destroys a live
+    lane's work.
 
 ## Execution loop
 
@@ -260,7 +286,7 @@ with the network denied. Record a bench live only on a bounded round-tripped mod
 back, and record what came back beside the routing decision. Probes are read-only, and the role file
 owns each bench's exact probe.
 
-The two local steps still run, because they route the recovery rather than decide the verdict: an
+The local steps still run, because they route the recovery rather than decide the verdict: an
 unresolved CLI is an install problem, a failed authentication-state check starts the login ladder
 below, and a bench that passes both and still cannot round-trip is dark for a reason no local check
 can see. Record every dark bench with its fallback and the lane substitution it forces, and never
@@ -273,7 +299,7 @@ lane instead of re-dispatching against a session-start answer that no longer hol
 1. **Absorb.** Dispatch `grok` for terrain, prior art, and the reading the decision needs. In an
    Orkestrel repo dispatch `orkestrel` alongside it for live package state. Skip only when the
    ground is already known.
-2. **Design adversarially.** Run the two-lane adversarial pass on one design brief: `planner` for
+2. **Design adversarially.** Run the adversarial pass on one design brief: `planner` for
    the subjective lane and `analyst` for the objective lane. Reconcile them yourself into one plan:
    units, dependencies, ownership, parallel and serial order, acceptance criteria, risks.
    - Surface the plan before dispatch, including a routing ledger naming each unit's role **and**
@@ -293,7 +319,7 @@ lane instead of re-dispatching against a session-start answer that no longer hol
    criterion discovered at integration is a successor brief routed to a writer, never an
    integration edit.
 5. **Audit adversarially.** Audit every nontrivial implementation with at least one lane whose
-   engine did not write it. Run the second lane when the first returns FAIL, when the subject is a
+   engine did not write it. Run another lane when the first returns FAIL, when the subject is a
    rendered or externally driven surface, or when the unit's claims span both correctness and
    shape. Dispatch `checker` when the acceptance criteria are mechanical — counts, paths, parity
    rows, scope honesty. Record in the round's verdict file when a lane or the checker did not run.
@@ -321,7 +347,7 @@ lane instead of re-dispatching against a session-start answer that no longer hol
    - Record what changed and why. An unrecorded re-baseline cannot be audited, and the next one
      re-derives it.
 8. **Accept.** Decide, then report outcomes, decisions, evidence, and remaining risk concisely.
-   When step 2's exit criterion is met and the gates are green, accept. The next goal is the
+   When the design step's exit criterion is met and the gates are green, accept. The next goal is the
    deliverable.
 
 ### Re-baselining is not rescoping
@@ -360,7 +386,7 @@ Never route a native model through its own CLI or an MCP loopback.
 
 - Use a single-agent dispatch when later control flow depends on the previous result.
 - Use a workflow for a known deterministic fan-out, staged pipeline, or loop. Serialize writing
-  nodes; never run two concurrent writers in the tree.
+  nodes; never run concurrent writers in the tree.
 - Name a role and its engine in every node.
 
 The harness bridge names the concrete mechanism for each of these.
@@ -370,11 +396,21 @@ The harness bridge names the concrete mechanism for each of these.
 - Write the brief to a file under `tmp/`, named for its unit, before launching the unit, whatever
   engine executes it. A brief composed only inside a launch argument cannot be corrected, resumed,
   or re-run once that call ends.
+- Write the unit's returned report in the SAME action that commits its code, never afterwards. A
+  commit message states what changed; the report states what the unit measured, what it decided, what
+  it could not close, and which of its own claims it flagged. An auditor's subject is the report,
+  so a report living only in the Orchestrator's context stops the next lane on arrival.
 - Capture the unit's returned report to a file beside its brief under the same unit name, so a
   unit's instruction and its outcome are one pair on disk.
 - Amend a brief on re-run rather than restating it. A mid-campaign correction produces a successor
   file recording what changed and why, and the original stays. A fix round's brief names the
   findings it carries and where each came from.
+- Read the copy the executor will open, not the one you wrote. A brief written in the orchestrator's
+  repository and staged into the subject's checkout so a `-C` invocation can reach it is a second
+  file, and staging can rewrite a path or drop a clause. The executor rules on what it opens, so a
+  staged copy whose facts are false stops a unit that was correctly briefed. Verify the staged path
+  and its load-bearing facts before launching, and stage into a scratch directory the subject tree
+  ignores rather than into the checkout root.
 - Send a decision taken mid-campaign to every unit already in flight whose brief it invalidates. An
   executor cannot see a change made after it was dispatched, so it writes the state its brief
   described and the defect surfaces as its own.
@@ -383,8 +419,9 @@ The harness bridge names the concrete mechanism for each of these.
   audit verdict, the exact executed script or instrument, and the acceptance evidence into
   `.orkestrel/<package>/` as the unit is dispatched and as it returns, then sweep only the `tmp/`
   launch copies. A capture claim's instrument is acceptance evidence; the frames may be swept once
-  the record transcribes them, because the committed instrument re-produces the film. **Bench
-  laws** rule 4 owns journals and points here for everything durable.
+  the record transcribes them, because the committed instrument re-produces the film. The **Bench
+  laws** rule "Ephemeral streams, durable records" owns journals and points here for everything
+  durable.
 - Promote anything that must outlive the campaign into a durable artifact before the sweep — a
   commit message, a guide, a rule, a retrospective. What is only in a swept file did not survive,
   and a debrief that must quote the record verbatim has nothing to quote.
@@ -395,6 +432,8 @@ The harness bridge names the concrete mechanism for each of these.
 
 - Put every campaign artifact in the **orchestrator's** repository under `.orkestrel/<package>/`,
   named for the package the campaign is about.
+- Give a campaign spanning several packages one shared `.orkestrel/campaign/` folder instead, so the
+  wave's plan, ledger, and verdicts sit together rather than split across the packages they rule on.
 - Never put them in the package they are about. A published package's tree is its product.
 - Claim nothing outside `.orkestrel/` unless Orkestrel scaffold mandates it. Everything Orkestrel
   owns in a consumer's tree lives beneath that folder, so a convention can be settled there without
@@ -408,6 +447,34 @@ The harness bridge names the concrete mechanism for each of these.
   regenerates, not in a written order anyone has to remember to update.
 - Prune the campaign folder in a commit at acceptance. The tree ends clean and the record stays
   recoverable by hash. Git history is the archive; the working tree is the workspace.
+
+### Before you prune
+
+Pruning is deletion, so it needs the same evidence as any other destructive step. Run these
+checks, and prune only when every one closes.
+
+1. **Carry check.** List every item the folder leaves open — a defect, a measurement to re-take, a
+   deferred decision, a withdrawn claim, an unmet acceptance condition. Each ends the check with a
+   carrier: a commit that closed it, a live brief that owns it, or an explicit drop on the record.
+   An item with no carrier blocks the prune. Read the register files for this — the plan, the
+   readiness grade, the carry ledger, the triage — not every brief and report in the folder.
+2. **Promotion check.** Rule on each remaining file by what it asserts. Product truth goes to the
+   guide, where the parity gate reaches it. A process law goes to the rule or contract file that
+   owns it. A decision goes to the commit message that made it, which is where it already is.
+   Everything else is process diary and prunes.
+3. **Measurement check.** A number the guide carries out of the folder carries the date it was
+   taken. A measurement whose date the folder does not record is re-taken or dropped, never copied.
+4. **Orientation check.** A cross-session orientation document — a handoff, a package-root narrative
+   file, a session log — is not a further category. It duplicates the guide for product truth and
+   the contract for process truth, it is gated by nothing, and it drifts. Dissolve it into the
+   artifacts that own it and delete it.
+
+A section recording live state — adopter republish status, installed version tables, what a sibling
+repository was doing that week — prunes with no promotion. It was stale when it was written, and
+promoting it publishes the staleness.
+
+Write the prune commit's message as the promotion record: what moved, and where each part landed.
+That message is what makes the deletion recoverable in practice rather than only in principle.
 
 ### Required sections
 
@@ -425,7 +492,15 @@ The harness bridge names the concrete mechanism for each of these.
   shipping a guess the executor would have to invent an answer around.
 - **Scope.** Owned files, shared and off-limits files, allowed tools, permission limits.
 - **Execution.** State that the executor performs the assignment directly and spawns nothing. Put
-  it in every brief; an executor deep in a task does not re-read this contract.
+  it in every brief; an executor deep in a task does not re-read this contract. Write the sentence
+  for the reader the transport actually delivers it to, because "directly" names a different action
+  on each side of a bridge. To a native subagent or a bench engine reading the brief inside its own
+  CLI, it means do the work yourself. To a bridge driver, whose entire assignment is the launch, it
+  means carry the brief across unaltered and return the journal — the engine behind the CLI is not a
+  subagent the driver is spawning, and a driver told to work directly answers from its own engine
+  instead. That answer reads normal and its only tell is the missing journal, so pair this sentence
+  with **Bench laws** rule "Journal first" and refuse a bench result whose journal path and session
+  id are absent.
 - **Output.** The exact distilled return shape. No process diary.
 - **Deviation contract.** The required stop-and-report behaviour for writers, scoped. A conflict
   with the primary objective stops the unit. An ancillary conflict — where a paragraph sits, which
@@ -441,9 +516,9 @@ The harness bridge names the concrete mechanism for each of these.
 
 ### Check the brief before you send it
 
-Run these eleven checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
-that produces no work, because a unit given a brief that is internally consistent and factually
-wrong is right to stop.
+Run these checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle that
+produces no work, because a unit given a brief that is internally consistent and factually wrong is
+right to stop.
 
 - Name the executor that will actually read the brief, and write its transport for that reader. The
   same unit goes either to a bridge driver that invokes a bench CLI or to the bench engine already
@@ -459,14 +534,26 @@ wrong is right to stop.
 - Take every measurement under the conditions the unit will run in, or have the unit take it. A
   number measured in your environment and asserted as a criterion is unreachable when the
   executor's sandbox denies what yours permitted, and no edit to the owned files can close it.
-  Where the unit is better placed to measure than you are, make the measurement its first step and
-  fix the criterion to the property you want rather than to the number you saw.
+  Where the unit is better placed to measure than you are, have it take the measurement before doing
+  anything else and fix the criterion to the property you want rather than to the number you saw.
 - Read the acceptance criteria against the off-limits list, line by line. Every criterion closes
   using owned files alone. A criterion that needs an off-limits file gets that file granted or gets
   struck. A file the change will break that appears in neither list is an unscoped file; grant it or
   strike the criterion.
 - Give a small unrelated obligation its own unit. Ride it along in a large one and its scope error
   blocks the primary work, which is a whole unit lost to a detail.
+- Never make a timing-sensitive or whole-suite gate result a criterion for a unit that runs inside its
+  own exec. The exec is load, so the unit cannot take that reading validly however carefully it
+  isolates, and a criterion it cannot close either stalls it or invites it to explain the failure away.
+  Name the gate as an observation the unit reports with both readings, and take the authoritative run
+  yourself after the unit exits, per **Writing concurrency**'s rule on re-running a timing or
+  resource failure alone. A scoped run over the unit's own
+  owned files stays a legitimate criterion.
+- Order the criteria so an unreachable one cannot hide the others. A deviation contract fires on the
+  first criterion the unit cannot close and stops it there, so an unreachable criterion placed ahead
+  of a typecheck or a lint criterion skips that gate entirely and the unit ships a defect its own
+  brief would have caught. Put the cheap non-timing gates first, and never let a whole-suite result
+  gate a scoped one.
 - Ask what the change will do to the facts you just measured. A criterion fixed to a measured set is
   unreachable if the change alters that set, and a file marked off-limits is wrong if the change
   writes to it. Measure the state the unit will finish in, not only the state it starts from.
@@ -486,17 +573,29 @@ wrong is right to stop.
   allowlist. A read-only role cannot write a report file, cannot write a probe, and cannot run a
   sandbox that writes, so naming any of those stops the unit on arrival over a detail the allowlist
   already settled. Where a read-only lane needs executed evidence, produce it separately and hand it
-  over: the Orchestrator supplies the evidence and the lane rules on it.
-- Scope a fleet-wide refactor by the files that **consume** a symbol, not by the files that declare
-  it. A criterion that removes a symbol, or that makes an existing state or fixture shape
-  unreachable, closes only when every consumer that exercises it is owned, so a brief scoped to the
-  declaration alone sends the unit into a typecheck break in a file it cannot edit. Count the
-  importers before writing the owned list.
+  over: the Orchestrator supplies the evidence and the lane rules on it. When the evidence a lane
+  needs is a `prove` verdict and the lane's allowlist omits that tool, the Orchestrator takes the
+  call outside the lane's live interval and hands over the complete rendered verdict.
+- Scope a change by the files its result makes **false**, not by the files that declare the thing
+  changing. Counting importers finds only part of that set. A test asserting the behaviour being
+  reversed, a fixture carrying a value being raised, a golden digest over generated output, and a
+  consumer script naming a union member being removed each go false without importing anything new,
+  and a brief scoped to the declaration alone sends the unit into a failure in a file it cannot edit.
+  The unit is then right to stop, and a whole dispatch cycle produces no work.
+  Ask of every criterion: what asserts the state this change ends? Own every answer, or strike the
+  criterion. Grant a behaviour and the tests that pin it together; grant a constant and every fixture
+  and expectation derived from it together.
 
 ### Carry every finding
 
 After reconciling findings into briefs, walk the retained finding list once. Every finding names
 the brief item that carries it. A finding with no carrier is a dropped finding.
+
+Every finding names exactly one carrier. A further brief claiming the same finding is not redundancy
+that costs a little duplicated work — it is a conflict the executor discovers mid-unit, between
+documents you told it to obey, with no way to tell which you meant. It will either implement the row
+twice or stop. Where a reconciliation table and a brief disagree about who owns a row, the brief the
+executor opens wins, and you fix the other one before the second unit launches.
 
 ## Long-running commands
 
@@ -510,6 +609,10 @@ command that outlives the turn that started it. Every law here binds all of them
   completion re-invokes the session, and the cap kills a wedged command loudly instead of trusting
   the agent to report its own failure. A wedged bridge is silent, and silence must never read as
   progress.
+- Never replicate git commits through a hosting provider's REST API when a file's content must ride
+  inside the tool-call JSON. The per-call read cap truncates it, and a lockfile is the file that
+  proves the point: it transits incomplete and the tree it lands in installs something else. Push
+  over git, or move the file another way.
 - Write a multi-step chain to a script file and run the file. A chain composed inside one shell
   argument cannot be read back, corrected, or re-run, and the record of what actually ran is the
   argument text in a transcript rather than a file on disk.
@@ -560,8 +663,20 @@ nothing.
 
 - Prove the previous run is gone before starting another. List the processes and read the list. A
   second run started beside a live first one produces failures that read as the subject's — a
-  publish chain relaunched over a live one reports `EOTP` and `E403` that are its own two processes
+  publish chain relaunched over a live one reports `EOTP` and `E403` that are its own processes
   colliding, and both readings point at the registry.
+- Never ask `pgrep -f` or `ps | grep` whether a command is running from a shell whose own command line
+  contains that command's text. The shell matches itself, so the answer is yes whatever the truth is.
+  This bites in separate places and each one fails differently:
+  - **A liveness watcher** loops forever, reporting "still running" and never delivering its completion
+    notification, because it always finds itself.
+  - **An elapsed-time reading** returns the watcher's age rather than the exec's, so the number falls
+    instead of rising and reads as a relaunch that never happened.
+  - **A pre-launch "is anything already running" check** reports a phantom concurrent writer, which is
+    the worst of them: the honest response to it is to kill something, and there is nothing there.
+    Read liveness from the recorded process id with `kill -0 <pid>`, or enumerate by executable name and
+    parent with `ps -eo pid,ppid,comm` and read the rows. Both are immune; a pattern over the full command
+    line is not.
 - Kill by process id, never by pattern. `pkill -f` matches the relaunch that is already starting, so
   the pattern that cleans up the old run kills the new one and the cleanup reads as a launch
   failure.
@@ -586,7 +701,7 @@ This section adds what is true of a bench and nothing else.
 
 Every bridge verifies before running that its CLI resolves and its bench is authenticated, and stops
 with a deviation report naming the fallback when either fails. The role file owns the exact
-invocation, flags, paths, probe, and recovery ladder; these four laws bind every bench regardless of
+invocation, flags, paths, probe, and recovery ladder; these laws bind every bench regardless of
 transport.
 
 1. **Transport by work class.** Use an MCP transport only for a short interactive exchange — one
@@ -605,7 +720,41 @@ transport.
 3. **Tracked, never loose.** Register every bench unit in the session task registry at launch with
    its subject, journal path, and session id, and complete it there at acceptance. "What is
    running" always has a first-class answer instead of a recollection of a command.
-4. **Ephemeral streams, durable records.** A journal proves a bench is alive and recovers an
+4. **A bench sandbox spawns a child and denies that child's child.** Under `workspace-write` a bench
+   exec runs a test suite and spawns children normally, and every operation one level deeper fails:
+   a grandchild process is denied `EPERM`, and a nested `npm install` is denied the same way. So a
+   proof needing a process tree, a tree-kill, a detached group, or an installed package cannot be
+   produced inside a bench unit at all — however carefully that unit isolates. Name the limit in the
+   brief before dispatch, tell the unit to record such a proof as an observation naming the exact
+   settling command, and take that proof yourself on the host. Never let a unit substitute the
+   reachable half: linking a packed tarball is not installing it, and a gate written to catch an
+   install failure that only ever links cannot see the defect it exists for.
+   Not every symptom names the sandbox. A nested process and a nested install fail `EPERM`, which
+   reads as a denial; a nested `git` invocation instead reports **"not a git repository"** while the
+   unit's own `git status` succeeds a moment earlier. That one reads as a broken checkout, and a unit
+   acting on it will go looking for damage that is not there. Tell a unit which of its tools shell out
+   one level down — a scaffolding CLI that probes git, a formatter that spawns a worker — so it
+   recognises the shape instead of diagnosing the tree.
+   The child a bench does create has unreliable stdio, and that failure wears a worse disguise than a
+   denial. A Node process spawned by a bench unit's own Node process has been measured both buffering
+   its pipe until EOF and publishing nothing at all, so no workaround built on either reading is
+   dependable. Any subject whose behaviour lives in a child's pipes is therefore unmeasurable inside a
+   bench: a stage driving a language server, a protocol fixture, a built entry driven as a spawned
+   child. It fails as a **false green**. The stage never arms, the boot inspection times out, and that
+   timeout produces the same rejection a genuine stage timeout produces, so a test asserting on the
+   message passes inside the bench while the host's gate reports the honest red — and neither run
+   reports why they disagree. Route such a subject to the harness's native implementer, or keep it on
+   the bench and supply every executed measurement yourself. Never dispatch it to a bench and expect
+   it to prove its own work. The shape to recognise is a child that exits 0 almost immediately, a
+   request to it that never resolves, and a stack landing in the spawning code's exit handler.
+   **When a bench sandbox denies a loopback listener, `listen` fails `EPERM` on every address.** A
+   subject needing a real local server is unmeasurable inside the bench. Name the limit in the brief
+   before dispatch. Have the unit report the reading as an observation naming the exact command.
+   Take the proof on the host.
+   **When a brief assigns a bench unit a path outside the obvious source tree, name the write limit
+   in the brief.** If the sandbox rejects the patch, the unit stops and reports the rejection. Never
+   find another write mechanism.
+5. **Ephemeral streams, durable records.** A journal proves a bench is alive and recovers an
    interrupted session. Keep journals under `tmp/`, never commit them, and sweep them at acceptance
    after the final gate evidence is recorded. Durable retention — brief, distillate, verdict,
    instrument, acceptance evidence — is owned by **Dispatch anatomy**; this rule owns only the
@@ -634,6 +783,34 @@ A publish chain is a long-running command, so every law under **Long-running com
 write the chain to a file, detach it with `setsid`, and confirm the previous one is dead before
 starting another.
 
+### Fixing a dependency before it publishes
+
+A defect a consumer meets sometimes lives in a package the consumer only has from the registry.
+Waiting for that package to publish before the consumer can prove its own fix serializes releases
+that could have been one. Do not wait, and do not work around it in the consumer.
+
+Build the dependency from source, pack it, and **install the tarball** into the consumer.
+
+- **Install it, never link it.** A link resolves through a directory and skips the packing, the
+  `files` list, and the exports map — which is most of what a distribution proof exists to check. A
+  gate written to catch an install failure that only ever linked cannot see the defect it exists for.
+- **Write the swap to a script and run the file**, so the build, the pack, and the install are one
+  artifact the next run reuses rather than a command nobody can read back.
+- **Record the range you replaced** in the same step that replaces it. A consumer sitting on an
+  unpublished tarball with no record of what it had is a consumer nobody can restore.
+- **Rebuild and repack whenever the source moves.** A stale tarball is the same defect as a stale
+  `dist/`, and it is worse for being invisible: the consumer's gates go green against a fix that no
+  longer exists in the dependency's tree.
+- **Restore the registry copy before any gate that must prove the published artifact, and before
+  publishing anything.** A distribution proof run against a local tarball proves the local tarball.
+  The release still follows layer order: the dependency publishes first, then the consumer re-pins to
+  the version the registry now serves and re-runs its gates against that.
+- **Keep the tarballs out of the tree.** They belong under `tmp/`, they are swept at acceptance, and
+  they are never committed.
+
+The tarball is a head start, not a shortcut. It lets the consumer's work proceed and its proofs run
+against the real packed artifact while the dependency's own release is still being prepared.
+
 ### What a bump obliges
 
 A runtime dependency and a development dependency have different blast radius, and confusing them
@@ -654,8 +831,8 @@ either publishes packages nobody needed to publish or leaves a consumer pinned t
 
 Every package is `0.0.x`, where a caret pins one exact release. A dependent therefore sees a new
 version only after it re-pins and republishes, so the fleet publishes in topological layer order
-derived from runtime `dependencies` alone. Layers exist for a reason a flat pass cannot fix: two
-ranges that disagree install two copies of the same package, and the compiler reads them as two
+derived from runtime `dependencies` alone. Layers exist for a reason a flat pass cannot fix:
+ranges that disagree install duplicate copies of the same package, and the compiler reads them as
 distinct types.
 
 Read the order from the catalog table in `.claude/agents/orkestrel.md`, which `scaffold catalog`
@@ -696,15 +873,20 @@ once per round with one procedure, publish each layer in one window, and only th
 - The visit, in order: re-pin the target's `@orkestrel/scaffold` devDependency and install, so the
   overwrite runs the current vendored host; `scaffold overwrite`; force-verify every `@orkestrel`
   range against a registry sweep taken after the previous layer published; full install; mutating
-  `format` to converge generated writes; the five gates; the material-dist comparison against the
+  `format` to converge generated writes; the quality gates; the material-dist comparison against the
   published tarball.
 - Bump on either trigger: the rebuilt dist differs materially from the published tarball, or the
   final runtime dependency set differs from the published packument. Test the final set against the
   packument, never "did my step move a pin" — overwrite's `declare` re-pins before any later check,
   so the step-local reading reports nothing moved while the manifest surface did. A re-pinned
-  runtime range is published surface: without the bump a consumer installs two copies of the moved
-  dependency.
-- A dist built before the version bump is the release artifact; the bump edits no emitted byte.
+  runtime range is published surface: without the bump a consumer installs duplicate copies of the
+  moved dependency.
+- A dist built before the version bump is the release artifact wherever the bump edits no emitted
+  byte. Check that per package rather than assuming it: a package that imports its own
+  `package.json` version into published code emits that version, so its pre-bump dist is stale the
+  moment the version moves. Rebuild after the bump there, and pack from the rebuilt tree. Because
+  `npm publish --ignore-scripts` skips `prepack`, that rebuild is the operator's step, not the
+  publish's.
 - Refresh the registry evidence between layers and derive each round's pins from it. A pin can only
   name a version the registry already serves, so a dependency shipping in the same window keeps the
   resolvable previous pin and takes its dev-only re-pin after the window closes.
@@ -713,6 +895,9 @@ once per round with one procedure, publish each layer in one window, and only th
 
 ### Preparing
 
+0. **An unpublished package's first version is `0.0.1`.** Do not bump it before that first publish.
+   The registry has nothing to serve, so there is no version to move away from, and bumping produces
+   a package whose history starts at a number nothing explains.
 1. **Bump from what the registry serves, not from the local manifest.** A repository's `version`
    can sit a release behind what was published from another checkout, and bumping that produces a
    version the registry already holds, which fails on upload after the whole gate chain has run.
@@ -750,16 +935,20 @@ flag is what stops the gate chain running a second time inside the five minutes.
   the layer, prove the gates, surface the exact `npm publish` command, and the operator runs it in a
   real terminal. Everything before and after the upload — bumps, re-pins, gates, registry reads —
   stays with the Orchestrator. The fifo stdin law still binds on that host.
-- Expect two approvals. `npmjs.com/login/cli/<id>` authenticates the session; `npmjs.com/auth/cli/<id>`
-  authorizes the publish and opens the five-minute window. Tell the user both are coming, or the
-  second link reads as the first having failed.
+- Expect an approval for each stage. `npmjs.com/login/cli/<id>` authenticates the session;
+  `npmjs.com/auth/cli/<id>` authorizes the publish and opens the five-minute window. Tell the user
+  both are coming, or the second link reads as the first having failed.
 - Confirm authentication with `npm whoami`, never with an exit code. The legacy fallthrough exits
   zero.
 - Re-probe `whoami` immediately before opening the window. A stored credential expires mid-session,
   so a session-start answer does not hold.
 - Surface each approval URL the moment it appears in the log, and take the **last** one in log order.
   npm mints a new URL whenever an attempt restarts, and the log accumulates every one, so a URL
-  chosen by sorting rather than by position is already dead when the user opens it.
+  chosen by sorting rather than by position is already dead when the user opens it. Read it out of
+  the journal in the foreground and surface it before arming any watcher: a watcher-based relay can
+  fail silently, and its silence is indistinguishable from a chain that has not reached the URL yet.
+  Relay the URL as plain text. A decorated link did not render for the operator, who then had nothing
+  to click while the window ran down.
 - Re-read the log before treating an approval as failed. The chain is usually still alive on a newer
   URL, so surface that one rather than relaunching.
 - A `404` on an approval URL usually means the publish already succeeded and consumed it. Read the
@@ -782,13 +971,14 @@ flag is what stops the gate chain running a second time inside the five minutes.
 - **Never retry a publish that is still waiting for its authorization.** Each `npm publish` attempt
   mints a new `authId` and invalidates the previous one, so a retry loop makes the URL a moving
   target the user cannot approve in time. The abandoned poll then reports
-  `403 Forbidden - GET /-/v1/done?authId=…`, which reads as a permissions problem and is two attempts
-  colliding. Publish the first package of a layer with exactly one attempt.
+  `403 Forbidden - GET /-/v1/done?authId=…`, which reads as a permissions problem and is the
+  abandoned attempt colliding with the live one. Publish the first package of a layer with exactly
+  one attempt.
 - Retry only an upload that failed **inside** an already-open window. `EOTP` there is intermittent
   contention rather than the window closing: retry about three times, and retry a failed set once the
   layer ends. Packages have landed on the third attempt and on a later pass with no new approval.
-  These are two different failures wearing similar codes; a retry fixes the second and causes the
-  first.
+  These are different failures wearing similar codes; a retry fixes in-window contention and causes
+  the moving approval target.
 - Expect a large layer to outlast one window. Size batches to what uploads in five minutes and tell
   the user how many approvals to expect, rather than discovering it mid-run.
 - Read the result from the registry, not from an exit code: a piped `npm publish` reports the exit
@@ -811,7 +1001,7 @@ flag is what stops the gate chain running a second time inside the five minutes.
 - Substitute an engine only when the same session records the bench dark — CLI missing, auth
   expired, model unavailable. Name the fallback in the plan; never improvise it silently. The
   tedious-work ladder is the only pre-approved substitution, and each step down it is still recorded.
-- Never run the two lanes on different briefs, and never show either one the other's answer before
+- Never run the lanes on different briefs, and never show either one the other's answer before
   both have returned.
 - Never run a lane inline in the Orchestrator's context, and never drop a lane because its default
   engine is unavailable. Substitute the engine, keep the lane.

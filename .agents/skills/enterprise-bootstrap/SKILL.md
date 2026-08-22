@@ -47,7 +47,7 @@ not to hand-roll before building one.
 
 ---
 
-## Dual mandate
+## The mandate
 
 1. **Design direction** — take a point of view rooted in the _subject_ (audience, job-to-be-done, vernacular). Take one justified aesthetic risk, in one place.
 2. **Bootstrap execution** — components and utilities first; custom CSS only when the system cannot express the need; paint through `--bs-*` so light and dark both survive.
@@ -68,7 +68,7 @@ setting a direction. The loop:
 2. **Plan** — build a token system: **color** (4–6 named values), **type** (display / body / utility), **layout** (prose plus ASCII if useful), **signature** (one memorable element).
 3. **Critique the plan** — if swapping the logo would make it "any SaaS", revise. Avoid the clustered AI defaults unless the brief asks for them: cream + #F4F1EA + serif + terracotta; near-black + acid green or vermilion; broadsheet hairlines, zero radius, dense columns. The brief wins when it pins a direction.
 4. **Build** — compose Bootstrap components and utilities; map the plan's tokens onto theme variables or a thin skin, with no scattered one-off hex ([bootstrap-reference.md](references/bootstrap-reference.md) → Theming & design tokens). Watch selector specificity: a utility and a custom rule that cancel each other show up as padding and margin bugs.
-5. **Critique the render** — remove one accessory. Check contrast, focus, `prefers-reduced-motion`, mobile, and all five states. Critique what rendered, not the markup.
+5. **Critique the render** — remove one accessory. Check contrast, focus, `prefers-reduced-motion`, mobile, and every data state. Critique what rendered, not the markup.
 
 Brainstorm privately; show a direction only once it satisfies the brief and the quality floor
 ([frontend-design.md](references/frontend-design.md) → Process).
@@ -79,13 +79,13 @@ both viewports and both themes plus an accessibility snapshot; source only corro
 mechanism. For a full review-round campaign built on that evidence, use the
 `orkestrel-polish-surface` skill instead of improvising one here.
 
-**Mechanical proof.** Three instruments settle what a capture cannot. Pair each one with a negative
+**Mechanical proof.** These instruments settle what a capture cannot. Pair each one with a negative
 control drawn from outside the population it covers, and treat an instrument whose control passes as
 broken; `.claude/rules/quality.md` owns this law where it is present:
 
 - **Contrast, composited.** Read every pairing through a reader that composites the painted layers, in both themes ([bootstrap-reference.md](references/bootstrap-reference.md) → Measuring the bars).
 - **Authored classes against the shipped cascade.** Extract every class authored in the templates and components, and fail the run on one that has no rule in the compiled CSS the page loads. Assert a population floor so an extractor that quietly matched nothing cannot pass, and control it with a class you know is absent.
-- **One glyph, one meaning.** Register each status glyph against the meaning it carries. No meaning takes two glyphs, no glyph serves two meanings, and every registered glyph resolves in the icon set actually shipped.
+- **One glyph, one meaning.** Register each status glyph against the meaning it carries. No meaning takes more than one glyph, no glyph serves more than one meaning, and every registered glyph resolves in the icon set actually shipped.
 
 ---
 
@@ -105,7 +105,7 @@ the need.
 
 1. **The component's own classes, in its documented structure.** Use the right elements, nesting, class names, and required ARIA: a card is `.card` wrapping `.card-body` wrapping `.card-title`, not a `div` with borrowed padding. Variants, states, color modes, and responsive behavior all hang off that structure.
 2. **Bootstrap utilities, for refinement.** Spacing, flex, display, sizing, text, borders, color. Compose utilities rather than reaching past them, and use only classes that exist in [utilities.md](references/utilities.md).
-3. **Bootstrap's own extension points.** Component `--bs-{component}-*` variables and the utilities API, when a real gap remains after rungs 1 and 2.
+3. **Bootstrap's own extension points.** Component `--bs-{component}-*` variables and the utilities API, when a real gap remains after the component-class and utility tiers.
 4. **Anything beyond Bootstrap's conventions is the developer's call, not yours.** Stop at rung 3 and say plainly what rung 4 would require.
 
 Never open at rung 4. Specifically, do not reach first for:
@@ -162,7 +162,7 @@ A status mark with **no text** is an icon glyph, never a `badge`
 
 ### States & feedback
 
-- **Every data surface ships five states:** ideal, empty, loading, partial, error. It is not done until all five exist. Loading thresholds, empty and error specifics, and the channel matrix for toast / inline alert / banner / modal: [bootstrap-reference.md](references/bootstrap-reference.md) → The five states, Feedback discipline.
+- **Every data surface ships these states:** ideal, empty, loading, partial, error. It is not done until every one exists. Loading thresholds, empty and error specifics, and the channel matrix for toast / inline alert / banner / modal: [bootstrap-reference.md](references/bootstrap-reference.md) → The data states, Feedback discipline.
 - **Build a blocking decision on the native `<dialog>`.** `showModal()` brings focus containment, Esc, an inert background, and top-layer stacking from the platform, with no instance to construct and none to leak on unmount. Dress it with Bootstrap chrome inside ([components.md](references/components.md) → Modal). Reach for `.modal` and its JS only when the project already drives its dialogs that way.
 - **Destructive actions:** prefer undoable over interrupting. Ladder and confirmation contracts: [bootstrap-reference.md](references/bootstrap-reference.md) → Destructive actions.
 
@@ -222,7 +222,7 @@ Progress:
 - [ ] Styling ladder held: no `style` attribute, no `<style>` block, no custom rule doing a utility's job
 - [ ] Plan tokens mapped to theme / --bs-* (no hex scatter); light and dark both shipped where both are offered
 - [ ] Copy in user language, verbs consistent, empty/error/loading text useful
-- [ ] Five states per data surface: ideal / empty / loading / partial / error
+- [ ] Every state per data surface: ideal / empty / loading / partial / error
 - [ ] Contrast composited and measured in both themes: ≥ 4.5:1 information-bearing (small included), ≥ 3:1 marks and state chrome; meaning not color-alone
 - [ ] Tiers held: `-emphasis` for information-bearing status, solid buttons for real actions, no tone class inside a filled surface
 - [ ] Every treatment resolved in the shipped cascade, not from docs memory

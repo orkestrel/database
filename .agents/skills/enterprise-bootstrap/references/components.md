@@ -423,7 +423,7 @@ Multiple targets: give each panel `.multi-collapse` and point separate triggers 
 </dialog>
 ```
 
-`role="alertdialog"` for a destructive confirm, `role="dialog"` otherwise; `aria-labelledby` points at the heading. The element's own `close` event is where the host clears the state that opened it, so Esc and the buttons all close by one path. The scrim is the UA's `::backdrop`, which no Bootstrap class touches — restyling it is a rung-4 decision.
+`role="alertdialog"` for a destructive confirm, `role="dialog"` otherwise; `aria-labelledby` points at the heading. The element's own `close` event is where the host clears the state that opened it, so Esc and the buttons all close by one path. The scrim is the UA's `::backdrop`, which no Bootstrap class touches — restyling it requires the custom-CSS tier.
 
 Bootstrap's `.modal` is the answer when the project already drives its dialogs through Bootstrap's JS:
 
@@ -670,7 +670,7 @@ Real switchable tab panels (JS-driven — buttons, not scroll anchors):
 <button class="btn btn-primary disabled placeholder col-4" aria-hidden="true"></button>
 ```
 
-Always wrap skeletons in `aria-hidden="true"` — they are visual scaffolding, not content. Skeleton-vs-spinner decision rules: [bootstrap-reference.md](bootstrap-reference.md) → The five states.
+Always wrap skeletons in `aria-hidden="true"` — they are visual scaffolding, not content. Skeleton-vs-spinner decision rules: [bootstrap-reference.md](bootstrap-reference.md) → The data states.
 
 ### Popover (Requires Popper.js)
 
@@ -1002,7 +1002,7 @@ The textless mark that survives both themes — dots, ticks, rings, pulses — i
 
 ### Selection fills
 
-A selected row, pill, or filter chip repaints everything inside it — marks included. Two traps, both invisible until the selected state is captured in both themes:
+A selected row, pill, or filter chip repaints everything inside it — marks included. These traps stay invisible until the selected state is captured in both themes:
 
 - **A mark on an active fill of the same family disappears.** `.active` on a `list-group-item`, `nav-pill`, or `page-item` sets the item's own color, and a `text-bg-primary`-family mark inside it inherits or loses to that fill — present in the markup, gone on screen. Carry no tone class inside the fill ([SKILL.md](../SKILL.md) → Surfaces, color, contrast). Verify by capturing the selected row, not by reading the class list.
 - **`btn-check` filter labels invert in dark.** A `btn-outline-secondary` label reads as "chosen" in light and as "muted" in dark, because the checked fill and the surface swap relative weight. Give chosen filters an accent variant (a real theme color) rather than the neutral outline, so "chosen" reads the same way in both modes.

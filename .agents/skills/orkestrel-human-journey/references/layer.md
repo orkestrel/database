@@ -42,7 +42,7 @@ resolveAccessible(role: string, name: string): HTMLElement
 
 ### The failure voices
 
-Keep these distinct, and never merge two into one message.
+Keep these distinct, and never merge any of them into one message.
 
 | Condition                                  | The voice it must throw                                          |
 | ------------------------------------------ | ---------------------------------------------------------------- |
@@ -51,8 +51,8 @@ Keep these distinct, and never merge two into one message.
 | Several matches are reachable              | `Interactive target "<name>" is ambiguous across <n> elements`   |
 | Still off-viewport after being scrolled to | `Interactive target "<name>" is unreachable after scrolling`     |
 
-- Report an absent control and a present-but-unreachable one as different findings: the first names
-  a missing control, the second names the interface gating one that exists.
+- Report an absent control and a present-but-unreachable one as different findings: absence names
+  a missing control, and unreachability names the interface gating one that exists.
 - Report ambiguity as a finding about the surface. Name the match count in the message, and
   re-target the journey by role or region.
 

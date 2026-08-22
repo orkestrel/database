@@ -42,7 +42,7 @@ A question a probe can settle is settled by the probe, whether or not anyone has
 - Do not read a result into a tool's failure to find your probe. "No tests found", an empty match, a skipped file, a runner that resolved nothing — these report on the harness, not the subject. Confirm the probe was collected and executed first.
 - Prefer an observation over a derivation, including your own. When a measurement and an argument disagree, the argument is wrong until the measurement is shown to be broken.
 - Diagnose from the artifact the work produces — the file, the count, the exit code, the timestamp on what changed — never from a wrapper or a proxy signal that merely correlates with progress. Read a gate bare: a pipeline stage after it (`| tail`, `| grep`) reports the stage's exit status and hides the gate's failing lines.
-- Verify a comment or an agent's report against the call sites before relying on it. A code comment is not evidence. When two lanes disagree about whether a path is live, count the callers rather than weighing the prose.
+- Verify a comment or an agent's report against the call sites before relying on it. A code comment is not evidence. When lanes disagree about whether a path is live, count the callers rather than weighing the prose.
 - What a round proves is what it ran. A conclusion carried from one door to another is a hypothesis at the second door. Re-run it there.
 
 ## Falsification
@@ -59,6 +59,9 @@ A review that reads a diff finds what the diff shows. A review that tries to bre
 ### Instruments
 
 - An instrument is not evidence until it has failed. Pair every probe, comparison, or matrix with a negative control that must report failure, run under the same conditions. An identity check whose control reports "same" has measured nothing.
+- When a question about a TypeScript edit can supply a workspace project, a case of workspace files with a test, and a negative control naming its files, its test, the stage it must fail at, and why, call the `prove` tool the `probe` MCP server registers before relying on the answer. When the question supplies no project, no case, or no control, follow `.claude/rules/tests.md` § Probes and report the fallback instrument's own control and coverage.
+- Quote the closing line of the `prove` answer verbatim in every report, brief, and audit verdict that rests on the claim: the `receipt probe:<digest>:…` line when the case ran clean and the control broke exactly where the claim declared it would, and the `no receipt` line otherwise. A `no receipt` line leaves the claim unproved — report it with the stage that refused.
+- Read a receipt as evidence about its claim, never as a gate result. The gate chain still runs, and `verifier` still owns its result.
 - Draw the negative control from outside the population the instrument covers. Name the instrument's membership rule first, then pick a control that rule excludes. A control sampled from constructs the instrument already handles proves only that it discriminates among those constructs, and says nothing about the class it silently cannot reach.
 - State an instrument's coverage beside its result. A conclusion inherits the instrument's scope, not the question's. An unstated coverage claim is read as complete, and it never is. A search proves something about the paths it walked, so name them.
 - Match the instrument to the question. A text search reports on text, so a claim about declarations, call sites, or structure needs the compiler or a parser instead. A pattern written for one spelling of a construct reports on that spelling alone. A path check answers relative to the directory it runs from, so resolve the inputs against their own base before reading a miss as a finding.
@@ -80,9 +83,12 @@ A review that reads a diff finds what the diff shows. A review that tries to bre
 - A fix that adopts the auditor's prescription verbatim may close with a mutation probe in place of a fresh audit round: disable the load-bearing line, watch the adopted pin fail, restore it, and commit the pin as the regression guard. A fix that departs from the prescription gets the cross-engine round.
 - Let reachability bound the fix. A defect reachable through the package's own shipped code or a documented extension seam falsifies its claim and is repaired now.
 - Document the obligation instead when a defect is reachable only through a hypothetical foreign implementation of a contract this package publishes. State it on the interface that owns it and prove the documentation. Do not build coordination machinery against a requirement nobody wrote down. Attacks are unlimited; reachable ones are not, and only the reachable set is a work list.
-- **Three rounds at one seam is the budget.** Repeated rounds against one seam are evidence about the design, not evidence of diligence. At the third round the next unit is a ruling — on the threat model, the mechanism, or the boundary — taken with the same adversarial pass a design gets, not a fourth repair.
+- **Three rounds at one seam is the budget, and reaching it switches the search strategy rather than stopping the work.** Repeated rounds against one seam are evidence about the design, not evidence of diligence. At the third round, name what the audit is trying to accomplish, then pick the successor strategy from what the recurrence shows.
+- Recurrence with a direction — each fix relocates the class along one stream, or the evidence points up a dependency chain — ends the depth search. Run one breadth round that probes the stream's stations in parallel to locate the source, in the shape `.agents/orchestration.md` § Context and decomposition prescribes, then plan the downstream work from the source and size it by the sweep's map.
+- Recurrence with no direction makes the seam itself the question. The next unit is a ruling — on the threat model, the mechanism, or the boundary — taken with the same adversarial pass a design gets, not a fourth repair.
+- A subject that reprices itself on every edit — a count, a census, a total over prose — has no closing condition and is not a seam. Drop the claim, or recast it as the property the tally stood in for.
 - Write the round count down in the capability/defect matrix row that owns the seam, when the seam opens, so it is a fact rather than a feeling. A seam that has consumed more rounds than the rest of the matrix combined has already answered the question.
-- State the ruling that ends a seam as three things: the invariant the code will obey, the constraint bounding it against over-correction, and the interface where a consumer meets the obligation. A ruling that names only the defect it replaces produces the opposite defect next round.
+- State the ruling that ends a seam as the invariant the code will obey, the constraint bounding it against over-correction, and the interface where a consumer meets the obligation. A ruling that names only the defect it replaces produces the opposite defect next round.
 - Give every behavioural audit the means to run its attacks. An auditor that cannot execute cannot falsify a behavioural claim: it returns derivations, and a derivation reads exactly like a verdict while being a different thing — it will confirm a claim one probe would break. Treat a report with no executed evidence as a review of the source, and label it as such.
 
 ## Ecosystem reuse
@@ -106,7 +112,7 @@ The root laws on inspecting declared `@orkestrel/*` capabilities, reusing a matc
 
 ## Completion
 
-The root completion law — finish every in-scope capability now, leave no TODO, deferral, or hidden follow-up, and run the applicable repository skill for comprehensive work — binds here without restatement. This file adds three obligations:
+The root completion law — finish every in-scope capability now, leave no TODO, deferral, or hidden follow-up, and run the applicable repository skill for comprehensive work — binds here without restatement. This file adds these obligations:
 
 - Perform a final centralization, wrapper, test-helper, and text-integrity sweep after implementation and before gates.
 - Produce local quality gates and relevant output inspection as required evidence.

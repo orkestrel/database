@@ -226,7 +226,7 @@ Notes: `s`/`e` are logical start/end — they flip automatically under RTL; neve
 .text-truncate
 ```
 
-Two composition traps in this group:
+The composition traps in this group:
 
 - **`fs-*` without `lh-1` grows the row.** A resized glyph or mark keeps the parent's line-height, so the line box stretches and the row sits taller than its neighbors. Pair `fs-*` with `lh-1` on anything that is a mark rather than a paragraph.
 - **`text-truncate` zeroes a flex item's automatic minimum size** (that's the `min-width: 0` it carries). Inside a flex _column_, that also removes the floor that kept a heading at its own height: a growing sibling then squeezes the title from the bottom until it clips. Floor the title with `flex-shrink-0` and let the growing sibling absorb the change.

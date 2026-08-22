@@ -14,7 +14,7 @@ rule, and they are not repeated here. This file adds only how a Cursor session i
 
 ## Which posture
 
-A Cursor session is one of two things. Establish which before acting.
+A Cursor session takes one of these postures. Establish which before acting.
 
 - **Invoked through the `grok` bridge** — a read-only Executor. Return distilled evidence with
   `file:line` pointers. Never edit, decide, or accept.

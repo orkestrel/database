@@ -51,7 +51,7 @@ Load [hardening.md](references/hardening.md) for the hardening lane and for any 
 10. **Document the final behavior.** Update the governing guide, examples, method tables, limitations, and parity coverage. Document architectural limits honestly.
 11. **Audit completion.** Inspect test discovery, `.todo`/`.skip`/conditional skip use, source/test helper duplication, exports, environment isolation, unexpected text corruption, and the entire diff.
 12. **Verify.** Run the repository-prescribed gates in order and inspect the generated outputs relevant to the request.
-13. **Review independently, and never by the author.** When orchestration is available, run the two-lane adversarial pass — subjective design fit and objective correctness — plus a mechanical checker, per `.agents/orchestration.md`. Add a dedicated adversarial round for security, concurrency, destructive paths, or external input. A unit's auditor is an engine that did not write it; same-engine re-review returns the author's own blind spot. Resolve every required finding, then rerun affected verification.
+13. **Review independently, and never by the author.** When orchestration is available, run the adversarial pass — subjective design fit and objective correctness — plus a mechanical checker, per `.agents/orchestration.md`. Add a dedicated adversarial round for security, concurrency, destructive paths, or external input. A unit's auditor is an engine that did not write it; same-engine re-review returns the author's own blind spot. Resolve every required finding, then rerun affected verification.
 
 ## Accept the result
 

@@ -17,10 +17,10 @@ Read `.agents/orchestration.md` first.
 
 `.claude/agents/codex.md` owns the Sol transport contract in full — work class to transport, the
 exact `codex exec` form, the journal and session-id discipline, the recovery ladder, and the
-Windows notes. **Read it and follow it.** It is not restated here; two copies of a transport
-contract drift, and the one you are not reading is the one that is right.
+Windows notes. **Read it and follow it.** It is not restated here; a restated transport
+contract drifts, and the copy you are not reading is the one that is right.
 
-This role pins the one thing that file leaves to the dispatch: **the route is `implementer`, and
+This role pins what that file leaves to the dispatch: **the route is `implementer`, and
 its sandbox is `workspace-write`.** A unit that needs no write is a misrouted unit — stop and
 report, do not switch routes.
 

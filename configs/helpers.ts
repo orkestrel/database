@@ -1,4 +1,4 @@
-import type { Plugin } from 'vite'
+import type { Plugin, Rolldown } from 'vite'
 import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { isBuiltin } from 'node:module'
@@ -24,6 +24,26 @@ export function hasAsciiUrlControl(value: string): boolean {
 
 export const PACKAGE_MANIFEST_BYTES = 1_048_576
 export const ENVIRONMENT_MODULE_BYTES = 8_388_608
+
+/**
+ * Throws on a CommonJS import-meta rewrite and forwards every other build log.
+ *
+ * @param level - The Rolldown log level.
+ * @param log - The structured Rolldown log.
+ * @param report - The active default log handler.
+ * @returns Nothing.
+ * @throws An error when Rolldown reports `EMPTY_IMPORT_META`.
+ */
+export function enforceBuildLog(
+	level: Rolldown.LogLevel,
+	log: Rolldown.RolldownLog,
+	report: Rolldown.LogOrStringHandler,
+): void {
+	if (log.code === 'EMPTY_IMPORT_META') {
+		throw new Error(`[orkestrel-build] ${log.message}`)
+	}
+	report(level, log)
+}
 
 export const WORKSPACE_ROOT = realpathSync.native(
 	resolvePath(dirname(fileURLToPath(import.meta.url)), '..'),

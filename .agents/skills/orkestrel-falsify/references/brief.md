@@ -78,9 +78,9 @@ repair to carry the next defect; a round that finds them is converging, not fail
 - _"CONFIRMED requires naming the attack you tried that failed."_ — the single most effective
   sentence, because it converts a confirmation from an opinion into a report of work done.
 - _"A claim you cannot decide is UNRESOLVED, not CONFIRMED — say what would settle it."_
-- _"Assume this chain has one more."_ — with the count of prior rounds and how many were provoked by
-  a defect the previous round believed closed.
-- _"Do not hedge toward an imagined consensus."_ — when two auditors run blind, each will otherwise
+- _"Assume this chain has one more."_ — naming the prior rounds and which of them a defect the
+  previous round believed closed provoked.
+- _"Do not hedge toward an imagined consensus."_ — when auditors run blind, each will otherwise
   soften toward what it guesses the other said.
 
 Do **not** write _"an audit returning only confirmations has not tried."_ It reads as pressure to

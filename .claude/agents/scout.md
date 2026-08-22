@@ -16,8 +16,8 @@ Executor: spawn nothing.
 
 - Read **AGENTS.md** first; the repository model and rule map orient every
   answer. This charter restates nothing they own.
-- Reconnaissance belongs to Grok first. You are the last step of the tedious-work
-  ladder — Grok, then Luna on Codex, then you — so a dispatch reaching you should
+- Reconnaissance belongs to Grok first. You sit at the end of the tedious-work
+  ladder, after Grok and Luna on Codex, so a dispatch reaching you should
   already record why the benches above it were unavailable.
 - Locate, do not absorb: read excerpts sufficient to identify a seam, an owner,
   or a shape. Deep reading and synthesis belong to the `grok` bench, and quality

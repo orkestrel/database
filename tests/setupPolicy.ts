@@ -47,6 +47,8 @@ export interface PolicyControl {
 	readonly membership: string
 	readonly rule: PolicyRule
 	readonly files: readonly PolicySource[]
+	readonly directories?: readonly string[]
+	readonly line?: number
 	readonly message?: string
 }
 
@@ -114,7 +116,7 @@ export const SKILL_REFERENCE_TEXT = `${SKILL_POLICY_TEXT}\nRead references/examp
 /** Minimal valid provider bridge text for physical bridge controls. */
 export const SKILL_BRIDGE_TEXT = `${SKILL_POLICY_TEXT}\nRead \`.agents/skills/sample/SKILL.md\`.\n`
 
-/** Canonical skill metadata whose three values each carry YAML's escaped apostrophe. */
+/** Canonical skill metadata whose values each carry YAML's escaped apostrophe. */
 export const SKILL_APOSTROPHE_METADATA =
 	"interface:\n  display_name: 'Owner''s Fixture'\n" +
 	"  short_description: 'Exercise the family''s apostrophe rule'\n" +
@@ -184,7 +186,10 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts'])
 
 /** Fleet-registered folders whose direct modules each contain one named function. */
-export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze(['app/browser/composables'])
+export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze([
+	'app/browser/composables',
+	'src/server/execution',
+])
 
 /** Every ambient declaration suffix the source glob collects and the parsed population excludes. */
 export const POLICY_AMBIENT_SUFFIXES: readonly string[] = Object.freeze([
@@ -1094,7 +1099,7 @@ export function readSkillReferences(root: string, name: string): readonly string
 }
 
 /**
- * Create metadata in the canonical four-line skill interface shape.
+ * Create metadata in the canonical skill interface shape.
  *
  * @param name - The skill token the default prompt invokes.
  * @returns Canonical skill interface metadata ending in one newline.
@@ -1111,7 +1116,7 @@ export function createSkillMetadata(name: string): string {
 }
 
 /**
- * Parse the default prompt from the canonical four-line skill interface shape.
+ * Parse the default prompt from the canonical skill interface shape.
  *
  * Each value is a non-empty single-quoted scalar in which `''` carries an apostrophe.
  *
@@ -1167,6 +1172,67 @@ export function extractSkillReferences(content: string): readonly string[] {
 }
 
 /**
+ * Inspects one skill document for template TODOs outside Markdown code.
+ *
+ * Coverage includes each literal `TODO` outside a matched pair of single backticks on one line and
+ * outside a backtick or tilde fence indented by no more than three spaces. A fence starts with at
+ * least three matching markers and ends on a later line starting with the same marker. Four spaces
+ * start an indented code block, which this fence scanner does not interpret. An unterminated fence
+ * excludes the rest of the file. Inline spans cannot cross lines, and the line discipline cannot
+ * validate escaped or repeated delimiters or distinguish a backtick inside a code span's language
+ * tag.
+ *
+ * @param rule - The canonical-skill or provider-bridge population being inspected.
+ * @param path - The workspace-relative skill document path.
+ * @param content - The raw Markdown text.
+ * @returns Every template-TODO violation in line and occurrence order.
+ */
+export function inspectSkillTemplateTODOs(
+	rule: 'bridge' | 'skill',
+	path: string,
+	content: string,
+): readonly PolicyViolation[] {
+	const violations: PolicyViolation[] = []
+	const lines = content.split(/\r\n|\r|\n/u)
+	let fence: string | undefined
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index]
+		if (line === undefined) continue
+		const fenceLine = line.replace(/^ {0,3}/u, '')
+		if (fence !== undefined) {
+			if (fenceLine.startsWith(fence)) fence = undefined
+			continue
+		}
+		const opening = fenceLine.match(/^(`{3,}|~{3,})/u)?.[1]
+		if (opening !== undefined) {
+			fence = opening
+			continue
+		}
+		let cursor = 0
+		while (cursor < line.length) {
+			const openingBacktick = line.indexOf('`', cursor)
+			const end = openingBacktick === -1 ? line.length : openingBacktick
+			for (
+				let todo = line.indexOf('TODO', cursor);
+				todo !== -1 && todo < end;
+				todo = line.indexOf('TODO', todo + 4)
+			) {
+				violations.push({
+					rule,
+					path,
+					line: index + 1,
+					message: 'skill documents contain no template TODOs',
+				})
+			}
+			if (openingBacktick === -1) break
+			const closingBacktick = line.indexOf('`', openingBacktick + 1)
+			cursor = closingBacktick === -1 ? openingBacktick + 1 : closingBacktick + 1
+		}
+	}
+	return violations
+}
+
+/**
  * Inspect one discovered skill's required files, metadata, token, and references.
  *
  * @param root - The workspace root to inspect.
@@ -1179,7 +1245,8 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 	const metadata = `${base}/agents/openai.yaml`
 	const violations: PolicyViolation[] = []
 	let content: string | undefined
-	if (!isPolicyFile(root, skill)) {
+	const hasSkill = isPolicyFile(root, skill)
+	if (!hasSkill) {
 		violations.push(
 			createPolicyViolation('skill', skill, 'skill requires an exact-case regular SKILL.md'),
 		)
@@ -1223,8 +1290,10 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 				)
 			}
 		}
+		violations.push(...inspectSkillTemplateTODOs('skill', skill, content))
 	}
-	if (!isPolicyFile(root, metadata)) {
+	const hasMetadata = isPolicyFile(root, metadata)
+	if (!hasMetadata) {
 		violations.push(
 			createPolicyViolation(
 				'skill',
@@ -1264,6 +1333,10 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 						`SKILL.md reference resolves to an exact-case regular file: ${reference}`,
 					),
 				)
+			} else {
+				violations.push(
+					...inspectSkillTemplateTODOs('skill', path, readFileSync(join(root, path), 'utf8')),
+				)
 			}
 		}
 	}
@@ -1295,8 +1368,28 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 	const directory = resolvePolicyDirectory(root, base)
 	if (directory !== undefined) {
 		for (const path of globSync('**/*', { cwd: directory }).map(normalizePolicyPath).sort()) {
+			if (resolvePolicyDirectory(directory, path) !== undefined) {
+				if (
+					path === 'agents' ||
+					path === 'references' ||
+					path.startsWith('references/') ||
+					(!hasSkill && path.toLowerCase() === 'skill.md') ||
+					(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml')
+				) {
+					continue
+				}
+				violations.push(
+					createPolicyViolation(
+						'skill',
+						`${base}/${path}`,
+						'skill directory contains only agents/ and references/ directories',
+					),
+				)
+				continue
+			}
+			if (!isPolicyFile(directory, path)) continue
 			const file = basename(path).toLowerCase()
-			if ((file === 'readme.md' || file === 'changelog.md') && isPolicyFile(directory, path)) {
+			if (file === 'readme.md' || file === 'changelog.md') {
 				violations.push(
 					createPolicyViolation(
 						'skill',
@@ -1304,7 +1397,26 @@ export function inspectSkill(root: string, name: string): readonly PolicyViolati
 						'skill directory contains no README.md or CHANGELOG.md',
 					),
 				)
+				continue
 			}
+			if (
+				path === 'SKILL.md' ||
+				path === 'agents/openai.yaml' ||
+				/^references\/[^/]+\.md$/u.test(path) ||
+				(!hasSkill &&
+					(path.toLowerCase() === 'skill.md' || path.toLowerCase().startsWith('skill.md/'))) ||
+				(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml') ||
+				(path.startsWith('references/') && path.slice('references/'.length).includes('/'))
+			) {
+				continue
+			}
+			violations.push(
+				createPolicyViolation(
+					'skill',
+					`${base}/${path}`,
+					'skill directory contains only SKILL.md, agents/openai.yaml, and references/*.md',
+				),
+			)
 		}
 	}
 	return violations
@@ -1397,6 +1509,7 @@ export function inspectBridge(root: string, name: string): readonly PolicyViolat
 			),
 		)
 	}
+	violations.push(...inspectSkillTemplateTODOs('bridge', bridgePath, content))
 	if (resolvePolicyDirectory(root, `${bridgeBase}/references`) !== undefined) {
 		violations.push(
 			createPolicyViolation(
@@ -1478,6 +1591,11 @@ export function inspectPolicyControl(control: PolicyControl): readonly PolicyVio
 	try {
 		for (const file of control.files) {
 			scratch.write(file.path, file.content)
+		}
+		for (const directory of control.directories ?? []) {
+			const marker = `${directory}/.policy-control`
+			scratch.write(marker, '')
+			rmSync(join(scratch.path, marker))
 		}
 		if (control.rule === 'skill') return inspectSkillFamily(scratch.path)
 		if (control.rule === 'bridge') return inspectSkillBridges(scratch.path)
@@ -1854,6 +1972,52 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		],
 	},
 	{
+		label: 'rejects a template TODO in skill prose',
+		membership:
+			'TODO occurrences outside inline backtick spans and fences indented no more than three spaces in canonical SKILL.md files and the references/*.md files they name',
+		rule: 'skill',
+		message: 'skill documents contain no template TODOs',
+		files: [
+			{
+				path: '.agents/skills/sample/SKILL.md',
+				content: `${SKILL_POLICY_TEXT}\nTODO: describe the workflow\n`,
+			},
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+		],
+	},
+	{
+		label: 'rejects a template TODO in a CR-only skill reference',
+		membership:
+			'TODO occurrences outside inline backtick spans and fenced code blocks in named canonical skill references using CR line endings',
+		rule: 'skill',
+		line: 5,
+		message: 'skill documents contain no template TODOs',
+		files: [
+			{ path: '.agents/skills/sample/SKILL.md', content: SKILL_REFERENCE_TEXT },
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+			{
+				path: '.agents/skills/sample/references/example.md',
+				content: '# Example\r```text\rTODO: fenced\r```\rTODO: describe the workflow\r',
+			},
+		],
+	},
+	{
+		label: 'rejects a template TODO in a four-space-indented fence opener',
+		membership:
+			'TODO occurrences inside a four-space-indented fence opener and closer, which forms an indented code block outside the fence population, in discovered skill documents',
+		rule: 'skill',
+		message: 'skill documents contain no template TODOs',
+		files: [
+			{
+				path: '.agents/skills/sample/SKILL.md',
+				content:
+					SKILL_POLICY_TEXT +
+					'\n3. Return the verdict.\n\n    ```text\n    TODO: describe the workflow\n    ```\n',
+			},
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+		],
+	},
+	{
 		label: 'rejects a nested references directory',
 		membership: 'directories directly beneath a discovered skill references directory',
 		rule: 'skill',
@@ -1872,8 +2036,30 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		files: [
 			{ path: '.agents/skills/sample/SKILL.md', content: SKILL_POLICY_TEXT },
 			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
-			{ path: '.agents/skills/sample/docs/CHANGELOG.MD', content: '# Changes\n' },
+			{ path: '.agents/skills/sample/CHANGELOG.MD', content: '# Changes\n' },
 		],
+	},
+	{
+		label: 'rejects a non-contract file in a skill directory',
+		membership: 'regular files at any depth inside a discovered skill directory',
+		rule: 'skill',
+		message: 'skill directory contains only SKILL.md, agents/openai.yaml, and references/*.md',
+		files: [
+			{ path: '.agents/skills/sample/SKILL.md', content: SKILL_POLICY_TEXT },
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+			{ path: '.agents/skills/sample/run.sh', content: '#!/bin/sh\n' },
+		],
+	},
+	{
+		label: 'rejects an empty non-contract directory in a skill directory',
+		membership: 'directories at any depth inside a discovered skill directory',
+		rule: 'skill',
+		message: 'skill directory contains only agents/ and references/ directories',
+		files: [
+			{ path: '.agents/skills/sample/SKILL.md', content: SKILL_POLICY_TEXT },
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+		],
+		directories: ['.agents/skills/sample/assets'],
 	},
 	{
 		label: 'rejects a missing exact-case SKILL.md',
@@ -2046,6 +2232,20 @@ export const BRIDGE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		],
 	},
 	{
+		label: 'rejects a template TODO in bridge prose',
+		membership:
+			'TODO occurrences outside inline backtick spans and fenced code blocks in exact-case bridge SKILL.md files shared with the canonical family',
+		rule: 'bridge',
+		message: 'skill documents contain no template TODOs',
+		files: [
+			{ path: '.agents/skills/sample/SKILL.md', content: SKILL_POLICY_TEXT },
+			{
+				path: '.claude/skills/sample/SKILL.md',
+				content: `${SKILL_BRIDGE_TEXT}\nTODO: describe the bridge\n`,
+			},
+		],
+	},
+	{
 		label: 'rejects a references directory owned by a provider bridge',
 		membership: 'shared provider bridge directories',
 		rule: 'bridge',
@@ -2084,22 +2284,39 @@ export const SKILL_POLICY_FOLDED: PolicyControl = Object.freeze({
 	],
 })
 
-/** A trigger sentence whose first subject is a backticked command token. */
+/** A healthy skill reference whose prose carries the documented backticked TODO form. */
 export const SKILL_POLICY_BACKTICKED: PolicyControl = Object.freeze({
-	label: 'accepts a backticked token after Use',
-	membership: 'single-line descriptions in discovered skill frontmatter',
+	label: 'accepts a backticked TODO in skill prose',
+	membership: 'TODO occurrences inside matched inline backtick spans in discovered skill documents',
+	rule: 'skill',
+	files: [
+		{ path: '.agents/skills/sample/SKILL.md', content: SKILL_REFERENCE_TEXT },
+		{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+		{
+			path: '.agents/skills/sample/references/example.md',
+			content: '- every `TODO`, deferred branch, placeholder, or documented omission in scope.\n',
+		},
+	],
+})
+
+/** A healthy skill whose fenced example carries a template-TODO spelling. */
+export const SKILL_POLICY_FENCED: PolicyControl = Object.freeze({
+	label: 'accepts a TODO in a three-space-indented fenced skill example',
+	membership:
+		'TODO occurrences inside fenced code blocks indented no more than three spaces in discovered skill documents',
 	rule: 'skill',
 	files: [
 		{
 			path: '.agents/skills/sample/SKILL.md',
 			content:
-				'---\nname: sample\ndescription: Use `--app` when a policy fixture needs it.\n---\n\n# Skill\n',
+				SKILL_POLICY_TEXT +
+				'\n3. Return the verdict.\n\n   ```text\n   TODO: describe the workflow\n   ```\n',
 		},
 		{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
 	],
 })
 
-/** A folded description whose blank scalar line separates two paragraphs. */
+/** A folded description whose blank scalar line separates its paragraphs. */
 export const SKILL_POLICY_PARAGRAPHS: PolicyControl = Object.freeze({
 	label: 'accepts a folded description containing two paragraphs',
 	membership: 'folded description scalars in discovered skill frontmatter',

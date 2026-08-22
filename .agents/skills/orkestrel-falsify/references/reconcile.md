@@ -1,6 +1,6 @@
 # Reconciling a round and ruling on it
 
-Two auditors return. Neither accepts; the orchestrator does. This is where a round becomes a
+The auditors return. Neither accepts; the orchestrator does. This is where a round becomes a
 decision, and it is not delegable.
 
 ## Reproduce before you act
@@ -16,7 +16,7 @@ catch cannot distinguish _the subject threw_ from _my harness threw_ — a missi
 arity, a `require` in an ESM context all surface as the finding you were hoping to see. Construct
 first, let harness failures crash loudly, and only guard the call under test.
 
-Reproduction produces three outcomes, and all three matter:
+Reproduction produces these outcomes, and all of them matter:
 
 - the finding **confirms** and is often **wider** than reported — the reproduction reaches doors the
   auditor did not try;
@@ -32,18 +32,18 @@ code under test reports a pass that means nothing, and it will read exactly like
 
 ## A disagreement is rarely a tie
 
-When two auditors return opposite verdicts on one claim, do not average them and do not prefer the
+When auditors return opposite verdicts on one claim, do not average them and do not prefer the
 engine you trust more. **Reproduce first** — running the disagreement settles most of them outright,
 and it is the only method that can also find what neither auditor saw. Then find the question each
 one answered. The common shapes:
 
 - **Both right about different objects.** One tested a case the other did not construct. This is a
-  `SPLIT-CLAIM`: the claim was a universal that carried more than one subject. It is **not** a third
-  verdict value — one falsifying input makes a universal claim `BROKEN`, and succeeding on a
+  `SPLIT-CLAIM`: the claim was a universal that carried more than one subject. It is **not** a
+  further verdict value — one falsifying input makes a universal claim `BROKEN`, and succeeding on a
   different object does not undo that. Split it, keep the original `BROKEN` if any subclaim is
   broken, and carry the split into the successor brief.
 - **Both right about different halves of one claim number.** Same resolution: the claim number was
-  carrying two claims. Split and renumber.
+  carrying more than one claim. Split and renumber.
 - **One right on the mechanism, the other on the criterion.** Take both. The reconciled ruling is
   frequently neither proposal, and better than either, because each supplied a constraint the other
   violated.
@@ -60,7 +60,7 @@ memory. A reader six months out must be able to tell an unbiased blind verdict f
 after an auditor saw its counterpart's evidence — otherwise the whole value of running blind is
 unverifiable after the fact.
 
-Two rules, both enforceable:
+These rules are enforceable:
 
 1. **A returned verdict is never edited** — not by the auditor, not by the orchestrator.
 2. **Anything an auditor says after seeing another's report is a separate file beside that verdict**,
@@ -82,7 +82,7 @@ State what is **not** broken, and why the adjacent behaviour that looks identica
 finding without a boundary is an alarm, and alarms get discounted wholesale — including the true
 ones next to them.
 
-Two boundaries earn their keep:
+These boundaries earn their keep:
 
 - **Credit what the round got right.** If the hostile inputs adjacent to the hole are correctly
   contained, say so and list them. It sharpens the finding to a point instead of an area.
@@ -95,8 +95,8 @@ Two boundaries earn their keep:
 Establish what over-correcting would break, and put it in the fix brief as a constraint. Both ends
 are usually wrong:
 
-- **too little** — a patch to the one function, leaving the package holding two standards for the
-  same thing, which is the inconsistency that produced the finding;
+- **too little** — a patch to the one function, leaving the package holding conflicting standards
+  for the same thing, which is the inconsistency that produced the finding;
 - **too much** — adopting the strictest sibling's rule verbatim, breaking a legitimate caller
   pattern, and tripping "no refusal was widened into a regression" in the next round.
 
@@ -124,7 +124,7 @@ are easiest to construct. That sampling proves discrimination _within_ the popul
 routinely reported as proof the instrument works.
 
 So before running controls, write down the instrument's **membership rule** in one sentence, then
-ask what the rule excludes. Draw at least one control from there. Two shapes have already cost a
+ask what the rule excludes. Draw at least one control from there. These shapes have already cost a
 round each:
 
 - an AST comparison whose controls were all drawn from the literal classes present in the bodies it
@@ -132,9 +132,9 @@ round each:
 - a call-closure pin whose controls were all body-reachable functions, green for a function reached
   only through a parameter default.
 
-Then write the two sentences that matter: what the controls established, and what they did not. The
-second sentence is the one that gets skipped, and skipping it is how an instrument's credibility
-outruns its evidence.
+Then write the sentences that matter: what the controls established, and what they did not. What
+they did not establish is the one that gets skipped, and skipping it is how an instrument's
+credibility outruns its evidence.
 
 ## Ruling
 

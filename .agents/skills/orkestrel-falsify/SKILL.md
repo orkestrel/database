@@ -32,6 +32,10 @@ A round also needs something new to attack. When the previous round's claims all
 been added or repaired since, and the only motive is that an auditor could still imagine an attack,
 there is no subject — closing is the correct action and the next subject is the deliverable.
 
+When the same class has recurred along one seam to the budget in `.claude/rules/quality.md`
+§ Rounds and verdicts, the next move is that law's strategy switch — the breadth sweep of the
+stream, the ruling, or the dropped moving-target claim — rather than another successor round.
+
 ## Write the brief
 
 The brief is the instrument. A weak brief produces a confirming review no matter which auditor reads
@@ -58,7 +62,7 @@ diff is a rule the brief cannot satisfy.
 | a policy, design, or process proposal   | the proposal, the canon it must satisfy, and the record of what motivated it          |
 
 **A subject can occupy more than one row; supply every row it occupies.** A ruling whose fixes
-already landed as edits is both the third row and the first, and withholding the diff on the grounds
+already landed as edits is both a proposal and a code change, and withholding the diff on the grounds
 that the subject is "a proposal" leaves the auditor unable to check whether a fix changed anything
 nobody claimed.
 
@@ -69,21 +73,22 @@ nobody claimed.
   looking like authority — and it fails silently, because an auditor does not report a heading it
   never saw. Check before dispatch; propagate the missing file rather than restating its contents in
   the brief. This is the reason restatement felt necessary, and it is the wrong cure.
-- Run the **two-lane adversarial pass** on one identical brief: a subjective lane and an objective
+- Run the **adversarial pass** on one identical brief: a subjective lane and an objective
   lane, each a fresh subagent with a clean context, blind to each other. Reconcile them yourself.
   `.agents/orchestration.md` owns lane definitions, engine assignment, and what happens when an
   engine is dark; do not restate them here.
 - A round run with one lane is a deviation. Record it rather than glossing it. If an engine is
-  unavailable, the remaining engine runs both lanes — it never drops one.
-- **Pair every finder with an independent refuter when the round fans out past two lanes.** The
+  unavailable, the remaining engine runs every lane — it never drops one.
+- **Pair every finder with an independent refuter when the round fans out past the subjective and
+  objective lanes.** The
   refuter receives one slice's findings, never that finder's work, and is briefed to BREAK them
   rather than to re-audit the subject. It reproduces each stated vector itself and defaults to
   refuted when uncertain.
-- Refute on any of six grounds, and name which: the vector does not reproduce; the behaviour is
+- Refute on any of these grounds, and name which: the vector does not reproduce; the behaviour is
   correct and documented; it is unreachable through the public API or a documented seam; it asks
   for new capability rather than naming a defect; it restates a finding an earlier round
   repaired; or its diagnosis is wrong — then CONFIRM with the correction.
-- Only a survivor earns a fix unit. An unrefuted finding is a hypothesis. The two scope grounds,
+- Only a survivor earns a fix unit. An unrefuted finding is a hypothesis. The scope grounds,
   unreachable and new capability, are what keep a round from drifting into a redesign.
 - **Give every auditor the means to run its attacks.** A lens that can only read returns derivations,
   and a derivation reads exactly like a verdict — it will confirm a claim that one probe would break.
@@ -124,7 +129,7 @@ nobody claimed.
 Every auditor in every round returns exactly this, and nothing else. One shape makes rounds
 comparable; a round that invents its own cannot be read against the last one.
 
-1. **Numbered verdicts**, one per claim, in the brief's order. Exactly one of four values:
+1. **Numbered verdicts**, one per claim, in the brief's order. Exactly one of these values:
 
    | value           | meaning                                                                                | evidence                                                                                                                                                      |
    | --------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -133,10 +138,11 @@ comparable; a round that invents its own cannot be read against the last one.
    | `UNRESOLVED`    | cannot be decided from the evidence available                                          | what would settle it                                                                                                                                          |
    | `NOT-EVIDENCED` | a claim about a rendered or externally driven surface the supplied capture cannot show | which capture is missing                                                                                                                                      |
 
-   The first two rows defer; only the last two are this skill's, because the law does not name them.
-   `BROKEN` and `UNRESOLVED` are **separate**: a claim nobody could decide has not been falsified,
-   and it cannot supply the fields falsification requires. `NOT-EVIDENCED` is the token the
-   `analyst` and `reviewer` charters already require; it is kept, not re-invented.
+   `CONFIRMED` and `BROKEN` defer; only `UNRESOLVED` and `NOT-EVIDENCED` are this skill's, because
+   the law does not name them. `BROKEN` and `UNRESOLVED` are **separate**: a claim nobody could
+   decide has not been falsified, and it cannot supply the fields falsification requires.
+   `NOT-EVIDENCED` is the token the `analyst` and `reviewer` charters already require; it is kept,
+   not re-invented.
 
 2. **Findings fitting no claim**, if any, each substantiated to the same standard as `BROKEN`.
 
@@ -147,7 +153,7 @@ comparable; a round that invents its own cannot be read against the last one.
    VERDICT: FAIL — <n> broken, <u> unresolved, <e> not-evidenced, <x> findings outside the claims
    ```
 
-   **`PASS` requires all four to be true**: every claim `CONFIRMED`, nothing `UNRESOLVED`, nothing
+   **`PASS` requires every one of these to be true**: every claim `CONFIRMED`, nothing `UNRESOLVED`, nothing
    `NOT-EVIDENCED`, and no substantiated finding outside the claims. A single substantiated finding
    forces `FAIL` no matter how the numbered claims landed — otherwise a round can report a real
    defect and still emit the word that authorises the release.
@@ -173,8 +179,8 @@ Follow `references/reconcile.md`. The obligations that are not delegable:
   vectors teaches the lane those vectors matter, and a lane can hand back the brief's own questions as
   the subject's claims — demanding coverage for a property the subject never documented. Grep the
   subject for the claim the finding rests on. Where it is not there, the finding is against the brief.
-- **A disagreement between auditors is rarely a tie to average.** It is usually two correct answers
-  to two different questions. Find the question each one answered.
+- **A disagreement between auditors is rarely a tie to average.** It is usually correct answers
+  to different questions. Find the question each one answered.
 - **Bound every finding**: state what is _not_ broken, and why the adjacent behaviour that looks the
   same is correct. An audit that reports everything is as useless as one that reports nothing.
 - **Bound the fix before briefing it.** Establish what over-correcting would break, and include that

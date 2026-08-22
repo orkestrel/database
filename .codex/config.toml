@@ -37,3 +37,7 @@ contract owns when each is used; this is only the mapping:
 enabled = true
 max_concurrent_threads_per_session = 3
 interrupt_message = true
+
+[mcp_servers.probe]
+command = "node"
+args = ["node_modules/@orkestrel/probe/dist/bin/main.js"]

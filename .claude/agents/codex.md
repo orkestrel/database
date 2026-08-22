@@ -24,9 +24,9 @@ CODEX_IMPLEMENTER_EFFORT=high
 
 Raise the analyst to `xhigh` only for a stated hard reasoning need. Use `gpt-5.6-terra`
 only for explicitly mechanical, taste-free roles. Use `gpt-5.6-luna` for absorption,
-distillation, scouting, and bounded research when the Cursor bench is dark — it is the
-second step of the tedious-work ladder, and the substitution is recorded. Never switch
-models silently.
+distillation, scouting, and bounded research when the Cursor bench is dark — it sits
+between Cursor Grok and Sonnet on the tedious-work ladder, and the substitution is
+recorded. Never switch models silently.
 
 ## Transport — pick by work class
 
@@ -43,7 +43,7 @@ models silently.
 
 ## Prepare the journaled CLI launch
 
-Your two jobs are drafting the brief and running short MCP exchanges. For long work you
+Your jobs are drafting the brief and running short MCP exchanges. For long work you
 prepare the launch and return it; the Orchestrator runs it as a harness-tracked
 background command under a hard cap.
 
@@ -52,7 +52,7 @@ never travel as shell arguments. Return the exact resolved command with a pointe
 
 `timeout <cap> codex exec --json -C <working-directory> --sandbox <route-sandbox> --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "Read and execute the brief at tmp/codex/<unit>-brief.md exactly. Your final message must be the report it specifies." < /dev/null > tmp/codex/<unit>.jsonl`
 
-- Return three things: the brief path, that resolved command, and the journal path. Leave
+- Return the brief path, that resolved command, and the journal path. Leave
   `<cap>` unresolved — the Orchestrator owns it, per **Long-running commands → Launching**
   in `.agents/orchestration.md`. You hold no record of prior runs.
 - Never launch, background, poll, sleep-loop, restart, or kill an exec.
@@ -98,10 +98,10 @@ On any interruption or missing result, in order:
 3. Interrupted CLI exec → the journal survives. Report the thread id and the last journal
    events as a deviation, and let the Orchestrator choose resume or fresh.
 
-`codex exec resume <session-id>` inherits the session's sandbox, model, and effort, and
-rejects `--sandbox`, `--model`, and `-c`. Only output flags and the prompt are valid on a
-resume. A read-only session can therefore never be resumed into a writer, so
-implementation always gets a fresh `workspace-write` session.
+`codex exec resume <session-id>` inherits the session's sandbox, model, effort, and
+working directory, and rejects `--sandbox`, `--model`, `-c`, and `-C`. Only output flags
+and the prompt are valid on a resume. A read-only session can therefore never be resumed
+into a writer, so implementation always gets a fresh `workspace-write` session.
 
 ## Analyst route
 

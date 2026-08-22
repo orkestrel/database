@@ -58,13 +58,13 @@ Use only the centralized files an environment needs.
 - Module-scope constants live only in `constants.ts`, use UPPER_SNAKE_CASE, and freeze object/array data with `Object.freeze`.
 - A camelCase namespace containing functions is helper behavior, not constant data; place it in `helpers.ts`.
 - `helpers.ts` is exported reusable infrastructure. A reusable regex, parser, header flattener, signer, or similar fragment has one implementation used by source, tests, and fixtures.
-- A would-be helper has two outcomes:
+- A would-be helper has these outcomes:
   - trivial and genuinely single-use → fold into its caller;
   - non-trivial or reusable → extract, export, unit-test, and route every duplicate through it.
 - `factories.ts`, `compilers.ts`, and `parsers.ts` are centralized files, not hiding places. Factory glue extracts to `helpers.ts`; pure compiler/parser recursion remains exported in its own kind file.
 - Every exported function in `parsers.ts` is named `parse*`. Every exported function in
   `factories.ts` is named `create*`.
-- The two name forms are one-directional. A name does not place a function: `createWriteDirectory`
+- Those name forms are one-directional. A name does not place a function: `createWriteDirectory`
   creates a directory rather than an entity and `isVacant` is a predicate rather than a `Guard<T>`,
   so both stay in `helpers.ts`. Placement follows what the function is; the name form follows
   placement.
@@ -85,7 +85,7 @@ Use only the centralized files an environment needs.
   graph: they import types, constants, errors, and each other, and they import no implementation
   class. Every file that constructs or drives a class — `cloners.ts`, `compilers.ts`, `factories.ts`,
   `shapers.ts` — sits above them, consumes them, and is never consumed by them. One cycle between
-  the two leaves is the shape this produces and is acceptable; an edge running downward from a
+  the leaves is the shape this produces and is acceptable; an edge running downward from a
   class-importing file into the leaf pair is not.
 - `templates.ts` and `contracts.ts` hold data only — shipped template definitions and compiled
   contracts. A function that builds either belongs in the kind file for what it builds.
@@ -110,7 +110,7 @@ kind. It reads declaration syntax and file name, never meaning.
   returns, so `Object.freeze([…])` and any other call initializer are one syntax to it. The freeze
   obligation in the kind-purity rules above binds regardless; only the bare literal is mechanical.
 - It does not tell one function kind from another. Every centralized file that permits functions
-  reads the same to it apart from the two name forms above: `cloners.ts`, `combinators.ts`,
+  reads the same to it apart from the `parse*` and `create*` name forms: `cloners.ts`, `combinators.ts`,
   `compilers.ts`, `errors.ts`, `factories.ts`, `handlers.ts`, `helpers.ts`, `inferers.ts`,
   `middlewares.ts`, `parsers.ts`, `relations.ts`, `schemas.ts`, `seeders.ts`, `shapers.ts`, and
   `validators.ts`. That list is exhaustive, a new function kind joins it, and no later version of
@@ -150,7 +150,7 @@ A wrapper survives only when it adds a real boundary, invariant, composition, tr
 - The only in-body function expressions allowed are an anonymous callback passed directly as an argument and an anonymous function returned directly as the result (the factory/combinator pattern).
 - Instance-bound work that reaches state or sibling methods is a method, not a free function.
 
-Separate three roles:
+Separate these roles:
 
 1. **Public method:** implements the interface and genuinely composes behavior; never forwards 1:1 to one helper.
 2. **`#` private method:** stateful/instance-bound orchestration or the class's defining recursive/compositional algorithm.
@@ -225,7 +225,7 @@ Choose the access shape:
 - **Point access:** `get`, `set`, `delete`.
 - **Bulk restore:** `save`, `load`, `remove`, `clear`.
 
-Both obey:
+Every shape obeys:
 
 - The stored value carries its own id; do not pass a separate id to `set`/`save`.
 - Every primitive is async and returns a `Promise`.

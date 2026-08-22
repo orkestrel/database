@@ -106,8 +106,8 @@ Environment rules:
 
 ## Test project matrix
 
-`vite.config.ts` defines Vitest projects on two axes. The first is one project per src/app axis ×
-environment:
+`vite.config.ts` defines Vitest projects on an environment axis and a workspace-proof axis. The
+environment axis is one project per src/app axis × environment:
 
 | Project       | Files                  | Environment         | Setup                                           |
 | ------------- | ---------------------- | ------------------- | ----------------------------------------------- |
@@ -120,7 +120,7 @@ environment:
 | `app:browser` | `tests/app/browser/**` | Playwright Chromium | `setup.ts`, `setupBrowser.ts`                   |
 | `app:server`  | `tests/app/server/**`  | Node                | `setup.ts`, `setupServer.ts`                    |
 
-The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
+The workspace-proof axis is cross-cutting. Each proof covers the whole workspace rather than
 one environment, so each is its own project:
 
 | Project        | Files                        | Proves                                                                                            | Gate                                  |
@@ -138,7 +138,7 @@ one environment, so each is its own project:
   Include every matching file. When registered, emit `test:setup` and run it from `test`. When no
   file matches, emit neither the project nor the script.
 
-`conformance`, `integration`, `distribution`, and `service` are four subjects, not four names for
+`conformance`, `integration`, `distribution`, and `service` are separate subjects, not names for
 one.
 Keep `conformance` in `test`: measure this package against an installed official artifact, and start
 any server the proof drives itself. Keep `integration` in `test`: compose the workspace's public
@@ -150,12 +150,18 @@ parallelism in `service`. In a `private: true` workspace, never declare `prepubl
 configuration.
 
 One project sits on neither axis. `probe` includes `tmp/probe/**/*.test.ts` so an agent can run a
-throwaway instrument against real sources, aliases and setup. Declare no proof there. Every test
-script names its project, so no gate runs it; its directory is ignored by git; and
-`.claude/rules/tests.md` governs what may live there.
+throwaway instrument against real sources, aliases and setup. Declare no proof there. Keep the
+project composed in the root configuration rather than declared as a path string. The `probe` MCP
+server arms through it — its arming specifications live under the `tmp/probe/` directory and infer
+this project — so a workspace that removes the project, or declares it as a path string, fails the
+server's arming, and an unarmed server refuses every `prove` call. The `test:bench` script runs the
+same project in benchmark mode, which collects every test file under the `tmp/probe/` directory and
+the `tests/` tree while refusing every ordinary test case. Every test script names its project and
+the `test:bench` script joins no chain, so no gate runs either mode; the project's directory is
+ignored by git; and `.claude/rules/tests.md` governs what may live there.
 
 - Define a cross-cutting project only for a proof the package actually has.
-- A live-service project is the fifth kind. It is the `service` project above, `scripts/service.sh`
+- A live-service project is the `service` project in the preceding table, `scripts/service.sh`
   provisions what it drives, and `.claude/rules/tests.md` governs it. Name it `service` whatever it
   drives.
 - In a publishing workspace, a project leaves the default run when it drives a live external
@@ -208,24 +214,25 @@ Build/check config alignment:
 
 ## Script intent
 
-| Script                  | Contract                                                          |
-| ----------------------- | ----------------------------------------------------------------- |
-| `dev`                   | Browser development entry                                         |
-| `build`                 | Build configured library/application targets                      |
-| `serve` / `serve:build` | Run built server / build then run                                 |
-| `showcase`              | Showcase dev server                                               |
-| `build:showcase`        | Build `dist/showcase`                                             |
-| `show`                  | Build and copy showcase to `demo/showcase.html`                   |
-| `lint`                  | `oxlint --config .oxlintrc.json --fix .`; separate from typecheck |
-| `lint:check`            | Non-mutating whole-tree lint gate                                 |
-| `check`                 | Comprehensive root typecheck plus configured isolation scopes     |
-| `check:<scope>`         | On-demand environment-isolation pass                              |
-| `format`                | Format all files                                                  |
-| `format:check`          | Non-mutating whole-tree format gate                               |
-| `test`                  | Environment projects plus non-isolated cross-cutting proofs       |
-| `clean`                 | Remove `dist/`                                                    |
-| `copy <from> <to>`      | Copy while creating parent directories                            |
-| `prepublishOnly`        | Publishing workspaces only: the gate chain, then isolated proofs  |
+| Script                  | Contract                                                                   |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `dev`                   | Browser development entry                                                  |
+| `build`                 | Build configured library/application targets                               |
+| `serve` / `serve:build` | Run built server / build then run                                          |
+| `showcase`              | Showcase dev server                                                        |
+| `build:showcase`        | Build `dist/showcase`                                                      |
+| `show`                  | Build and copy showcase to `demo/showcase.html`                            |
+| `lint`                  | `oxlint --config .oxlintrc.json --fix .`; separate from typecheck          |
+| `lint:check`            | Non-mutating whole-tree lint gate                                          |
+| `check`                 | Comprehensive root typecheck plus configured isolation scopes              |
+| `check:<scope>`         | On-demand environment-isolation pass                                       |
+| `format`                | Format all files                                                           |
+| `format:check`          | Non-mutating whole-tree format gate                                        |
+| `test`                  | Environment projects plus non-isolated cross-cutting proofs                |
+| `clean`                 | Remove `dist/`                                                             |
+| `copy <from> <to>`      | Copy while creating parent directories                                     |
+| `prepublishOnly`        | Publishing workspaces only: the gate chain, then isolated proofs           |
+| `prepack`               | Publishing workspaces only: rebuild `dist/` so a pack ships current output |
 
 Run `show` only **after** formatting. The committed `demo/showcase.html` is generated/minified; formatting after generation would expand its inlined bundle.
 
@@ -241,7 +248,7 @@ Run `show` only **after** formatting. The committed `demo/showcase.html` is gene
 
 Policy instruments:
 
-- Put every rule of the policy law in exactly one of two instruments. `configs/policy.ts` — the
+- Put every rule of the policy law in exactly one instrument. `configs/policy.ts` — the
   oxlint plugin, namespace `policy` — takes the rules a single file's AST decides. The policy sweep
   (`tests/setupPolicy.ts`) takes the rules that are path- or text-shaped, and every rule whose
   subject is suppression itself.
@@ -252,7 +259,7 @@ Policy instruments:
   a named module-scope `report{Noun}` function. Never write rule logic inline in the table. That
   arrow is the sanctioned exception to the in-body function-expression limits in
   `.claude/rules/architecture.md` for exactly that table.
-- Name no individual rule id here. This section fixes the two instruments and how work is assigned
+- Name no individual rule id here. This section fixes the instruments and how work is assigned
   between them; each rule's substance stays with the law it enforces.
 
 ## Text integrity

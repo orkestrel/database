@@ -27,13 +27,13 @@ paths:
   `node:*` external.
 - Browser and server integrate across a contract and transport boundary. Neither
   environment imports the other's implementation.
-- Four tools enforce that boundary, and none of them is replaceable by a custom
-  parser or source-language analyzer: `.oxlintrc.json` `no-restricted-imports`
-  enforces declared package, alias, and conventional relative import direction;
-  scoped TypeScript configurations remove Node and DOM globals from the wrong
-  environment; Vite's real browser and server builds resolve Vue, assets, CSS,
-  workers, and runtime module graphs; and generated-consumer tests exercise all
-  three.
+- The project toolchain enforces that boundary, and none of its tools is
+  replaceable by a custom parser or source-language analyzer: `.oxlintrc.json`
+  `no-restricted-imports` enforces declared package, alias, and conventional
+  relative import direction; scoped TypeScript configurations remove Node and
+  DOM globals from the wrong environment; Vite's real browser and server builds
+  resolve Vue, assets, CSS, workers, and runtime module graphs; and
+  generated-consumer tests exercise those real configurations.
 - Generated consumers must pass lint, scoped typechecking, production builds, and
   real integration tests.
 - Scoped checks include `.ts`, `.tsx`, `.mts`, and `.cts`. Vue SFCs and CSS

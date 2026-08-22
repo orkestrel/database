@@ -75,7 +75,7 @@ a practice that worked so it repeats.
    [instruction-audit.md](references/instruction-audit.md). What confused an executor is
    a defect in the instruction, not the executor.
 6. **Reconcile into the ledger.** Number the findings, attach verbatim evidence, bucket
-   every one. Where two audit lanes disagree, rule each divergence on the record with
+   every one. Where audit lanes disagree, rule each divergence on the record with
    the reason.
 7. **Land the refinements.** Dispatch fix-now findings as bounded units under the
    repository's engine contract; make the canon edits (charters, rules, skills,

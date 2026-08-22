@@ -1,10 +1,10 @@
 # Auditing the instruction set
 
 The method for judging the agents, rules, skills, and orchestration contract against a
-campaign's record. Proven across two debrief rounds; the instruction layer is code — it
-gets the same adversarial, evidence-first treatment as any surface.
+campaign's record. The instruction layer is code — it gets the same adversarial,
+evidence-first treatment as any surface.
 
-## Two blind passes, one brief
+## Blind passes, one brief
 
 Run a subjective lane and an objective lane on the SAME brief, in parallel, neither
 seeing the other's answer before both return:
@@ -27,11 +27,11 @@ record.
 ## The objective lanes
 
 - **Duplication diff.** Whole-line and obligation-level comparison across charters, rules,
-  and skills. A charter that restates a rule drifts from it; a rule stated twice has two
-  owners.
+  and skills. A charter that restates a rule drifts from it; a rule restated elsewhere has
+  more than one owner.
 - **Mechanical-equivalence groups.** Cluster roles by frontmatter (tools, model, effort,
-  mode). Two roles in one group are either genuinely distinct by context binding — or a
-  duplicate.
+  mode). Roles in one group are either genuinely distinct by context binding — or
+  duplicates.
 - **Charter-versus-usage drift.** For each role, compare the charter's promises against
   how the campaign actually dispatched it: unused powers, exercised powers the charter
   never granted, deviation reports the charter's wording caused.
@@ -69,7 +69,7 @@ Findings land as one of:
   probe-first, journal-first, verdict shapes, launch ownership) land in the operating
   contract, mirrored across providers.
 
-## Three questions every round asks
+## The questions every round asks
 
 - **Which findings came from falsification rather than diff reading**, and is the brief
   shape that produced them doctrine yet? Route to the Falsification law in

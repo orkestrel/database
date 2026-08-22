@@ -12,7 +12,7 @@ This route pins `--permission-mode plan`.
 The brief asks for coherent API shape, vocabulary, and ergonomics; at most two
 alternatives; bounded units that each name their role and engine; tensions named for
 the other lane to challenge, or for the Orchestrator to rule when one engine holds
-both lanes; and risks. It forbids edits, commands, reconciliation, orchestration, and
+every lane; and risks. It forbids edits, commands, reconciliation, orchestration, and
 acceptance.
 
 Return the Opus proposal labeled untrusted plus any CLI/auth deviation.

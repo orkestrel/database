@@ -36,7 +36,7 @@ Invoke `$orkestrel-harden-package` for each package implementation unit. This sk
 8. **Prove the round trip.** Put integration coverage at the highest package that can exercise the real composed behavior. Retain focused deterministic coverage in lower packages.
 9. **Validate local changes safely.** When necessary, use built artifacts in an isolated consumer and prove the resolved graph. Restore temporary manifest/lockfile state.
 10. **Verify topologically.** Run local gates for touched packages from dependencies to dependents and inspect relevant generated outputs.
-11. **Review the campaign.** Run the two-lane adversarial pass plus a mechanical checker on each implementation unit, then one cross-package architecture and ergonomics review over the whole graph.
+11. **Review the campaign.** Run the adversarial pass plus a mechanical checker on each implementation unit, then one cross-package architecture and ergonomics review over the whole graph.
 
 ## Accept the result
 

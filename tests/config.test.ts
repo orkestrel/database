@@ -15,10 +15,10 @@ import {
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build, loadConfigFromFile } from 'vite'
+import { build, createServer, loadConfigFromFile } from 'vite'
 import { RuleTester } from 'oxlint/plugins-dev'
 import * as configHelpers from '../configs/helpers.js'
-import { MOCKING_RULE, PRIVACY_RULE } from '../configs/policy.js'
+import { MOCKING_RULE, NESTED_RULE, PRIVACY_RULE } from '../configs/policy.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
 import { createPolicyScratch, inspectPolicyConfiguration } from './setupPolicy.js'
@@ -62,7 +62,13 @@ describe('root configuration', () => {
 	it('registers every workspace project with its fixed include and setup files', () => {
 		const expected = new Map<
 			string,
-			{ readonly include: string; readonly setup: readonly string[] }
+			{
+				readonly benchmark?: readonly string[]
+				readonly include: string
+				readonly parallel?: boolean
+				readonly pool?: string
+				readonly setup: readonly string[]
+			}
 		>()
 		if (existsSync(resolve(root, 'src/core'))) {
 			expected.set('src:core', {
@@ -120,6 +126,16 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts'],
 			})
 		}
+		// The setup project is selected by any proof named `setup*.test.ts` directly under
+		// `tests`, so it is the one derived project whose include is a pattern rather than
+		// the proof's own path. Reading it from the same glob the generator reads keeps a
+		// registered project inside this gate instead of beside it.
+		if (globSync('tests/setup*.test.ts', { cwd: root }).length > 0) {
+			expected.set('setup', {
+				include: 'tests/setup*.test.ts',
+				setup: ['./tests/setup.ts'],
+			})
+		}
 		// The live-service project covers a directory rather than one proof, so its
 		// readiness module is the fact that selects it. A suite beneath
 		// `tests/service` with no setup module is a project nothing configures.
@@ -129,7 +145,13 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts', './tests/setupService.ts'],
 			})
 		}
-		expected.set('probe', { include: 'tmp/probe/**/*.test.ts', setup: ['./tests/setup.ts'] })
+		expected.set('probe', {
+			benchmark: ['tmp/probe/**/*.test.ts', 'tests/**/*.test.ts'],
+			include: 'tmp/probe/**/*.test.ts',
+			parallel: false,
+			pool: 'threads',
+			setup: ['./tests/setup.ts'],
+		})
 		// A row that is a configuration rather than a factory. A workspace with a
 		// browser application emits one, because that factory refuses overrides and
 		// so is not a value Vitest may call. It is required here, in a workspace that
@@ -164,7 +186,13 @@ describe('root configuration', () => {
 		const controlled = projects.concat(control, concrete)
 		const configured = new Map<
 			string,
-			{ readonly include: string; readonly setup: readonly string[] }
+			{
+				readonly benchmark?: readonly string[]
+				readonly include: string
+				readonly parallel?: boolean
+				readonly pool?: string
+				readonly setup: readonly string[]
+			}
 		>()
 		for (const [requiredLabel] of expected) {
 			const factoryName = requiredLabel.replace(/:([a-z])/gu, (_match, letter: string) =>
@@ -216,6 +244,34 @@ describe('root configuration', () => {
 			)
 			if (effective.length !== 1 || typeof effective[0] !== 'string') {
 				throw new Error(`${label} does not resolve to one effective include`)
+			}
+			if (label === 'probe') {
+				const benchmark: unknown = Object.getOwnPropertyDescriptor(test, 'benchmark')?.value
+				const parallel: unknown = Object.getOwnPropertyDescriptor(test, 'fileParallelism')?.value
+				const pool: unknown = Object.getOwnPropertyDescriptor(test, 'pool')?.value
+				if (typeof benchmark !== 'object' || benchmark === null) {
+					throw new Error('The probe project carries no benchmark block')
+				}
+				const benchmarkInclude: unknown = Object.getOwnPropertyDescriptor(
+					benchmark,
+					'include',
+				)?.value
+				if (
+					!Array.isArray(benchmarkInclude) ||
+					!benchmarkInclude.every((path) => typeof path === 'string') ||
+					typeof parallel !== 'boolean' ||
+					typeof pool !== 'string'
+				) {
+					throw new Error('The probe project carries an invalid benchmark configuration')
+				}
+				configured.set(label, {
+					benchmark: benchmarkInclude,
+					include: effective[0],
+					parallel,
+					pool,
+					setup: [...new Set(setup)],
+				})
+				continue
 			}
 			configured.set(label, { include: effective[0], setup: [...new Set(setup)] })
 		}
@@ -457,6 +513,108 @@ describe('root configuration', () => {
 		)
 	})
 
+	it('keeps the committed host inventory aligned with the vendored checkout bytes', async () => {
+		// Run this gate against a quiescent checkout. It compares two reads and cannot
+		// distinguish stale committed data from a source edit made while it runs.
+		const packageValue: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+		if (typeof packageValue !== 'object' || packageValue === null) {
+			throw new Error('The package manifest is not a record')
+		}
+		const scripts: unknown = Object.getOwnPropertyDescriptor(packageValue, 'scripts')?.value
+		if (typeof scripts !== 'object' || scripts === null) {
+			throw new Error('The package manifest carries no scripts')
+		}
+		const generator: unknown = Object.getOwnPropertyDescriptor(scripts, 'build:inventory')?.value
+		expect(generator === undefined || typeof generator === 'string').toBe(true)
+		if (generator === undefined) {
+			if (existsSync(resolve(root, 'host.json'))) {
+				throw new Error('A committed host inventory exists without a generator')
+			}
+			return
+		}
+		if (typeof generator !== 'string') {
+			throw new Error('The host inventory generator is not a script')
+		}
+		const committed = resolve(root, 'host.json')
+		if (!existsSync(committed)) {
+			throw new Error('The committed host inventory is absent at host.json')
+		}
+		const helper = resolve(root, 'src/server/helpers.ts')
+		if (!existsSync(helper)) {
+			throw new Error('The committed host inventory has no server stager')
+		}
+		const server = await createServer({
+			configFile: false,
+			root,
+			...(configuration.resolve === undefined ? {} : { resolve: configuration.resolve }),
+			server: { middlewareMode: true },
+		})
+		try {
+			const loaded: unknown = await server.ssrLoadModule(helper)
+			if (typeof loaded !== 'object' || loaded === null) {
+				throw new Error('The server helper module did not load')
+			}
+			const stage: unknown = Reflect.get(loaded, 'stageInventory')
+			if (typeof stage !== 'function') {
+				throw new Error('The server helper module exports no stageInventory function')
+			}
+			const workspace = mkdtempSync(join(root, 'host-inventory-'))
+			try {
+				const generated = join(workspace, 'host.json')
+				Reflect.apply(stage, undefined, [root, generated])
+				const generatedText = readFileSync(generated, 'utf8')
+				const committedText = readFileSync(committed, 'utf8')
+				const values: readonly unknown[] = [JSON.parse(generatedText), JSON.parse(committedText)]
+				const indexes: Array<Map<string, string>> = []
+				for (const value of values) {
+					if (typeof value !== 'object' || value === null) {
+						throw new Error('A host inventory is not a record')
+					}
+					const entries: unknown = Object.getOwnPropertyDescriptor(value, 'entries')?.value
+					if (!Array.isArray(entries)) throw new Error('A host inventory carries no entry list')
+					const index = new Map<string, string>()
+					for (const entry of entries) {
+						if (typeof entry !== 'object' || entry === null) {
+							throw new Error('A host inventory carries a malformed entry')
+						}
+						const destination: unknown = Object.getOwnPropertyDescriptor(
+							entry,
+							'destination',
+						)?.value
+						const digest: unknown = Object.getOwnPropertyDescriptor(entry, 'digest')?.value
+						if (typeof destination !== 'string' || typeof digest !== 'string') {
+							throw new Error('A host inventory entry carries no destination digest')
+						}
+						index.set(destination, digest)
+					}
+					indexes.push(index)
+				}
+				const generatedIndex = indexes[0]
+				const committedIndex = indexes[1]
+				if (generatedIndex === undefined || committedIndex === undefined) {
+					throw new Error('The host inventories were not indexed')
+				}
+				if (generatedText !== committedText) {
+					const stale: string[] = []
+					for (const [destination, digest] of generatedIndex) {
+						if (committedIndex.get(destination) !== digest) stale.push(destination)
+					}
+					for (const destination of committedIndex.keys()) {
+						if (!generatedIndex.has(destination)) stale.push(destination)
+					}
+					throw new Error(
+						`The committed host inventory is stale at ${stale.length > 0 ? stale.sort().join(', ') : 'host.json'}`,
+					)
+				}
+				console.info(`host-inventory: entries=${generatedIndex.size}`)
+			} finally {
+				rmSync(workspace, { recursive: true, force: true })
+			}
+		} finally {
+			await server.close()
+		}
+	})
+
 	it('keeps policy rules active across every linted workspace path', () => {
 		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
 		expect(inspectPolicyConfiguration(parsed)).toEqual([])
@@ -563,23 +721,114 @@ describe('policy plugin', () => {
 		],
 	})
 
+	tester.run('no-nested-functions', NESTED_RULE, {
+		valid: [
+			{
+				name: 'accepts a module-scope function',
+				code: 'function projectValue() { return 1 }',
+			},
+			{
+				name: 'accepts an anonymous callback passed directly',
+				code: 'function projectValues() { return values.map((value) => value + 1) }',
+			},
+			{
+				name: 'accepts an anonymous arrow returned directly',
+				code: 'function createProjector() { return () => 1 }',
+			},
+			{
+				name: 'accepts the sanctioned policy visitor delegation',
+				code: [
+					'function reportNode(context, node) { context.report({ node }) }',
+					'const RULE = {',
+					'create(context) {',
+					'return { CallExpression: (node) => reportNode(context, node) }',
+					'}',
+					'}',
+				].join('\n'),
+			},
+			{
+				name: 'accepts function syntax inside a class expression',
+				code: 'function projectValue() { return class { read() { const value = () => 1; return value() } } }',
+			},
+			{
+				name: 'accepts class accessors inside a factory',
+				code: 'function createAccessor() { class Accessor { get value() { return 1 } set value(value) { consume(value) } } return Accessor }',
+			},
+		],
+		invalid: [
+			{
+				name: 'accepts object accessors while rejecting nested function expressions',
+				code: [
+					'function createAccessor() {',
+					'  const control = function () { return 1 }',
+					'  return {',
+					'    get value() {',
+					'      const nested = function () { return 2 }',
+					'      return nested()',
+					'    },',
+					'    set value(value) { consume(value) },',
+					'  }',
+					'}',
+				].join('\n'),
+				errors: [
+					{ messageId: 'nested', line: 2, column: 18 },
+					{ messageId: 'nested', line: 5, column: 21 },
+				],
+			},
+			{
+				name: 'rejects a local function declaration',
+				code: 'function projectValue() { function readValue() { return 1 } return readValue() }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a function assigned to a local binding',
+				code: 'function projectValue() { const readValue = () => 1; return readValue() }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a named function expression argument',
+				code: 'function projectValue() { return read(function readValue() { return 1 }) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a callback parameter default function',
+				code: 'function projectValue() { return values.map((value = () => 1) => value()) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects an assignment two direct callbacks down',
+				code: 'function projectValue() { return values.map((value) => read((nested) => { const project = () => nested; return project() })) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a function assigned inside a class-declaration method',
+				code: 'class Project { read() { const value = () => 1; return value() } }',
+				errors: [{ messageId: 'nested' }],
+			},
+		],
+	})
+
 	it('loads every configured policy rule through the real binary', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-policy-' })
 		try {
+			scratch.write('.oxlintrc.json', readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
+			scratch.write('configs/policy.ts', readFileSync(resolve(root, 'configs/policy.ts'), 'utf8'))
 			scratch.write(
-				'violations/fixture.ts',
+				'src/violations/fixture.ts',
 				[
 					"vi.mock('./x')",
 					'class PrivateMember { private value = 1 }',
 					'class ParameterMember { constructor(readonly value: string) {} }',
 					'class PublicMember { public value = 1 }',
+					'function OuterFunction() { const nested = () => undefined; return nested() }',
 					'void PrivateMember',
 					'void ParameterMember',
 					'void PublicMember',
+					'void OuterFunction',
 				].join('\n'),
 			)
 			scratch.write(
-				'clean/fixture.ts',
+				'src/clean/fixture.ts',
 				[
 					'class CleanMember {',
 					'\t#value = 1',
@@ -611,16 +860,16 @@ describe('policy plugin', () => {
 				throw new Error('The oxlint package declares no bin.oxlint entry')
 			}
 			const binary = resolve(dirname(manifestPath), entry)
-			const config = resolve(root, '.oxlintrc.json')
+			const config = resolve(scratch.path, '.oxlintrc.json')
 			const violations = spawnSync(
 				process.execPath,
-				[binary, '--config', config, '--format', 'json', resolve(scratch.path, 'violations')],
-				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
+				[binary, '--config', config, '--format', 'json', 'src/violations'],
+				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
 			const clean = spawnSync(
 				process.execPath,
-				[binary, '--config', config, '--format', 'json', resolve(scratch.path, 'clean')],
-				{ cwd: root, encoding: 'utf8', timeout: 15_000 },
+				[binary, '--config', config, '--format', 'json', 'src/clean'],
+				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
 			const reports: string[][] = []
 			for (const result of [violations, clean]) {
@@ -654,6 +903,7 @@ describe('policy plugin', () => {
 			for (const rule of [
 				'policy(no-mocking)',
 				'policy(no-keyword-privacy)',
+				'policy(no-nested-functions)',
 				'typescript(parameter-properties)',
 				'typescript(explicit-member-accessibility)',
 			]) {
@@ -675,6 +925,7 @@ describe('configuration helpers', () => {
 			'WORKSPACE_ROOT',
 			'containedPath',
 			'decodeAssetSource',
+			'enforceBuildLog',
 			'enforceOutputPath',
 			'environmentAssetSources',
 			'environmentBoundary',
@@ -700,6 +951,34 @@ describe('configuration helpers', () => {
 		]
 		const found = Object.keys(configHelpers)
 		for (const name of required) expect(found).toContain(name)
+	})
+
+	it('fails broken import-meta builds and forwards every other log', () => {
+		expect(() =>
+			configHelpers.enforceBuildLog(
+				'warn',
+				{
+					code: 'EMPTY_IMPORT_META',
+					message: 'The import.meta meta-property is not available in CommonJS output.',
+				},
+				expect.unreachable,
+			),
+		).toThrow(
+			'[orkestrel-build] The import.meta meta-property is not available in CommonJS output.',
+		)
+
+		const levels: string[] = []
+		const messages: string[] = []
+		configHelpers.enforceBuildLog(
+			'warn',
+			{ code: 'CONTROL_WARNING', message: 'The control warning remains visible.' },
+			(level, log) => {
+				levels.push(level)
+				messages.push(typeof log === 'string' ? log : log.message)
+			},
+		)
+		expect(levels).toStrictEqual(['warn'])
+		expect(messages).toStrictEqual(['The control warning remains visible.'])
 	})
 
 	it('resolves contained workspace paths and refuses a real outside sibling', () => {
@@ -813,7 +1092,7 @@ describe('configuration helpers', () => {
 		)
 	})
 
-	it('drives both plugins through their real Vite hooks', async () => {
+	it('drives each plugin through its real Vite hooks', async () => {
 		const environments: ReadonlyArray<
 			'src/core' | 'src/browser' | 'src/server' | 'app/core' | 'app/browser' | 'app/server'
 		> = ['src/core', 'src/browser', 'src/server', 'app/core', 'app/browser', 'app/server']
