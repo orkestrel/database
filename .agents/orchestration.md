@@ -530,7 +530,8 @@ right to stop.
   is a guess. A claim about a search names the scope the search covered: a search bounded to one
   directory proves something about that directory and nothing about the rest of the tree, and a
   filtered set proves something about the filter's membership rule and nothing about the population
-  it was drawn from.
+  it was drawn from. Where several artifacts state the fact, check it against the code rather than
+  against the other copies: agreement proves one copy was taken from another.
 - Take every measurement under the conditions the unit will run in, or have the unit take it. A
   number measured in your environment and asserted as a criterion is unreachable when the
   executor's sandbox denies what yours permitted, and no edit to the owned files can close it.
@@ -553,7 +554,10 @@ right to stop.
   first criterion the unit cannot close and stops it there, so an unreachable criterion placed ahead
   of a typecheck or a lint criterion skips that gate entirely and the unit ships a defect its own
   brief would have caught. Put the cheap non-timing gates first, and never let a whole-suite result
-  gate a scoped one.
+  gate a scoped one. Cheap-first has one exception: where the change edits a file the repository
+  vendors or otherwise digests, the regeneration step precedes every gate that reads the generated
+  artifact. A parity or inventory gate ordered ahead of it cannot pass, because the edit restaled the
+  digest that gate reads, and the unit stops on a criterion its own work already satisfied.
 - Ask what the change will do to the facts you just measured. A criterion fixed to a measured set is
   unreachable if the change alters that set, and a file marked off-limits is wrong if the change
   writes to it. Measure the state the unit will finish in, not only the state it starts from.
@@ -585,6 +589,17 @@ right to stop.
   Ask of every criterion: what asserts the state this change ends? Own every answer, or strike the
   criterion. Grant a behaviour and the tests that pin it together; grant a constant and every fixture
   and expectation derived from it together.
+- Find that set by running the suite, not by searching for the assertion's shape. A search returns
+  the assertions that look right and cannot say which ones the change actually reaches: a fixture
+  that never builds the directory the new code reads is a match the change cannot touch, and a
+  fixture that reaches it through a path the search never named is a miss. Both errors appear in one
+  grep. Where the change is already written somewhere — a scratch copy, an earlier unit, a probe —
+  run the suite against it and read the failures. Where it is not, name the search's bound in the
+  brief so the unit re-derives the set instead of trusting it.
+- Scope a unit that changes a mechanism to own the prose describing that mechanism: the comment
+  beside the code it edits, and the guide passage stating the behaviour it moves. Where a brief
+  scopes that prose out so writers do not share a file, name the carrier that takes it and dispatch
+  that carrier before the change ships.
 
 ### Carry every finding
 
@@ -616,6 +631,11 @@ command that outlives the turn that started it. Every law here binds all of them
 - Write a multi-step chain to a script file and run the file. A chain composed inside one shell
   argument cannot be read back, corrected, or re-run, and the record of what actually ran is the
   argument text in a transcript rather than a file on disk.
+- Never edit a script file while a shell is executing it. `bash` reads a script incrementally from a
+  byte offset rather than loading it, so an edit that shifts line numbers moves the text under that
+  offset and the shell resumes mid-construct. The run dies on a syntax error in a line the script
+  does not contain, which reads as a defect in the work rather than as the edit that caused it. Copy
+  the file, edit the copy, and launch the copy for the next run.
 - On a Windows host this binds every program-carrying command, not only long ones. Heredocs,
   `node -e`, `node -p`, `&&` chaining, and any argument carrying `${...}` trip the Git Bash
   approval classifier and turn an unattended run into a manual approval prompt. Write the program

@@ -83,7 +83,8 @@
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts",
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
+		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
