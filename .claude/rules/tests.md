@@ -111,7 +111,9 @@ The kinds split by which tool has to see the probe:
   test script names its project, so no gate runs the `probe` project.
 - A **bench** is read by Vitest's benchmark mode, so it lives inside a test file as a block behind
   the `if (import.meta.env.MODE === 'benchmark')` guard. Only the `test:bench` script collects the
-  block, test mode fails an unguarded `bench()` call loudly, and no gate runs a bench.
+  block, test mode fails an unguarded `bench()` call loudly, and no gate runs a bench. Call `bench`
+  directly inside the guard. A `describe` inside it trips `vitest/no-conditional-tests`, and a suite
+  the guard leaves unregistered fails test mode with `No test found in suite`.
 
 Run a probe before relying on an unverified belief about behaviour: what a function returns, what a
 configuration resolves to, whether a path is reached at all. Prefer a probe to an argument whenever
@@ -169,7 +171,7 @@ A test that spawns a process, packs, installs, or drives a real build is a proof
 
 Test helpers are shared infrastructure, not local test-file clutter.
 
-`@orkestrel/test` owns the helpers every workspace repeats: the call recorder, the real delay, the JSON and async collectors, and the owned scratch directory. Import them from `@orkestrel/test`, and its Node-only helpers from `@orkestrel/test/server`. Write a helper of your own only where the package exports none for the job. The shapes below are the contract a workspace codes against, not source to copy.
+`@orkestrel/test` owns the helpers every workspace repeats: the call recorder, the real delay, the JSON and async collectors, and the owned scratch directory. Import them from `@orkestrel/test`, and its Node-only helpers from `@orkestrel/test/server`. Write a helper of your own only where the package exports none for the job. The following shapes are the contract a workspace codes against, not source to copy.
 
 - For the vendored test set (`tests/setupPolicy.ts`, `tests/policy.test.ts`, and
   `tests/config.test.ts`), keep shared helpers within that set instead of importing them from

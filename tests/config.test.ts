@@ -318,6 +318,43 @@ describe('root configuration', () => {
 		expect(callable).not.toContain(inline)
 	})
 
+	it('keeps Vitest invocation fields out of project configurations', () => {
+		const projects = configuration.test?.projects
+		if (!Array.isArray(projects)) throw new Error('The root configuration carries no projects')
+		const factories = projects.filter((row) => typeof row === 'function')
+		if (factories.length === 0)
+			throw new Error('The root configuration registers no project factory')
+		const sentinel = {
+			command: 'sentinel-command',
+			isPreview: true,
+			isSsrBuild: true,
+			mode: 'sentinel-mode',
+			sentinel: true,
+		}
+		for (const factory of factories) {
+			const project: unknown = Reflect.apply(factory, undefined, [sentinel])
+			if (typeof project !== 'object' || project === null) {
+				throw new Error('A project factory returned no configuration')
+			}
+			for (const field of Object.keys(sentinel)) {
+				expect(Object.getOwnPropertyDescriptor(project, field)?.value).toBeUndefined()
+			}
+		}
+
+		const control = Object.defineProperty(() => ({ ...sentinel }), 'name', { value: 'control' })
+		expect(() => {
+			for (const factory of factories.concat(control)) {
+				const project: unknown = Reflect.apply(factory, undefined, [sentinel])
+				if (typeof project !== 'object' || project === null) {
+					throw new Error('A project factory returned no configuration')
+				}
+				for (const field of Object.keys(sentinel)) {
+					expect(Object.getOwnPropertyDescriptor(project, field)?.value).toBeUndefined()
+				}
+			}
+		}).toThrow(/expected/u)
+	})
+
 	it('requires and validates every selected target wrapper', async () => {
 		const required: string[] = []
 		for (const axis of ['src', 'app']) {
@@ -532,6 +569,26 @@ describe('root configuration', () => {
 		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(
 			hasService && publishes,
 		)
+	})
+
+	it('rebuilds publishing workspaces before packing', () => {
+		const manifest: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+		if (typeof manifest !== 'object' || manifest === null) {
+			throw new Error('The package manifest is not a record')
+		}
+		const scripts: unknown = Object.getOwnPropertyDescriptor(manifest, 'scripts')?.value
+		if (typeof scripts !== 'object' || scripts === null) {
+			throw new Error('The package manifest carries no scripts')
+		}
+		const publishes = Object.getOwnPropertyDescriptor(manifest, 'private')?.value !== true
+		const prepack = Object.getOwnPropertyDescriptor(scripts, 'prepack')?.value
+		expect(prepack).toBe(publishes ? 'npm run build' : undefined)
+
+		const controlled = { ...scripts, prepack: 'npm run control' }
+		expect(() => {
+			const control = Object.getOwnPropertyDescriptor(controlled, 'prepack')?.value
+			expect(control).toBe(publishes ? 'npm run build' : undefined)
+		}).toThrow(/expected/u)
 	})
 
 	it('keeps the committed host inventory aligned with the vendored checkout bytes', async () => {

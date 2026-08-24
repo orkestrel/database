@@ -13,7 +13,7 @@
 - External delegates, including Cursor and Codex models, have no exemption. Every dispatch restates the non-negotiables, applicable rules, guide or spec, and owned files. Every result receives independent review.
 - Before working, read in order:
   1. this file;
-  2. every applicable file in `.claude/rules/` from the rule map below;
+  2. every applicable file in `.claude/rules/` from the Rule map section;
   3. every explicitly invoked or dispatch-named skill and the references it requires;
   4. `guides/README.md`, the matching guide or spec, and `ROADMAP.md` when present.
 - Rules state **how to write**. Guides and specs state **what to build** and the domain workflow. When they conflict, stop and surface the conflict.
@@ -115,7 +115,7 @@ npm run format:check → npm run lint:check → npm run check → npm run build 
 
 ## Rule map
 
-Every file below is a normative extension of this root. Read every rule relevant to the files or concepts you touch. Path frontmatter only controls Claude's automatic loading.
+Every file in the following table is a normative extension of this root. Read every rule relevant to the files or concepts you touch. Path frontmatter only controls Claude's automatic loading.
 
 | Rule                             | Governs                                                                |
 | -------------------------------- | ---------------------------------------------------------------------- |

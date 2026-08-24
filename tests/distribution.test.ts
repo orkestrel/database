@@ -40,8 +40,8 @@ const SHELL = process.platform === 'win32'
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
 // everywhere else: a gate that passes on missing evidence proves nothing.
 const RELEASE = import.meta.env.MODE === 'release'
-// The built output directory a browser face is published from. Every selection here
-// reads this prefix off the export TARGET and never off the subpath name. A
+// The built output directory convention a browser face may publish from. Every
+// selection reads this prefix off the export target and never off the subpath name. A
 // workspace whose only published face is the browser one publishes that face at the
 // root subpath, so a rule keyed on the subpath name drives a browser bundle through
 // Node and the miss is silent.
@@ -329,11 +329,33 @@ function readPackageType(installed: string, target: string): unknown {
 	}
 }
 
-// Whether the declaration selected by a typed CommonJS consumer admits that entry
-// to its compile probe. A `.d.cts` declaration admits and a `.d.mts`
-// declaration refuses. A `.d.ts` declaration takes its own nearest package scope.
-// Runtime target format remains the runtime drive's separate question.
+function resolvesBrowser(entry: unknown): boolean {
+	const module = resolveTarget(entry, RUNTIME_CONDITIONS.browser)
+	if (module !== undefined && module.startsWith(BROWSER_OUTPUT)) return true
+	if (module === undefined) return false
+	const imported = resolveTarget(entry, RUNTIME_CONDITIONS.module)
+	const required = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs)
+	return module !== imported && module !== required
+}
+
+// Whether the target selected by Node's CommonJS conditions is a module require can
+// load. A JavaScript target takes its own nearest package scope. Native addons and
+// extensionless targets have their own CommonJS handlers.
 function resolvesCommonJS(entry: unknown, installed: string): boolean {
+	const target = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs)
+	if (target === undefined) return false
+	const name = target.slice(target.lastIndexOf('/') + 1)
+	if (name.endsWith('.cjs')) return true
+	if (name.endsWith('.mjs')) return false
+	if (name.endsWith('.node')) return true
+	if (!name.includes('.')) return true
+	return name.endsWith('.js') && readPackageType(installed, target) !== 'module'
+}
+
+// Whether the declaration selected by a typed CommonJS consumer admits that entry.
+// A `.d.cts` declaration admits and a `.d.mts` declaration refuses. A `.d.ts`
+// declaration takes its own nearest package scope.
+function declaresCommonJS(entry: unknown, installed: string): boolean {
 	const declaration = resolveDeclaration(entry, DECLARATION_CONDITIONS.commonjs, installed)
 	if (declaration === undefined) return false
 	if (declaration.endsWith('.d.cts')) return true
@@ -396,13 +418,13 @@ function selectEntries(entries: readonly Entry[], conditions: readonly string[])
 // Require-loadable entries that declare CommonJS support but a typed CommonJS
 // consumer cannot compile against. A default branch resolving under the require
 // condition set makes no CommonJS claim.
-function selectUntypable(entries: readonly Entry[]): readonly Entry[] {
+function selectUntypable(entries: readonly Entry[], installed: string): readonly Entry[] {
 	return entries.filter(
 		(entry) =>
 			entry.required &&
 			isRecord(entry.mapping) &&
 			Object.hasOwn(entry.mapping, 'require') &&
-			!entry.commonjs,
+			!declaresCommonJS(entry.mapping, installed),
 	)
 }
 
@@ -631,9 +653,11 @@ function buildStage(): Stage {
 			continue
 		}
 		const imported = resolveTarget(entry, RUNTIME_CONDITIONS.module)
-		const commonjs = resolvesCommonJS(entry, installed)
-		const required = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs) !== undefined
-		const module = resolveTarget(entry, RUNTIME_CONDITIONS.browser)
+		const requiredTarget = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs)
+		const browserTarget = resolveTarget(entry, RUNTIME_CONDITIONS.browser)
+		const browser = resolvesBrowser(entry)
+		const required = requiredTarget !== undefined && !(browser && requiredTarget === browserTarget)
+		const commonjs = required && resolvesCommonJS(entry, installed)
 		entries.push({
 			subpath,
 			specifier: subpath === '.' ? name : `${name}${subpath.slice(1)}`,
@@ -645,8 +669,8 @@ function buildStage(): Stage {
 				browser:
 					declaration.browser === undefined ? undefined : join(installed, declaration.browser),
 			},
-			browser: module !== undefined && module.startsWith(BROWSER_OUTPUT),
-			module: imported !== undefined,
+			browser,
+			module: imported !== undefined && !(browser && imported === browserTarget),
 			commonjs,
 			required,
 		})
@@ -686,6 +710,74 @@ function openStage(): Stage | undefined {
 
 const STAGE = openStage()
 const STAGED = STAGE !== undefined
+
+describe('distribution classifiers', () => {
+	it('classifies synthetic export mappings without a registry stage', () => {
+		const root = join(SCRATCH, 'classifiers')
+		writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({
+				type: 'commonjs',
+				exports: {
+					condition: { browser: './b.js', default: './n.js' },
+					convention: { default: './dist/src/browser/index.js' },
+					universal: { default: './shared.js' },
+					'import-shared': {
+						browser: './shared.mjs',
+						import: './shared.mjs',
+						default: './node.js',
+					},
+					'require-shared': {
+						browser: './shared.cjs',
+						require: './shared.cjs',
+						default: './node.js',
+					},
+					node: { node: './node.js', default: './node.js' },
+					silent: { 'module-sync': './x.cjs', import: './x.mjs' },
+					module: { require: './x.mjs' },
+					'nested-module': { require: './module/x.js' },
+					'nested-commonjs': { require: './commonjs/x.js' },
+					esm: { import: './x.mjs' },
+				},
+			}),
+		)
+		writeFile(join(root, 'module/package.json'), '{ "type": "module" }\n')
+		writeFile(join(root, 'commonjs/package.json'), '{ "type": "commonjs" }\n')
+		const manifest = readJson(join(root, 'package.json'))
+		if (!isRecord(manifest) || !isRecord(manifest.exports)) {
+			throw new Error('The classifier fixture declares no exports map')
+		}
+		const mappings = manifest.exports
+		expect({
+			condition: resolvesBrowser(mappings.condition),
+			convention: resolvesBrowser(mappings.convention),
+			universal: resolvesBrowser(mappings.universal),
+			import: resolvesBrowser(mappings['import-shared']),
+			require: resolvesBrowser(mappings['require-shared']),
+			node: resolvesBrowser(mappings.node),
+		}).toStrictEqual({
+			condition: true,
+			convention: true,
+			universal: false,
+			import: false,
+			require: false,
+			node: false,
+		})
+		expect({
+			silent: resolvesCommonJS(mappings.silent, root),
+			module: resolvesCommonJS(mappings.module, root),
+			nestedModule: resolvesCommonJS(mappings['nested-module'], root),
+			nestedCommonJS: resolvesCommonJS(mappings['nested-commonjs'], root),
+			esm: resolvesCommonJS(mappings.esm, root),
+		}).toStrictEqual({
+			silent: true,
+			module: false,
+			nestedModule: false,
+			nestedCommonJS: true,
+			esm: false,
+		})
+	})
+})
 
 // The staged consumer, or a skip naming what the run could not reach. `it.skipIf`
 // carries no reason, so the gate sits here where the test context can state one.
@@ -734,7 +826,7 @@ describe('installed package consumer', () => {
 			(entry) => !entry.module && !entry.required && !entry.browser,
 		)
 		expect(unreachable.map((entry) => entry.subpath)).toStrictEqual([])
-		const untypable = selectUntypable(stage.entries)
+		const untypable = selectUntypable(stage.entries, stage.installed)
 		expect(untypable.map((entry) => entry.subpath)).toStrictEqual([])
 	})
 
@@ -779,7 +871,7 @@ describe('installed package consumer', () => {
 
 for (const entry of STAGE?.entries ?? []) {
 	describe(`installed entry ${entry.subpath}`, () => {
-		it.runIf(entry.module && !entry.browser)(
+		it.runIf(entry.module)(
 			'publishes what it declares to a Node import, and no more',
 			(context) => {
 				const declaration = entry.declaration.module
@@ -791,7 +883,7 @@ for (const entry of STAGE?.entries ?? []) {
 			},
 		)
 
-		it.runIf(!entry.browser && entry.required)(
+		it.runIf(entry.required)(
 			'publishes what it declares to a Node require, and no more',
 			(context) => {
 				const declaration = entry.declaration.commonjs

@@ -14,7 +14,7 @@ developer_instructions = """
 Read AGENTS.md, .agents/orchestration.md, every applicable .claude/rules/*.md file, the
 dispatch-named .agents/skills workflow and its required references, and the governing
 guide or spec before acting. AGENTS.md controls code substance; .agents/orchestration.md
-controls agent operation; this layer adds only the Codex specifics below and cannot
+controls agent operation; this layer adds only the following Codex specifics and cannot
 weaken either.
 
 Sol orchestrates in this harness. Act as the Orchestrator defined in

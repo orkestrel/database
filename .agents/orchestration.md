@@ -7,7 +7,7 @@ harness follows this file.
 
 Read in this order before acting:
 
-1. The user's current instruction. It wins over everything below.
+1. The user's current instruction. It wins over every later item.
 2. `AGENTS.md` and the applicable `.claude/rules/*.md` files. They govern code substance.
 3. This file. It governs agent operation only and cannot weaken the coding contract.
 4. The dispatch-named skill and the references it requires.
@@ -95,8 +95,9 @@ Record the substitution.
 - Grok takes every lane only in Cursor, and only when Opus 5 and Sol are both unavailable.
 - Treat a lane that returns no verdicts as a lane that did not run. A bench lane reporting that its
   driver executed and its engine was never reached is a dark bench, not a result. Record the bench
-  dark from that report, re-run the lane on the substitute engine from the table above, and name in
-  the routing ledger which lane ran on which engine. Never accept a round with one lane empty.
+  dark from that report, re-run the lane on the substitute engine from the preceding table, and
+  name in the routing ledger which lane ran on which engine. Never accept a round with one lane
+  empty.
 - Re-read bench liveness at dispatch, not at session start. A bench that probed live can be dark when
   the lane launches.
 
@@ -288,13 +289,14 @@ owns each bench's exact probe.
 
 The local steps still run, because they route the recovery rather than decide the verdict: an
 unresolved CLI is an install problem, a failed authentication-state check starts the login ladder
-below, and a bench that passes both and still cannot round-trip is dark for a reason no local check
-can see. Record every dark bench with its fallback and the lane substitution it forces, and never
-absorb one silently. A readiness script reports readiness and performs no model call, so the round
-trip belongs to the Orchestrator's own probe or to the bridge carrying the unit, never to the hook.
-Liveness also expires: a dispatch that fails on quota, model access, or the network is a fresh
-liveness result rather than a unit-level fault, so record the bench dark from there and re-plan the
-lane instead of re-dispatching against a session-start answer that no longer holds.
+in Recovering a dark bench, and a bench that passes both and still cannot round-trip is dark for a
+reason no local check can see. Record every dark bench with its fallback and the lane substitution
+it forces, and never absorb one silently. A readiness script reports readiness and performs no
+model call, so the round trip belongs to the Orchestrator's own probe or to the bridge carrying
+the unit, never to the hook. Liveness also expires: a dispatch that fails on quota, model access,
+or the network is a fresh liveness result rather than a unit-level fault, so record the bench dark
+from there and re-plan the lane instead of re-dispatching against a session-start answer that no
+longer holds.
 
 1. **Absorb.** Dispatch `grok` for terrain, prior art, and the reading the decision needs. In an
    Orkestrel repo dispatch `orkestrel` alongside it for live package state. Skip only when the
@@ -846,8 +848,8 @@ either publishes packages nobody needed to publish or leaves a consumer pinned t
   whitespace-only differences; a superfluous diff (formatting, blank lines, map noise) moves
   nothing and obliges nothing. A material diff — tokens, declarations, logic — means the published
   surface moved — a forced `src` or `app` edit and a toolchain-changed emit both surface here — so
-  that package bumps and publishes on its own account, and its own dependents follow the runtime
-  rule above.
+  that package bumps and publishes on its own account, and its own dependents follow the preceding
+  runtime rule.
 
 Every package is `0.0.x`, where a caret pins one exact release. A dependent therefore sees a new
 version only after it re-pins and republishes, so the fleet publishes in topological layer order

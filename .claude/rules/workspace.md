@@ -166,7 +166,7 @@ ignored by git; and `.claude/rules/tests.md` governs what may live there.
   drives.
 - In a publishing workspace, a project leaves the default run when it drives a live external
   service or is hermetic but slow — it spawns processes, packs, installs, or drives a real build.
-- Give every isolated project its own script, and place that script by the paragraph above.
+- Give every isolated project its own script, and place that script by the preceding paragraph.
 
 Setup assets:
 

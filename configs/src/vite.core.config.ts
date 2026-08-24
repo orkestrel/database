@@ -1,10 +1,10 @@
-import { defineConfig } from 'vite'
+import { defineConfig, mergeConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 import { environmentBoundary, outputBoundary } from '../helpers.js'
 import { peers, srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
-	srcCore({
+	mergeConfig(srcCore(), {
 		publicDir: false,
 		plugins: [
 			outputBoundary('dist/src/core'),
@@ -26,7 +26,7 @@ export default defineConfig(
 			lib: {
 				entry: resolveWorkspacePath('src/core/index.ts'),
 				formats: ['es', 'cjs'],
-				fileName: (format) => (format === 'es' ? 'index.js' : 'index.cjs'),
+				fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
 			},
 			outDir: 'dist/src/core',
 			rolldownOptions: {
