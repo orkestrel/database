@@ -148,6 +148,16 @@ Every file in the following table is a normative extension of this root. Read ev
 
 This governs prose everywhere: chat replies, instruction files, guides, TSDoc, commit messages, and briefs.
 
+Follow ISO 24495-1:2023 Plain Language in every response:
+
+- Give the reader what they need for the task at hand, and nothing else.
+- Put the key point first, and order the rest so the reader finds each part where they look for it.
+- Word every sentence so the reader understands it on the first read.
+- Shape the response so the reader can act on it without asking a follow-up question.
+
+The rules in this section and `.claude/rules/writing.md` implement these principles. Apply the
+principles directly to a case no rule covers.
+
 - Write plainly. Say what you mean; mean what you say.
 - Lead with the decision or the finding. Do not build up to it.
 - One idea per sentence. Keep sentences short.
