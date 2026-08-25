@@ -1,11 +1,18 @@
 import type { Condition, Migration, TableSchema } from '@src/core'
-import { createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
+import { conformDriver, createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { conformDriver, tableSchemas } from '../../../setup.js'
+import { tableSchemas } from '../../../setup.js'
 
-conformDriver('MemoryDriver', () => createMemoryDriver())
+// The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
+// schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
+// stream / transaction); each backend suite registers its own case.
+describe('driver conformance — MemoryDriver', () => {
+	it('conforms to DriverInterface', async () => {
+		await expect(conformDriver(() => createMemoryDriver())).resolves.toBeUndefined()
+	})
+})
 
 describe('MemoryDriver', () => {
 	it('readies the named tables on open (a scan returns nothing, not an error)', async () => {

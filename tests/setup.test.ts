@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
 	collectRankStreamIds,
-	conformDriver,
 	createConstrainedUsersDatabase,
 	createCursorDatabase,
 	createMemoryAdapter,
@@ -40,16 +39,6 @@ import {
 // fixture's writes are read back through the WRAPPED driver rather than through the handle the
 // fixture returned, so nothing the wrapper holds itself can satisfy the assertion. A condition
 // literal is judged by the rows a real query returns rather than by its own fields.
-
-/** The recorder proving the registered conformance battery mints from the supplied factory. */
-const conformanceFactory = createRecorder<[]>()
-
-// Registered at import time, so the recorder above is declared first and the assertion on it is
-// declared last — Vitest runs a file's cases in declaration order.
-conformDriver('memory driver', () => {
-	conformanceFactory.handler()
-	return createMemoryDriver()
-})
 
 /** Seed the canonical trio into a real constrained `users` table. */
 async function seedConstrainedUsers() {
@@ -85,14 +74,16 @@ function recordUsersTable(aggregatesUndefined: boolean) {
 }
 
 describe('INTEGRATION_TABLES', () => {
+	it('declares the users table and no other', () => {
+		expect(Object.keys(INTEGRATION_TABLES)).toEqual(['users'])
+		expect(Object.keys(INTEGRATION_TABLES.users).sort()).toEqual(['age', 'id', 'name'])
+	})
+
 	it('admits the canonical fixture row and refuses a value of the wrong column type', () => {
 		const { age, id, name } = INTEGRATION_TABLES.users
-		const { author, title } = INTEGRATION_TABLES.posts
 		expect(compileGuard(id)('u1')).toBe(true)
 		expect(compileGuard(name)('Ada')).toBe(true)
 		expect(compileGuard(age)(36)).toBe(true)
-		expect(compileGuard(author)('u1')).toBe(true)
-		expect(compileGuard(title)('First')).toBe(true)
 		expect(compileGuard(id)(1)).toBe(false)
 		expect(compileGuard(age)('36')).toBe(false)
 		expect(compileGuard(age)(36.5)).toBe(false)
@@ -414,11 +405,5 @@ describe('createRecordingDriver', () => {
 		const { recording, users } = recordUsersTable(true)
 		expect(await users.aggregate('sum', 'age')).toBeUndefined()
 		expect(recording.aggregateCalls.map(({ operation }) => operation)).toEqual(['sum'])
-	})
-})
-
-describe('conformDriver', () => {
-	it('registers a battery that mints its driver from the supplied factory', () => {
-		expect(conformanceFactory.count).toBeGreaterThan(0)
 	})
 })

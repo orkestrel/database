@@ -21,8 +21,7 @@ import type {
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
 import { integerShape, literalShape, stringShape } from '@orkestrel/contract'
-import { conformDriver as coreConformDriver, createDatabase, createMemoryDriver } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { createDatabase, createMemoryDriver } from '@src/core'
 
 // ── Database test fixtures ────────────────────────────────────────────────────
 // Shared, environment-agnostic scenario builders for the `database` module's tests — a
@@ -87,10 +86,9 @@ export function buildCondition(
 	return { column, operator, values, connector }
 }
 
-/** The shared `users` / `posts` shape maps for the cross-driver integration tests. */
+/** The shared `users` shape map the fixture rows and the native-hook dispatch tests declare. */
 export const INTEGRATION_TABLES = {
 	users: { id: stringShape(), name: stringShape(), age: integerShape() },
-	posts: { id: stringShape(), author: stringShape(), title: stringShape() },
 } satisfies Readonly<Record<string, ColumnMap>>
 
 /** A row of the canonical `users` table ({@link INTEGRATION_TABLES}` users`). */
@@ -431,28 +429,4 @@ export function createRecordingDriver(aggregatesUndefined = false): {
 		},
 	}
 	return { driver, recordsCalls, aggregateCalls }
-}
-
-// ── Driver conformance battery ──────────────────────────────────────────────
-// Every current and future DriverInterface backend proves the same contract
-// with one call (AGENTS §16.1) — delegated to the core `conformDriver` helper
-// (`@src/core`), which owns the schema, the required-primitive checks, and the
-// presence-gated optional-hook coverage (migrate / stream / transaction).
-
-/**
- * Register the shared {@link DriverInterface} conformance battery for one backend
- * — a thin `describe` wrapper around the core `conformDriver` helper. Call once
- * per backend (AGENTS §16.1) so a new driver proves the same invariants the
- * reference `MemoryDriver` does, with one line instead of a hand-rolled copy of
- * its test file.
- *
- * @param name - The backend's name, used in the registered `describe` title
- * @param factory - Builds one fresh, unopened driver instance
- */
-export function conformDriver(name: string, factory: () => DriverInterface): void {
-	describe(`driver conformance — ${name}`, () => {
-		it('conforms to DriverInterface', async () => {
-			await expect(coreConformDriver(factory)).resolves.toBeUndefined()
-		})
-	})
 }

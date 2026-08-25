@@ -2,11 +2,6 @@
 // for the `src:browser` project, which runs in a real Chromium (DOM
 // available, no `node:*`).
 
-import type { DatabaseInterface } from '@src/core'
-import { createDatabase } from '@src/core'
-import { createIndexedDBDriver } from '@src/browser'
-import { INTEGRATION_TABLES } from './setup.js'
-
 /**
  * Deletes an IndexedDB database, settling after the request reports any outcome, so a test can
  * start from a clean store.
@@ -78,40 +73,4 @@ export function putIndexedDBValue(
 		transaction.onerror = () => reject(transaction.error)
 		transaction.onabort = () => reject(transaction.error)
 	})
-}
-
-// ── Cross-driver database fixture (the core stack over the IndexedDB driver) ──
-
-/** A core `Database` over the IndexedDB driver plus the boilerplate to name and
- *  dispose it — the cross-driver integration fixture. */
-export interface IntegrationDatabaseInterface {
-	/** The core `Database`, opened over `INTEGRATION_TABLES` via the IndexedDB driver. */
-	readonly db: DatabaseInterface<typeof INTEGRATION_TABLES>
-	/** The unique IndexedDB name the database was opened under (for reopen tests). */
-	readonly name: string
-	/** Close the connection and delete the underlying IndexedDB database. */
-	cleanup(): Promise<void>
-}
-
-/**
- * Open the core database over the IndexedDB driver, under a
- * unique name, returning the handle, its name, and a cleanup — the shared opener
- * for the cross-driver integration test.
- *
- * @returns The connected database, its IndexedDB name, and a cleanup
- */
-export function createIntegrationDatabase(): IntegrationDatabaseInterface {
-	const name = uniqueName('taverna-idb-int')
-	const db = createDatabase({
-		driver: createIndexedDBDriver(name),
-		tables: INTEGRATION_TABLES,
-	})
-	return {
-		db,
-		name,
-		async cleanup(): Promise<void> {
-			await db.close()
-			await deleteDatabase(name)
-		},
-	}
 }

@@ -1,6 +1,7 @@
 import type { DriverInterface, TableSchema } from '@src/core'
 import {
 	applyQuery,
+	conformDriver,
 	createDatabase,
 	createMemoryDriver,
 	isDatabaseError,
@@ -11,7 +12,7 @@ import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, conformDriver, tableSchemas } from '../../../setup.js'
+import { buildCondition, tableSchemas } from '../../../setup.js'
 import { deleteDatabase, putIndexedDBValue, uniqueName } from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
@@ -67,9 +68,16 @@ afterEach(async () => {
 	await deleteDatabase(name)
 })
 
-conformDriver('IndexedDBDriver', () =>
-	createIndexedDBDriver(uniqueName('taverna-idbdriver-conform')),
-)
+// The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
+// schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
+// stream / transaction); each backend suite registers its own case.
+describe('driver conformance — IndexedDBDriver', () => {
+	it('conforms to DriverInterface', async () => {
+		await expect(
+			conformDriver(() => createIndexedDBDriver(uniqueName('taverna-idbdriver-conform'))),
+		).resolves.toBeUndefined()
+	})
+})
 
 describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 	it('reads back what it writes; misses are undefined / false', async () => {

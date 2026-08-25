@@ -6,17 +6,26 @@ import type {
 	TableSchema,
 	StorageInterface,
 } from '@src/core'
-import { createDatabase, isDatabaseError, planMigration } from '@src/core'
+import { conformDriver, createDatabase, isDatabaseError, planMigration } from '@src/core'
 import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, conformDriver } from '../../../setup.js'
+import { buildCondition } from '../../../setup.js'
 import { driverSchema, replaceTransactionFailure, tempDatabasePath } from '../../../setupServer.js'
 
-conformDriver('JSONDriver', () => createJSONDriver(tempDatabasePath().path))
+// The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
+// schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
+// stream / transaction); each backend suite registers its own case.
+describe('driver conformance — JSONDriver', () => {
+	it('conforms to DriverInterface', async () => {
+		await expect(
+			conformDriver(() => createJSONDriver(tempDatabasePath().path)),
+		).resolves.toBeUndefined()
+	})
+})
 
 // The JSON driver's nine DriverInterface primitives over a real temp file (no
 // mocks, AGENTS §16): open + keyed read/write/delete/keys/scan(KEY order)/clear,
