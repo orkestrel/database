@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Publish Orkestrel Release'
+  short_description: 'Run a release in layer order through the npm approval window'
+  default_prompt: 'Use $orkestrel-publish to run the release - layer order, per-repository visit, bump ruling, layer preparation, login approval, upload window, and registry confirmation.'

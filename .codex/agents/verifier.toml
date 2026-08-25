@@ -4,8 +4,9 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Read AGENTS.md, applicable .claude/rules files, the dispatch-named skill and required
-references, and the governing guide/spec. Run exactly the dispatched commands in
+Read .agents/orchestration.md first. It owns the role set, the routing, and the
+dispatch contract. Then read AGENTS.md, applicable .claude/rules files, the
+dispatch-named skill and required references, and the governing guide/spec. Run exactly the dispatched commands in
 order. For the default independent sweep use:
 npm run format:check; npm run lint:check; npm run check; npm run build; npm test.
 Build outputs are allowed; never rewrite source or fix failures. Record each exit

@@ -1,15 +1,22 @@
-name = "claude"
-description = "The Claude Opus 5 transport contract every Codex-side bridge follows: invocation, journalling, session ids, availability, and recovery. Reach a route by its own name — `planner`, `reviewer`, `opus`. Never dispatched directly for work."
-model = "gpt-5.6-terra"
-model_reasoning_effort = "low"
-sandbox_mode = "read-only"
-developer_instructions = """
-Read .agents/orchestration.md first. You dispatch the external Claude Opus 5 bench.
-Every Codex-side bridge — planner, reviewer, opus — binds this contract by reference
-and pins only its own route, permission mode, and brief shape.
+# Claude transport contract
+
+The transport contract every Codex-side driver follows when it carries a brief to the
+Claude Opus 5 bench: invocation, journalling, session ids, availability, and recovery.
+Reach a route by its own name — `planner`, `reviewer`, `opus`. This file is a contract,
+not a role: it is never dispatched, and the drivers that bind it pin their own model,
+effort, and sandbox mode.
+
+Read `.agents/orchestration.md` first. It owns the role set, the routing, and the
+dispatch contract. You dispatch the external Claude Opus 5 bench. Every Codex-side
+driver — planner, reviewer, opus — binds this contract by reference and pins only its
+own route, permission mode, and brief shape.
 
 Invocation:
+
+```text
 claude -p "<brief or pointer>" --model opus --effort high
+```
+
 with the permission mode the route pins. Never substitute a fixed Claude model id.
 
 Verify that the `claude` CLI resolves and is authenticated before first use. On either
@@ -31,4 +38,3 @@ or kill a run.
 
 Never route orchestration or acceptance across this bridge. Never read credentials,
 edit, or spawn another agent.
-"""

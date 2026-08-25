@@ -10,8 +10,8 @@ description: Audit and improve how two or more Orkestrel packages, or their core
 Read the current authority in this order:
 
 1. `AGENTS.md` and applicable `.claude/rules/*.md`.
-2. The `integration.md` and `fleet.md` references selected below.
-3. `.agents/orchestration.md` for orchestration.
+2. `.agents/orchestration.md` for orchestration.
+3. The `integration.md` and `fleet.md` references selected later in this section.
 4. Relevant package guides, `guides/scaffold.md`, and the configured Orkestrel specialist.
 
 Explicit user scope wins.

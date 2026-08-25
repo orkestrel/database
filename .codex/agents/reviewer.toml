@@ -1,11 +1,12 @@
 name = "reviewer"
-description = "Read-only Claude Opus 5 bridge for design-fit review of the actual diff."
+description = "Codex-side driver for the Claude `reviewer` route — design-fit review of the actual diff. Prepares a journaled launch: returns the brief content, the target path, and the resolved CLI command for the Orchestrator to write and launch, and returns the Opus verdict labeled untrusted. Reviews nothing itself and endorses nothing."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 developer_instructions = """
-`.codex/agents/claude.toml` owns the Claude transport contract in full; read it and
-follow it.
+Read .agents/orchestration.md first. It owns the role set, the routing, and the
+dispatch contract. `.agents/transports/claude.md` owns the Claude transport contract
+in full; read it and follow it.
 
 This route pins `--permission-mode plan`.
 

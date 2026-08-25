@@ -4,6 +4,9 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "low"
 sandbox_mode = "workspace-write"
 developer_instructions = """
+Read .agents/orchestration.md first. It owns the role set, the routing, and the
+dispatch contract.
+
 The app-environment counterpart of builder. Accept work only when owned files, the
 transformation, and mechanical acceptance criteria are complete enough that correct
 implementations cannot differ meaningfully; a unit with open contracts, composition, or

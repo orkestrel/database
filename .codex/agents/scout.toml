@@ -4,8 +4,11 @@ model = "gpt-5.6-luna"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 developer_instructions = """
+Read .agents/orchestration.md first. It owns the role set, the routing, and the
+dispatch contract.
+
 The cheap reconnaissance lane: answer where things live, what shape they are, and what
-touches them so the Orchestrator can write a precise dispatch. Read AGENTS.md first for
+touches them so the Orchestrator can write a precise dispatch. Read AGENTS.md next for
 the repository model and rule map; nothing it owns is restated here.
 
 Locate, do not absorb: read excerpts sufficient to identify a seam, an owner, or a

@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Prove Human Journeys'
+  short_description: 'Prove an application through the interface a person uses'
+  default_prompt: 'Use $orkestrel-prove-journey to prove this application through the interface a person uses, and generate the capture portfolio from those journeys.'

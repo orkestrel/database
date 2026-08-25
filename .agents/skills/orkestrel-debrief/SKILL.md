@@ -1,6 +1,6 @@
 ---
 name: orkestrel-debrief
-description: Look back at a long campaign to learn from its mistakes and successes and improve the agents, rules, skills, and processes that ran it. Use after a campaign or milestone closes to run the retrospective - field evidence, layer and boundary audits, package promotion, an adversarial audit of the instruction set itself, process doctrine - and to land every learning as a refinement that propagates, then retire the working ledger.
+description: Look back at a long campaign to learn from its mistakes and successes and improve the agents, rules, skills, and processes that ran it. Use after a campaign or milestone closes to run the retrospective - field evidence, layer and boundary audits, package promotion, an adversarial audit of the instruction set itself, process doctrine - and to land every learning as a refinement that propagates, then retire the campaign folder.
 ---
 
 # Debrief a closed campaign
@@ -11,11 +11,12 @@ Read the current files in this order:
 
 1. `AGENTS.md`.
 2. Every applicable `.claude/rules/*.md`; the documentation and quality laws bind every
-   ledger entry and every refinement this skill produces.
+   finding this round records and every refinement it produces.
 3. The references this round needs: [instruction-audit.md](references/instruction-audit.md)
    before auditing the agent/rule/skill/process layer;
    [field-testing.md](references/field-testing.md) before running or judging a live field
-   pass of an agent-facing surface.
+   pass of an agent-facing surface; [retention.md](references/retention.md) before
+   retiring the campaign folder.
 4. `guides/README.md`, the governing guides for what the campaign built, and `ROADMAP.md` when
    the repository keeps one.
 
@@ -42,9 +43,11 @@ a practice that worked so it repeats.
 - **Portable versus resident.** Learnings reusable beyond the repository — process
   doctrine, role charters, rules, skills — land in the portable canon and propagate
   through the scaffold host inventory. Repository truth lands in the guide; forward work
-  in `ROADMAP.md`. Nothing load-bearing stays only in the ledger.
-- **The ledger is ephemeral.** Fold every surviving truth into its destination, then
-  delete the folder on the owner's explicit go-ahead — never silently, never as residue.
+  in `ROADMAP.md`. Nothing load-bearing stays only in the campaign folder.
+- **The campaign folder is ephemeral.** Fold every surviving truth into its destination,
+  then retire the folder through [retention.md](references/retention.md): its checks close
+  the deletion and the owner's explicit go-ahead authorizes it, in that order. Never
+  silently, never as residue.
 
 ## Run the round
 
@@ -74,9 +77,9 @@ a practice that worked so it repeats.
    contract themselves against the campaign record, using the adversarial method in
    [instruction-audit.md](references/instruction-audit.md). What confused an executor is
    a defect in the instruction, not the executor.
-6. **Reconcile into the ledger.** Number the findings, attach verbatim evidence, bucket
-   every one. Where audit lanes disagree, rule each divergence on the record with
-   the reason.
+6. **Reconcile into the campaign folder.** Number the findings, attach verbatim
+   evidence, bucket every one. Where audit lanes disagree, rule each divergence on the
+   record with the reason.
 7. **Land the refinements.** Dispatch fix-now findings as bounded units under the
    repository's engine contract; make the canon edits (charters, rules, skills,
    orchestration contract) with the owner's direction where the root contract is
@@ -85,8 +88,9 @@ a practice that worked so it repeats.
    staged, gated, and pushed — editing one project's checkout propagates nothing. Verify
    the generated-workspace proofs stay green so new projects inherit the refined canon.
 9. **Dispose.** Present the disposition map — finding table with carriers, the canon
-   delta, what remains open — and delete the ledger only on the owner's explicit
-   go-ahead.
+   delta, what remains open — and retire the campaign folder through
+   [retention.md](references/retention.md), which owns the checks, the go-ahead, the
+   `tmp/` sweep, and the prune commit's promotion record.
 
 ## Verdict shape
 

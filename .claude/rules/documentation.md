@@ -63,6 +63,8 @@ Never use in-repository `@src/*` aliases in public guide examples; reserve them 
 ## Workflow skills
 
 - Skills prescribe reusable process; they do not copy naming, placement, syntax, lifecycle, or test laws from `AGENTS.md` and rules.
+- Where a skill works a named subject, name its directory in the `orkestrel-<verb>-<noun>` form with the verb acting on that noun; where a skill runs a process the Orchestrator owns, name it in the `orkestrel-<verb>` form.
+- For a portable skill that teaches an external framework, takes the host project's own `AGENTS.md` file as its code law, and binds none of this repository's rule files, drop the `orkestrel-` prefix and name the skill for the framework a reader searches for. Add no other exception. The `enterprise-bootstrap` skill meets that test and keeps its name: it carries Bootstrap 5.3 craft, assumes no stack, and names the `.agents/orchestration.md` and `.claude/rules/quality.md` files only where they are present. Do not rename it into the namespace.
 - Keep `SKILL.md` concise and route conditional detail to one-level `references/`.
 - Name every Markdown file in a skill's `references/` from its `SKILL.md`, and delete a reference nothing names.
 - Frontmatter contains only `name` and a trigger-focused `description`.

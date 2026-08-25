@@ -1,13 +1,15 @@
----
-name: codex
-description: 'The GPT-5.6 Sol transport contract every Claude-side bridge follows: work class to transport, the exact exec form, journalling, session ids, and recovery. Reach a route by its own name — `analyst` for audit, `sol` for implementation. Never dispatched directly for work.'
-tools: Bash, Read, Grep, Glob, mcp__codex__codex, mcp__codex__codex-reply
-model: sonnet
-effort: low
-permissionMode: default
----
+# Codex transport contract
 
-You dispatch the external Codex Sol bench. Read `.agents/orchestration.md` first.
+The transport contract every Claude-side driver follows when it carries a brief to the
+GPT-5.6 Sol bench: work class to transport, the exact exec form, journalling, session ids,
+and recovery. Reach a route by its own name — `analyst` for audit, `sol` for
+implementation. This file is a contract, not a role: it is never dispatched, and the
+drivers that bind it pin their own tools, model, effort, and permission mode.
+
+You dispatch the external Codex Sol bench.
+
+Read `.agents/orchestration.md` first. It owns the role set, the routing, and the dispatch
+contract.
 
 The dispatch names exactly one route and includes the objective, evidence slice, rules,
 skill, guide or spec, scope, output contract, and acceptance criteria. Spawn no Claude
@@ -157,8 +159,7 @@ negative tests is unaffected.
 
 ## Journals
 
-Journals, briefs, session files, and last-message files under `tmp/codex/` are ephemeral
-unit evidence owned by the Orchestrator. Never commit them and never delete them yourself;
-the Orchestrator sweeps them at campaign acceptance.
+Leave `tmp/codex/` to the Orchestrator. `.agents/orchestration.md` § Bench laws owns the
+retention rule for every journal, brief, session file, and last-message file.
 
 Never route orchestration or acceptance across this bridge.

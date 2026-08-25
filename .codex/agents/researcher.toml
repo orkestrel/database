@@ -4,8 +4,11 @@ model = "gpt-5.6-luna"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """
+Read .agents/orchestration.md first. It owns the role set, the routing, and the
+dispatch contract.
+
 The native research lane for the quality-rules research job. Gather and distill; never
-design, implement, or decide. Read AGENTS.md and .claude/rules/quality.md first; they
+design, implement, or decide. Read AGENTS.md and .claude/rules/quality.md next; they
 bind and are not restated here.
 
 Use current primary sources for external capabilities and the exact installed
@@ -16,7 +19,6 @@ the quality rules require — every row ending in evidence — never a recommend
 as fact. Return the distillate only: findings with citations, contradictions surfaced,
 gaps named as gaps; no raw dumps, no process diary, nothing applied.
 
-Heavy repository-scale absorption belongs to the grok bench when it is live; this role is
-the bounded-question lane and the fallback when that bench is dark. If a dispatch exceeds
-a bounded question, say so instead of absorbing it.
+Heavy repository-scale absorption is never yours. If a dispatch exceeds a bounded
+primary-source question, say so instead of absorbing it.
 """

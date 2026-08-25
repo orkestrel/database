@@ -16,6 +16,9 @@ Read in this order before acting:
 `CLAUDE.md`, `.codex/config.toml`, and `.cursor/rules/` are bridges. Each points here and adds
 only what its harness needs. None of them restates this file.
 
+A line stays in this file when an executor who is not doing that thing is worse off without it. A
+line becomes a skill when it fires on a named trigger and its reader is one agent at one moment.
+
 Every dispatch tells its executor to read every item after the user's current instruction before
 acting.
 
@@ -32,7 +35,8 @@ One workflow runs across all providers. Each engine has one job and never takes 
 - Route each nontrivial implementation unit to Opus or Sol. Objective, constraint-heavy,
   mechanical-precision work goes to Sol. API-shape, naming, and documentation-voice work goes to
   Opus. Cursor Composer is not an implementation route, and no `composer` role exists.
-- Design and audit always run the adversarial pass.
+- Design runs the adversarial pass. An audit runs the lanes its round names, with at least one whose
+  engine did not write the work.
 
 ## Orchestration by harness
 
@@ -93,11 +97,11 @@ Record the substitution.
 - Never assign Grok to either lane in Claude Code or Codex. If the remaining native engine is also
   unavailable there, the pass cannot run: stop and report rather than substituting Grok.
 - Grok takes every lane only in Cursor, and only when Opus 5 and Sol are both unavailable.
-- Treat a lane that returns no verdicts as a lane that did not run. A bench lane reporting that its
-  driver executed and its engine was never reached is a dark bench, not a result. Record the bench
-  dark from that report, re-run the lane on the substitute engine from the preceding table, and
-  name in the routing ledger which lane ran on which engine. Never accept a round with one lane
-  empty.
+- Treat a lane that returns no verdicts as a lane that did not run. Re-probe the bench before ruling
+  on why, per Bench laws rule "One lane at a time per bench". A bench lane reporting that its driver
+  executed and its engine was never reached is a dark bench, not a result. Record the bench dark
+  from that report, re-run the lane on the substitute engine from the preceding table, and name in
+  the routing ledger which lane ran on which engine. Never accept a round with one lane empty.
 - Re-read bench liveness at dispatch, not at session start. A bench that probed live can be dark when
   the lane launches.
 
@@ -143,7 +147,7 @@ when the role file already pins it.
 | Design-fit review and audit              | `reviewer`                      | `reviewer`                    | Opus 5 (native / bridge)      |
 | Objective analysis and correctness audit | `analyst`                       | `analyst`                     | GPT-5.6 Sol (bridge / native) |
 | Nontrivial implementation (objective)    | `sol`                           | `implementer`                 | GPT-5.6 Sol (bridge / native) |
-| Nontrivial implementation (subjective)   | `implementer`                   | `implementer` route `opus`    | Opus 5 (native / bridge)      |
+| Nontrivial implementation (subjective)   | `implementer`                   | `opus`                        | Opus 5 (native / bridge)      |
 | Bounded primary-source research          | `researcher`                    | `researcher`                  | Grok → Luna → Sonnet          |
 | Repository reconnaissance                | `scout`                         | `scout`                       | Grok → Luna → Sonnet          |
 | Mechanical conformance evidence          | `checker`                       | `checker`                     | Grok → Luna → Sonnet          |
@@ -154,6 +158,9 @@ when the role file already pins it.
 
 - A **bridge** role is a cheap driver whose only work is invoking another provider's CLI. It never
   implements, judges, or endorses the result.
+- `implementer` names the harness's native implementation lane, so the token means Opus in Claude
+  Code and Sol in Codex. An engine-named bridge — `sol`, `opus` — names the other engine. Read a
+  role name against the harness you are running in, and state the engine anyway.
 - Give every role a file on both sides. The role file is where engine, effort, tools, permissions,
   and charter are pinned, and the tool allowlist is what makes the read-only floor real. A role
   with no file has nowhere to pin either.
@@ -163,11 +170,15 @@ when the role file already pins it.
   has stepped past Grok. Record which step you are on.
 - `orkestrel` stays native because it carries the package catalog in its own role file. Sending its
   job to a bench means shipping that catalog across, which costs more than the bench saves.
-- `codex` is the shared Sol transport contract, not a route. `analyst` and `sol` are the named
-  bridges; both bind that contract by reference and pin only their route and sandbox.
-- Mirroring is by work class, not filename. A transport contract is provider-specific:
-  `.claude/agents/codex.md` carries the Sol transport on the Claude side, `.codex/agents/claude.toml`
-  the Opus transport on the Codex side, and each side's bridges bind their own by reference.
+- A transport contract lives in `.agents/transports/`, not in an agents directory. A harness lists
+  its dispatchable agents from that directory, so a contract that is never dispatched sits outside
+  it. `.agents/transports/codex.md` is the shared Sol transport contract and
+  `.agents/transports/claude.md` the shared Opus transport contract. Neither is a route: `analyst`
+  and `sol` are the named Sol bridges, `planner`, `reviewer`, and `opus` the named Opus bridges, and
+  each binds its own contract by reference and pins only its route and sandbox.
+- Mirroring is by work class, not filename. A transport contract is provider-specific: the Codex
+  contract carries the Sol transport the Claude-side bridges follow, the Claude contract carries the
+  Opus transport the Codex-side bridges follow, and each side's bridges bind their own.
 - Opus and Sol roles use high effort. Native cheap-tier roles use low or medium. Bridge drivers use
   the cheapest tier that can run a CLI.
 - Never route orchestration or acceptance across a bridge.
@@ -321,10 +332,12 @@ longer holds.
    criterion discovered at integration is a successor brief routed to a writer, never an
    integration edit.
 5. **Audit adversarially.** Audit every nontrivial implementation with at least one lane whose
-   engine did not write it. Run another lane when the first returns FAIL, when the subject is a
-   rendered or externally driven surface, or when the unit's claims span both correctness and
-   shape. Dispatch `checker` when the acceptance criteria are mechanical — counts, paths, parity
-   rows, scope honesty. Record in the round's verdict file when a lane or the checker did not run.
+   engine did not write it: `reviewer` for the subjective lane and `analyst` for the objective lane,
+   the way step 2 names its lanes. Run the second lane when the first returns FAIL, when the subject
+   is a rendered or externally driven surface, or when the unit's claims span both correctness and
+   shape. Dispatch `checker` in addition when the acceptance criteria are mechanical — counts,
+   paths, parity rows, scope honesty — never in place of a lane. Record in the round's verdict file
+   when a lane or the checker did not run.
    - State the audit's subject as numbered falsifiable claims and require per-claim verdicts with
      evidence, per the Falsification law in `.claude/rules/quality.md` and the `orkestrel-falsify`
      value set, unless the dispatch names a different skill that fixes another.
@@ -397,7 +410,9 @@ The harness bridge names the concrete mechanism for each of these.
 
 - Write the brief to a file under `tmp/`, named for its unit, before launching the unit, whatever
   engine executes it. A brief composed only inside a launch argument cannot be corrected, resumed,
-  or re-run once that call ends.
+  or re-run after that call ends. A native unit's pair is `tmp/units/<unit>-brief.md` and
+  `tmp/units/<unit>-report.md`. A bench unit's pair sits under the bench directory its role file
+  names, beside the journal.
 - Write the unit's returned report in the SAME action that commits its code, never afterwards. A
   commit message states what changed; the report states what the unit measured, what it decided, what
   it could not close, and which of its own claims it flagged. An auditor's subject is the report,
@@ -407,6 +422,11 @@ The harness bridge names the concrete mechanism for each of these.
 - Amend a brief on re-run rather than restating it. A mid-campaign correction produces a successor
   file recording what changed and why, and the original stays. A fix round's brief names the
   findings it carries and where each came from.
+- Name a corrected unit's effective brief and report and the pair they supersede before that unit
+  integrates. A unit whose correction landed as a serial patch or a direct reconciliation, with no
+  successor pair on disk, cannot be re-run from what the campaign kept.
+- Write the round's verdict to `.orkestrel/<package>/<unit>-audit-verdict.md`. That file is where
+  the audit step records a lane or a checker that did not run.
 - Read the copy the executor will open, not the one you wrote. A brief written in the orchestrator's
   repository and staged into the subject's checkout so a `-C` invocation can reach it is a second
   file, and staging can rewrite a path or drop a clause. The executor rules on what it opens, so a
@@ -435,7 +455,8 @@ The harness bridge names the concrete mechanism for each of these.
 - Put every campaign artifact in the **orchestrator's** repository under `.orkestrel/<package>/`,
   named for the package the campaign is about.
 - Give a campaign spanning several packages one shared `.orkestrel/campaign/` folder instead, so the
-  wave's plan, ledger, and verdicts sit together rather than split across the packages they rule on.
+  wave's plan, routing ledger, and verdicts sit together rather than split across the packages they
+  rule on.
 - Never put them in the package they are about. A published package's tree is its product.
 - Claim nothing outside `.orkestrel/` unless Orkestrel scaffold mandates it. Everything Orkestrel
   owns in a consumer's tree lives beneath that folder, so a convention can be settled there without
@@ -443,40 +464,14 @@ The harness bridge names the concrete mechanism for each of these.
 - Keep the campaign narrative and every ruling in the durable artifact that owns it — the guide for
   product truth, a rule or role file for process truth, the commit message for the decision itself.
   Use `ROADMAP.md` only where the repository already keeps one.
-- Prefer a mechanism that recomputes a fact over a document that records it. A ledger of live state
-  is stale from the moment it is written, and the next campaign reads it as current. Where the fact
-  can be derived, derive it: the fleet's publish order lives in the catalog table `scaffold catalog`
-  regenerates, not in a written order anyone has to remember to update.
-- Prune the campaign folder in a commit at acceptance. The tree ends clean and the record stays
-  recoverable by hash. Git history is the archive; the working tree is the workspace.
-
-### Before you prune
-
-Pruning is deletion, so it needs the same evidence as any other destructive step. Run these
-checks, and prune only when every one closes.
-
-1. **Carry check.** List every item the folder leaves open — a defect, a measurement to re-take, a
-   deferred decision, a withdrawn claim, an unmet acceptance condition. Each ends the check with a
-   carrier: a commit that closed it, a live brief that owns it, or an explicit drop on the record.
-   An item with no carrier blocks the prune. Read the register files for this — the plan, the
-   readiness grade, the carry ledger, the triage — not every brief and report in the folder.
-2. **Promotion check.** Rule on each remaining file by what it asserts. Product truth goes to the
-   guide, where the parity gate reaches it. A process law goes to the rule or contract file that
-   owns it. A decision goes to the commit message that made it, which is where it already is.
-   Everything else is process diary and prunes.
-3. **Measurement check.** A number the guide carries out of the folder carries the date it was
-   taken. A measurement whose date the folder does not record is re-taken or dropped, never copied.
-4. **Orientation check.** A cross-session orientation document — a handoff, a package-root narrative
-   file, a session log — is not a further category. It duplicates the guide for product truth and
-   the contract for process truth, it is gated by nothing, and it drifts. Dissolve it into the
-   artifacts that own it and delete it.
-
-A section recording live state — adopter republish status, installed version tables, what a sibling
-repository was doing that week — prunes with no promotion. It was stale when it was written, and
-promoting it publishes the staleness.
-
-Write the prune commit's message as the promotion record: what moved, and where each part landed.
-That message is what makes the deletion recoverable in practice rather than only in principle.
+- Prefer a mechanism that recomputes a fact over a document that records it. A document recording
+  live state is stale from the moment it is written, and the next campaign reads it as current.
+  Where the fact can be derived, derive it: the fleet's publish order lives in the catalog table
+  `scaffold catalog` regenerates, not in a written order anyone has to remember to update.
+- Prune the campaign folder in a commit at acceptance. Git history is the archive; the working tree
+  is the workspace. `.agents/skills/orkestrel-debrief/references/retention.md` owns the procedure —
+  the checks that close the prune, the artifact locations it sweeps, and the promotion record
+  the commit message carries. Run it before deleting anything.
 
 ### Required sections
 
@@ -518,90 +513,44 @@ That message is what makes the deletion recoverable in practice rather than only
 
 ### Check the brief before you send it
 
-Run these checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle that
-produces no work, because a unit given a brief that is internally consistent and factually wrong is
-right to stop.
+Fill `.agents/templates/brief.md`, which carries the named scope rows and the worked reason behind
+each check. Then run this checklist against what you filled.
 
-- Name the executor that will actually read the brief, and write its transport for that reader. The
-  same unit goes either to a bridge driver that invokes a bench CLI or to the bench engine already
-  running inside that CLI, and the sections that are essential for the first are nonsense to the
-  second: a brief telling an engine to launch its own CLI fails on arrival. Describe the route the
-  reader takes, not the route the work travels.
-- Paste the command and its output for every factual claim — paths, counts, registrations, file
-  existence. A description of a result is not the result, and a name recalled beside a counted set
-  is a guess. A claim about a search names the scope the search covered: a search bounded to one
-  directory proves something about that directory and nothing about the rest of the tree, and a
-  filtered set proves something about the filter's membership rule and nothing about the population
-  it was drawn from. Where several artifacts state the fact, check it against the code rather than
-  against the other copies: agreement proves one copy was taken from another.
-- Take every measurement under the conditions the unit will run in, or have the unit take it. A
-  number measured in your environment and asserted as a criterion is unreachable when the
-  executor's sandbox denies what yours permitted, and no edit to the owned files can close it.
-  Where the unit is better placed to measure than you are, have it take the measurement before doing
-  anything else and fix the criterion to the property you want rather than to the number you saw.
-- Read the acceptance criteria against the off-limits list, line by line. Every criterion closes
-  using owned files alone. A criterion that needs an off-limits file gets that file granted or gets
-  struck. A file the change will break that appears in neither list is an unscoped file; grant it or
-  strike the criterion.
-- Give a small unrelated obligation its own unit. Ride it along in a large one and its scope error
-  blocks the primary work, which is a whole unit lost to a detail.
-- Never make a timing-sensitive or whole-suite gate result a criterion for a unit that runs inside its
-  own exec. The exec is load, so the unit cannot take that reading validly however carefully it
-  isolates, and a criterion it cannot close either stalls it or invites it to explain the failure away.
-  Name the gate as an observation the unit reports with both readings, and take the authoritative run
-  yourself after the unit exits, per **Writing concurrency**'s rule on re-running a timing or
-  resource failure alone. A scoped run over the unit's own
-  owned files stays a legitimate criterion.
-- Order the criteria so an unreachable one cannot hide the others. A deviation contract fires on the
-  first criterion the unit cannot close and stops it there, so an unreachable criterion placed ahead
-  of a typecheck or a lint criterion skips that gate entirely and the unit ships a defect its own
-  brief would have caught. Put the cheap non-timing gates first, and never let a whole-suite result
-  gate a scoped one. Cheap-first has one exception: where the change edits a file the repository
-  vendors or otherwise digests, the regeneration step precedes every gate that reads the generated
-  artifact. A parity or inventory gate ordered ahead of it cannot pass, because the edit restaled the
-  digest that gate reads, and the unit stops on a criterion its own work already satisfied.
-- Ask what the change will do to the facts you just measured. A criterion fixed to a measured set is
-  unreachable if the change alters that set, and a file marked off-limits is wrong if the change
-  writes to it. Measure the state the unit will finish in, not only the state it starts from.
-- Grant both halves of a template change where the package generates the configuration it runs on.
-  The template and the repository's own materialized copy of that template's output are one change:
-  adding a fixed Vitest project moves the template, `vite.config.ts`, `package.json`, and the proof
-  file that project includes. Withhold either half and no edit to the owned files can reach the
-  gates the brief requires.
-- Name the property the unit must change, and stop. A consequence you expect to follow from it is an
-  observation for the report, not a criterion. Bundled together, the unit can satisfy neither and
-  cannot tell which half you meant.
-- Keep the brief's control identifiers inside the brief. Label controls so the brief's own table can
-  be read, and say in the brief that a test is named for what it proves, never for the control that
-  specified it. An implementer writing one test per control otherwise takes the label as the obvious
-  name, and a private brief vocabulary becomes a permanent test name.
+- Name the executor that will open the brief, and write the transport for that reader. A bridge
+  driver and the bench engine inside that driver's CLI need opposite instructions.
+- Paste the command and its output behind every factual claim — paths, counts, registrations, file
+  existence. Name the scope any search covered, and check a fact against the code rather than
+  against another artifact that states it.
+- Take every measurement under the conditions the unit runs in, or have the unit take it before
+  doing anything else.
+- Ask what the change does to every fact you measured, and fix each criterion to the state the unit
+  finishes in.
+- Scope the change by the files its result makes **false**, not by the files that declare the thing
+  changing: the test asserting the reversed behaviour, the fixture carrying the raised value, the
+  golden digest over generated output, the consumer script naming the removed union member.
+- Derive that set by running the suite. Where you cannot run it, name the search's bound in the
+  brief so the unit re-derives the set.
+- Grant a behaviour with the tests that pin it, a constant with every fixture and expectation
+  derived from it, and a template change with the materialized copy the package generates from it.
+- Read each criterion against the off-limits list, line by line. Grant the file a criterion needs or
+  strike that criterion. A file the change will break that appears in neither list is unscoped.
+- Scope a unit that changes a mechanism to own the prose describing it. Where a brief scopes that
+  prose out, name the carrier and dispatch it before the change ships.
+- Give a small unrelated obligation its own unit.
+- Name the property the unit must change, and stop. Record an expected consequence as an
+  observation, never as a second criterion.
+- Order the criteria cheap-first, so an unreachable one cannot hide a typecheck or a lint criterion
+  behind it. Where the change edits a file the repository vendors or digests, the regeneration step
+  precedes every gate that reads the generated artifact.
+- Never make a timing-sensitive or whole-suite gate result a criterion for a unit running inside its
+  own exec. Name it as an observation the unit reports with its own reading, and take the
+  authoritative run yourself after the unit exits. A scoped run over the unit's owned files stays a
+  legitimate criterion.
 - Check the brief's output mechanism and its verification method against the executor's tool
-  allowlist. A read-only role cannot write a report file, cannot write a probe, and cannot run a
-  sandbox that writes, so naming any of those stops the unit on arrival over a detail the allowlist
-  already settled. Where a read-only lane needs executed evidence, produce it separately and hand it
-  over: the Orchestrator supplies the evidence and the lane rules on it. When the evidence a lane
-  needs is a `prove` verdict and the lane's allowlist omits that tool, the Orchestrator takes the
-  call outside the lane's live interval and hands over the complete rendered verdict.
-- Scope a change by the files its result makes **false**, not by the files that declare the thing
-  changing. Counting importers finds only part of that set. A test asserting the behaviour being
-  reversed, a fixture carrying a value being raised, a golden digest over generated output, and a
-  consumer script naming a union member being removed each go false without importing anything new,
-  and a brief scoped to the declaration alone sends the unit into a failure in a file it cannot edit.
-  The unit is then right to stop, and a whole dispatch cycle produces no work.
-  Ask of every criterion: what asserts the state this change ends? Own every answer, or strike the
-  criterion. Grant a behaviour and the tests that pin it together; grant a constant and every fixture
-  and expectation derived from it together.
-- Find that set by running the suite, not by searching for the assertion's shape. A search returns
-  the assertions that look right and cannot say which ones the change actually reaches: a fixture
-  that never builds the directory the new code reads is a match the change cannot touch, and a
-  fixture that reaches it through a path the search never named is a miss. Both errors appear in one
-  grep. Where the change is already written somewhere — a scratch copy, an earlier unit, a probe —
-  run the suite against it and read the failures. Where it is not, name the search's bound in the
-  brief so the unit re-derives the set instead of trusting it.
-- Scope a unit that changes a mechanism to own the prose describing that mechanism: the comment
-  beside the code it edits, and the guide passage stating the behaviour it moves. Where a brief
-  scopes that prose out so writers do not share a file, name the carrier that takes it and dispatch
-  that carrier before the change ships.
+  allowlist. A read-only lane writes no report file and runs no probe, so hand it the rendered
+  evidence instead.
+- Keep the brief's control identifiers inside the brief, and say in the brief that a test is named
+  for what it proves rather than for the control that specified it.
 
 ### Carry every finding
 
@@ -742,7 +691,12 @@ transport.
 3. **Tracked, never loose.** Register every bench unit in the session task registry at launch with
    its subject, journal path, and session id, and complete it there at acceptance. "What is
    running" always has a first-class answer instead of a recollection of a command.
-4. **A bench sandbox spawns a child and denies that child's child.** Under `workspace-write` a bench
+4. **One lane at a time per bench.** Launch one `grok` lane at a time and queue the rest. Lanes past
+   that starve the bench: it accepts each launch and the lanes come back empty, which reads as the
+   work failing. Re-probe before ruling on an empty lane. A probe that round-trips while the lanes
+   return empty names starvation, not darkness — cut the concurrency and re-run the lane, rather
+   than recording the bench dark and substituting an engine.
+5. **A bench sandbox spawns a child and denies that child's child.** Under `workspace-write` a bench
    exec runs a test suite and spawns children normally, and every operation one level deeper fails:
    a grandchild process is denied `EPERM`, and a nested `npm install` is denied the same way. So a
    proof needing a process tree, a tree-kill, a detached group, or an installed package cannot be
@@ -776,7 +730,7 @@ transport.
    **When a brief assigns a bench unit a path outside the obvious source tree, name the write limit
    in the brief.** If the sandbox rejects the patch, the unit stops and reports the rejection. Never
    find another write mechanism.
-5. **Ephemeral streams, durable records.** A journal proves a bench is alive and recovers an
+6. **Ephemeral streams, durable records.** A journal proves a bench is alive and recovers an
    interrupted session. Keep journals under `tmp/`, never commit them, and sweep them at acceptance
    after the final gate evidence is recorded. Durable retention — brief, distillate, verdict,
    instrument, acceptance evidence — is owned by **Dispatch anatomy**; this rule owns only the
@@ -803,7 +757,14 @@ the conversation.
 
 A publish chain is a long-running command, so every law under **Long-running commands** binds it:
 write the chain to a file, detach it with `setsid`, and confirm the previous one is dead before
-starting another.
+starting another. Publish serially, because concurrent publishes collide on the authentication
+handshake and fail each other.
+
+The release itself runs from the `orkestrel-publish` skill: the wave's per-repo visit and its bump
+triggers in `references/wave.md`, and the preparation order, the login approval, and the
+five-minute upload window in `references/window.md`. Load the skill when the user asks for a
+release, and follow it there rather than reconstructing the procedure here. What remains in this
+section binds an executor who is not publishing.
 
 ### Fixing a dependency before it publishes
 
@@ -886,134 +847,6 @@ and propagates as files rather than as a cascade.
   `dist/host` surface, so editing one forces a bump, a publish, and a re-propagation across every
   target. Scope a fleet-wide refactor to the files each target owns, and record the vendored
   exclusion in the brief rather than letting each unit rediscover it.
-
-### The release wave
-
-Close a fleet-wide "everything on latest" goal as a release wave in layer order: visit every repo
-once per round with one procedure, publish each layer in one window, and only then prepare the next.
-
-- The visit, in order: re-pin the target's `@orkestrel/scaffold` devDependency and install, so the
-  overwrite runs the current vendored host; `scaffold overwrite`; force-verify every `@orkestrel`
-  range against a registry sweep taken after the previous layer published; full install; mutating
-  `format` to converge generated writes; the quality gates; the material-dist comparison against the
-  published tarball.
-- Bump on either trigger: the rebuilt dist differs materially from the published tarball, or the
-  final runtime dependency set differs from the published packument. Test the final set against the
-  packument, never "did my step move a pin" — overwrite's `declare` re-pins before any later check,
-  so the step-local reading reports nothing moved while the manifest surface did. A re-pinned
-  runtime range is published surface: without the bump a consumer installs duplicate copies of the
-  moved dependency.
-- A dist built before the version bump is the release artifact wherever the bump edits no emitted
-  byte. Check that per package rather than assuming it: a package that imports its own
-  `package.json` version into published code emits that version, so its pre-bump dist is stale the
-  moment the version moves. Rebuild after the bump there, and pack from the rebuilt tree. Because
-  `npm publish --ignore-scripts` skips `prepack`, that rebuild is the operator's step, not the
-  publish's.
-- Refresh the registry evidence between layers and derive each round's pins from it. A pin can only
-  name a version the registry already serves, so a dependency shipping in the same window keeps the
-  resolvable previous pin and takes its dev-only re-pin after the window closes.
-- Run visits in parallel slices of disjoint repos, each slice strictly serial inside itself,
-  reporting per-target. Refuse a failed target, name it, repair, and re-run it alone.
-
-### Preparing
-
-0. **An unpublished package's first version is `0.0.1`.** Do not bump it before that first publish.
-   The registry has nothing to serve, so there is no version to move away from, and bumping produces
-   a package whose history starts at a number nothing explains.
-1. **Bump from what the registry serves, not from the local manifest.** A repository's `version`
-   can sit a release behind what was published from another checkout, and bumping that produces a
-   version the registry already holds, which fails on upload after the whole gate chain has run.
-   Read the registry first.
-2. **Prepare a whole layer before authenticating.** Bump each version, re-pin every `@orkestrel`
-   range to what the registry serves now, install, and run the package's own `prepublishOnly` to
-   green. Move any self-pin in source with the manifest. Commit and push before the window opens.
-3. **Prepare the next layer only after this one is on the registry.** A dependent's new pin cannot
-   install until the version it names exists, so preparation and publication interleave and cannot
-   be batched ahead.
-
-The window is for uploads. Every gate, build, install, and commit happens outside it, which is what
-makes `--ignore-scripts` the right flag at publish time: the artifact was already proved, and the
-flag is what stops the gate chain running a second time inside the five minutes.
-
-### Reaching the approval
-
-- Launch the login chain only when the user has signalled they are at the keyboard and will click
-  within ten minutes. An approval URL expires unclicked in about ten to fifteen minutes, and an
-  overnight gap expires the session credential with it.
-- Run `npm login` before any publish. `npm publish` does not open the browser flow: unauthenticated
-  it returns `E404` on `PUT`, which reads as a missing package rather than a missing credential.
-- Pass `--browser=false` to `npm login` and to every `npm publish`. Without it npm prints
-  `Press ENTER to open in the browser...` and blocks. Never answer that prompt with a newline: the
-  web flow consumes the newline on a later read, drops to a legacy `Username:` prompt, and exits
-  **zero** without authenticating. With the flag npm prints the URL and polls, and stdin stays
-  untouched.
-- Hold stdin open and write nothing to it. Use a fifo held open by a long `sleep`. EOF drops npm to
-  the same legacy prompt a stray newline does.
-- A login log showing the spinner and then a legacy `Username:` prompt is an expired attempt, not a
-  prompt to answer: kill it by process id and mint a fresh flow.
-- Run the login and every publish under `script -qfc '<command>' <log>`. npm offers the approval only
-  when it sees a TTY; without one it fails `EOTP` with no way to answer.
-- Git Bash on Windows ships no `script` binary, so the upload step there is operator-driven: prepare
-  the layer, prove the gates, surface the exact `npm publish` command, and the operator runs it in a
-  real terminal. Everything before and after the upload — bumps, re-pins, gates, registry reads —
-  stays with the Orchestrator. The fifo stdin law still binds on that host.
-- Expect an approval for each stage. `npmjs.com/login/cli/<id>` authenticates the session;
-  `npmjs.com/auth/cli/<id>` authorizes the publish and opens the five-minute window. Tell the user
-  both are coming, or the second link reads as the first having failed.
-- Confirm authentication with `npm whoami`, never with an exit code. The legacy fallthrough exits
-  zero.
-- Re-probe `whoami` immediately before opening the window. A stored credential expires mid-session,
-  so a session-start answer does not hold.
-- Surface each approval URL the moment it appears in the log, and take the **last** one in log order.
-  npm mints a new URL whenever an attempt restarts, and the log accumulates every one, so a URL
-  chosen by sorting rather than by position is already dead when the user opens it. Read it out of
-  the journal in the foreground and surface it before arming any watcher: a watcher-based relay can
-  fail silently, and its silence is indistinguishable from a chain that has not reached the URL yet.
-  Relay the URL as plain text. A decorated link did not render for the operator, who then had nothing
-  to click while the window ran down.
-- Re-read the log before treating an approval as failed. The chain is usually still alive on a newer
-  URL, so surface that one rather than relaunching.
-- A `404` on an approval URL usually means the publish already succeeded and consumed it. Read the
-  registry before calling it a failure.
-- Say that approving the publish one opens a five-minute window covering the rest of the layer.
-
-### Spending the window
-
-- The window opens when the user approves, not when the first publish starts. Open each layer with
-  one package: publish it alone, surface its approval URL the moment the journal shows it, and
-  confirm the upload from the registry before starting the rest. Then chase the remaining uploads
-  back-to-back in one process with no gap — an upload started within seconds of an approval
-  frequently rides that approval, and each one that does not mints its own URL. Relay every new URL
-  to the user the moment it appears, through a journal watcher, and never pause the chain to wait
-  for a click: a poll outlives the relay.
-- A click on a superseded URL poisons the live attempt — the current poll fails
-  `403 Forbidden - GET /-/v1/done` mid-flight. Tell the user to click only the newest URL. After
-  any such 403, confirm no publish process is live, then mint one fresh attempt.
-- Publish serially. Concurrent publishes collide on the auth handshake and fail each other.
-- **Never retry a publish that is still waiting for its authorization.** Each `npm publish` attempt
-  mints a new `authId` and invalidates the previous one, so a retry loop makes the URL a moving
-  target the user cannot approve in time. The abandoned poll then reports
-  `403 Forbidden - GET /-/v1/done?authId=…`, which reads as a permissions problem and is the
-  abandoned attempt colliding with the live one. Publish the first package of a layer with exactly
-  one attempt.
-- Retry only an upload that failed **inside** an already-open window. `EOTP` there is intermittent
-  contention rather than the window closing: retry about three times, and retry a failed set once the
-  layer ends. Packages have landed on the third attempt and on a later pass with no new approval.
-  These are different failures wearing similar codes; a retry fixes in-window contention and causes
-  the moving approval target.
-- Expect a large layer to outlast one window. Size batches to what uploads in five minutes and tell
-  the user how many approvals to expect, rather than discovering it mid-run.
-- Read the result from the registry, not from an exit code: a piped `npm publish` reports the exit
-  status of the pipeline, and a CDN read straight after a publish can still serve the previous
-  version.
-- A first publish creates the packument and can serve 404 for minutes after success. For a package
-  with no prior version treat 404 as pending, not failed, and re-read on an interval before
-  reporting either way. A bump serving the old version is CDN lag, same rule.
-- Rule on a pack-time manifest-rewriting warning by fetching the registry's copy of the manifest,
-  never by the warning's own text.
-- Re-read the registry before telling the user a package failed. A chain still running, a retry that
-  landed, and CDN lag all produce a failure reading that the registry contradicts, and a false
-  failure report costs a needless approval and a needless republish.
 
 ## Acceptance laws
 
