@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Polish Rendered Surface'
-  short_description: 'Drive a rendered surface to shipped quality on captured evidence'
-  default_prompt: 'Use $orkestrel-polish-surface to bring this rendered surface to shipped quality on captured evidence.'

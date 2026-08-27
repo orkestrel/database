@@ -1,11 +1,16 @@
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
 	BRIDGE_POLICY_CONTROLS,
 	createPolicyScratch,
+	createSkillMetadata,
 	FUNCTION_SOURCE_FILES,
 	GENERIC_POLICY_SOURCES,
 	inspectPolicyControl,
+	inspectPolicyFilenamePaths,
 	inspectPolicyMirrorPaths,
+	inspectPolicyPortability,
 	inspectPolicySources,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
@@ -14,7 +19,15 @@ import {
 	parseSkillFrontmatter,
 	POLICY_CONTROLS,
 	POLICY_SUPPRESSION_DIRECTIVE,
+	PORTABILITY_POLICY_CONTROLS,
+	PORTABILITY_POLICY_EXCLUSION,
+	PORTABILITY_POLICY_LOCAL,
+	PORTABILITY_POLICY_SPLIT,
+	readPolicyPaths,
 	readSkillFamily,
+	RULES_POLICY_CONTROLS,
+	SKILL_BRIDGE_ROOT,
+	SKILL_FAMILY_ROOT,
 	SKILL_POLICY_APOSTROPHE,
 	SKILL_POLICY_BACKTICKED,
 	SKILL_POLICY_CONTROLS,
@@ -22,6 +35,7 @@ import {
 	SKILL_POLICY_FENCED,
 	SKILL_POLICY_FOLDED,
 	SKILL_POLICY_PARAGRAPHS,
+	SKILL_POLICY_TEXT,
 	stemToPolicyCandidates,
 	testToPolicyStem,
 } from './setupPolicy.js'
@@ -337,10 +351,29 @@ describe('instrument negative controls', () => {
 })
 
 describe('skill family policy', () => {
-	it('discovers a non-empty family containing orkestrel-falsify', () => {
+	// The family is read from the workspace it runs in, so a membership literal would
+	// bind this file to one workspace. The relationship binds in every workspace: a
+	// direct `node:fs` read of the canonical root is a second mechanism that reports
+	// the same directories, and reports none where the root is absent.
+	//
+	// The root is spelled here as literal segments rather than read from
+	// `SKILL_FAMILY_ROOT`, and that literal is what makes this read a second
+	// mechanism. Both sides reading the constant would move together when it drifts,
+	// so the case would stay green for every value the constant ever holds. Against
+	// the literal, a drifted constant desyncs the sides and reddens this case in a
+	// workspace that has the tree, while a workspace without one still passes on
+	// both readings being empty.
+	it('discovers exactly the directories the canonical skill root holds', () => {
+		const root = join(process.cwd(), '.agents', 'skills')
+		const held = existsSync(root)
+			? readdirSync(root, { withFileTypes: true })
+					.filter((entry) => entry.isDirectory())
+					.map((entry) => entry.name)
+					.sort()
+			: []
 		const family = readSkillFamily(process.cwd())
-		expect(family.length).toBeGreaterThan(0)
-		expect(family).toContain('orkestrel-falsify')
+		expect(family.length > 0).toBe(held.length > 0)
+		expect([...family]).toEqual(held)
 	})
 
 	it('requires every discovered skill file, metadata token, and reference', () => {
@@ -413,8 +446,126 @@ describe('skill bridge policy', () => {
 	}
 })
 
+describe('rule map policy', () => {
+	for (const control of RULES_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
+		})
+	}
+})
+
+describe('portability policy', () => {
+	for (const control of PORTABILITY_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
+		})
+	}
+
+	for (const control of [
+		PORTABILITY_POLICY_EXCLUSION,
+		PORTABILITY_POLICY_LOCAL,
+		PORTABILITY_POLICY_SPLIT,
+	]) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(inspectPolicyControl(control)).toEqual([])
+		})
+	}
+
+	it('rejects a character Windows refuses inside a path segment', () => {
+		// A Windows host refuses to create this name, so the population itself is the control.
+		expect(inspectPolicyFilenamePaths(['src/worker/read<write>.ts'])).toEqual([
+			{
+				rule: 'portability',
+				path: 'src/worker/read<write>.ts',
+				message: 'path segments avoid the characters Windows refuses',
+			},
+		])
+	})
+
+	it('rejects sibling paths that differ by case alone', () => {
+		// A Windows host folds the pair into one file, so the population itself is the control.
+		expect(inspectPolicyFilenamePaths(['guides/Readme.md', 'guides/readme.md'])).toEqual([
+			{
+				rule: 'portability',
+				path: 'guides/readme.md',
+				message: 'path differs from guides/Readme.md by case alone',
+			},
+		])
+	})
+
+	it('accepts sibling paths that differ by more than case', () => {
+		expect(
+			inspectPolicyFilenamePaths([
+				'guides/readme.md',
+				'guides/readmes.md',
+				'src/worker/helpers.ts',
+			]),
+		).toEqual([])
+	})
+})
+
 describe('repository policy', () => {
 	it('enforces placement and mirrors over the real workspace', () => {
 		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
+	})
+
+	// A target reads the canon from the installed package, so its tree carries the
+	// pointer pair and no `.agents/` directory, no rule map, and no skill bridges.
+	// This vendored suite runs there, and every inspector it routes through has to
+	// stay silent on that shape.
+	it('accepts a target holding the pointer pair and no canon tree', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-pointer-' })
+		try {
+			scratch.write(
+				'AGENTS.md',
+				'# AGENTS.md\n\nRead `node_modules/@orkestrel/scaffold/dist/host/AGENTS.md` for the canon.\n',
+			)
+			scratch.write(
+				'CLAUDE.md',
+				'# Claude Code bridge\n\nRead the `AGENTS.md` file beside this one first.\n',
+			)
+			scratch.write('.claude/settings.json', '{\n\t"permissions": {\n\t\t"allow": []\n\t}\n}\n')
+			scratch.write(
+				'.claude/agents/orkestrel.md',
+				'# Orkestrel\n\nThe agent carrying the package catalog.\n',
+			)
+			scratch.write(
+				'package.json',
+				'{\n\t"name": "target",\n\t"private": true,\n\t"scripts": {\n\t\t"test": "vitest run"\n\t}\n}\n',
+			)
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+			// The control: the same workspace with one canonical skill planted and no
+			// bridge beside it reports the twin violation, so the empty result above is a
+			// sweep that ran rather than a sweep with nothing it could report.
+			scratch.write(`${SKILL_FAMILY_ROOT}/sample/SKILL.md`, SKILL_POLICY_TEXT)
+			scratch.write(`${SKILL_FAMILY_ROOT}/sample/agents/openai.yaml`, createSkillMetadata('sample'))
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'bridge',
+					path: `${SKILL_BRIDGE_ROOT}/sample`,
+					message: 'canonical skill has a matching provider bridge directory',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('reaches every branch of the workspace-authored path population', () => {
+		const paths = readPolicyPaths(process.cwd())
+		expect(paths).toContain('tests/setupPolicy.ts')
+		expect(paths).toContain('.claude/settings.json')
+		expect(paths).toContain('package.json')
+		expect(paths).toContain('.gitattributes')
+	})
+
+	it('keeps every workspace path, script, and source portable', () => {
+		expect(inspectPolicyPortability(process.cwd())).toEqual([])
 	})
 })

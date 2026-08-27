@@ -23,6 +23,8 @@ export type PolicyRule =
 	| 'function'
 	| 'mirror'
 	| 'parser'
+	| 'portability'
+	| 'rules'
 	| 'skill'
 	| 'suppression'
 	| 'type'
@@ -265,6 +267,61 @@ export const POLICY_SUPPRESSION_PATTERN = new RegExp(
 	[['eslint', '-disable'].join(''), POLICY_SUPPRESSION_DIRECTIVE].join('|'),
 	'u',
 )
+
+/** The workspace-authored path population inspected for a name a Windows checkout cannot hold. */
+export const POLICY_PORTABILITY_GLOB: readonly string[] = Object.freeze([
+	'{src,app,configs,tests,scripts,guides}/**/*',
+	'{.agents,.claude,.codex,.cursor,.github}/**/*',
+	'*',
+	'.*',
+])
+
+/** The TypeScript source population parsed for host-specific line-ending handling. */
+export const POLICY_PORTABILITY_SOURCE_GLOB = '{src,app,configs}/**/*.ts'
+
+/** Every device name Windows reserves, whatever extension the segment carries. */
+export const POLICY_RESERVED_NAMES: readonly string[] = Object.freeze([
+	'aux',
+	'com1',
+	'com2',
+	'com3',
+	'com4',
+	'com5',
+	'com6',
+	'com7',
+	'com8',
+	'com9',
+	'con',
+	'lpt1',
+	'lpt2',
+	'lpt3',
+	'lpt4',
+	'lpt5',
+	'lpt6',
+	'lpt7',
+	'lpt8',
+	'lpt9',
+	'nul',
+	'prn',
+])
+
+/** Every character Windows refuses inside a path segment. */
+export const POLICY_RESERVED_PATTERN = /[<>:"|?*]/u
+
+/** A shell script named as a complete path token inside a manifest script. */
+export const POLICY_SHELL_PATTERN = /\.sh\b/u
+
+/** The directory whose direct Markdown files form the complete rule family. */
+export const POLICY_RULE_ROOT = '.claude/rules'
+
+/** The root instruction file whose rule map registers the rule family. */
+export const POLICY_RULE_MAP_FILE = 'AGENTS.md'
+
+/** The heading that opens the root instruction file's rule map table. */
+export const POLICY_RULE_MAP_HEADING = '## Rule map'
+
+/** The workspace manifest whose scripts run on every supported host. */
+export const POLICY_MANIFEST_FILE = 'package.json'
 
 /**
  * Normalize platform separators for stable matching and diagnostics.
@@ -736,10 +793,14 @@ export function inspectPolicySources(sources: readonly PolicySource[]): readonly
  * Read the parsed TypeScript source population beneath one workspace.
  *
  * @param root - The workspace root to read.
- * @returns Every non-ambient TypeScript source under the src and app axes, sorted by path.
+ * @param glob - The population to read. Default: the src and app placement population.
+ * @returns Every non-ambient TypeScript source the population names, sorted by path.
  */
-export function readPolicySources(root: string): readonly PolicySource[] {
-	return globSync(POLICY_SOURCE_GLOB, { cwd: root })
+export function readPolicySources(
+	root: string,
+	glob: string | readonly string[] = POLICY_SOURCE_GLOB,
+): readonly PolicySource[] {
+	return globSync(glob, { cwd: root })
 		.map(normalizePolicyPath)
 		.filter((path) => !POLICY_AMBIENT_SUFFIXES.some((suffix) => basename(path).endsWith(suffix)))
 		.sort()
@@ -1562,10 +1623,322 @@ export function inspectSkillBridges(root: string): readonly PolicyViolation[] {
 }
 
 /**
+ * Read every rule path the root instruction file's rule map registers.
+ *
+ * @param content - The raw root instruction text.
+ * @returns Each backticked first cell beneath the rule map heading, in table order.
+ */
+export function readPolicyRuleMap(content: string): readonly string[] {
+	const lines = content.replaceAll('\r\n', '\n').split('\n')
+	const heading = lines.indexOf(POLICY_RULE_MAP_HEADING)
+	if (heading === -1) return []
+	const paths: string[] = []
+	for (let index = heading + 1; index < lines.length; index += 1) {
+		const line = lines[index]
+		if (line === undefined || line.startsWith('## ')) break
+		const cell = line.match(/^\|\s*`([^`]+)`\s*\|/u)?.[1]
+		if (cell !== undefined) paths.push(normalizePolicyPath(cell))
+	}
+	return paths
+}
+
+/**
+ * Inspect the discovered rule family against the root instruction file's rule map.
+ *
+ * A workspace with no rule file has no rule map to keep, so the population is empty there.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every unregistered rule file, then every row resolving to no file.
+ */
+export function inspectPolicyRuleMap(root: string): readonly PolicyViolation[] {
+	const directory = resolvePolicyDirectory(root, POLICY_RULE_ROOT)
+	if (directory === undefined) return []
+	const rules = readdirSync(directory, { withFileTypes: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+		.map((entry) => `${POLICY_RULE_ROOT}/${entry.name}`)
+		.sort()
+	if (rules.length === 0) return []
+	const content = isPolicyFile(root, POLICY_RULE_MAP_FILE)
+		? readFileSync(join(root, POLICY_RULE_MAP_FILE), 'utf8')
+		: ''
+	const registered = new Set(readPolicyRuleMap(content))
+	const violations: PolicyViolation[] = []
+	for (const rule of rules) {
+		if (!registered.has(rule)) {
+			violations.push(createPolicyViolation('rules', rule, 'the rule map names every rule file'))
+		}
+	}
+	for (const path of registered) {
+		if (!isPolicyFile(root, path)) {
+			violations.push(
+				createPolicyViolation('rules', path, 'every rule-map row resolves to a rule file'),
+			)
+		}
+	}
+	return violations
+}
+
+/**
+ * Inspect an explicit path population for a name a Windows checkout cannot hold.
+ *
+ * Each path is read through its own final segment, because the population lists every directory as
+ * its own entry. A Windows host refuses the reserved characters and folds a case collision into one
+ * file, so those two boundaries are proven from a path population rather than from written files.
+ *
+ * @param paths - The workspace-relative paths to inspect.
+ * @returns Every unusable-name and case-collision violation in path order.
+ */
+export function inspectPolicyFilenamePaths(paths: readonly string[]): readonly PolicyViolation[] {
+	const violations: PolicyViolation[] = []
+	const folded = new Map<string, string>()
+	for (const candidate of paths) {
+		const path = normalizePolicyPath(candidate)
+		const segment = basename(path)
+		const [stem = ''] = segment.split('.')
+		if (POLICY_RESERVED_NAMES.includes(stem.toLowerCase())) {
+			violations.push(
+				createPolicyViolation(
+					'portability',
+					path,
+					'path segments avoid the names Windows reserves',
+				),
+			)
+		}
+		if (POLICY_RESERVED_PATTERN.test(segment)) {
+			violations.push(
+				createPolicyViolation(
+					'portability',
+					path,
+					'path segments avoid the characters Windows refuses',
+				),
+			)
+		}
+		if (segment.endsWith('.') || segment.endsWith(' ')) {
+			violations.push(
+				createPolicyViolation(
+					'portability',
+					path,
+					'path segments end with neither a dot nor a space',
+				),
+			)
+		}
+		const key = path.toLowerCase()
+		const previous = folded.get(key)
+		if (previous === undefined) {
+			folded.set(key, path)
+		} else if (previous !== path) {
+			violations.push(
+				createPolicyViolation('portability', path, `path differs from ${previous} by case alone`),
+			)
+		}
+	}
+	return violations
+}
+
+/**
+ * Read the workspace-authored path population, directories included.
+ *
+ * @param root - The workspace root to read.
+ * @returns Every authored path, sorted by path.
+ */
+export function readPolicyPaths(root: string): readonly string[] {
+	return globSync(POLICY_PORTABILITY_GLOB, { cwd: root }).map(normalizePolicyPath).sort()
+}
+
+/**
+ * Inspect the workspace-authored path population for a name a Windows checkout cannot hold.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every unusable-name and case-collision violation in path order.
+ */
+export function inspectPolicyFilenames(root: string): readonly PolicyViolation[] {
+	return inspectPolicyFilenamePaths(readPolicyPaths(root))
+}
+
+/**
+ * Parse the manifest's script record without interpreting any other manifest field.
+ *
+ * @param content - The raw package.json text.
+ * @returns Each script name and its command, in manifest order.
+ */
+export function parsePolicyScripts(content: string): ReadonlyMap<string, string> {
+	const scripts = new Map<string, string>()
+	let manifest: unknown
+	try {
+		manifest = JSON.parse(content)
+	} catch {
+		return scripts
+	}
+	if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) return scripts
+	const record: unknown = Object.getOwnPropertyDescriptor(manifest, 'scripts')?.value
+	if (typeof record !== 'object' || record === null || Array.isArray(record)) return scripts
+	for (const name of Object.getOwnPropertyNames(record)) {
+		const command: unknown = Object.getOwnPropertyDescriptor(record, name)?.value
+		if (typeof command === 'string') scripts.set(name, command)
+	}
+	return scripts
+}
+
+/**
+ * Inspect every manifest script for a shell file no Windows host runs.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every shell-script violation in manifest order.
+ */
+export function inspectPolicyScripts(root: string): readonly PolicyViolation[] {
+	if (!isPolicyFile(root, POLICY_MANIFEST_FILE)) return []
+	const content = readFileSync(join(root, POLICY_MANIFEST_FILE), 'utf8')
+	const violations: PolicyViolation[] = []
+	for (const [name, command] of parsePolicyScripts(content)) {
+		if (POLICY_SHELL_PATTERN.test(command)) {
+			violations.push(
+				createPolicyViolation(
+					'portability',
+					POLICY_MANIFEST_FILE,
+					`manifest scripts name no .sh file: ${name}`,
+				),
+			)
+		}
+	}
+	return violations
+}
+
+/**
+ * Whether a call trims a whole payload before splitting it on a line feed.
+ *
+ * @param node - The syntax node to inspect.
+ * @returns True when the node is the split chain that leaves a carriage return on each line but
+ * the last; false otherwise.
+ */
+export function matchesPolicySplit(node: ts.Node): boolean {
+	if (!ts.isCallExpression(node) || node.arguments.length !== 1) return false
+	const split = node.expression
+	if (!ts.isPropertyAccessExpression(split) || split.name.text !== 'split') return false
+	const argument = node.arguments[0]
+	if (argument === undefined) return false
+	if (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument)) return false
+	if (argument.text !== '\n') return false
+	const trim = split.expression
+	return (
+		ts.isCallExpression(trim) &&
+		trim.arguments.length === 0 &&
+		ts.isPropertyAccessExpression(trim.expression) &&
+		trim.expression.name.text === 'trim'
+	)
+}
+
+/**
+ * Whether an expression reads the host line ending from a binding named os.
+ *
+ * @param node - The syntax node to inspect.
+ * @returns True for an EOL member read on a binding named os; false otherwise.
+ */
+export function matchesPolicyTerminator(node: ts.Node): boolean {
+	return (
+		ts.isPropertyAccessExpression(node) &&
+		node.name.text === 'EOL' &&
+		ts.isIdentifier(node.expression) &&
+		node.expression.text === 'os'
+	)
+}
+
+/**
+ * Whether an import declaration takes the EOL member from the host module.
+ *
+ * @param node - The syntax node to inspect.
+ * @returns True for a named EOL import from node:os or os; false otherwise.
+ */
+export function importsPolicyTerminator(node: ts.Node): boolean {
+	if (!ts.isImportDeclaration(node)) return false
+	const specifier = node.moduleSpecifier
+	if (!ts.isStringLiteral(specifier)) return false
+	if (specifier.text !== 'node:os' && specifier.text !== 'os') return false
+	const bindings = node.importClause?.namedBindings
+	if (bindings === undefined || !ts.isNamedImports(bindings)) return false
+	return bindings.elements.some((element) => (element.propertyName ?? element.name).text === 'EOL')
+}
+
+/**
+ * Inspect one syntax node and its descendants for host-specific line-ending handling.
+ *
+ * @param path - The workspace-relative source path.
+ * @param node - The syntax node to inspect.
+ * @returns Every line-ending violation in source order.
+ */
+export function inspectPolicyEndingNode(path: string, node: ts.Node): readonly PolicyViolation[] {
+	const violations: PolicyViolation[] = []
+	if (matchesPolicySplit(node)) {
+		violations.push(
+			createPolicyViolation(
+				'portability',
+				path,
+				'sources split arrived text before trimming each line',
+				node,
+			),
+		)
+	}
+	if (matchesPolicyTerminator(node) || importsPolicyTerminator(node)) {
+		violations.push(
+			createPolicyViolation(
+				'portability',
+				path,
+				'sources emit a line feed rather than the host line ending',
+				node,
+			),
+		)
+	}
+	ts.forEachChild(node, (child) => {
+		violations.push(...inspectPolicyEndingNode(path, child))
+	})
+	return violations
+}
+
+/**
+ * Inspect one parsed source for host-specific line-ending handling.
+ *
+ * @param source - The path and TypeScript text to inspect.
+ * @returns Every line-ending violation in source order.
+ */
+export function inspectPolicyEndingSource(source: PolicySource): readonly PolicyViolation[] {
+	const path = normalizePolicyPath(source.path)
+	const syntax = ts.createSourceFile(path, source.content, ts.ScriptTarget.Latest, true)
+	return inspectPolicyEndingNode(path, syntax)
+}
+
+/**
+ * Inspect every source axis the portability population covers for line-ending handling.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every line-ending violation in path and source order.
+ */
+export function inspectPolicyEndings(root: string): readonly PolicyViolation[] {
+	const violations: PolicyViolation[] = []
+	for (const source of readPolicySources(root, POLICY_PORTABILITY_SOURCE_GLOB)) {
+		violations.push(...inspectPolicyEndingSource(source))
+	}
+	return violations
+}
+
+/**
+ * Inspect every host portability rule across one workspace.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every rule-map, filename, manifest-script, and line-ending violation.
+ */
+export function inspectPolicyPortability(root: string): readonly PolicyViolation[] {
+	return [
+		...inspectPolicyRuleMap(root),
+		...inspectPolicyFilenames(root),
+		...inspectPolicyScripts(root),
+		...inspectPolicyEndings(root),
+	]
+}
+
+/**
  * Inspect every policy rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every source, mirror, suppression, skill, and bridge violation.
+ * @returns Every source, mirror, suppression, skill, bridge, and portability violation.
  */
 export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[] {
 	return [
@@ -1574,6 +1947,7 @@ export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[]
 		...inspectPolicySuppressions(root),
 		...inspectSkillFamily(root),
 		...inspectSkillBridges(root),
+		...inspectPolicyPortability(root),
 	]
 }
 
@@ -2337,6 +2711,168 @@ export const SKILL_POLICY_EXCLUSION: PolicyControl = Object.freeze({
 	membership: 'directories outside .agents/skills',
 	rule: 'skill',
 	files: [{ path: '.claude/skills/bridge/SKILL.md', content: SKILL_POLICY_TEXT }],
+})
+
+/**
+ * Create root instruction text whose rule map names an explicit rule set.
+ *
+ * @param rules - The workspace-relative rule paths the map registers.
+ * @returns Root instruction text carrying one rule map table.
+ */
+export function createPolicyRuleMap(rules: readonly string[]): string {
+	return (
+		[
+			'# Fixture instructions',
+			'',
+			POLICY_RULE_MAP_HEADING,
+			'',
+			'| Rule | Governs |',
+			'| ---- | ------- |',
+			...rules.map((rule) => `| \`${rule}\` | Fixture rows |`),
+		].join('\n') + '\n'
+	)
+}
+
+/** Physical controls for every rule-map parity assertion the workspace route reaches. */
+export const RULES_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a rule file the rule map omits',
+		membership: 'Markdown files directly beneath .claude/rules',
+		rule: 'rules',
+		message: 'the rule map names every rule file',
+		files: [
+			{ path: POLICY_RULE_MAP_FILE, content: createPolicyRuleMap([]) },
+			{ path: `${POLICY_RULE_ROOT}/sample.md`, content: '# Sample\n' },
+		],
+	},
+	{
+		label: 'rejects a rule-map row that resolves to nothing',
+		membership: 'backticked first cells in the rule map table',
+		rule: 'rules',
+		message: 'every rule-map row resolves to a rule file',
+		files: [
+			{
+				path: POLICY_RULE_MAP_FILE,
+				content: createPolicyRuleMap([
+					`${POLICY_RULE_ROOT}/sample.md`,
+					`${POLICY_RULE_ROOT}/missing.md`,
+				]),
+			},
+			{ path: `${POLICY_RULE_ROOT}/sample.md`, content: '# Sample\n' },
+		],
+	},
+])
+
+/** Physical controls for every portability assertion the workspace route reaches. */
+export const PORTABILITY_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a reserved device name',
+		membership: 'path segments in the workspace-authored path population',
+		rule: 'portability',
+		message: 'path segments avoid the names Windows reserves',
+		files: [{ path: 'src/worker/con.ts', content: '' }],
+	},
+	{
+		label: 'rejects a segment that ends with a dot',
+		membership: 'path segments in the workspace-authored path population',
+		rule: 'portability',
+		message: 'path segments end with neither a dot nor a space',
+		files: [{ path: 'src/worker/helpers.ts.', content: '' }],
+	},
+	{
+		label: 'rejects a segment that ends with a space',
+		membership: 'path segments in the workspace-authored path population',
+		rule: 'portability',
+		message: 'path segments end with neither a dot nor a space',
+		files: [{ path: 'src/worker/helpers.ts ', content: '' }],
+	},
+	{
+		label: 'rejects a shell script named by a manifest script',
+		membership: 'string values beneath the manifest scripts record',
+		rule: 'portability',
+		message: 'manifest scripts name no .sh file: prepare',
+		files: [
+			{
+				path: POLICY_MANIFEST_FILE,
+				content: '{\n\t"scripts": {\n\t\t"prepare": "bash scripts/prepare.sh"\n\t}\n}\n',
+			},
+		],
+	},
+	{
+		label: 'rejects a payload trimmed before it is split',
+		membership: 'split calls carrying a line-feed string literal in the parsed source axes',
+		rule: 'portability',
+		message: 'sources split arrived text before trimming each line',
+		files: [
+			{
+				path: 'src/worker/helpers.ts',
+				content:
+					"export function readLines(text: string): readonly string[] {\n\treturn text.trim().split('\\n')\n}\n",
+			},
+		],
+	},
+	{
+		label: 'rejects a read of the host line ending',
+		membership: 'EOL member reads on a binding named os in the parsed source axes',
+		rule: 'portability',
+		message: 'sources emit a line feed rather than the host line ending',
+		files: [
+			{
+				path: 'configs/helpers.ts',
+				content:
+					"import * as os from 'node:os'\nexport function endLine(): string {\n\treturn os.EOL\n}\n",
+			},
+		],
+	},
+	{
+		label: 'rejects an EOL import from node:os',
+		membership: 'named import specifiers from node:os in the parsed source axes',
+		rule: 'portability',
+		message: 'sources emit a line feed rather than the host line ending',
+		files: [
+			{
+				path: 'configs/helpers.ts',
+				content:
+					"import { EOL } from 'node:os'\nexport function endLine(): string {\n\treturn EOL\n}\n",
+			},
+		],
+	},
+])
+
+/** A trimmed split outside the parsed source axes, proving the population boundary. */
+export const PORTABILITY_POLICY_EXCLUSION: PolicyControl = Object.freeze({
+	label: 'excludes a script module from the parsed source axes',
+	membership: 'TypeScript modules outside the src, app, and configs axes',
+	rule: 'portability',
+	files: [
+		{
+			path: 'scripts/read.ts',
+			content:
+				"export function readLines(text: string): readonly string[] {\n\treturn text.trim().split('\\n')\n}\n",
+		},
+	],
+})
+
+/** A locally declared line-ending constant, which the host line-ending rule leaves legal. */
+export const PORTABILITY_POLICY_LOCAL: PolicyControl = Object.freeze({
+	label: 'accepts a locally declared EOL constant',
+	membership: 'EOL identifiers that neither read a binding named os nor import from node:os',
+	rule: 'portability',
+	files: [{ path: 'src/worker/constants.ts', content: "export const EOL = '\\n'\n" }],
+})
+
+/** A split on the host-independent line-ending pattern, which the split rule leaves legal. */
+export const PORTABILITY_POLICY_SPLIT: PolicyControl = Object.freeze({
+	label: 'accepts a split on the line-ending pattern',
+	membership: 'split calls whose argument is not a line-feed string literal',
+	rule: 'portability',
+	files: [
+		{
+			path: 'src/worker/helpers.ts',
+			content:
+				'export function readLines(text: string): readonly string[] {\n\treturn text.trim().split(/\\r\\n|\\n/u)\n}\n',
+		},
+	],
 })
 
 /** A differently shaped workspace with app, browser, and worker environments but no core. */

@@ -9,3 +9,6 @@ demo/showcase.html
 
 # Campaign records under the orchestration folder are verbatim evidence, not formatted source.
 .orkestrel/
+
+# Fetched-bytes mirrors keep their upstream bytes and stay out of the formatter.
+tests/mirrors/

@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Falsify Finished Work'
-  short_description: 'Run an adversarial audit round that tries to break named claims'
-  default_prompt: 'Use $orkestrel-falsify to audit the work that looks finished: numbered falsifiable claims, blind lanes, independent refutation, reconciliation, one ruling.'

@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Enterprise Bootstrap'
-  short_description: 'Design and build distinctive, production-grade UI with Bootstrap 5.3'
-  default_prompt: 'Use $enterprise-bootstrap to design and build this interface with Bootstrap 5.3 craft.'

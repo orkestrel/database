@@ -64,6 +64,12 @@ neither `node:*` nor the DOM, so a browser test project imports it unchanged.
 The browser face ships ES only. It is built on `vitest/browser`, which is an ES-only module, so no
 CommonJS consumer can reach it and no `.d.cts` is emitted for it.
 
+`@orkestrel/test/browser` loads only inside Vitest Browser Mode. It imports `vitest/browser` at
+module scope, so importing it from a Node host throws at module load rather than deferring the
+failure into the first helper call. A module that must load under Node as well reaches it through a
+dynamic import behind a DOM guard — a setup file that a Node project and a browser project both
+register is the case that needs it.
+
 ## Surface
 
 The values and types that follow are everything this package exports, from its core, browser, and
@@ -751,7 +757,7 @@ what the link reaches, not on what it stores.
 ## Voices
 
 Every message `src/browser` throws. Keep them distinct: a journey asserts the one it means, and
-absent, present-but-gated, and ambiguous are three different findings about an interface.
+absent, present-but-gated, and ambiguous are different findings about an interface.
 
 | Voice                                                                                 | Thrown by               |
 | ------------------------------------------------------------------------------------- | ----------------------- |
@@ -831,8 +837,8 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    reference captured before the call reads as empty after it. Capture `calls` after the last
    `clear()` you care about, or read `count` instead.
 3. **`captureError` converts a synchronous throw into a value.** It returns the thrown value
-   exactly, including `null` and `undefined`, and it never throws for a thunk that completed. Two
-   limits come with that. A thunk that throws `undefined` is indistinguishable from one that
+   exactly, including `null` and `undefined`, and it never throws for a thunk that completed. Limits
+   come with that. A thunk that throws `undefined` is indistinguishable from one that
    completed, because both return `undefined`; assert on a thrown value's identity, not on its
    absence. And an `async` thunk never throws synchronously — it returns a rejected promise — so
    `captureError` returns `undefined` and the rejection escapes unhandled. It converts; it decides
@@ -846,13 +852,13 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    `JSONValue` constraint rejects every `interface`: TypeScript grants an implicit index signature
    to a type alias and never to an interface, and interfaces are what this fleet's public types are.
    The projection accepts an interface-typed value, keeps `T` as the return type, and refuses a
-   `Date`, a `Map`, or any method-bearing type at the member that carries it. Three more members
-   meet `never` for one reason: the copy would not carry what the type claims. Serialization drops a
+   `Date`, a `Map`, or any method-bearing type at the member that carries it. More members meet
+   `never` because the copy would not carry what the type claims. Serialization drops a
    member typed `undefined` from an object and rewrites it to `null` in an array, so
    `{ a: undefined }` and a top-level `undefined` are both refused at the call. `JSON.stringify`
    never enumerates a symbol-keyed member, so the copy arrives without it. And a member declared as
    the opaque `object` type projects over no members at all, so a `Date` under it would copy back as
-   a string, off the type the member declares. One member type does pass through: `unknown`, so
+   a string, off the type the member declares. `unknown` is the member type that does pass through, so
    `Record<string, unknown>` is accepted and what its values hold is a runtime question rather than
    a typed one. The bound is not enough on its own either: `NaN`, `Infinity`, and `-Infinity` are
    numbers, they satisfy it, and `JSON.stringify` turns each of them into `null`. So the helper
@@ -860,8 +866,9 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    copy's type claim holds for every value it does return. The replacer alone would not close it: a
    `JSON.rawJSON` value carries text `JSON.stringify` emits without inspecting, so
    `JSON.rawJSON('1e400')` passes the replacer untouched and parses back as `Infinity`. The helper
-   therefore checks the parsed graph as well, and both doors report the same message. One
-   normalization remains and is not an error: `-0` serializes as `0`, so the copy is `0`.
+   therefore checks the parsed graph as well, and the replacer and the parsed-graph check report the
+   same message. A normalization remains and is not an error: `-0` serializes as `0`, so the copy is
+   `0`.
 6. **`readInventory` refuses links.** A target is a file or a directory. A named file is read and
    keyed whatever `extensions` says, which is what lets one call take a package's root files and its
    source tree together; a named directory is walked under the filter. It throws when the root or a
@@ -871,7 +878,7 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    than following it. A target may be written relative to the root or as an absolute path inside it,
    and one that escapes is refused either way.
 
-   A link in the **middle** of a named target is the fourth refusal, and the only one that reaches
+   A link in the **middle** of a named target is a separate refusal, and the only one that reaches
    it: the symbolic-link check reads the final segment, which such a link is not. The named target is
    resolved with `realpath` and refused when the real path leaves the root, so
    `readInventory(root, ['link/file.txt'])` with `link` pointing outside throws
@@ -882,26 +889,32 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    `readInventory(root, ['src/core/index.ts'], { exclude: ['src/core'] })` returns `{}`. A
    `tsconfig` reader expects the more specific entry to win, the way a `files` entry survives
    `exclude`; here the more specific entry is the one that disappears. Express an exception with a
-   second call that names the kept file and passes no exclusion, and merge the two maps. An
+   second call that names the kept file and passes no exclusion, and merge the maps. An
    exclusion is normalized before the rule applies: a leading `./` and a trailing `/` are stripped,
    and `''` and `'.'` both name the root, so either drops every key. Keys are root-relative and
-   separated by `/` whatever the host separator is. The suite runs on POSIX, where `/` is already
-   the separator, so it proves the key shape and not the conversion. The map is built by inserting
-   the keys in sorted order. Read back, non-integer keys hold that order. Integer-like keys do not,
-   because a plain object enumerates them numerically first: four files named `0`, `2`, `10`, and
-   `a.txt` insert as `0`, `10`, `2`, `a.txt` and enumerate as `0`, `2`, `10`, `a.txt`. Returning a
-   `ReadonlyMap` would keep the order and break the structural match with `@orkestrel/guide`'s
-   `SourceOptions.files` that the whole helper is shaped for, so the guarantee narrows instead. Case
-   is the host's decision, not this package's: whether two names differing only in case are one file
-   varies by filesystem, so the suite probes the running host and asserts what the probe returned
-   instead of assuming either answer.
+   separated by `/` whatever the host separator is: `readInventory` takes the spelling `relative`
+   returns and rejoins its segments split on `sep` with `/`. The suite gates that proof on a host
+   reading rather than on a platform name. It spells a nested path with `join`, and where that
+   spelling carries `sep` and no `/` it asserts that a walked key and a named key both read
+   `alpha/beta/deep.txt` and carry no `sep`. A host that already spells the path with `/` skips the
+   case, because the conversion is a no-op there and discriminates nothing. The map is built by
+   inserting the keys in sorted order. Read back, non-integer keys hold that order. Integer-like
+   keys do not, because a plain object enumerates them numerically first: files named `0`, `2`,
+   `10`, and `a.txt` insert as `0`, `10`, `2`, `a.txt` and enumerate as `0`, `2`, `10`, `a.txt`.
+   Returning a `ReadonlyMap` would keep the order and break the structural match with
+   `@orkestrel/guide`'s `SourceOptions.files` that the whole helper is shaped for, so the guarantee
+   narrows instead. Case is the host's decision, not this package's: whether names differing only in
+   case are the same file varies by filesystem, so the suite probes the running host and asserts
+   what the probe returned instead of assuming either answer.
 
 7. **`createScratch` refuses a lexical escape, not a symbolic link.** It allocates with
-   `mkdtempSync` below `parent`, which creates the directory at POSIX mode `0700`. The suite asserts
-   that mode unguarded, so it is proven on POSIX and unproven on a host that emulates permission
-   bits. Every member that takes a target — `write`, `read`, `has`, `names`, `ensure`, `link`, and
-   `remove` — throws when that target lexically escapes the allocated directory, and a failed seed
-   removes the directory before rethrowing. `remove` adds one refusal the others do not need: a
+   `mkdtempSync` below `parent`, which creates the directory at mode `0700` on a host that applies
+   POSIX permission bits. The suite gates that assertion on `supportsMode`, so the mode is proven
+   where the probe answers `true` and the case is skipped where it answers `false`. A Windows host
+   answers `false` and reads the same allocation back as `0666`, so the bits describe nothing it
+   applies. Every member that takes a target — `write`, `read`, `has`, `names`, `ensure`, `link`,
+   and `remove` — throws when that target lexically escapes the allocated directory, and a failed
+   seed removes the directory before rethrowing. `remove` adds a refusal the others do not need: a
    target naming the allocation itself, lexically or through an intermediate symbolic link. The
    lexical half compares paths. The physical half reads only the final entry with `lstat` and
    compares it with `matchesIdentity`; it walks no path segments and follows no final link. That is
@@ -913,14 +926,14 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    what each member does with a link it meets, and the [threat model](#threat-model) says who
    creates one.
 
-   `names` sorts, and the suite discriminates a dropped `.sort()`. Two filenames written from raw
+   `names` sorts, and the suite discriminates a dropped `.sort()`. Filenames written from raw
    bytes give `readdirSync` the reverse of sorted order: `0x80` is an invalid UTF-8 lead byte, so
    that name reaches JavaScript as `U+FFFD` and sorts after `é`, while on disk `0x80` sorts before
-   `é`'s leading `0xc3`. The suite asserts the host's order, the sorted order, and that the two
+   `é`'s leading `0xc3`. The suite asserts the host's order, the sorted order, and that they
    differ, so it fails rather than going quiet if that population ever stops discriminating.
 
    That population carries a limit, and it is Node's rather than this package's. A name the host
-   refuses to decode reaches JavaScript as `U+FFFD`, and that string re-encodes to the three bytes
+   refuses to decode reaches JavaScript as `U+FFFD`, and that string re-encodes to the bytes
    `EF BF BD`, which are not the bytes on disk. So the string `names()` hands back never addresses
    the entry it came from: `has` on it reports `false`, and `remove(names()[i])` removes nothing and
    throws nothing, because a missing target is a no-op. The silence is the cost — a caller looping
@@ -931,14 +944,15 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    the entry at the allocated path only while `matchesIdentity` holds against the allocation. A
    replacement directory left at that path is not removed, and an allocation moved elsewhere is not
    removed at all. That comparison never consulted the host temporary directory, so it holds
-   unchanged wherever `parent` puts the allocation. Two limits sit beside the `0700` one. The check
-   reads the entry and then removes the path as two steps, so an allocation swapped between them is
-   removed anyway; whoever swaps it runs as the same uid, which is the population the threat model
-   already declines to defend against. And birth time is the host's to supply. This host supplies a
-   real one — the allocation's `birthtimeMs` does not move when files are written into it, while its
-   `ctimeMs` does — so `destroy()` is sound here. Where a host has none, libuv reports `ctime` in its
-   place, the first seeded write moves it, and `destroy()` takes its early return. It returns `void`,
-   so that refusal is indistinguishable from success and the allocation leaks silently.
+   unchanged wherever `parent` puts the allocation. Limits sit beside the `0700` one. The check
+   reads the entry and then removes the path as separate steps, so an allocation swapped between
+   them is removed anyway; whoever swaps it runs as the same uid, which is the population the threat
+   model already declines to defend against. And birth time is the host's to supply. This host
+   supplies a real one — the allocation's `birthtimeMs` does not move when files are written into
+   it, while its `ctimeMs` does — so `destroy()` is sound here. Where a host has none, libuv reports
+   `ctime` in its place, the first seeded write moves it, and `destroy()` takes its early return. It
+   returns `void`, so that refusal is indistinguishable from success and the allocation leaks
+   silently.
 
 8. **A destroyed allocation answers presence and refuses action.** `read` returns `undefined` and
    `has` returns `false`; `write`, `names`, `ensure`, `link`, and `remove` throw
@@ -947,7 +961,7 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    question and changes nothing, and it refuses anyway, because `readonly string[]` has no value
    meaning gone. `write`, `ensure`, and `link` are why the refusal is written out rather than left to
    the host: each calls `mkdirSync` with `recursive`, which recreates every missing parent, so
-   without the check any of the three would rebuild the allocation root and leave a destroyed
+   without the check any of them would rebuild the allocation root and leave a destroyed
    fixture looking alive. `remove` is written out for the opposite reason: `rmSync` with `force`
    does not throw on a path that is not there, so without the check it would report success against
    a fixture that is gone.
@@ -1063,11 +1077,11 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     the channel that was there when `start` armed it. A run under a journal therefore prints exactly
     what it prints without one, which is what stops a recording from hiding the diagnostics it exists
     to keep. `stop` puts those same function references back by identity, so a channel another tool
-    installed survives the journal rather than being replaced by a copy of it. `start` clears both
-    lists whether or not the journal was already recording and leaves a standing interception alone,
-    so a restart never wraps its own wrappers. `record` does nothing while the journal is stopped,
-    and `steps` and `output` hand out snapshots. There is no shared instance: a file that needs one
-    journal per scenario creates one per scenario.
+    installed survives the journal rather than being replaced by a copy of it. `start` clears `steps`
+    and `output` whether or not the journal was already recording and leaves a standing interception
+    alone, so a restart never wraps its own wrappers. `record` does nothing while the journal is
+    stopped, and `steps` and `output` hand out snapshots. There is no shared instance: a file that
+    needs one journal per scenario creates one per scenario.
 18. **The capture layer depends on the Vitest runner's own tester layout, deliberately.** A
     screenshot is taken off the page the runner painted, and `vitest@4.1.11` lays its tester out
     inside a smaller page and fits it by scaling the pane the tester sits in, so a frame shot through
@@ -1083,16 +1097,19 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
 
 ### Threat model
 
-The two filesystem helpers make different promises, because they work on different directories.
-Read rule 7 against the `createScratch` paragraphs below and rule 6 against the `readInventory` one.
+The filesystem helpers make different promises, because they work on different directories.
+Read rule 7 against the `createScratch` paragraphs later and rule 6 against the `readInventory` one.
 
-`createScratch` allocates its own directory with `mkdtempSync` at POSIX mode `0700`, and the suite
-asserts that mode on POSIX, the only host CI runs. The mode keeps another uid out. It does not keep
-out a sibling test worker or the code under test, because both run as the same uid, and they are the
-population that would create a link here. Its containment check is lexical: it refuses a relative
-path that escapes the allocated directory, which is the accident that actually happens — a test
-writing `../foo`. It does not walk the path's segments for symbolic links, because per-segment
-walking is sandbox behavior and this is not a sandbox.
+`createScratch` allocates its own directory with `mkdtempSync`, which sets mode `0700` on a host
+that applies POSIX permission bits, and the suite asserts that mode where `supportsMode` answers
+`true`. Where the host applies those bits, the mode keeps another uid out; where `supportsMode`
+answers `false` the mode protects nothing, and the allocation carries only the access its parent
+directory already gives. The mode does not keep out a sibling test worker or the code under test on
+any host, because both run as the same uid, and they are the population that would create a link
+here. Its containment check is lexical: it refuses a relative path that escapes the allocated
+directory, which is the accident that actually happens — a test writing `../foo`. It does not walk
+the path's segments for symbolic links, because per-segment walking is sandbox behavior and this is
+not a sandbox.
 
 So a link inside the allocation was created by the test process or by the code the test drives, and
 handing `scratch.path` to the code under test is the ordinary use of this helper. `link` is this
@@ -1102,7 +1119,7 @@ path, which stats it to decide whether a junction can point there. [Traversal](#
 what each member does with a link it meets, and a contained path reaching outside the allocation
 through one is the result. This helper does not defend against that.
 
-`parent` adds one limit, and it is visibility. An allocation under the host temporary directory is
+`parent` adds a limit, and it is visibility. An allocation under the host temporary directory is
 seen by nothing in the repository. An allocation under a path inside a package tree is seen by
 everything that walks that tree while it exists — `tsc`, the formatter, the linter, the policy
 sweep, and the test runner's own globs. Set `parent` to a path those tools already ignore, or leave
@@ -1110,10 +1127,10 @@ it unset and take the host temporary directory. `destroy()` is unaffected either
 matches on identity rather than on where the allocation sits.
 
 `readInventory` walks a directory the caller supplies, usually a real checkout the test did not
-create, so it does refuse links. It keeps four separate refusals: it throws on a symlinked root,
+create, so it does refuse links. It keeps its refusals separate: it throws on a symlinked root,
 throws on a symlinked named target, throws on a named target whose real path leaves the root through
-a link in the middle, and skips a symlink met while walking. They are four decisions rather than one
-rule, and each is its own check at the door it guards.
+a link in the middle, and skips a symlink met while walking. They are distinct decisions rather than
+a shared rule, and each is its own check at the door it guards.
 
 Neither helper stops hard links. A hard link is an ordinary directory entry: `lstat` reports a
 regular file, so `readInventory` reads the outside inode and `createScratch` writes through it.
@@ -1645,13 +1662,14 @@ import { readInventory } from '@orkestrel/test/server'
 const root = resolveRoot(import.meta)
 
 Object.keys(readInventory(root, ['src/core'], { extensions: ['.ts'] }))
-// ['src/core/factories.ts', 'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts']
+// ['src/core/factories.ts', 'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts',
+//  'src/core/validators.ts']
 
 // A named file is included whatever `extensions` says, so one call takes the root files a suite
 // needs and the source tree it walks.
 Object.keys(readInventory(root, ['package.json', 'src/core'], { extensions: ['.ts'] }))
 // ['package.json', 'src/core/factories.ts', 'src/core/helpers.ts', 'src/core/index.ts',
-//  'src/core/types.ts']
+//  'src/core/types.ts', 'src/core/validators.ts']
 
 Object.keys(
 	readInventory(root, ['src/core'], {
@@ -1659,11 +1677,13 @@ Object.keys(
 		exclude: ['src/core/index.ts'],
 	}),
 )
-// ['src/core/factories.ts', 'src/core/helpers.ts', 'src/core/types.ts']
+// ['src/core/factories.ts', 'src/core/helpers.ts', 'src/core/types.ts', 'src/core/validators.ts']
 
 // A directory key takes every key below it.
 Object.keys(readInventory(root, ['src'], { extensions: ['.ts'], exclude: ['src/server'] }))
-// ['src/core/factories.ts', 'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts']
+// ['src/browser/constants.ts', 'src/browser/factories.ts', 'src/browser/helpers.ts',
+//  'src/browser/index.ts', 'src/browser/types.ts', 'src/core/factories.ts',
+//  'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts', 'src/core/validators.ts']
 
 // An exclusion also applies to a target you name, so naming one file below an excluded directory
 // does not reinstate it.
@@ -2100,7 +2120,8 @@ readRing(focused, requireValue(document.querySelector('label[for="evaluate"]')))
 
 `token` and `rootToken` read what the cascade resolved, and `rgba` resolves any color expression by
 asking the same browser. In the following fence the document declares `--ink: rgb(1, 2, 3)` on `:root`,
-`.card` sets `padding-left: 12px`, and `card` is a mounted element carrying that class.
+`.card` sets `padding-left: 12px`, and `card` is a mounted inline element carrying that class, so
+its `width` resolves to `auto`.
 
 ```ts
 import { colorEqual, pixels, rgba, rootToken, token } from '@orkestrel/test/browser'
@@ -2283,7 +2304,7 @@ Each entry names the rules its file proves. The test names carry the cases.
 
 - [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — rules 3, 4, 5, and 14, plus
   `waitForDelay` against a real elapsed interval and `resolveRoot` against the calling file. The wait
-  family takes its bounds and its two throw directions: `waitForCondition` takes an immediate read
+  family takes its bounds and its throw directions: `waitForCondition` takes an immediate read
   under a zero budget, a later read that holds, an asynchronous condition, the timeout naming the
   condition and the budget, a condition throw propagated unchanged, an abort that rejects with the
   signal's reason and stops reading, a true reading taken after the final interval, and the refused
@@ -2349,7 +2370,7 @@ Each entry names the rules its file proves. The test names carry the cases.
   already queued, `render` takes parsed fixture markup attached to the document, and `clearStorage`
   takes local and session storage emptied together.
   `contrast` takes a translucent surface composited onto the opaque layer beneath it, a fully opaque
-  stack over two different ancestors as the control from outside that population, a stack where
+  stack over different ancestors as the control from outside that population, a stack where
   nothing paints and one whose every painted layer is translucent, a stack 64 translucent layers
   deep whose composite has rounded to the canvas's own channels, a detached element whose computed
   foreground does not exist, and the same unpainted and translucent stacks measured against a
@@ -2386,11 +2407,11 @@ Each entry names the rules its file proves. The test names carry the cases.
   out snapshots rather than its own lists; it refuses an unregistered state and a second placement of
   one state; and a placement handed an element writes a frame that is not the whole page's and leaves
   the staged pane released. `createJournal` takes a step recorded only while it is started, every
-  console channel forwarded to the recorder that was there, the arguments of one call joined into one
-  line, an uncaught error and an unhandled rejection recorded and then ignored after the stop, the
+  console channel forwarded to the recorder that was there, a call's arguments joined into a line,
+  an uncaught error and an unhandled rejection recorded and then ignored after the stop, the
   channels handed back by identity with a second stop proven a no-op against a replacement, a restart
-  that clears both lists while keeping one wrapper rather than stacking two, snapshots that stay what
-  they were, and one journal's recording kept out of another's.
+  that clears `steps` and `output` without stacking wrappers, snapshots that stay what they were, and
+  one journal's recording kept out of another's.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — rules 6 and 14, and
   each pure leaf against its own inputs. `resolveContained` takes contained relative and absolute
   targets and both spellings of an escape. `matchesIdentity` takes a triple matching in every field
@@ -2404,7 +2425,7 @@ Each entry names the rules its file proves. The test names carry the cases.
   level up, a dangling link, the host's `EEXIST` on an occupied path, and — where the host makes no
   symbolic link — a file source refused with the host's own `EPERM` and nothing left behind.
   `removeTree` takes a live process
-  holding the tree as its working directory, and the two hosts split rather than branching at
+  holding the tree as its working directory, and the hosts split rather than branching at
   runtime: on Windows the un-retried `rmSync` baseline is proven to fail first, so the retry is what
   succeeds, and on POSIX the removal is permitted outright. `isRunning` takes the process making the
   call, a child that has exited, and a pid the host refuses without throwing. `waitForSocketClose`
@@ -2419,7 +2440,7 @@ Each entry names the rules its file proves. The test names carry the cases.
 - [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts) — rules 7, 8, and 11.
   `createLoopback` takes a real `fetch` answered from its own origin, a live keep-alive connection
   dropped by `destroy()` with a second server then binding the released port, a repeated `destroy()`
-  handed the same promise before either call settles, ten parallel instances landing on distinct
+  handed the same promise before either call settles, parallel instances landing on distinct
   ports, a plain `node:net` server bound and closed, and a server already listening when it was
   handed over, refused. For `createScratch`, the ungrouped cases take the `0700` mode, nested
   seeding, the cleanup after a failed seed, the lexical refusals, the empty target's answers, and
@@ -2436,13 +2457,13 @@ Each entry names the rules its file proves. The test names carry the cases.
   sibling, an empty directory, a populated subtree, a missing target, an ancestor link back to the
   allocation with every seeded file read back afterwards, a final link whose destination is read back
   afterwards, a sibling directory reached through that same ancestor link, an escaping target with
-  the file outside left intact, the root refused in all three spellings, a foreign directory swapped
-  onto the allocated path that `remove('')` refuses, and that same swap under `destroy()`, which
-  removes nothing either. `parent` and `prefix` take their own refusals. `createCookieJar` takes an
-  empty jar rendering no header, every `Set-Cookie` field a real response carries applied and handed
-  back unmodified, a cookie replaced whatever attributes the second field carries, a deletion on
-  `Max-Age=0` in whatever case and spacing the origin sends, and a field carrying no `name=value`
-  pair read past and still returned.
+  the file outside left intact, the root refused as `''`, as `'.'`, and as its absolute path, a
+  foreign directory swapped onto the allocated path that `remove('')` refuses, and that same swap
+  under `destroy()`, which removes nothing either. `parent` and `prefix` take their own refusals.
+  `createCookieJar` takes an empty jar rendering no header, every `Set-Cookie` field a real response
+  carries applied and handed back unmodified, a cookie replaced whatever attributes the second field
+  carries, a deletion on `Max-Age=0` in whatever case and spacing the origin sends, and a field
+  carrying no `name=value` pair read past and still returned.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — rule 1: the `## Surface` ↔ source bijection,
   the barrel ↔ source bijection, the behavioral-interface ↔ `## Methods` bijection and each group's
   members, the fence imports, and link resolution for this guide. Beside them it runs the fences

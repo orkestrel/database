@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Build Orkestrel Application'
-  short_description: 'Design and harden Orkestrel app environments'
-  default_prompt: 'Use $orkestrel-build-application to build or harden this workspace application layer.'

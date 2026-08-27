@@ -1,5 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+	"ignorePatterns": [".orkestrel/"],
 	"plugins": ["import", "typescript", "vitest"],
 	"jsPlugins": [{ "name": "policy", "specifier": "./configs/policy.ts" }],
 	"rules": {

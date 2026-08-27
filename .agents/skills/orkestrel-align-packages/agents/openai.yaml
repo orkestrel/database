@@ -1,4 +1,0 @@
-interface:
-  display_name: 'Align Orkestrel Packages'
-  short_description: 'Align package boundaries, ergonomics, and readiness'
-  default_prompt: 'Use $orkestrel-align-packages to audit and improve this Orkestrel package stack.'
