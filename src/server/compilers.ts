@@ -10,9 +10,10 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteValue } from '@orkestrel/sqlite'
 import type { CompiledSQL } from './types.js'
-import { DatabaseError, validatePage } from '@src/core'
+import { DatabaseError, findColumn, validatePage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { deriveSQLiteIndexName, encodeValue, quoteIdentifier } from './helpers.js'
+import { inferValueStorage } from './inferers.js'
 
 /**
  * Map a portable {@link ColumnStorage} to its SQLite column type.
@@ -103,13 +104,19 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 // parameters in clause order. Its WHERE fold parenthesizes LEFT-TO-RIGHT to match the
 // engine's `matchesQuery` exactly (NOT SQL's AND-over-OR precedence), so a
 // native read and an engine read agree on every query (the parity test). Branches
-// are centralized and public per AGENTS §5 — no operator logic buried in closures.
+// are centralized and public — no operator logic buried in closures.
 // This module speaks pure strings/values only. Its SQLiteValue import is
 // type-only and cannot couple the emitted JavaScript to the native package.
 
 /**
- * Escape `\`, `%`, and `_` (each with a leading `\`) so a `starts` / `ends`
- * operand is matched literally under the `LIKE … ESCAPE '\'` clause.
+ * Escapes `\`, `%`, and `_` (each with a leading `\`) so an operand is matched
+ * literally under a `LIKE … ESCAPE '\'` clause.
+ *
+ * @remarks
+ * No compile in this module emits `LIKE … ESCAPE '\'` — `starts` / `ends`
+ * compile through `substr`, and `like` binds the caller's pattern verbatim so
+ * its wildcards stay live. This escaper is for a consumer assembling its own
+ * `LIKE` clause over a literal operand.
  *
  * @param text - The raw operand text
  * @returns The text with LIKE metacharacters escaped
@@ -121,51 +128,6 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
  */
 export function escapeLike(text: string): string {
 	return text.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
-}
-
-/**
- * The declared storage type of a flat (string) column, read from the schema.
- *
- * @param column - The column name
- * @param schema - The table's schema
- * @returns The column's {@link ColumnStorage}, or `undefined` if the schema does not carry it
- *
- * @example
- * ```ts
- * findColumnStorage('age', schema) // 'integer'
- * ```
- */
-export function findColumnStorage(column: string, schema: TableSchema): ColumnStorage | undefined {
-	return schema.columns.find((candidate) => candidate.name === column)?.storage
-}
-
-/**
- * The storage type a nested (`json_extract`) operand encodes as, derived from its
- * RUNTIME value — NOT `json`.
- *
- * @remarks
- * `json_extract` returns the unquoted, natively-typed scalar (a JSON boolean as
- * `1` / `0`, a number as-is, a string as-is), so the operand must encode to that
- * same scalar to compare. A boolean → `'boolean'` (→ `1` / `0`); a number →
- * `'integer'` / `'real'`; a bigint → `'integer'`; a string → `'text'`; `null` /
- * `undefined` → `'text'` (encodes to `null`); an object / array → `'json'` (the
- * edge of comparing against a json subtree).
- *
- * @param value - The runtime operand value
- * @returns The {@link ColumnStorage} to encode it as
- *
- * @example
- * ```ts
- * inferValueStorage(true) // 'boolean'
- * inferValueStorage(9) // 'integer'
- * ```
- */
-export function inferValueStorage(value: unknown): ColumnStorage {
-	if (typeof value === 'boolean') return 'boolean'
-	if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'real'
-	if (typeof value === 'bigint') return 'integer'
-	if (typeof value === 'object' && value !== null) return 'json'
-	return 'text'
 }
 
 /**
@@ -240,9 +202,7 @@ export function inferValueStorage(value: unknown): ColumnStorage {
 export function compileConditionSQL(condition: Condition, schema: TableSchema): CompiledSQL {
 	const column = compileFieldSQL(condition.column)
 	const nested = !isString(condition.column)
-	const declared = isString(condition.column)
-		? schema.columns.find((candidate) => candidate.name === condition.column)
-		: undefined
+	const declared = isString(condition.column) ? findColumn(condition.column, schema) : undefined
 	const first = condition.values[0]
 	const second = condition.values[1]
 	const nullOperand = first === null || first === undefined
@@ -407,7 +367,7 @@ export function compileWhere(conditions: readonly Condition[], schema: TableSche
  * The native `records` read then resolves ties in key order, matching a
  * primary-key-ordered `scan` and the core engine's stable `sortRows` over a
  * key-ordered scan (and IndexedDB's key-ordered reads), so a native read equals
- * the scan path (AGENTS §21 / §22 native ↔ engine parity). SQLite without an
+ * the scan path — native ↔ engine parity. SQLite without an
  * `ORDER BY` returns rowid (insertion) order, and an explicit order alone breaks
  * ties by rowid too — both diverge from every key-ordered backend. The
  * tie-breaker is ASCENDING regardless of the explicit directions: the engine's
@@ -479,8 +439,10 @@ export function compilePage(limit: number | undefined, offset: number | undefine
  * via `encodeValue`: a flat column uses its declared schema type, while a nested
  * `FieldPath` (a `json_extract` read) encodes each operand as the native scalar
  * the extract returns — derived from the operand's runtime type — so it compares.
- * The 15 operators map per the databases guide's operator table, with
- * `starts` / `ends` using `LIKE … ESCAPE '\'` and an empty `any` / `none` list
+ * Every operator maps per the databases guide's operator table, with
+ * `starts` / `ends` compiling to a CODE-POINT `substr` slice guarded by
+ * `typeof(<column>) = 'text'` (case-sensitive, matching the engine's
+ * `String.prototype.startsWith` / `endsWith`) and an empty `any` / `none` list
  * collapsing to a constant. An `undefined` input (or one with no parts)
  * compiles to an empty clause.
  *

@@ -7,6 +7,7 @@ import {
 	encodeValue,
 	extractValues,
 	deriveSQLiteIndexName,
+	findColumnStorage,
 	matchesAbsentPath,
 	matchesAggregateExactly,
 	matchesConditionExactly,
@@ -55,7 +56,7 @@ const BLOB: ColumnSchema = {
 	nullable: false,
 }
 
-// The SQLite ↔ JS codecs as pure functions (no DB needed, AGENTS §16): the SQL
+// The SQLite ↔ JS codecs as pure functions (no DB needed): the SQL
 // identifier containment (`quoteIdentifier`), persisted SQLite index naming,
 // value / row codecs, value extraction, and exactness gates. SQL emitters are
 // tested together in `compilers.test.ts`. Every codec is total — a value that
@@ -466,5 +467,27 @@ describe('matchesAbsentPath', () => {
 			expect(() => matchesAbsentPath(hostile)).not.toThrow()
 			expect(matchesAbsentPath(hostile)).toBe(false)
 		}
+	})
+})
+
+describe('findColumnStorage', () => {
+	const schema: TableSchema = {
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: false, nullable: false },
+			{ name: 'meta', storage: 'json', optional: false, nullable: true },
+		],
+		indexes: [],
+	}
+
+	it('returns the declared storage type of a known column', () => {
+		expect(findColumnStorage('age', schema)).toBe('integer')
+		expect(findColumnStorage('meta', schema)).toBe('json')
+	})
+
+	it('returns undefined for a column the schema does not carry', () => {
+		expect(findColumnStorage('missing', schema)).toBeUndefined()
 	})
 })

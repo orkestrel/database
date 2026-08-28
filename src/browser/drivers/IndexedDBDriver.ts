@@ -64,8 +64,8 @@ import { METADATA_STORE } from '../constants.js'
  * wrapper's native `getAll` / `getAllKeys`, and `snapshot` rolls back through one
  * atomic wrapper transaction.
  *
- * It also implements the optional native `records` / `stream` hooks
- * (AGENTS §21): `selectPlan` ({@link selectPlan}) turns the {@link QueryInput} into a
+ * It also implements the optional native `records` / `stream` hooks:
+ * `selectPlan` ({@link selectPlan}) turns the {@link QueryInput} into a
  * key-range pushdown over the primary key or a single-column secondary index,
  * fetching a candidate **superset** that the core engine (`applyQuery` /
  * `matchesQuery`) then refines — so a native read is byte-identical to a full
@@ -112,7 +112,7 @@ export class IndexedDBDriver implements DriverInterface {
 		const owned = normalizeDriverSchema(schema)
 		// The reserved metadata store name may never collide with a caller-declared
 		// table — it would silently corrupt this driver's own `metadata`/`stamp`
-		// bookkeeping (AGENTS §12 — a programmer error throws).
+		// bookkeeping — a programmer error, so it throws.
 		if (owned.some((table) => table.name === METADATA_STORE)) {
 			throw new DatabaseError(
 				'VALIDATION',
@@ -261,31 +261,6 @@ export class IndexedDBDriver implements DriverInterface {
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		validatePage(input)
 		return this.#stream(table, input)
-	}
-
-	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		try {
-			const schema = this.#table(table)
-			const store = this.#store(table)
-			const plan = selectPlan(input, schema, store.indexes)
-			const conditions = input.conditions ?? []
-			const offset = input.offset ?? 0
-			const limit = input.limit
-			let skipped = 0
-			let yielded = 0
-			for (const row of await this.#candidates(store, schema, plan)) {
-				if (limit !== undefined && yielded >= limit) break
-				if (!matchesQuery(row, conditions)) continue
-				if (skipped < offset) {
-					skipped += 1
-					continue
-				}
-				yielded += 1
-				yield row
-			}
-		} catch (error) {
-			throw this.#wrap(error)
-		}
 	}
 
 	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
@@ -527,6 +502,31 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	// === Private
+
+	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
+		try {
+			const schema = this.#table(table)
+			const store = this.#store(table)
+			const plan = selectPlan(input, schema, store.indexes)
+			const conditions = input.conditions ?? []
+			const offset = input.offset ?? 0
+			const limit = input.limit
+			let skipped = 0
+			let yielded = 0
+			for (const row of await this.#candidates(store, schema, plan)) {
+				if (limit !== undefined && yielded >= limit) break
+				if (!matchesQuery(row, conditions)) continue
+				if (skipped < offset) {
+					skipped += 1
+					continue
+				}
+				yielded += 1
+				yield row
+			}
+		} catch (error) {
+			throw this.#wrap(error)
+		}
+	}
 
 	// Run one point mutation inside an explicit readwrite transaction. The
 	// signal can abort that transaction only while it is active; native

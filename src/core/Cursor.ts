@@ -1,4 +1,4 @@
-import type { CursorInterface, Key } from './types.js'
+import type { CursorInterface, Key, Row } from './types.js'
 
 /**
  * A forward row cursor for bulk in-place mutation.
@@ -9,7 +9,7 @@ import type { CursorInterface, Key } from './types.js'
  * iteration cannot corrupt the walk, and a key removed mid-iteration is simply
  * skipped. `update` and `remove` act on the row at the current position.
  */
-export class Cursor<T = Record<string, unknown>> implements CursorInterface<T> {
+export class Cursor<T = Row> implements CursorInterface<T> {
 	readonly #keys: readonly Key[]
 	readonly #read: (key: Key) => Promise<T | undefined>
 	readonly #update: (key: Key, changes: Partial<T>) => Promise<boolean>

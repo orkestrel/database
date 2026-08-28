@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { TransactionIterator } from '../../../src/core/TransactionIterator.js'
+import { ScopedIterator } from '../../../src/core/ScopedIterator.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
 import { IteratorSource } from '../../setup.js'
 
-describe('TransactionIterator', () => {
+/** The transaction-scoped readiness thunk: a transaction is already connected. */
+function ready(): Promise<void> {
+	return Promise.resolve()
+}
+
+describe('ScopedIterator', () => {
 	it('tracks next until its explicit source barrier settles', async () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
@@ -15,7 +20,7 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 		const continuation = iterator.next()
 		await entered.promise
 		scope.stop()
@@ -41,7 +46,7 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 		const continuation = iterator.return()
 		await entered.promise
 		scope.stop()
@@ -66,7 +71,7 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 
 		await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined })
 		await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
@@ -87,7 +92,7 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 		const continuation = iterator.throw(reason)
 		scope.stop()
 		await expect(continuation).rejects.toBe(reason)
@@ -112,7 +117,7 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 		const continuation = iterator.throw(reason)
 		await entered.promise
 		scope.stop()
@@ -125,13 +130,14 @@ describe('TransactionIterator', () => {
 
 	it('normalizes a missing return method to a completed continuation', async () => {
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(
+		const iterator = new ScopedIterator(
 			new IteratorSource<number>({
 				async next() {
 					return { done: false, value: 1 }
 				},
 			}),
 			scope,
+			ready,
 		)
 		await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined })
 		scope.stop()
@@ -141,13 +147,14 @@ describe('TransactionIterator', () => {
 	it('tracks synchronous source throws through the same rejection ledger', async () => {
 		const reason = new Error('synchronous source failure')
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(
+		const iterator = new ScopedIterator(
 			new IteratorSource<number>({
 				next() {
 					throw reason
 				},
 			}),
 			scope,
+			ready,
 		)
 		const continuation = iterator.next()
 		scope.stop()
@@ -160,7 +167,7 @@ describe('TransactionIterator', () => {
 		const second = Promise.withResolvers<void>()
 		let calls = 0
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(
+		const iterator = new ScopedIterator(
 			new IteratorSource<number>({
 				async next() {
 					calls += 1
@@ -170,6 +177,7 @@ describe('TransactionIterator', () => {
 				},
 			}),
 			scope,
+			ready,
 		)
 		await expect(scope.drain()).resolves.toBeUndefined()
 		const one = iterator.next()
@@ -194,12 +202,58 @@ describe('TransactionIterator', () => {
 			},
 		})
 		const scope = new TransactionScope()
-		const iterator = new TransactionIterator(source, scope)
+		const iterator = new ScopedIterator(source, scope, ready)
 		scope.stop()
 		await expect(scope.drain()).resolves.toBeUndefined()
 		await expect(iterator.next()).rejects.toMatchObject({ code: 'CONFLICT' })
 		await expect(iterator.return()).rejects.toMatchObject({ code: 'CONFLICT' })
 		await expect(iterator.throw('late')).rejects.toMatchObject({ code: 'CONFLICT' })
 		expect(returns).toBe(1)
+	})
+
+	it('readies the boundary before every advance and on no other continuation', async () => {
+		const order: string[] = []
+		const scope = new TransactionScope()
+		const iterator = new ScopedIterator(
+			new IteratorSource<number>({
+				async next() {
+					order.push('next')
+					return { done: false, value: 1 }
+				},
+				async return() {
+					order.push('return')
+					return { done: true, value: undefined }
+				},
+			}),
+			scope,
+			async () => {
+				order.push('ready')
+			},
+		)
+		await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 })
+		await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 })
+		await expect(iterator.return()).resolves.toEqual({ done: true, value: undefined })
+		expect(order).toEqual(['ready', 'next', 'ready', 'next', 'return'])
+	})
+
+	it('propagates a readiness failure instead of advancing the source', async () => {
+		const reason = new Error('connect failed')
+		let nexts = 0
+		const scope = new TransactionScope()
+		const iterator = new ScopedIterator(
+			new IteratorSource<number>({
+				async next() {
+					nexts += 1
+					return { done: false, value: 1 }
+				},
+			}),
+			scope,
+			() => Promise.reject(reason),
+		)
+		const continuation = iterator.next()
+		scope.stop()
+		await expect(continuation).rejects.toBe(reason)
+		await expect(scope.drain()).rejects.toBe(reason)
+		expect(nexts).toBe(0)
 	})
 })

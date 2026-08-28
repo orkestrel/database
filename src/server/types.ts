@@ -3,7 +3,7 @@ import type { SQLiteValue } from '@orkestrel/sqlite'
 // The server surface's type domain — the compiled-SQL contract shared between
 // the pure `compilers.ts` (`QueryInput` → SQL) and `SQLiteDriver`. SQL is a
 // Node-backend concept, so it lives here rather than in `core`; core stays
-// host-independent and never speaks SQL (AGENTS §1, §5).
+// host-independent and never speaks SQL.
 
 /**
  * A parameterized SQL fragment or statement plus its bind values.

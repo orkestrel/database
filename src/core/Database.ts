@@ -1,7 +1,6 @@
 import type { ContractInterface, Result } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
-	ColumnMap,
 	DatabaseEventMap,
 	DatabaseInterface,
 	DatabaseOptions,
@@ -19,9 +18,8 @@ import type {
 	TableSchema,
 } from './types.js'
 import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
-import { DEFAULT_PRIMARY } from './constants.js'
 import { DatabaseError } from './errors.js'
-import { shapeToColumnSchema } from './helpers.js'
+import { resolveColumns, resolvePrimary, shapeToColumnSchema } from './helpers.js'
 import { DatabaseContext } from './DatabaseContext.js'
 import { DatabaseTransaction } from './DatabaseTransaction.js'
 import { Table } from './Table.js'
@@ -70,8 +68,12 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 				name: this.#context.name,
 			})
 		}
-		const columns = this.#columns(name)
-		return this.#build(name, this.#key(name), createContract(objectShape(columns)))
+		const columns = resolveColumns(this.#tables, name)
+		return this.#build(
+			name,
+			resolvePrimary(this.#primary, name),
+			createContract(objectShape(columns)),
+		)
 	}
 
 	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U> {
@@ -81,9 +83,9 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 	export(): Readonly<Record<string, TableDefinition>> {
 		const result: Record<string, TableDefinition> = {}
 		for (const name of Object.keys(this.#tables)) {
-			const columns = this.#columns(name)
+			const columns = resolveColumns(this.#tables, name)
 			result[name] = {
-				primary: this.#key(name),
+				primary: resolvePrimary(this.#primary, name),
 				columns,
 				schema: compileSchema(objectShape(columns)),
 			}
@@ -148,26 +150,12 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 		)
 	}
 
-	#key(name: string): string {
-		return this.#primary[name] ?? DEFAULT_PRIMARY
-	}
-
-	#columns<K extends keyof T & string>(name: K): T[K]
-	#columns(name: string): ColumnMap
-	#columns(name: string): ColumnMap {
-		const columns = this.#tables[name]
-		if (columns === undefined) {
-			throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
-		}
-		return columns
-	}
-
 	#schema(): readonly TableSchema[] {
 		return Object.keys(this.#tables).map((name) => {
-			const columns = this.#columns(name)
+			const columns = resolveColumns(this.#tables, name)
 			return {
 				name,
-				primary: this.#key(name),
+				primary: resolvePrimary(this.#primary, name),
 				columns: Object.entries(columns).map(([column, shape]) =>
 					shapeToColumnSchema(column, shape),
 				),

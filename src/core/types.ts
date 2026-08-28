@@ -15,7 +15,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 // table is typed by `Infer` of its columns, with validation, coercion, JSON-Schema
 // introspection, and seed generation all flowing from that one declaration.
 // `import` / `export` move whole schemas between databases and environments.
-// Types are the source of truth (AGENTS §2).
+// Types are the source of truth: implementation and tests conform to this file.
 
 // === Primitives
 
@@ -138,6 +138,22 @@ export interface OperationOptions {
 /** The lifecycle state of a {@link DatabaseInterface}. */
 export type DatabaseStatus = 'idle' | 'open' | 'closed'
 
+/**
+ * The admission boundary a scoped operation enters before it runs.
+ *
+ * @remarks
+ * The one contract the root database context and a transaction scope both
+ * expose: `accepting` reports whether the boundary still admits work, and
+ * `track` enters an operation into the boundary's ledger so whoever stops the
+ * boundary can contain everything already accepted. A streamed read enters each
+ * continuation independently through the same pair, so an idle iterator never
+ * pins the boundary open.
+ */
+export interface AdmissionInterface {
+	readonly accepting: boolean
+	track<R>(operation: () => Promise<R>): Promise<R>
+}
+
 /** A machine-readable {@link DatabaseError} code. */
 export type DatabaseErrorCode =
 	| 'CLOSED'
@@ -164,14 +180,14 @@ export interface ConformanceFinding {
 }
 
 /**
- * The push observation surface of a {@link DatabaseInterface} (AGENTS §13) — the
+ * The push observation surface of a {@link DatabaseInterface} — the
  * connection + transaction lifecycle a fire-and-forget observer (logging, metrics,
  * tracing, cache invalidation) subscribes to.
  *
  * @remarks
  * Pure signals carrying no row data — these are the database-level (not per-row)
  * moments, so a non-generic map stays lean (per-row writes are {@link TableEventMap}).
- * Listener isolation is the emitter's (AGENTS §13): every event is emitted directly and a
+ * Listener isolation is the emitter's: every event is emitted directly and a
  * listener throw is routed to the emitter's OWN `error` handler (the `error` option), never
  * onto this domain map and never into the snapshot / commit / rollback flow — so a buggy
  * observer can never reorder, throw into, or corrupt a transaction. Every emit sits AFTER the
@@ -180,7 +196,7 @@ export interface ConformanceFinding {
  * still propagates). A rollback failure propagates instead and emits no misleading
  * `rollback` event. Subscribe via `database.emitter.on(...)`.
  *
- * Declared as a `type` alias (not `interface extends EventMap`, §4.5 — `EventMap` is a
+ * Declared as a `type` alias (not `interface extends EventMap` — `EventMap` is a
  * `type` kind): a type-literal satisfies the `EventMap` constraint
  * (`Record<string, readonly unknown[]>`) structurally, whereas an interface lacks the
  * required index signature.
@@ -201,7 +217,7 @@ export type DatabaseEventMap = {
 }
 
 /**
- * The push observation surface of a {@link TableInterface} (AGENTS §13) — the per-row
+ * The push observation surface of a {@link TableInterface} — the per-row
  * mutation moments a fire-and-forget observer (cache invalidation, sync, an audit log)
  * subscribes to, ALONGSIDE the database-level {@link DatabaseEventMap}.
  *
@@ -211,11 +227,11 @@ export type DatabaseEventMap = {
  * value re-reads it by key. Any row put — `set`, `add`, or `update` — emits a single
  * `write` (the consumer re-reads if it needs to know what changed); a delete emits
  * `remove`; emptying the table emits `clear`. Reads / queries / counts are NOT emitted
- * (too hot, and a reader does not mutate). Listener isolation is the emitter's (AGENTS §13):
+ * (too hot, and a reader does not mutate). Listener isolation is the emitter's:
  * every event is emitted directly and a listener throw is routed to the emitter's `error`
  * handler (the `error` option), never onto this map, and sits AFTER the driver write / delete
  * / clear has completed — so a throwing observer can never corrupt a write or perturb a
- * transaction. Subscribe via `table.emitter.on(...)`. Declared as a `type` alias (§4.5 —
+ * transaction. Subscribe via `table.emitter.on(...)`. Declared as a `type` alias (
  * `EventMap` is a `type` kind).
  */
 export type TableEventMap = {
@@ -287,7 +303,7 @@ export interface TableSchema {
  * table.
  *
  * @remarks
- * `operation` names the axis it splits on (AGENTS §4.4): adding / removing a
+ * `operation` names the axis it splits on: adding / removing a
  * whole table, a column, or an index. A driver's optional `migrate` applies each
  * step natively; a step referencing an unknown table throws `DatabaseError`
  * `MIGRATION`.
@@ -377,9 +393,9 @@ export interface StorageInterface {
  * {@link TableSchema}`[]` (columns, types, primary, indexes) so a native backend
  * can build real tables and indexes; a scan-only backend reads only `name`. The
  * optional `records?` / `aggregate?` are native overrides the engine
- * falls back from (AGENTS §21). The API is async (Promises) because IndexedDB is; synchronous
+ * falls back from. The API is async (Promises) because IndexedDB is; synchronous
  * backends resolve immediately. Lookups that may miss return `undefined` /
- * `false` rather than throwing (AGENTS §12). Metadata has the same ownership
+ * `false` rather than throwing. Metadata has the same ownership
  * boundary across every implementation: `stamp` and `migrate` snapshot
  * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply frozen
  * snapshot. A durable driver returns `undefined` only when it proves the
@@ -478,8 +494,8 @@ export type IndexMap = Readonly<Record<string, ReadonlyArray<readonly string[]>>
  * `primary` overrides the primary-key column per table ({@link DEFAULT_PRIMARY}
  * otherwise); `indexes` declares secondary indexes per table (contracts don't
  * express them) that flow into each derived {@link TableSchema}; `name` labels
- * the database; `on` wires initial {@link DatabaseEventMap} listeners (§8); `error`
- * is the emitter's listener-error handler (§13 — a listener throw routes here);
+ * the database; `on` wires initial {@link DatabaseEventMap} listeners; `error`
+ * is the emitter's listener-error handler (a listener throw routes here);
  * `generator` is the authoritative key-generation override a table uses when a
  * written row's primary is exactly `undefined`. When omitted, the table uses
  * global `crypto.randomUUID()`; numeric primary keys require a custom generator.
@@ -643,7 +659,7 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the
  * compiled contract for introspection (`schema`) and fixtures (`generate`).
  *
- * The keyed methods batch by overload (AGENTS §9.2): pass one key/row for one
+ * The keyed methods batch by overload: pass one key/row for one
  * result, or an array for an array of results in the same order — a single verb,
  * never `getMany` / `setAll`. Batches run as independent sequential operations;
  * wrap them in `transaction` for atomicity.

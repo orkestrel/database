@@ -71,7 +71,7 @@ import { DriverIterator } from '../../core/DriverIterator.js'
  * `stamp()` read and write — **a user table named `_metadata` collides with it**;
  * avoid the name. Rows cross the boundary through the codecs in `helpers.ts`
  * (`json` columns store / parse JSON text, a `boolean` stores `1` / `0`), so the
- * typed layer above imposes the exact shape (AGENTS §14). `write` is an
+ * typed layer above imposes the exact shape. `write` is an
  * `INSERT OR REPLACE` upsert, while `insert` uses a plain `INSERT` and maps its
  * atomic primary-key constraint failure to `CONFLICT`; every other backend
  * `SQLiteError` is contained by the same `DatabaseError` boundary described
@@ -244,12 +244,12 @@ export class SQLiteDriver implements DriverInterface {
 		await this.#clear(table)
 	}
 
-	// Doctrine (AGENTS §5, the audit's keystone fix): a QueryInput whose compiled
+	// A QueryInput whose compiled
 	// SQL is PROVABLY identical to the core engine's semantics (see
 	// `matchesConditionExactly` / `matchesOrderExactly` / `matchesQueryExactly`) runs the fast
 	// native path; otherwise this driver fetches a full scan and refines it
-	// through the SAME core engine every scan-only driver (`MemoryDriver`,
-	// `JSONDriver`) already uses — exact → native, otherwise → refine, never a
+	// through the SAME core engine `MemoryDriver` and `JSONDriver` already answer
+	// every query with — exact → native, otherwise → refine, never a
 	// silent semantics drift between backends.
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)

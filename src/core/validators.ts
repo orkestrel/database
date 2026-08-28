@@ -5,40 +5,9 @@ import type {
 	Migration,
 	MigrationInput,
 	MigrationStep,
-	QueryInput,
 	TableSchema,
 } from './types.js'
 import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
-import { DatabaseError } from './errors.js'
-
-/**
- * Validate the paging fields of a portable query.
- *
- * @remarks
- * A present `limit` or `offset` must be a finite nonnegative integer; zero is
- * valid. Validation is deterministic (`limit` before `offset`). Non-finite
- * values are rendered as strings in error context so JSON serialization cannot
- * collapse `NaN` or infinity to `null`.
- *
- * @param input - The portable query whose paging fields to validate
- * @throws {@link DatabaseError} `VALIDATION` when a paging field is invalid
- */
-export function validatePage(input?: QueryInput): void {
-	const limit = input?.limit
-	if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
-		throw new DatabaseError('VALIDATION', 'Query limit must be a nonnegative integer', {
-			field: 'limit',
-			value: Number.isFinite(limit) ? limit : String(limit),
-		})
-	}
-	const offset = input?.offset
-	if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
-		throw new DatabaseError('VALIDATION', 'Query offset must be a nonnegative integer', {
-			field: 'offset',
-			value: Number.isFinite(offset) ? offset : String(offset),
-		})
-	}
-}
 
 /**
  * Test whether a value is a usable database key.

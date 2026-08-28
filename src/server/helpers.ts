@@ -10,13 +10,13 @@ import type {
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
-import { DatabaseError } from '@src/core'
+import { DatabaseError, findColumn } from '@src/core'
 import { cloneJSONValue, isBoolean, isFiniteNumber, isString } from '@orkestrel/contract'
 import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js'
 
 // The server environment's pure helpers: the SQLite ↔ JS bridge, and the
 // filesystem-error classification the file-backed driver reads. Every helper is pure and
-// total — it narrows with `typeof` / `instanceof`, never `as` (AGENTS §1, §14):
+// total — it narrows with `typeof` / `instanceof`, never `as`:
 // a value that does not fit its column's storage type encodes to `null` rather
 // than throwing, and `decodeValue` is the exact inverse. `encodeRow` /
 // `decodeRow` lift the per-cell codecs across a whole schema; the SQL
@@ -25,10 +25,33 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
 // persisted-name derivation. Its SQLite import is type-only and cannot couple
 // the emitted JavaScript to the native package.
 
+// === Schema lookups
+
+/**
+ * Reads the declared storage type of a flat (string) column out of the schema.
+ *
+ * @remarks
+ * The narrow read for a caller that needs only the storage type. A caller that
+ * also needs `optional` or `nullable` reads the whole declaration through
+ * `findColumn` instead, so one lookup answers every declared-column question.
+ *
+ * @param column - The column name
+ * @param schema - The table's schema
+ * @returns The column's {@link ColumnStorage}, or `undefined` when the schema does not declare it
+ *
+ * @example
+ * ```ts
+ * findColumnStorage('age', schema) // 'integer'
+ * ```
+ */
+export function findColumnStorage(column: string, schema: TableSchema): ColumnStorage | undefined {
+	return findColumn(column, schema)?.storage
+}
+
 // === Filesystem classification
 
 /**
- * Whether a caught filesystem error reports that nothing is there to read.
+ * Reports whether a caught filesystem error says that nothing is there to read.
  *
  * @remarks
  * Two codes carry that meaning: `ENOENT` is a plain absence, and `ENOTDIR` is a
@@ -68,25 +91,25 @@ export function matchesAbsentPath(error: unknown): boolean {
 // contract-validated write can store ("declared-type trust"). These guards
 // decide, per condition/order/input, whether that proof holds; when it does
 // not, the driver falls back to a full scan refined through the same core
-// engine every scan-only driver (`MemoryDriver`, `JSONDriver`) already uses —
+// engine that `MemoryDriver` and `JSONDriver` already answer every query with —
 // exact → native, otherwise → refine, never a silent semantics drift.
 
 /**
- * Whether a value's runtime type matches a column's declared exact type —
- * the operand side of the declared-type-trust proof.
+ * Reports whether a value's runtime type matches a column's declared exact type
+ * — the operand side of the declared-type-trust proof.
  *
  * @remarks
  * `text` ↔ string, `integer` / `real` ↔ FINITE number (`NaN` / `±Infinity`
  * fail), `boolean` ↔ boolean. Backs {@link matchesConditionExactly}'s operand checks.
  *
  * @param value - The condition operand to test
- * @param type - The column's declared portable type
+ * @param storage - The column's declared portable storage type
  * @returns `true` when the operand's runtime type matches the declared type
  *
  * @example
  * ```ts
- * matchesDeclaredType('Ada', 'text') // true
- * matchesDeclaredType(Number.NaN, 'integer') // false — only finite numbers
+ * matchesDeclaredStorage('Ada', 'text') // true
+ * matchesDeclaredStorage(Number.NaN, 'integer') // false — only finite numbers
  * ```
  */
 export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): boolean {
@@ -96,9 +119,9 @@ export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): 
 }
 
 /**
- * Whether one {@link Condition} compiles to SQL that is PROVABLY identical to
- * the core engine's `matchesCondition` for every value its column's declared
- * type can store.
+ * Reports whether one {@link Condition} compiles to SQL that is PROVABLY
+ * identical to the core engine's `matchesCondition` for every value its
+ * column's declared type can store.
  *
  * @remarks
  * `false` for a nested `FieldPath` (an array) or a column absent from `schema`.
@@ -131,7 +154,7 @@ export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): 
  */
 export function matchesConditionExactly(condition: Condition, schema: TableSchema): boolean {
 	if (!isString(condition.column)) return false
-	const column = schema.columns.find((candidate) => candidate.name === condition.column)
+	const column = findColumn(condition.column, schema)
 	if (column === undefined) return false
 	if (condition.operator === 'absent' || condition.operator === 'present') {
 		return !(column.optional && column.nullable)
@@ -174,8 +197,8 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
 }
 
 /**
- * Whether one {@link Order} term's column compiles to an `ORDER BY` that
- * matches the engine's {@link import('@src/core').sortRows} exactly.
+ * Reports whether one {@link Order} term's column compiles to an `ORDER BY`
+ * that matches the engine's {@link import('@src/core').sortRows} exactly.
  *
  * @remarks
  * `false` for a nested `FieldPath`, a column absent from `schema`, or a
@@ -192,7 +215,7 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
  */
 export function matchesOrderExactly(order: Order, schema: TableSchema): boolean {
 	if (!isString(order.column)) return false
-	const column = schema.columns.find((candidate) => candidate.name === order.column)
+	const column = findColumn(order.column, schema)
 	if (column === undefined) return false
 	return (
 		!column.optional &&
@@ -202,9 +225,9 @@ export function matchesOrderExactly(order: Order, schema: TableSchema): boolean 
 }
 
 /**
- * Whether a whole {@link QueryInput} is exact — every condition and every order
- * term is exact. `limit` / `offset` never affect exactness (SQL `LIMIT` /
- * `OFFSET` are always engine-identical).
+ * Reports whether a whole {@link QueryInput} is exact — every condition and
+ * every order term is exact. `limit` / `offset` never affect exactness (SQL
+ * `LIMIT` / `OFFSET` are always engine-identical).
  *
  * @param input - The query input to test
  * @param schema - The table's schema
@@ -234,7 +257,7 @@ export function matchesAggregateExactly(
 ): boolean {
 	if (operation === 'count') return true
 	if (operation === 'sum' || operation === 'average' || !isString(column)) return false
-	const declared = schema.columns.find((candidate) => candidate.name === column)
+	const declared = findColumn(column, schema)
 	return (
 		declared !== undefined &&
 		(declared.storage === 'integer' || declared.storage === 'real') &&

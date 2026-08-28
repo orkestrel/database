@@ -2,7 +2,7 @@ import type { Condition, QueryInput, TableSchema } from '@src/core'
 import type { IndexedDBError } from '@orkestrel/indexeddb'
 import type { StoreDefinition } from '@orkestrel/indexeddb'
 import type { QueryPlan } from './types.js'
-import { compareValues, DatabaseError, isKey } from '@src/core'
+import { compareValues, DatabaseError, findColumn, isKey } from '@src/core'
 import {
 	rangeAboveKey,
 	rangeBelowKey,
@@ -22,9 +22,9 @@ import { INDEXABLE_STORAGE } from './constants.js'
 // column type, a nested path, a non-scalar operand) falls through to a full scan.
 
 /**
- * The `IDBKeyRange` a single {@link Condition} maps to, when its operator is one
- * of the six exact key comparisons over scalar operands; otherwise
- * `undefined`.
+ * Translates one {@link Condition} to the `IDBKeyRange` it maps to, when its
+ * operator is one of the exact key comparisons over scalar operands; otherwise
+ * returns `undefined`.
  *
  * @remarks
  * Only the comparison operators (`equals`/`above`/`below`/`from`/`to`/`between`)
@@ -169,7 +169,7 @@ export function selectPlan(
 	for (const condition of conditions) {
 		// An array column is a nested FieldPath into a json value — not a key.
 		if (typeof condition.column !== 'string') continue
-		const column = schema.columns.find((candidate) => candidate.name === condition.column)
+		const column = findColumn(condition.column, schema)
 		if (column === undefined || !INDEXABLE_STORAGE.has(column.storage)) continue
 		const range = conditionToRange(condition)
 		if (range === undefined) continue

@@ -47,15 +47,15 @@ import { matchesAbsentPath } from '../helpers.js'
  * primary (the table contract), so the key is recovered on load with
  * {@link extractKey} and the file need not store it. The parsed JSON crosses the
  * boundary as `unknown` and is narrowed with {@link isRecord} / {@link extractKey},
- * never asserted (AGENTS §14). A read that reports no document there starts empty —
+ * never asserted. A read that reports no document there starts empty —
  * `ENOENT` for a plain absence, and `ENOTDIR` for a path whose parent is not a
  * directory, which no later write could find either; every other read failure or
  * invalid existing document fails closed without publication, mutation, or
- * automatic repair. It is scan-only — it implements none of
- * the optional native `records` / `aggregate` hooks, so the core engine
- * over `scan` answers every query. For development, small datasets, and portable /
- * inspectable data; for large or concurrent workloads reach for a SQLite-backed
- * driver.
+ * automatic repair. It implements the optional native `stream` hook that
+ * `TableInterface.scan` prefers over `scan`, and neither `records` nor
+ * `aggregate`, so the core engine's `matchesQuery` answers every query on
+ * either path. For development, small datasets, and portable / inspectable
+ * data; for large or concurrent workloads reach for a SQLite-backed driver.
  *
  * Metadata crosses {@link cloneDriverMetadata} at parsed-file ingress, public and
  * scoped write ingress, candidate/root publication, serialization, and copy-out.

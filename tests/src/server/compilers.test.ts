@@ -7,10 +7,8 @@ import {
 	compileOrder,
 	compilePage,
 	compileWhere,
-	findColumnStorage,
 	escapeLike,
 	compileConditionSQL,
-	inferValueStorage,
 	schemaToIndexes,
 	schemaToTable,
 	stepToSQL,
@@ -23,8 +21,8 @@ import { buildCondition as cond } from '../../setup.js'
 // (NOT SQL precedence), ORDER BY, and LIMIT/OFFSET — asserting both the `sql`
 // string and the bound `parameters`. ORDER BY always ENDS with the primary key so the
 // native read resolves ties in key order, matching a primary-key-ordered `scan`
-// and the core engine's stable sort over a key-ordered scan (AGENTS §21 / §22
-// native ↔ engine parity): with no explicit order it is the sole `ORDER BY
+// and the core engine's stable sort over a key-ordered scan — native ↔ engine
+// parity: with no explicit order it is the sole `ORDER BY
 // "<primary>"` (here `"id"`); an explicit order appends `, "<primary>"` (ASC) as
 // the final tie-break determinant — unless the primary is already one of the
 // explicit terms.
@@ -497,44 +495,6 @@ describe('escapeLike', () => {
 
 	it('returns plain text with no LIKE metacharacters unchanged', () => {
 		expect(escapeLike('plain')).toBe('plain')
-	})
-})
-
-describe('findColumnStorage', () => {
-	it('returns the declared storage type of a known column', () => {
-		expect(findColumnStorage('age', SCHEMA)).toBe('integer')
-		expect(findColumnStorage('meta', SCHEMA)).toBe('json')
-	})
-
-	it('returns undefined for a column the schema does not carry', () => {
-		expect(findColumnStorage('missing', SCHEMA)).toBeUndefined()
-	})
-})
-
-describe('inferValueStorage', () => {
-	it('maps a boolean to boolean', () => {
-		expect(inferValueStorage(true)).toBe('boolean')
-		expect(inferValueStorage(false)).toBe('boolean')
-	})
-
-	it('maps an integer number to integer and a fractional number to real', () => {
-		expect(inferValueStorage(9)).toBe('integer')
-		expect(inferValueStorage(1.5)).toBe('real')
-	})
-
-	it('maps a bigint to integer', () => {
-		expect(inferValueStorage(7n)).toBe('integer')
-	})
-
-	it('maps an object / array to json', () => {
-		expect(inferValueStorage({ a: 1 })).toBe('json')
-		expect(inferValueStorage([1, 2])).toBe('json')
-	})
-
-	it('maps a string, null, and undefined to text', () => {
-		expect(inferValueStorage('hi')).toBe('text')
-		expect(inferValueStorage(null)).toBe('text')
-		expect(inferValueStorage(undefined)).toBe('text')
 	})
 })
 

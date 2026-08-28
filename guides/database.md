@@ -108,7 +108,7 @@ None of these import a SQLite package; they speak strings and values only.
 
 | API                       | Kind     | Summary                                                                                                                                  |
 | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `escapeLike`              | function | Escape `\` / `%` / `_` so a `starts` / `ends` operand matches literally under `LIKE … ESCAPE '\'`.                                       |
+| `escapeLike`              | function | Escape `\` / `%` / `_` so an operand matches literally under a caller-assembled `LIKE … ESCAPE '\'` clause; no compile here emits one.   |
 | `findColumnStorage`       | function | The declared `ColumnStorage` of a flat column, read from the schema.                                                                     |
 | `inferValueStorage`       | function | The `ColumnStorage` a nested (`json_extract`) operand encodes as, derived from its runtime value.                                        |
 | `compileJSONTypeSQL`      | function | Compile a nested `FieldPath` to its `json_type(<col>, <path>)` SQL expression — disambiguates a present JSON `null` from an absent path. |
@@ -174,6 +174,9 @@ driver never re-implements.
 | `extractKey`           | function | Read a row's primary key from a column when it is a usable `Key`.                                            |
 | `bindRowKey`           | function | Return an owned row with its resolved primary key bound to the declared primary column.                      |
 | `shapeToColumnSchema`  | function | Project a named `ContractShape` to its complete portable `ColumnSchema`.                                     |
+| `findColumn`           | function | Read one flat column's declaration out of a `TableSchema`; `undefined` when the schema does not declare it.  |
+| `resolvePrimary`       | function | Resolve the primary-key column a table keys its rows by, falling back to `DEFAULT_PRIMARY`.                  |
+| `resolveColumns`       | function | Resolve one declared table's `ColumnMap` out of a `TableMap`; throws `NOT_FOUND` for an undeclared table.    |
 | `shapeToColumnStorage` | function | Map a column's `ContractShape` to its portable `ColumnStorage` — the schema `open` hands a driver.           |
 | `filterRows`           | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.               |
 | `equalsValue`          | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.               |
@@ -229,10 +232,13 @@ Pure helpers behind the query engine's pattern matching.
 
 ### Constants
 
-| Constant             | Kind  | Value                                                                                                                                                     |
-| -------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_PRIMARY`    | const | The primary-key column assumed when a table has no `primary` override (`id`).                                                                             |
-| `MAX_PATTERN_LENGTH` | const | The longest `LIKE` / `GLOB` pattern `matchesWildcardPattern` accepts before a `VALIDATION` throw — the ReDoS length bound (§6.5) on model-supplied input. |
+| Constant                   | Kind  | Value                                                                                                                                                   |
+| -------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_PRIMARY`          | const | The primary-key column assumed when a table has no `primary` override (`id`).                                                                           |
+| `MAX_PATTERN_LENGTH`       | const | The longest `LIKE` / `GLOB` pattern `matchesWildcardPattern` accepts before a `VALIDATION` throw — the ReDoS length bound on a caller-supplied pattern. |
+| `CONFORMANCE_USERS_SCHEMA` | const | The `users` table the driver-conformance battery opens — the default `id` primary, an optional `age`, and a declared `json` `meta` column.              |
+| `CONFORMANCE_POSTS_SCHEMA` | const | The `posts` table the driver-conformance battery opens — a non-`id` `slug` primary, so one battery covers both primary-key shapes.                      |
+| `CONFORMANCE_SCHEMA`       | const | The frozen two-table schema every driver-conformance phase opens.                                                                                       |
 
 ### Types
 
@@ -250,6 +256,7 @@ Pure helpers behind the query engine's pattern matching.
 | `AggregateOperation`       | type      | `'count' \| 'sum' \| 'average' \| 'minimum' \| 'maximum'`.                                                                                                                                                                                                                                                                       |
 | `OperationOptions`         | interface | `{ signal? }` — options for an abortable operation; point mutations propagate the signal through the driver to the backend commit point, while `scan` / `stream` check before each yield.                                                                                                                                        |
 | `DatabaseStatus`           | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                                                                                                  |
+| `AdmissionInterface`       | interface | `{ accepting, track }` — the admission boundary a scoped operation enters; the root context and a transaction scope both expose it.                                                                                                                                                                                              |
 | `DatabaseErrorCode`        | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE' \| 'DRIVER'`.                                                                                                                                                                                                                |
 | `ConformanceFinding`       | interface | `{ check, message, context }` — one violated invariant yielded by `driverFindings` / collected by `auditDriver`.                                                                                                                                                                                                                 |
 | `DatabaseEventMap`         | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                                                                                                          |
@@ -859,9 +866,10 @@ posts.primary // 'slug' — the declared override
 ```
 
 Each `indexes` entry is one (possibly compound) index of column names; they
-flow into each table's derived `TableSchema`. Both drivers here are
-scan-only and ignore them; SQLite and IndexedDB use supported declarations
-for native indexes and still refine through the shared engine when required.
+flow into each table's derived `TableSchema`. Neither driver here declares a
+native index, so both ignore them; SQLite and IndexedDB use supported
+declarations for native indexes and still refine through the shared engine when
+required.
 
 ### Swapping the driver
 
@@ -885,8 +893,9 @@ const db = createDatabase({
 void db
 ```
 
-`MemoryDriver` is scan-only (the core engine answers every query) and
-I/O-free, making it the storage behind tests, ephemeral caches, and any code
+`MemoryDriver` implements the native `stream` hook and neither `records` nor
+`aggregate`, so the core engine's `matchesQuery` answers every query on either
+path. It is I/O-free, making it the storage behind tests, ephemeral caches, and any code
 that wants the database API without a persistent backend. Its row boundary
 continues to use native `structuredClone`, retaining supported non-JSON values
 such as `Blob` and `Uint8Array`; only `DriverMetadata` crosses the stricter exact-JSON
@@ -2378,7 +2387,7 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 - [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, `matchesFuzzy` ordered case-folded subsequences and Unicode lowercasing boundaries, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `equalsValue`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
 - [`tests/src/core/drivers/MemoryDriver.test.ts`](../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear + `snapshot` rollback, duplicate-insert `CONFLICT`, non-JSON row isolation via native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
 - [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
-- [`tests/src/core/TransactionIterator.test.ts`](../tests/src/core/TransactionIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
+- [`tests/src/core/ScopedIterator.test.ts`](../tests/src/core/ScopedIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, the readiness thunk running before every advance and its failure preempting the source, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
 - [`tests/src/core/DriverIterator.test.ts`](../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
 - [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, coercion and error paths, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit/no-aborted-event guarantees.
 - [`tests/src/core/Query.test.ts`](../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.

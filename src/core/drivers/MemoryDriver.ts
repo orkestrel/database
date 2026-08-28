@@ -21,8 +21,9 @@ import {
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
+	validatePage,
 } from '../helpers.js'
-import { isKey, validatePage } from '../validators.js'
+import { isKey } from '../validators.js'
 
 /**
  * The reference {@link DriverInterface} — nested maps, no I/O.
@@ -34,7 +35,7 @@ import { isKey, validatePage } from '../validators.js'
  * `structuredClone`) in and out — at `write`, `read`, `scan`, `stream`, and both
  * snapshot capture and restore — so a caller mutating a nested field of an input
  * row, a returned row, or a row mutated in place between snapshot and rollback
- * can never perturb stored state (AGENTS §11); a shallow `{ ...row }` spread
+ * can never perturb stored state; a shallow `{ ...row }` spread
  * would still share nested object/array references. Metadata instead routes
  * through `cloneDriverMetadata`: `stamp` and migration snapshot exact JSON at
  * ingress, and `metadata` returns a distinct deeply frozen owned copy. `snapshot`
@@ -120,8 +121,8 @@ export class MemoryDriver implements DriverInterface {
 	 * instant `limit` yields have been produced, so a large table is never fully
 	 * walked for a small page. `input.order` is IGNORED (the same contract as
 	 * `TableInterface.scan` and `QueryInterface.stream`): streaming yields key
-	 * order, sorted output is `records()`'s job. Rows yield copy-out (AGENTS
-	 * §11), and an unknown table mirrors `scan`'s empty-yield behavior.
+	 * order, sorted output is `records()`'s job. Rows yield copy-out, and an
+	 * unknown table mirrors `scan`'s empty-yield behavior.
 	 *
 	 * @param table - The table to stream
 	 * @param input - The filter / offset / limit to apply lazily
@@ -136,29 +137,6 @@ export class MemoryDriver implements DriverInterface {
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		validatePage(input)
 		return this.#stream(table, input)
-	}
-
-	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		const store = this.#store(table)
-		const conditions = input.conditions
-		const offset = input.offset ?? 0
-		const limit = input.limit
-		let skipped = 0
-		let yielded = 0
-		for (const key of this.#ordered(table)) {
-			if (limit !== undefined && yielded >= limit) return
-			const row = store.get(key)
-			if (row === undefined) continue
-			if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
-				continue
-			}
-			if (skipped < offset) {
-				skipped += 1
-				continue
-			}
-			yield structuredClone(row)
-			yielded += 1
-		}
 	}
 
 	async clear(table: string): Promise<void> {
@@ -380,6 +358,29 @@ export class MemoryDriver implements DriverInterface {
 			case 'index.remove':
 				this.#require(tables, step.table)
 				break
+		}
+	}
+
+	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
+		const store = this.#store(table)
+		const conditions = input.conditions
+		const offset = input.offset ?? 0
+		const limit = input.limit
+		let skipped = 0
+		let yielded = 0
+		for (const key of this.#ordered(table)) {
+			if (limit !== undefined && yielded >= limit) return
+			const row = store.get(key)
+			if (row === undefined) continue
+			if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
+				continue
+			}
+			if (skipped < offset) {
+				skipped += 1
+				continue
+			}
+			yield structuredClone(row)
+			yielded += 1
 		}
 	}
 

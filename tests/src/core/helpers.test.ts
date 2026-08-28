@@ -24,9 +24,13 @@ import {
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
+	resolveColumns,
+	resolvePrimary,
+	findColumn,
 	shapeToColumnSchema,
 	shapeToColumnStorage,
 	sortRows,
+	validatePage,
 	matchesWildcardPattern,
 } from '@src/core'
 import {
@@ -51,6 +55,86 @@ import { buildCondition } from '../../setup.js'
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
 // — the connector is irrelevant for a single-condition match (it only matters
 // when folding a list).
+
+describe('validatePage', () => {
+	it.each([
+		{ field: 'limit', value: -1, diagnostic: -1 },
+		{ field: 'limit', value: 1.5, diagnostic: 1.5 },
+		{ field: 'limit', value: Number.NaN, diagnostic: 'NaN' },
+		{ field: 'limit', value: Number.POSITIVE_INFINITY, diagnostic: 'Infinity' },
+		{ field: 'offset', value: -1, diagnostic: -1 },
+		{ field: 'offset', value: 1.5, diagnostic: 1.5 },
+		{ field: 'offset', value: Number.NaN, diagnostic: 'NaN' },
+		{ field: 'offset', value: Number.POSITIVE_INFINITY, diagnostic: 'Infinity' },
+	])(
+		'rejects invalid $field page value $value without JSON null coercion',
+		({ field, value, diagnostic }) => {
+			const input = field === 'limit' ? { limit: value } : { offset: value }
+			let error: unknown
+			try {
+				validatePage(input)
+			} catch (caught) {
+				error = caught
+			}
+
+			expect(error).toMatchObject({
+				code: 'VALIDATION',
+				message: `Query ${field} must be a nonnegative integer`,
+				context: { field, value: diagnostic },
+			})
+			expect(JSON.stringify(error)).toContain(JSON.stringify(diagnostic))
+			expect(JSON.stringify(error)).not.toContain('"value":null')
+		},
+	)
+
+	it('checks limit before offset and accepts zero for both fields', () => {
+		expect(() => validatePage({ limit: 0, offset: 0 })).not.toThrow()
+		expect(() => validatePage()).not.toThrow()
+		expect(() => validatePage({ limit: -1, offset: -1 })).toThrow(
+			'Query limit must be a nonnegative integer',
+		)
+	})
+})
+
+describe('findColumn', () => {
+	it('reads a declared column and reports an undeclared one as absent', () => {
+		const declared: TableSchema = {
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'age', storage: 'integer', optional: true, nullable: false },
+			],
+			indexes: [],
+		}
+		expect(findColumn('age', declared)).toEqual({
+			name: 'age',
+			storage: 'integer',
+			optional: true,
+			nullable: false,
+		})
+		expect(findColumn('missing', declared)).toBeUndefined()
+	})
+})
+
+describe('resolvePrimary', () => {
+	it('reads an override and falls back to the default primary column', () => {
+		expect(resolvePrimary({ posts: 'slug' }, 'posts')).toBe('slug')
+		expect(resolvePrimary({ posts: 'slug' }, 'users')).toBe('id')
+		expect(resolvePrimary({}, 'users')).toBe('id')
+	})
+})
+
+describe('resolveColumns', () => {
+	it('reads a declared table and throws NOT_FOUND for an undeclared one', () => {
+		const tables = { users: { id: stringShape() } }
+		expect(resolveColumns(tables, 'users')).toBe(tables.users)
+		expect(captureError(() => resolveColumns(tables, 'posts'))).toMatchObject({
+			code: 'NOT_FOUND',
+			context: { table: 'posts' },
+		})
+	})
+})
 
 describe('compareValues', () => {
 	it('orders unlike types by a stable rank', () => {

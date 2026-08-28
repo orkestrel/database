@@ -1,5 +1,6 @@
+import type { AdmissionInterface } from './types.js'
 import { DatabaseError } from './errors.js'
-import { TransactionIterator } from './TransactionIterator.js'
+import { ScopedIterator } from './ScopedIterator.js'
 
 /**
  * The internal lifetime boundary for one database transaction callback.
@@ -10,7 +11,7 @@ import { TransactionIterator } from './TransactionIterator.js'
  * work the callback started without awaiting. {@link stream} applies the same
  * boundary to each iterator continuation without retaining an idle iterator.
  */
-export class TransactionScope {
+export class TransactionScope implements AdmissionInterface {
 	readonly #operations = new Set<Promise<unknown>>()
 	#accepting = true
 	#failed = false
@@ -55,7 +56,7 @@ export class TransactionScope {
 	}
 
 	stream<T>(source: AsyncIterable<T>): AsyncIterable<T> {
-		return new TransactionIterator(source, this)
+		return new ScopedIterator(source, this, () => Promise.resolve())
 	}
 
 	stop(): void {

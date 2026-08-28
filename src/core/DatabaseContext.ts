@@ -1,6 +1,7 @@
 import type { Result } from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
 import type {
+	AdmissionInterface,
 	DatabaseEventMap,
 	DatabaseOptions,
 	DatabaseStatus,
@@ -25,7 +26,7 @@ import { TransactionScope } from './TransactionScope.js'
  * migration, and single transaction admission. It is deliberately omitted from
  * the public barrel; {@link Database} is the consumer-facing typed view.
  */
-export class DatabaseContext {
+export class DatabaseContext implements AdmissionInterface {
 	readonly #driver: DriverInterface
 	readonly #name: string
 	readonly #version: number | undefined
@@ -127,7 +128,28 @@ export class DatabaseContext {
 	}
 
 	connect(): Promise<void> {
-		return this.#connect()
+		if (this.#ready !== undefined) return this.#ready
+		if (this.#failure !== undefined) throw this.#failure.error
+		if (this.#status === 'closed') {
+			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, {
+				name: this.#name,
+			})
+		}
+		const readiness = this.#driver
+			.open(this.#schema)
+			.then(async () => {
+				if (this.#status === 'idle') {
+					this.#status = 'open'
+					this.#emitter.emit('open')
+				}
+				await this.#reconcile()
+			})
+			.catch((error: unknown) => {
+				if (this.#ready === readiness) this.#ready = undefined
+				throw error
+			})
+		this.#ready = readiness
+		return readiness
 	}
 
 	track<R>(operation: () => Promise<R>): Promise<R> {
@@ -164,7 +186,7 @@ export class DatabaseContext {
 		this.#transaction = token
 		try {
 			await this.#drain()
-			await this.#connect()
+			await this.connect()
 			if (this.#driver.transaction !== undefined) {
 				const rejection: { rejected: boolean; error: unknown; marker: object } = {
 					rejected: false,
@@ -263,31 +285,6 @@ export class DatabaseContext {
 				name: this.#name,
 			})
 		}
-	}
-
-	#connect(): Promise<void> {
-		if (this.#ready !== undefined) return this.#ready
-		if (this.#failure !== undefined) throw this.#failure.error
-		if (this.#status === 'closed') {
-			throw new DatabaseError('CLOSED', `Database '${this.#name}' is closed`, {
-				name: this.#name,
-			})
-		}
-		const readiness = this.#driver
-			.open(this.#schema)
-			.then(async () => {
-				if (this.#status === 'idle') {
-					this.#status = 'open'
-					this.#emitter.emit('open')
-				}
-				await this.#reconcile()
-			})
-			.catch((error: unknown) => {
-				if (this.#ready === readiness) this.#ready = undefined
-				throw error
-			})
-		this.#ready = readiness
-		return readiness
 	}
 
 	async #drain(): Promise<void> {

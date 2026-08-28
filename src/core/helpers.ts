@@ -1,6 +1,7 @@
 import type { ContractShape, FieldPath } from '@orkestrel/contract'
 import type {
 	AggregateOperation,
+	ColumnMap,
 	ColumnSchema,
 	ColumnStorage,
 	ConformanceFinding,
@@ -11,7 +12,9 @@ import type {
 	Migration,
 	MigrationStep,
 	Order,
+	PrimaryMap,
 	Row,
+	TableMap,
 	TableSchema,
 } from './types.js'
 import {
@@ -22,21 +25,58 @@ import {
 	parseNumber,
 	resolveField,
 } from '@orkestrel/contract'
-import { MAX_PATTERN_LENGTH } from './constants.js'
+import {
+	CONFORMANCE_POSTS_SCHEMA,
+	CONFORMANCE_SCHEMA,
+	CONFORMANCE_USERS_SCHEMA,
+	DEFAULT_PRIMARY,
+	MAX_PATTERN_LENGTH,
+} from './constants.js'
 import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
-import { isKey, validatePage } from './validators.js'
+import { isKey } from './validators.js'
 
 // The query engine. Every backend's `scan` yields rows; these pure helpers do
 // the filtering, ordering, paging, and aggregation once, so a driver never
 // re-implements WHERE compilation. They are total — like the contracts guards
 // they lean on, hostile input yields a `false` / a skipped value, never a throw.
 
+// === Query input validation
+
+/**
+ * Validates the paging fields of a portable query.
+ *
+ * @remarks
+ * A present `limit` or `offset` must be a finite nonnegative integer; zero is
+ * valid. Validation is deterministic (`limit` before `offset`). Non-finite
+ * values are rendered as strings in error context so JSON serialization cannot
+ * collapse `NaN` or infinity to `null`.
+ *
+ * @param input - The portable query whose paging fields to validate
+ * @throws {@link DatabaseError} `VALIDATION` when a paging field is invalid
+ */
+export function validatePage(input?: QueryInput): void {
+	const limit = input?.limit
+	if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+		throw new DatabaseError('VALIDATION', 'Query limit must be a nonnegative integer', {
+			field: 'limit',
+			value: Number.isFinite(limit) ? limit : String(limit),
+		})
+	}
+	const offset = input?.offset
+	if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
+		throw new DatabaseError('VALIDATION', 'Query offset must be a nonnegative integer', {
+			field: 'offset',
+			value: Number.isFinite(offset) ? offset : String(offset),
+		})
+	}
+}
+
 // === Comparison
 
 /**
- * A total ordering over arbitrary values — the comparator behind sorting and the
- * range operators.
+ * Compares two arbitrary values under one total order — the comparator behind
+ * sorting and the range operators.
  *
  * @remarks
  * Values of different types order by a fixed type rank (`undefined` < `null` <
@@ -83,8 +123,9 @@ export function compareValues(left: unknown, right: unknown): number {
 }
 
 /**
- * Structural equality by SameValueZero leaves — the comparator behind conformance
- * checks and any test/fixture that needs "same data", not "same reference".
+ * Compares two values structurally by SameValueZero leaves — the comparator
+ * behind conformance checks and any test/fixture that needs "same data", not
+ * "same reference".
  *
  * @remarks
  * Primitives compare by SameValueZero (`NaN` equals itself; `+0` equals `-0`).
@@ -210,9 +251,9 @@ export function matchesFuzzy(value: string, query: string): boolean {
  * @remarks
  * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is CATASTROPHIC on a hostile pattern:
  * `.*` segments separated by literals, matched against a long non-matching input, blow
- * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it
- * (AGENTS §6.5, now that the authed server runs model-supplied `list` input over the
- * wire). So this builds NO regex. It runs the classic GREEDY TWO-POINTER wildcard match:
+ * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it,
+ * while a `LIKE` / `GLOB` pattern is a caller-supplied operand this package cannot
+ * trust. So this builds NO regex. It runs the classic GREEDY TWO-POINTER wildcard match:
  * the `any` wildcard records its position and, on a later mismatch, backtracks ONLY to
  * that last `any` (letting it absorb one more char) — so the work is O(value × pattern),
  * never the exponential / polynomial backtracking a regex would do. The pattern length
@@ -281,12 +322,51 @@ export function matchesWildcardPattern(
 	return pi === needle.length
 }
 
-// SQL `LIKE` → case-INSENSITIVE wildcard match (`%` any run, `_` any char).
+/**
+ * Matches a value against a SQL `LIKE` pattern, folding case.
+ *
+ * @remarks
+ * `%` matches any run of characters (including none) and `_` matches exactly one
+ * character; every other pattern character matches itself literally. Runs on
+ * {@link matchesWildcardPattern}, so the match is linear in the value length and
+ * the pattern is capped at {@link MAX_PATTERN_LENGTH}.
+ *
+ * @param value - The value to test
+ * @param pattern - The `LIKE` pattern
+ * @returns True if `value` matches `pattern` under case folding; false otherwise
+ * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
+ *
+ * @example
+ * ```ts
+ * matchesLikePattern('Hello', 'h%o') // true — `%` spans any run, and case folds
+ * matchesLikePattern('Hello', 'h_llo') // true — `_` matches exactly one character
+ * ```
+ */
 export function matchesLikePattern(value: string, pattern: string): boolean {
 	return matchesWildcardPattern(value, pattern, '%', '_', true)
 }
 
-// `GLOB` → case-SENSITIVE wildcard match (`*` any run, `?` any char).
+/**
+ * Matches a value against a `GLOB` pattern, preserving case.
+ *
+ * @remarks
+ * `*` matches any run of characters (including none) and `?` matches exactly one
+ * character; every other pattern character matches itself literally, so a
+ * character class such as `[a-z]` is NOT interpreted. Runs on
+ * {@link matchesWildcardPattern}, so the match is linear in the value length and
+ * the pattern is capped at {@link MAX_PATTERN_LENGTH}.
+ *
+ * @param value - The value to test
+ * @param pattern - The `GLOB` pattern
+ * @returns True if `value` matches `pattern` case-sensitively; false otherwise
+ * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
+ *
+ * @example
+ * ```ts
+ * matchesGlobPattern('hello', 'h*o') // true — `*` spans any run
+ * matchesGlobPattern('Hello', 'h*o') // false — `GLOB` is case-sensitive
+ * ```
+ */
 export function matchesGlobPattern(value: string, pattern: string): boolean {
 	return matchesWildcardPattern(value, pattern, '*', '?', false)
 }
@@ -596,6 +676,83 @@ export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnS
 		optional: isColumn({}),
 		nullable: isColumn({ value: null }),
 	}
+}
+
+/**
+ * Reads one flat column's declaration out of a table schema.
+ *
+ * @remarks
+ * The single lookup behind every declared-column question — storage type,
+ * optionality, and nullability all come off the returned {@link ColumnSchema},
+ * so a caller that needs more than one of them reads them from one result. A
+ * nested {@link FieldPath} names no declared column, so resolve the path's head
+ * before calling. A schema that does not declare the column returns `undefined`.
+ *
+ * @param name - The flat column name
+ * @param schema - The table's schema
+ * @returns The column's {@link ColumnSchema}, or `undefined` when the schema does not declare it
+ *
+ * @example
+ * ```ts
+ * findColumn('age', schema)?.storage // 'integer'
+ * findColumn('absent', schema) // undefined
+ * ```
+ */
+export function findColumn(name: string, schema: TableSchema): ColumnSchema | undefined {
+	return schema.columns.find((candidate) => candidate.name === name)
+}
+
+/**
+ * Resolves the primary-key column one table keys its rows by.
+ *
+ * @remarks
+ * A table absent from the {@link PrimaryMap} keys its rows by
+ * {@link DEFAULT_PRIMARY}, so this is total over any table name.
+ *
+ * @param primary - The per-table primary-key overrides
+ * @param name - The table name
+ * @returns The table's primary-key column
+ *
+ * @example
+ * ```ts
+ * resolvePrimary({ posts: 'slug' }, 'posts') // 'slug'
+ * resolvePrimary({ posts: 'slug' }, 'users') // 'id' — the default primary
+ * ```
+ */
+export function resolvePrimary(primary: PrimaryMap, name: string): string {
+	return primary[name] ?? DEFAULT_PRIMARY
+}
+
+/**
+ * Resolves one declared table's columns out of a table map.
+ *
+ * @remarks
+ * The overload preserves the map's own value type for a statically known table
+ * name, so a typed view keeps its row type without an assertion. An undeclared
+ * table is a caller error rather than an absence, so it throws instead of
+ * returning `undefined`.
+ *
+ * @param tables - The declared table map
+ * @param name - The table name
+ * @returns The table's {@link ColumnMap}
+ * @throws A `NOT_FOUND` {@link DatabaseError} when `tables` does not declare `name`
+ *
+ * @example
+ * ```ts
+ * resolveColumns({ users: { id: stringShape() } }, 'users') // { id: … }
+ * ```
+ */
+export function resolveColumns<T extends TableMap, K extends keyof T & string>(
+	tables: T,
+	name: K,
+): T[K]
+export function resolveColumns(tables: TableMap, name: string): ColumnMap
+export function resolveColumns(tables: TableMap, name: string): ColumnMap {
+	const columns = tables[name]
+	if (columns === undefined) {
+		throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
+	}
+	return columns
 }
 
 // === Abort
@@ -937,7 +1094,7 @@ export function normalizeDriverSchema(value: unknown): readonly TableSchema[] {
  *
  * @remarks
  * `column.remove` drops that field from every row (a fresh copy — inputs are
- * never mutated, AGENTS §11); `column.add` leaves rows as-is (an absent field
+ * never mutated); `column.add` leaves rows as-is (an absent field
  * reads as `undefined`, backfill is application policy). `table.add` /
  * `table.remove` / `index.add` / `index.remove` are no-ops here (they operate
  * on storage shape, not row shape). Steps for tables other than the one
@@ -1035,37 +1192,7 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 export async function* driverFindings(
 	factory: () => DriverInterface,
 ): AsyncIterable<ConformanceFinding> {
-	// Fixed two-table schema every phase opens: `users` keyed by `id` (the
-	// default primary), `posts` keyed by a non-id `slug` — exercising both
-	// primary-key shapes in one battery.
-	const CONFORMANCE_USERS_SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'name', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: true, nullable: false },
-			// Declared so the nested-roundtrip phase is fair to typed-column
-			// backends (a SQL driver persists only declared columns; schemaless
-			// backends ignore declarations entirely).
-			{ name: 'meta', storage: 'json', optional: true, nullable: false },
-		],
-		indexes: [],
-	}
-	const CONFORMANCE_POSTS_SCHEMA: TableSchema = {
-		name: 'posts',
-		primary: 'slug',
-		columns: [
-			{ name: 'slug', storage: 'text', optional: false, nullable: false },
-			{ name: 'title', storage: 'text', optional: false, nullable: false },
-		],
-		indexes: [],
-	}
-	const CONFORMANCE_SCHEMA: readonly TableSchema[] = [
-		CONFORMANCE_USERS_SCHEMA,
-		CONFORMANCE_POSTS_SCHEMA,
-	]
-	// a. open with the inline two-table schema, then close cleanly.
+	// a. open with the shared two-table schema, then close cleanly.
 	try {
 		const driver = factory()
 		await driver.open(CONFORMANCE_SCHEMA)

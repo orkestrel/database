@@ -40,8 +40,8 @@ const MODULES = Object.freeze({
 /**
  * Declarations deliberately kept out of the barrel, as `symbolKey` strings.
  *
- * `Cursor`, `DatabaseContext`, `DatabaseIterator`, `DatabaseTransaction`, `DriverIterator`,
- * `Query`, `Table`, `TransactionIterator`, and `TransactionScope` are each exported from their
+ * `Cursor`, `DatabaseContext`, `DatabaseTransaction`, `DriverIterator`, `Query`,
+ * `ScopedIterator`, `Table`, and `TransactionScope` are each exported from their
  * own implementation file (one-class-per-file) but never star-exported from their face's
  * `index.ts`, so they are unreachable through the published barrel — only their `*Interface`
  * counterparts are. Naming them here is what makes that intentional rather than forgotten — and
@@ -50,12 +50,11 @@ const MODULES = Object.freeze({
 const INTERNAL: readonly string[] = Object.freeze([
 	'class Cursor',
 	'class DatabaseContext',
-	'class DatabaseIterator',
 	'class DatabaseTransaction',
 	'class DriverIterator',
 	'class Query',
+	'class ScopedIterator',
 	'class Table',
-	'class TransactionIterator',
 	'class TransactionScope',
 ])
 
@@ -433,7 +432,7 @@ for (const entry of manifest) {
 			expect(names).not.toContain('Table')
 			expect(names).not.toContain('Query')
 			expect(names).not.toContain('DatabaseTransaction')
-			expect(names).not.toContain('TransactionIterator')
+			expect(names).not.toContain('ScopedIterator')
 			expect(names).not.toContain('TransactionScope')
 			expect(names).toContain('TableInterface')
 			expect(names).toContain('QueryInterface')

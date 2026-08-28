@@ -1,21 +1,27 @@
-import type { TransactionScope } from './TransactionScope.js'
+import type { AdmissionInterface } from './types.js'
 
 /**
- * The internal continuation boundary for one transaction-scoped async iterable.
+ * The internal continuation admission boundary for one scoped async iterable.
  *
  * @remarks
- * Each active continuation enters the owning transaction ledger independently,
- * so an idle iterator never pins settlement. A continuation requested after
- * admission closes rejects while still attempting source cleanup exactly once.
+ * Each continuation enters the owning {@link AdmissionInterface} ledger
+ * independently, so an idle iterator never delays a transaction, a settlement,
+ * or a close. `ready` runs inside the tracked continuation before the source
+ * advances, which is where a root stream re-establishes the lazy connection and
+ * a transaction-scoped stream does nothing. A continuation requested after
+ * admission closes attempts source cleanup exactly once and leaves the iterator
+ * terminal.
  */
-export class TransactionIterator<T> implements AsyncIterableIterator<T> {
+export class ScopedIterator<T> implements AsyncIterableIterator<T> {
 	readonly #source: AsyncIterator<T>
-	readonly #scope: TransactionScope
+	readonly #admission: AdmissionInterface
+	readonly #ready: () => Promise<void>
 	#cleaned = false
 
-	constructor(source: AsyncIterable<T>, scope: TransactionScope) {
+	constructor(source: AsyncIterable<T>, admission: AdmissionInterface, ready: () => Promise<void>) {
 		this.#source = source[Symbol.asyncIterator]()
-		this.#scope = scope
+		this.#admission = admission
+		this.#ready = ready
 	}
 
 	[Symbol.asyncIterator](): AsyncIterableIterator<T> {
@@ -36,6 +42,7 @@ export class TransactionIterator<T> implements AsyncIterableIterator<T> {
 
 	async #next(): Promise<IteratorResult<T>> {
 		if (this.#cleaned) return { done: true, value: undefined }
+		await this.#ready()
 		const result = await this.#source.next()
 		if (result.done === true) this.#cleaned = true
 		return result
@@ -63,8 +70,8 @@ export class TransactionIterator<T> implements AsyncIterableIterator<T> {
 	}
 
 	#continue<R>(operation: () => Promise<R>): Promise<R> {
-		if (!this.#scope.accepting) this.#cleanup()
-		return this.#scope.track(operation)
+		if (!this.#admission.accepting) this.#cleanup()
+		return this.#admission.track(operation)
 	}
 
 	#cleanup(): void {

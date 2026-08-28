@@ -1,6 +1,6 @@
 import type { DatabaseErrorCode } from './types.js'
 
-// AGENTS §12: invalid operations and programmer errors `throw`, always a
+// Invalid operations and programmer errors `throw`, always a
 // `DatabaseError` carrying a machine-readable `code` so a `catch` branches on
 // `error.code` instead of parsing the message. Lookups that may simply miss
 // (`get`, `has`, `remove`) return `undefined` / `false` — they never throw.

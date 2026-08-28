@@ -1,7 +1,6 @@
 import type { ContractInterface } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type {
-	ColumnMap,
 	DatabaseStorageInterface,
 	KeyFunction,
 	RowOf,
@@ -11,8 +10,7 @@ import type {
 	StorageInterface,
 } from './types.js'
 import { createContract, objectShape } from '@orkestrel/contract'
-import { DEFAULT_PRIMARY } from './constants.js'
-import { DatabaseError } from './errors.js'
+import { resolveColumns, resolvePrimary } from './helpers.js'
 import { Table } from './Table.js'
 import type { TransactionScope } from './TransactionScope.js'
 
@@ -55,8 +53,12 @@ export class DatabaseTransaction<
 
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
 		this.#scope.check()
-		const columns = this.#columns(name)
-		return this.#build(name, this.#key(name), createContract(objectShape(columns)))
+		const columns = resolveColumns(this.#tables, name)
+		return this.#build(
+			name,
+			resolvePrimary(this.#primary, name),
+			createContract(objectShape(columns)),
+		)
 	}
 
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
@@ -71,19 +73,5 @@ export class DatabaseTransaction<
 			undefined,
 			this.#scope,
 		)
-	}
-
-	#key(name: string): string {
-		return this.#primary[name] ?? DEFAULT_PRIMARY
-	}
-
-	#columns<K extends keyof T & string>(name: K): T[K]
-	#columns(name: string): ColumnMap
-	#columns(name: string): ColumnMap {
-		const columns = this.#tables[name]
-		if (columns === undefined) {
-			throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
-		}
-		return columns
 	}
 }

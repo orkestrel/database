@@ -12,9 +12,10 @@ import { SQLiteDriver } from './drivers/SQLiteDriver.js'
  * `Table` / `Query` API is unchanged; only where the bytes live changes.
  * The driver is the reference `MemoryDriver` plus JSON-file persistence: `open` loads
  * the file, every mutation flushes the whole store back, and querying runs through
- * the core engine over `scan` (it is scan-only — no native `records` / `count` /
- * `aggregate`). A missing, corrupt, or wrong-shaped file starts empty rather than
- * throwing.
+ * the core engine's `matchesQuery`. The driver implements the native `stream`
+ * hook and neither `records` nor `aggregate`, so the engine answers every query
+ * on either path. A missing, corrupt, or wrong-shaped file starts empty rather
+ * than throwing.
  *
  * @param path - The JSON file path data is loaded from and flushed to
  * @returns A {@link DriverInterface} backed by a JSON file

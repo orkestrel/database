@@ -5,10 +5,10 @@ import type {
 	OperationOptions,
 	Order,
 	QueryInterface,
+	Row,
 	TableInterface,
 } from './types.js'
-import { computeAggregate } from './helpers.js'
-import { validatePage } from './validators.js'
+import { computeAggregate, validatePage } from './helpers.js'
 
 /**
  * A fluent query builder bound to one table.
@@ -18,7 +18,7 @@ import { validatePage } from './validators.js'
  * method mutates and returns the same instance. Portable inputs flow to the
  * table, while predicates remain an in-memory refinement.
  */
-export class Query<T = Record<string, unknown>> implements QueryInterface<T> {
+export class Query<T = Row> implements QueryInterface<T> {
 	readonly #table: TableInterface<T>
 	readonly #conditions: Condition[] = []
 	readonly #orders: Order[] = []

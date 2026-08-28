@@ -25,12 +25,12 @@ import {
 	extractKey,
 	filterRows,
 	matchesQuery,
+	validatePage,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
-import { DatabaseIterator } from './DatabaseIterator.js'
 import { Query } from './Query.js'
+import { ScopedIterator } from './ScopedIterator.js'
 import type { TransactionScope } from './TransactionScope.js'
-import { validatePage } from './validators.js'
 
 /**
  * A table — typed keyed CRUD plus fluent query and cursor access over a driver.
@@ -39,12 +39,12 @@ import { validatePage } from './validators.js'
  * The table's contract is the load-bearing piece: writes go through `parse`
  * (coercing inputs and rejecting rows that don't fit with a `VALIDATION` throw),
  * reads come back through the contract guard (narrowing a stored {@link Row} to
- * the table's type — no assertion, AGENTS §1), and `contract` is exposed for
+ * the table's type — no assertion), and `contract` is exposed for
  * introspection and seeding. The driver only stores and scans; all querying is
  * the shared core engine in `helpers.ts`.
  *
  * @remarks
- * - **Observable (§13).** The owned {@link emitter} ({@link TableEventMap}) carries the
+ * - **Observable.** The owned {@link emitter} ({@link TableEventMap}) carries the
  *   per-row mutation moments — `write` (set / add / update), `remove`, `clear` — for
  *   fire-and-forget observers (cache invalidation, sync, an audit log), ALONGSIDE the
  *   database-level lifecycle. Events carry the affected KEY only (no value payload, to
@@ -63,7 +63,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	readonly #generate: KeyFunction | undefined
 	readonly #context: DatabaseContext | undefined
 	readonly #scope: TransactionScope | undefined
-	// The PUSH observation surface (§13) — owned, never inherited. The emitter isolates a
+	// The PUSH observation surface — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into a write
 	// or a transaction.
 	readonly #emitter: Emitter<TableEventMap>
@@ -254,7 +254,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
 		validatePage(input)
 		const source = this.#scan(input, options)
-		if (this.#context !== undefined) return new DatabaseIterator(source, this.#context)
+		if (this.#context !== undefined) return new ScopedIterator(source, this.#context, this.#ready)
 		return this.#scope === undefined ? source : this.#scope.stream(source)
 	}
 
@@ -574,9 +574,9 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Coerce *and* validate through the contract in one step: the contract's `parse`
 	// now coerces types (`'36'` → `36`) AND enforces every leaf refinement (`min` /
 	// `max` / `pattern`), so a non-`undefined` result already satisfies the guard
-	// (AGENTS §14 parse↔guard soundness) — no separate `is` re-check is needed.
+	// (parse↔guard soundness) — no separate `is` re-check is needed.
 	// `isRecord` is kept solely to narrow the parsed `T` back to a storable `Row`
-	// without an assertion (AGENTS §1); a table contract is always an object shape,
+	// without an assertion; a table contract is always an object shape,
 	// so it never rejects a genuinely-parsed row.
 	#validate(row: Row): Row {
 		const parsed = this.#contract.parse(row)

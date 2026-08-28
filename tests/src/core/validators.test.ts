@@ -7,7 +7,6 @@ import {
 	isMigrationInput,
 	isMigrationStep,
 	isTableSchema,
-	validatePage,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
@@ -77,44 +76,6 @@ describe('database boundary validators', () => {
 		const steps: unknown[] = [STEP]
 		Object.defineProperty(steps, 'extra', { enumerable: true, value: true })
 		expect(isMigration({ ...PLAN, steps })).toBe(false)
-	})
-
-	it.each([
-		{ field: 'limit', value: -1, diagnostic: -1 },
-		{ field: 'limit', value: 1.5, diagnostic: 1.5 },
-		{ field: 'limit', value: Number.NaN, diagnostic: 'NaN' },
-		{ field: 'limit', value: Number.POSITIVE_INFINITY, diagnostic: 'Infinity' },
-		{ field: 'offset', value: -1, diagnostic: -1 },
-		{ field: 'offset', value: 1.5, diagnostic: 1.5 },
-		{ field: 'offset', value: Number.NaN, diagnostic: 'NaN' },
-		{ field: 'offset', value: Number.POSITIVE_INFINITY, diagnostic: 'Infinity' },
-	])(
-		'rejects invalid $field page value $value without JSON null coercion',
-		({ field, value, diagnostic }) => {
-			const input = field === 'limit' ? { limit: value } : { offset: value }
-			let error: unknown
-			try {
-				validatePage(input)
-			} catch (caught) {
-				error = caught
-			}
-
-			expect(error).toMatchObject({
-				code: 'VALIDATION',
-				message: `Query ${field} must be a nonnegative integer`,
-				context: { field, value: diagnostic },
-			})
-			expect(JSON.stringify(error)).toContain(JSON.stringify(diagnostic))
-			expect(JSON.stringify(error)).not.toContain('"value":null')
-		},
-	)
-
-	it('checks limit before offset and accepts zero for both fields', () => {
-		expect(() => validatePage({ limit: 0, offset: 0 })).not.toThrow()
-		expect(() => validatePage()).not.toThrow()
-		expect(() => validatePage({ limit: -1, offset: -1 })).toThrow(
-			'Query limit must be a nonnegative integer',
-		)
 	})
 
 	it('is total over accessors, proxies, and revoked proxies', () => {
