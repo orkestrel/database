@@ -9,19 +9,19 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+	computeSymbolKey,
 	createGuide,
 	createSource,
 	createSourceManager,
-	fenceImports,
+	extractFenceImports,
 	findMissing,
+	findMissingSymbols,
 	findUnexampled,
 	findUnlisted,
 	isExternalLink,
-	missingSymbols,
 	normalizeDirectories,
 	parseManifest,
 	resolveLink,
-	symbolKey,
 } from '@orkestrel/guide'
 import { requireValue } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
@@ -38,7 +38,7 @@ const MODULES = Object.freeze({
 	'@orkestrel/database/browser': 'src/browser',
 })
 /**
- * Declarations deliberately kept out of the barrel, as `symbolKey` strings.
+ * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
  *
  * `Cursor`, `DatabaseContext`, `DatabaseTransaction`, `DriverIterator`, `Query`,
  * `ScopedIterator`, `Table`, and `TransactionScope` are each exported from their
@@ -319,9 +319,9 @@ for (const entry of manifest) {
 		new Map(
 			normalizeDirectories(entry.source)
 				.flatMap((directory) => requireDirectorySurface(directory))
-				.map((symbol) => [symbolKey(symbol), symbol] as const),
+				.map((symbol) => [computeSymbolKey(symbol), symbol] as const),
 		).values(),
-	).sort((left, right) => symbolKey(left).localeCompare(symbolKey(right)))
+	).sort((left, right) => computeSymbolKey(left).localeCompare(computeSymbolKey(right)))
 
 	describe(`${entry.concept}`, () => {
 		it('uses only listed fence languages', () => {
@@ -333,23 +333,23 @@ for (const entry of manifest) {
 		})
 
 		it('documents every published entry export', () => {
-			expect(missingSymbols(surface, guide.surface())).toEqual([])
+			expect(findMissingSymbols(surface, guide.surface())).toEqual([])
 		})
 		it('documents only real entry exports', () => {
-			expect(missingSymbols(guide.surface(), surface)).toEqual([])
+			expect(findMissingSymbols(guide.surface(), surface)).toEqual([])
 		})
 
 		it('re-exports every direct declaration that is not named internal', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
 		})
 		it('names no symbol internal that the barrel already exports', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
-			expect(source.hidden().map(symbolKey)).toEqual([])
+			expect(source.hidden().map(computeSymbolKey)).toEqual([])
 		})
 
 		for (const group of guide.methods()) {
@@ -418,7 +418,7 @@ for (const entry of manifest) {
 		it('imports only real exports in every ```ts fence', () => {
 			const fences = guide.fences().filter((fence) => fence.language === EXAMPLE_LANGUAGE)
 			for (const fence of fences) {
-				for (const { specifier, names } of fenceImports(fence.code)) {
+				for (const { specifier, names } of extractFenceImports(fence.code)) {
 					const imported = sources.source(specifier)
 					if (imported === undefined) continue
 					const exported = imported.surface().map((symbol) => symbol.name)
