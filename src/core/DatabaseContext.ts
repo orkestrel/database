@@ -19,7 +19,7 @@ import { checkAbort, equalsValue, normalizeDriverSchema, planMigration } from '.
 import { TransactionScope } from './TransactionScope.js'
 
 /**
- * The internal shared owner behind every typed view of one database.
+ * Owns the internal shared state behind every typed view of one database.
  *
  * @remarks
  * A context owns the driver, merged physical schema, lifecycle, observation,

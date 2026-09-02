@@ -10,20 +10,20 @@ import type {
 import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
 
 /**
- * Test whether a value is a usable database key.
+ * Checks whether a value is a usable database key.
  *
  * @param value - The value to test
- * @returns Whether `value` is a string or finite number
+ * @returns True if `value` is a string or a finite number; false otherwise
  */
 export function isKey(value: unknown): value is Key {
 	return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
 }
 
 /**
- * Test whether a value is a portable column schema.
+ * Checks whether a value is a portable column schema.
  *
  * @param value - The value to test
- * @returns Whether `value` is a complete {@link ColumnSchema}
+ * @returns True if `value` is a complete {@link ColumnSchema}; false otherwise
  */
 export function isColumnSchema(value: unknown): value is ColumnSchema {
 	try {
@@ -52,10 +52,10 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
 }
 
 /**
- * Test whether a value is a portable table schema.
+ * Checks whether a value is a portable table schema.
  *
  * @param value - The value to test
- * @returns Whether `value` is a complete {@link TableSchema}
+ * @returns True if `value` is a complete {@link TableSchema}; false otherwise
  */
 export function isTableSchema(value: unknown): value is TableSchema {
 	try {
@@ -98,10 +98,10 @@ export function isTableSchema(value: unknown): value is TableSchema {
 }
 
 /**
- * Test whether a value is a complete portable driver schema.
+ * Checks whether a value is a complete portable driver schema.
  *
  * @param value - The value to test
- * @returns Whether `value` is a table-schema collection with unique table names
+ * @returns True if `value` is a table-schema collection with unique table names; false otherwise
  */
 export function isDriverSchema(value: unknown): value is readonly TableSchema[] {
 	try {
@@ -115,10 +115,10 @@ export function isDriverSchema(value: unknown): value is readonly TableSchema[] 
 }
 
 /**
- * Test whether a value is one ordered migration step.
+ * Checks whether a value is one ordered migration step.
  *
  * @param value - The value to test
- * @returns Whether `value` is a complete {@link MigrationStep}
+ * @returns True if `value` is a complete {@link MigrationStep}; false otherwise
  */
 export function isMigrationStep(value: unknown): value is MigrationStep {
 	try {
@@ -184,10 +184,10 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 }
 
 /**
- * Test whether a value is an ordered migration plan.
+ * Checks whether a value is an ordered migration plan.
  *
  * @param value - The value to test
- * @returns Whether `value` is a complete {@link Migration}
+ * @returns True if `value` is a complete {@link Migration}; false otherwise
  */
 export function isMigration(value: unknown): value is Migration {
 	try {
@@ -211,10 +211,10 @@ export function isMigration(value: unknown): value is Migration {
 }
 
 /**
- * Test whether a value is persisted driver metadata.
+ * Checks whether a value is persisted driver metadata.
  *
  * @param value - The value to test
- * @returns Whether `value` is complete {@link DriverMetadata}
+ * @returns True if `value` is complete {@link DriverMetadata}; false otherwise
  */
 export function isDriverMetadata(value: unknown): value is DriverMetadata {
 	try {
@@ -234,10 +234,10 @@ export function isDriverMetadata(value: unknown): value is DriverMetadata {
 }
 
 /**
- * Test whether a value is one atomic migration request.
+ * Checks whether a value is one atomic migration request.
  *
  * @param value - The value to test
- * @returns Whether `value` is a complete {@link MigrationInput}
+ * @returns True if `value` is a complete {@link MigrationInput}; false otherwise
  */
 export function isMigrationInput(value: unknown): value is MigrationInput {
 	try {

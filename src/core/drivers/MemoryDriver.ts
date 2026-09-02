@@ -26,7 +26,7 @@ import {
 import { isKey } from '../validators.js'
 
 /**
- * The reference {@link DriverInterface} — nested maps, no I/O.
+ * Implements the reference {@link DriverInterface} — nested maps, no I/O.
  *
  * @remarks
  * The in-between made concrete: it runs identically in a browser or on a server,
@@ -110,7 +110,7 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	/**
-	 * Natively filtered lazy iteration — the {@link DriverInterface.stream} hook.
+	 * Iterates rows lazily with native filtering — the {@link DriverInterface.stream} hook.
 	 *
 	 * @remarks
 	 * Iterates the table's keys in the same key order `scan` and `keys` yield
@@ -144,7 +144,7 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	/**
-	 * Capture the current state and return a thunk that rolls back to it.
+	 * Captures the current state and returns a thunk that rolls back to it.
 	 *
 	 * @remarks
 	 * Capture owns rows, schema, and one session-local table identity. Replay
@@ -223,7 +223,7 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	/**
-	 * Return the persisted {@link DriverMetadata}, or `undefined` when the store has
+	 * Returns the persisted {@link DriverMetadata}, or `undefined` when the store has
 	 * never been stamped.
 	 *
 	 * @remarks
@@ -239,7 +239,7 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	/**
-	 * Persist an owned snapshot for a later `metadata()` to return.
+	 * Persists an owned snapshot for a later `metadata()` to return.
 	 *
 	 * @param metadata - The {@link DriverMetadata} to persist
 	 */
@@ -248,7 +248,7 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	/**
-	 * Apply a {@link Migration} plan's steps against the in-memory store.
+	 * Applies a {@link Migration} plan's steps against the in-memory store.
 	 *
 	 * @remarks
 	 * Steps apply against an isolated candidate. Rows, schema changes, and

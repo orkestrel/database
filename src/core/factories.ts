@@ -3,7 +3,7 @@ import { Database } from './Database.js'
 import { MemoryDriver } from './drivers/MemoryDriver.js'
 
 /**
- * Create a database over a driver and a declared `tables` schema.
+ * Creates a database over a driver and a declared `tables` schema.
  *
  * @remarks
  * `tables` maps each name to its columns (a `column → shape` map); the database
@@ -40,7 +40,7 @@ export function createDatabase<const T extends TableMap>(
 }
 
 /**
- * Create the in-memory reference {@link DriverInterface}.
+ * Creates the in-memory reference {@link DriverInterface}.
  *
  * @remarks
  * Backed by nested maps with no I/O — the same driver runs in a browser or on a

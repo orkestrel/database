@@ -4,7 +4,7 @@ import type { ColumnStorage } from '@src/core'
 // the declared column groups that SQLite can query without engine refinement.
 
 /**
- * The declared {@link ColumnStorage}s whose SQL EQUALITY comparisons (`equals` /
+ * Lists the declared {@link ColumnStorage}s whose SQL EQUALITY comparisons (`equals` /
  * `not` / `any` / `none`) and `starts` / `ends` compiles are provably
  * engine-exact under declared-type trust — `text` / `integer` / `real` /
  * `boolean`; a `json` or `blob` column always refines instead.
@@ -30,7 +30,7 @@ export const EXACT_COLUMN_STORAGE: readonly ColumnStorage[] = Object.freeze([
 ])
 
 /**
- * The declared {@link ColumnStorage}s whose SQL RANGE comparisons
+ * Lists the declared {@link ColumnStorage}s whose SQL RANGE comparisons
  * (`above` / `below` / `from` / `to` / `between`) and `ORDER BY` compiles are
  * provably engine-exact — `integer` / `real` / `boolean` only. `text` is
  * excluded: see {@link EXACT_COLUMN_STORAGE}'s remarks for the BINARY-collation
@@ -44,7 +44,7 @@ export const EXACT_RANGE_COLUMN_STORAGE: readonly ColumnStorage[] = Object.freez
 ])
 
 /**
- * The reserved metadata table the {@link SQLiteDriver} creates on `open` to
+ * Names the reserved metadata table the {@link SQLiteDriver} creates on `open` to
  * persist its stamped `DriverMetadata` (`version` + declared schema JSON) — the
  * SQLite realization of the `metadata` / `stamp` driver hooks.
  *

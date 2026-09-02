@@ -1,7 +1,7 @@
 import type { AdmissionInterface } from './types.js'
 
 /**
- * The internal continuation admission boundary for one scoped async iterable.
+ * Forms the internal continuation admission boundary for one scoped async iterable.
  *
  * @remarks
  * Each continuation enters the owning {@link AdmissionInterface} ledger

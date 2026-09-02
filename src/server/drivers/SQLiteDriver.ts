@@ -58,8 +58,8 @@ import { METADATA_TABLE } from '../constants.js'
 import { DriverIterator } from '../../core/DriverIterator.js'
 
 /**
- * The SQLite {@link DriverInterface} — the server-native, trusted-mode backend
- * built on the published `@orkestrel/sqlite` synchronous wrapper.
+ * Implements the {@link DriverInterface} over SQLite — the server-native, trusted-mode
+ * backend built on the published `@orkestrel/sqlite` synchronous wrapper.
  *
  * @remarks
  * A thin adapter: it implements the storage primitives the core database layer
@@ -322,7 +322,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	/**
-	 * Begin a native transaction — real `BEGIN`, `COMMIT`, `ROLLBACK`.
+	 * Begins a native transaction — real `BEGIN`, `COMMIT`, `ROLLBACK`.
 	 *
 	 * @remarks
 	 * The callback receives a scoped {@link StorageInterface}. Fulfillment
@@ -372,7 +372,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	/**
-	 * Apply a {@link Migration} plan by executing each step's projected DDL
+	 * Applies a {@link Migration} plan by executing each step's projected DDL
 	 * ({@link import('../compilers.js').stepToSQL}).
 	 *
 	 * @remarks
@@ -424,7 +424,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	/**
-	 * Read the persisted {@link DriverMetadata} from the reserved `_metadata` table.
+	 * Reads the persisted {@link DriverMetadata} from the reserved `_metadata` table.
 	 *
 	 * @returns The last-stamped `DriverMetadata`, or `undefined` when never stamped
 	 *   (or the stored row is malformed)
@@ -435,7 +435,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	/**
-	 * Persist an owned metadata snapshot into the reserved `_metadata` table's
+	 * Persists an owned metadata snapshot into the reserved `_metadata` table's
 	 * single row.
 	 *
 	 * @param metadata - The {@link DriverMetadata} to persist

@@ -3,7 +3,7 @@ import { DatabaseError } from './errors.js'
 import { ScopedIterator } from './ScopedIterator.js'
 
 /**
- * The internal lifetime boundary for one database transaction callback.
+ * Forms the internal lifetime boundary for one database transaction callback.
  *
  * @remarks
  * Promise operations enter synchronously through {@link track}. Closing stops new

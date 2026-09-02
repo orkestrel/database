@@ -1,7 +1,7 @@
 import type { ColumnStorage } from '@src/core'
 
 /**
- * The declared {@link ColumnStorage}s that are valid, orderable IndexedDB keys.
+ * Lists the declared {@link ColumnStorage}s that are valid, orderable IndexedDB keys.
  *
  * @remarks
  * `text` / `integer` / `real` occupy IndexedDB's string / number key space, so a
@@ -19,7 +19,7 @@ export const INDEXABLE_STORAGE: readonly ColumnStorage[] = Object.freeze([
 ])
 
 /**
- * The reserved out-of-line store the {@link IndexedDBDriver} stamps its
+ * Names the reserved out-of-line store the {@link IndexedDBDriver} stamps its
  * {@link DriverMetadata} into.
  *
  * @remarks

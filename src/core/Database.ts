@@ -26,7 +26,7 @@ import { Table } from './Table.js'
 import type { TransactionScope } from './TransactionScope.js'
 
 /**
- * A typed database view over one shared internal lifecycle and storage context.
+ * Exposes a typed view over one shared internal lifecycle and storage context.
  *
  * @remarks
  * Each view owns only its table contracts, primary columns, indexes, and key

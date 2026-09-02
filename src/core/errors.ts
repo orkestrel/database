@@ -6,7 +6,7 @@ import type { DatabaseErrorCode } from './types.js'
 // (`get`, `has`, `remove`) return `undefined` / `false` — they never throw.
 
 /**
- * An error thrown by the database layer.
+ * Represents an error thrown by the database layer.
  *
  * @remarks
  * Carries a {@link DatabaseErrorCode} and an optional `context` bag naming the
@@ -38,10 +38,10 @@ export class DatabaseError extends Error {
 }
 
 /**
- * Narrow an unknown caught value to a {@link DatabaseError}.
+ * Narrows an unknown caught value to a {@link DatabaseError}.
  *
  * @param value - The value to test (typically a `catch` binding)
- * @returns `true` when `value` is a {@link DatabaseError}
+ * @returns True if `value` is a {@link DatabaseError}; false otherwise
  *
  * @example
  * ```ts

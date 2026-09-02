@@ -4,7 +4,7 @@
 // this driver's pushdown-planning shape is local.
 
 /**
- * A pushdown plan — an optional index and optional `IDBKeyRange` used to narrow
+ * Represents a pushdown plan — an optional index and optional `IDBKeyRange` used to narrow
  * a read. An omitted `index` selects the primary store; an omitted `range`
  * performs a full scan. The plan is always a superset of the matching rows;
  * the core engine refines it to the exact result. An empty plan (`{}`) is a

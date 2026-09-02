@@ -3,7 +3,7 @@ import type { ColumnSchema, TableSchema } from './types.js'
 // Database constants — frozen plain data.
 
 /**
- * The primary-key column assumed when {@link PrimaryMap} does not name one.
+ * Supplies the primary-key column assumed when {@link PrimaryMap} does not name one.
  *
  * @remarks
  * `id` is the convention IndexedDB (`keyPath: 'id'`) and SQL (`id` / rowid) both
@@ -12,7 +12,7 @@ import type { ColumnSchema, TableSchema } from './types.js'
 export const DEFAULT_PRIMARY = 'id'
 
 /**
- * The longest `LIKE` / `GLOB` pattern the wildcard matcher accepts before rejecting it.
+ * Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts before rejecting it.
  *
  * @remarks
  * A `LIKE` / `GLOB` pattern is a caller-supplied operand, so
@@ -27,7 +27,7 @@ export const DEFAULT_PRIMARY = 'id'
 export const MAX_PATTERN_LENGTH = 1024
 
 /**
- * The `users` table the driver-conformance battery opens — keyed by the default
+ * Describes the `users` table the driver-conformance battery opens — keyed by the default
  * `id` primary column.
  *
  * @remarks
@@ -49,7 +49,7 @@ export const CONFORMANCE_USERS_SCHEMA: TableSchema = Object.freeze({
 })
 
 /**
- * The `posts` table the driver-conformance battery opens — keyed by a non-`id`
+ * Describes the `posts` table the driver-conformance battery opens — keyed by a non-`id`
  * `slug` primary column.
  *
  * @remarks
@@ -67,7 +67,7 @@ export const CONFORMANCE_POSTS_SCHEMA: TableSchema = Object.freeze({
 })
 
 /**
- * The fixed two-table schema every driver-conformance phase opens.
+ * Holds the fixed two-table schema every driver-conformance phase opens.
  *
  * @remarks
  * Each phase mints a fresh driver and opens this exact schema, so a finding

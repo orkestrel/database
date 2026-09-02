@@ -33,7 +33,7 @@ import { DriverIterator } from '../../core/DriverIterator.js'
 import { matchesAbsentPath } from '../helpers.js'
 
 /**
- * A persistent {@link DriverInterface} backed by a single JSON file — the
+ * Implements a persistent {@link DriverInterface} backed by a single JSON file — the
  * reference {@link MemoryDriver} plus file load / flush.
  *
  * @remarks
@@ -134,7 +134,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	/**
-	 * Natively filtered lazy iteration — delegates to the inner {@link MemoryDriver}.
+	 * Iterates rows lazily with native filtering — delegates to the inner {@link MemoryDriver}.
 	 *
 	 * @remarks
 	 * Semantics are the memory driver's own: `input.conditions` filters, `offset`
@@ -157,7 +157,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	/**
-	 * Run an isolated native transaction callback over a candidate memory store.
+	 * Runs an isolated native transaction callback over a candidate memory store.
 	 *
 	 * @remarks
 	 * Single-writer: nesting and root operations while active throw `CONFLICT`.
@@ -175,7 +175,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	/**
-	 * Capture an owned row snapshot at an exact writer-queue position.
+	 * Captures an owned row snapshot at an exact writer-queue position.
 	 *
 	 * @remarks
 	 * Capture owns table names, schemas, rows, and one session-local identity per
@@ -205,7 +205,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	/**
-	 * Persist an owned metadata snapshot for a later `metadata()` to copy out.
+	 * Persists an owned metadata snapshot for a later `metadata()` to copy out.
 	 *
 	 * @remarks
 	 * Root stamping conflicts while a transaction is active. The scoped
@@ -221,7 +221,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	/**
-	 * Apply one atomic {@link MigrationInput} through an isolated candidate.
+	 * Applies one atomic {@link MigrationInput} through an isolated candidate.
 	 *
 	 * @remarks
 	 * The candidate receives every plan step plus optional metadata. Its complete

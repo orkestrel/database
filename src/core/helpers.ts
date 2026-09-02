@@ -141,7 +141,7 @@ export function compareValues(left: unknown, right: unknown): number {
  *
  * @param left - The left value
  * @param right - The right value
- * @returns Whether `left` and `right` are structurally equal
+ * @returns True if `left` and `right` are structurally equal; false otherwise
  *
  * @example
  * ```ts
@@ -213,7 +213,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
- * Match a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
+ * Matches a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
  * @remarks
@@ -240,7 +240,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
  * @param any - The any-run wildcard char (`%` for `LIKE`, `*` for `GLOB`)
  * @param single - The single-char wildcard char (`_` for `LIKE`, `?` for `GLOB`)
  * @param fold - Whether to match case-INSENSITIVELY (`LIKE` folds; `GLOB` does not)
- * @returns Whether `value` matches `pattern`
+ * @returns True if `value` matches `pattern`; false otherwise
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
  */
 export function matchesWildcardPattern(
@@ -342,7 +342,7 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
 // === Condition matching
 
 /**
- * Evaluate one {@link Condition} against a row — the per-operator predicate.
+ * Evaluates one {@link Condition} against a row — the per-operator predicate.
  *
  * @remarks
  * Reads the condition's column — a `FieldPath`, resolved with `resolveField` (a
@@ -360,7 +360,7 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  *
  * @param row - The row to test
  * @param condition - The condition to apply
- * @returns Whether the row satisfies the condition
+ * @returns True if the row satisfies the condition; false otherwise
  */
 export function matchesCondition(row: Row, condition: Condition): boolean {
 	const value = resolveField(row, condition.column)
@@ -401,7 +401,7 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 }
 
 /**
- * Fold a row through a list of conditions, joining each by its connector.
+ * Folds a row through a list of conditions, joining each by its connector.
  *
  * @remarks
  * Evaluated left-to-right: the first condition seeds the result, and each later
@@ -411,7 +411,7 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
  *
  * @param row - The row to test
  * @param conditions - The conditions to fold
- * @returns Whether the row satisfies the combined conditions
+ * @returns True if the row satisfies the combined conditions; false otherwise
  */
 export function matchesQuery(row: Row, conditions: readonly Condition[]): boolean {
 	let result = true
@@ -429,7 +429,7 @@ export function matchesQuery(row: Row, conditions: readonly Condition[]): boolea
 }
 
 /**
- * Filter rows by a list of conditions — the shared basis for a table's count
+ * Filters rows by a list of conditions — the shared basis for a table's count
  * and aggregate paths (no sort/page, unlike {@link applyQuery}).
  *
  * @remarks
@@ -456,7 +456,7 @@ export function filterRows(rows: readonly Row[], conditions: readonly Condition[
 // === Ordering & paging
 
 /**
- * Sort rows by an ordering specification, leaving the input untouched.
+ * Sorts rows by an ordering specification, leaving the input untouched.
  *
  * @remarks
  * Applies the terms in priority order — the first term that distinguishes two
@@ -482,7 +482,7 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
 }
 
 /**
- * Apply a {@link QueryInput} to rows — filter, then sort, then page.
+ * Applies a {@link QueryInput} to rows — filter, then sort, then page.
  *
  * @remarks
  * The whole portable read pipeline in one place: conditions filter, `order`
@@ -516,7 +516,7 @@ export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly R
 // === Aggregation
 
 /**
- * Compute an aggregate over a column across rows.
+ * Computes an aggregate over a column across rows.
  *
  * @remarks
  * `count` returns the row count. The numeric aggregates coerce each cell with
@@ -552,7 +552,7 @@ export function computeAggregate(
 // === Keys
 
 /**
- * Read a row's primary key from a column, when it is a usable {@link Key}.
+ * Reads a row's primary key from a column, when it is a usable {@link Key}.
  *
  * @param row - The row to read
  * @param column - The primary-key column name
@@ -564,7 +564,7 @@ export function extractKey(row: Row, column: string): Key | undefined {
 }
 
 /**
- * Return a fresh row whose primary column is authoritatively bound to its storage key.
+ * Returns a fresh row whose primary column is authoritatively bound to its storage key.
  *
  * @param row - The caller row
  * @param primary - The primary column
@@ -578,7 +578,7 @@ export function bindRowKey(row: Row, primary: string, key: Key): Row {
 // === Schema
 
 /**
- * Map a column's {@link ContractShape} to its portable {@link ColumnStorage} — the
+ * Maps a column's {@link ContractShape} to its portable {@link ColumnStorage} — the
  * value a `TableSchema` carries so a native backend can declare a real column.
  *
  * @remarks
@@ -630,7 +630,7 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 }
 
 /**
- * Project one contract shape into a portable column schema.
+ * Projects one contract shape into a portable column schema.
  *
  * @param name - The column name
  * @param shape - The column contract shape
@@ -726,7 +726,7 @@ export function resolveColumns(tables: TableMap, name: string): ColumnMap {
 // === Abort
 
 /**
- * Throw when an {@link OperationOptions.signal | AbortSignal} has fired — the shared
+ * Throws when an {@link OperationOptions.signal | AbortSignal} has fired — the shared
  * abort gate checked at operation boundaries and between streamed rows.
  *
  * @remarks
@@ -759,7 +759,7 @@ export function checkAbort(signal: AbortSignal | undefined): void {
 // === Migrations
 
 /**
- * Structurally diff a deployed and a declared table set into a {@link Migration}
+ * Diffs a deployed and a declared table set structurally into a {@link Migration}
  * plan.
  *
  * @remarks
@@ -909,7 +909,7 @@ export function planMigration(
 }
 
 /**
- * Sequentially project migration steps over a canonical validated owned schema.
+ * Projects migration steps sequentially over a canonical validated owned schema.
  * Adding a required non-null column to an existing table rejects with
  * `MIGRATION`; optional-only and nullable-only additions remain portable.
  *
@@ -1031,7 +1031,7 @@ export function projectMigrationSchema(
 }
 
 /**
- * Canonicalize an unknown driver schema into a distinct deeply frozen snapshot.
+ * Canonicalizes an unknown driver schema into a distinct deeply frozen snapshot.
  *
  * @remarks
  * Table and column lists are sorted by name. The index list is sorted by the
@@ -1057,7 +1057,7 @@ export function normalizeDriverSchema(value: unknown): readonly TableSchema[] {
 }
 
 /**
- * Apply one table's {@link MigrationStep}s to its rows — a pure row transform.
+ * Applies one table's {@link MigrationStep}s to its rows — a pure row transform.
  *
  * @remarks
  * `column.remove` drops that field from every row (a fresh copy — inputs are

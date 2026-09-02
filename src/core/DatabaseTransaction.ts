@@ -15,7 +15,7 @@ import { Table } from './Table.js'
 import type { TransactionScope } from './TransactionScope.js'
 
 /**
- * A table-only database view bound to one driver transaction scope.
+ * Binds a table-only database view to one driver transaction scope.
  *
  * @typeParam T - The declared table shape map
  *

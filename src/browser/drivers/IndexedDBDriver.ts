@@ -47,8 +47,8 @@ import {
 import { METADATA_STORE } from '../constants.js'
 
 /**
- * The IndexedDB {@link DriverInterface} — the persistent browser backend, built on
- * the published `@orkestrel/indexeddb` wrapper.
+ * Implements the {@link DriverInterface} over IndexedDB — the persistent browser backend,
+ * built on the published `@orkestrel/indexeddb` wrapper.
  *
  * @remarks
  * A thin adapter: it implements the storage primitives the core database layer
@@ -368,7 +368,7 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	/**
-	 * Return the persisted {@link DriverMetadata}, or `undefined` when the store has
+	 * Returns the persisted {@link DriverMetadata}, or `undefined` when the store has
 	 * never been stamped.
 	 *
 	 * @remarks
@@ -388,7 +388,7 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	/**
-	 * Persist an owned metadata snapshot for a later `metadata()` to return.
+	 * Persists an owned metadata snapshot for a later `metadata()` to return.
 	 *
 	 * @param metadata - The {@link DriverMetadata} to persist
 	 */
@@ -405,7 +405,7 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	/**
-	 * Apply a {@link Migration} plan by reconnecting at a bumped version and
+	 * Applies a {@link Migration} plan by reconnecting at a bumped version and
 	 * running the plan's steps inside the wrapper's `upgrade` hook.
 	 *
 	 * @remarks

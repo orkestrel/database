@@ -6,7 +6,7 @@ import type { SQLiteValue } from '@orkestrel/sqlite'
 // host-independent and never speaks SQL.
 
 /**
- * A parameterized SQL fragment or statement plus its bind values.
+ * Represents a parameterized SQL fragment or statement plus its bind values.
  *
  * @remarks
  * Produced by the pure SQL compilers (`compilers.ts`) that turn a core

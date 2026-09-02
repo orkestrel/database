@@ -16,7 +16,7 @@ import { deriveSQLiteIndexName, encodeValue, quoteIdentifier } from './helpers.j
 import { inferValueStorage } from './inferers.js'
 
 /**
- * Map a portable {@link ColumnStorage} to its SQLite column type.
+ * Maps a portable {@link ColumnStorage} to its SQLite column type.
  *
  * @param storage - The portable column type
  * @returns The SQLite column type keyword
@@ -37,7 +37,7 @@ export function compileColumnSQL(storage: ColumnStorage): string {
 }
 
 /**
- * Compile a {@link FieldPath} to the SQL expression that reads it.
+ * Compiles a {@link FieldPath} to the SQL expression that reads it.
  *
  * @param path - The field path
  * @returns The SQL expression selecting the value
@@ -53,7 +53,7 @@ export function compileFieldSQL(path: FieldPath): string {
 }
 
 /**
- * Compile an {@link AggregateOperation} over a {@link FieldPath}.
+ * Compiles an {@link AggregateOperation} over a {@link FieldPath}.
  *
  * @param operation - The aggregate to compute
  * @param column - The column or nested path to aggregate
@@ -75,7 +75,7 @@ export function compileAggregateSQL(operation: AggregateOperation, column: Field
 }
 
 /**
- * Compile a NESTED {@link FieldPath} to the `json_type(<col>, <path>)` SQL
+ * Compiles a NESTED {@link FieldPath} to the `json_type(<col>, <path>)` SQL
  * expression — the {@link compileFieldSQL} `json_extract` sibling used to tell a
  * PRESENT JSON `null` apart from an ABSENT path (both read back as SQL `NULL`
  * through `json_extract`, but `json_type` reports `'null'` for the former and
@@ -109,7 +109,7 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 // type-only and cannot couple the emitted JavaScript to the native package.
 
 /**
- * Compile one condition to its `<column> <operator>` SQL fragment and the parameters
+ * Compiles one condition to its `<column> <operator>` SQL fragment and the parameters
  * it binds — engine-exact under SQL's three-valued NULL logic.
  *
  * @remarks
@@ -407,7 +407,7 @@ export function compilePageSQL(limit: number | undefined, offset: number | undef
 }
 
 /**
- * Compile a {@link QueryInput} into the SQL clause that follows a table name, with
+ * Compiles a {@link QueryInput} into the SQL clause that follows a table name, with
  * its bound parameters in clause order.
  *
  * @remarks
@@ -450,7 +450,7 @@ export function compileQuerySQL(input: QueryInput | undefined, schema: TableSche
 }
 
 /**
- * Project a {@link TableSchema} to its `CREATE TABLE IF NOT EXISTS` statement.
+ * Projects a {@link TableSchema} to its `CREATE TABLE IF NOT EXISTS` statement.
  *
  * @param schema - The table schema
  * @returns The complete table declaration
@@ -475,7 +475,7 @@ export function schemaToTable(schema: TableSchema): string {
 }
 
 /**
- * Project a {@link TableSchema} to its declared SQLite indexes.
+ * Projects a {@link TableSchema} to its declared SQLite indexes.
  *
  * @param schema - The table schema
  * @returns One statement per declared index
@@ -494,7 +494,7 @@ export function schemaToIndexes(schema: TableSchema): readonly string[] {
 }
 
 /**
- * Project one {@link MigrationStep} to SQLite DDL.
+ * Projects one {@link MigrationStep} to SQLite DDL.
  *
  * @param step - The migration step
  * @returns The statements that apply the step

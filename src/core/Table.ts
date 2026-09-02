@@ -33,7 +33,7 @@ import { ScopedIterator } from './ScopedIterator.js'
 import type { TransactionScope } from './TransactionScope.js'
 
 /**
- * A table — typed keyed CRUD plus fluent query and cursor access over a driver.
+ * Exposes typed keyed CRUD plus fluent query and cursor access over a driver.
  *
  * @remarks
  * The table's contract is the load-bearing piece: writes go through `parse`
@@ -170,7 +170,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	/**
-	 * Count contract-valid rows matching `input`'s conditions.
+	 * Counts contract-valid rows matching `input`'s conditions.
 	 *
 	 * @remarks
 	 * Paging is ignored. Candidate rows use the driver's native `records` hook
@@ -199,7 +199,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	/**
-	 * Compute an aggregate over `column` across rows matching `input`'s
+	 * Computes an aggregate over `column` across rows matching `input`'s
 	 * conditions.
 	 *
 	 * @remarks
@@ -239,7 +239,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	/**
-	 * Stream the table's rows matching `input`, applying offset/limit paging.
+	 * Streams the table's rows matching `input`, applying offset/limit paging.
 	 *
 	 * @remarks
 	 * `input.limit` counts rows that pass both the input conditions and the

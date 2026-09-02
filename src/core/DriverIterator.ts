@@ -1,5 +1,5 @@
 /**
- * The internal continuation boundary for a root driver async iterator.
+ * Forms the internal continuation boundary for a root driver async iterator.
  *
  * @remarks
  * A driver transaction can begin while a caller holds an idle root iterator.

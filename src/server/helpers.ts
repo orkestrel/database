@@ -68,7 +68,7 @@ export function findColumnStorage(column: string, schema: TableSchema): ColumnSt
  * answers `false` rather than being read for a `code` any object could carry.
  *
  * @param error - The caught value to classify; any runtime is accepted
- * @returns `true` when the error reports that the path holds nothing
+ * @returns True if the error reports that the path holds nothing; false otherwise
  *
  * @example
  * ```ts
@@ -104,7 +104,7 @@ export function matchesAbsentPath(error: unknown): boolean {
  *
  * @param value - The condition operand to test
  * @param storage - The column's declared portable storage type
- * @returns `true` when the operand's runtime type matches the declared type
+ * @returns True if the operand's runtime type matches the declared type; false otherwise
  *
  * @example
  * ```ts
@@ -150,7 +150,7 @@ export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): 
  *
  * @param condition - The condition to test
  * @param schema - The table's schema
- * @returns Whether `condition` is exact
+ * @returns True if `condition` is exact; false otherwise
  */
 export function matchesConditionExactly(condition: Condition, schema: TableSchema): boolean {
 	if (!isString(condition.column)) return false
@@ -211,7 +211,7 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
  *
  * @param order - The order term to test
  * @param schema - The table's schema
- * @returns Whether `order` is exact
+ * @returns True if `order` is exact; false otherwise
  */
 export function matchesOrderExactly(order: Order, schema: TableSchema): boolean {
 	if (!isString(order.column)) return false
@@ -227,7 +227,7 @@ export function matchesOrderExactly(order: Order, schema: TableSchema): boolean 
  *
  * @param input - The query input to test
  * @param schema - The table's schema
- * @returns Whether every part of `input` is exact
+ * @returns True if every part of `input` is exact; false otherwise
  */
 export function matchesQueryExactly(input: QueryInput, schema: TableSchema): boolean {
 	const conditions = input.conditions ?? []
@@ -239,12 +239,12 @@ export function matchesQueryExactly(input: QueryInput, schema: TableSchema): boo
 }
 
 /**
- * Determine whether SQLite can execute an aggregate exactly like the core engine.
+ * Reports whether SQLite can execute an aggregate exactly like the core engine.
  *
  * @param operation - Aggregate operation
  * @param column - Aggregate field
  * @param schema - Current table schema
- * @returns Whether native aggregation is exact
+ * @returns True if native aggregation is exact; false otherwise
  */
 export function matchesAggregateExactly(
 	operation: AggregateOperation,
@@ -262,11 +262,11 @@ export function matchesAggregateExactly(
 }
 
 /**
- * Test a declared SQLite type against a portable storage affinity.
+ * Checks a declared SQLite type against a portable storage affinity.
  *
  * @param declared - Native declared type
  * @param storage - Portable column storage
- * @returns Whether SQLite's official affinity rules yield the expected affinity
+ * @returns True if SQLite's official affinity rules yield the expected affinity; false otherwise
  */
 export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage): boolean {
 	if (!isString(declared)) return false
@@ -288,7 +288,7 @@ export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage)
 // === SQL identifiers
 
 /**
- * Quote a SQL identifier (a table or column name) so any characters are literal.
+ * Quotes a SQL identifier (a table or column name) so any characters are literal.
  *
  * @remarks
  * Wraps the name in double quotes and doubles any embedded quote — the standard
@@ -310,7 +310,7 @@ export function quoteIdentifier(identifier: string): string {
 // === Value codecs
 
 /**
- * Encode a JS value to its stored {@link SQLiteValue} for a declared column.
+ * Encodes a JS value to its stored {@link SQLiteValue} for a declared column.
  *
  * @remarks
  * The codec is total: a malformed value encodes to SQL `NULL`. Absence always
@@ -361,7 +361,7 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 }
 
 /**
- * Decode a stored {@link SQLiteValue} back to its JS value for a declared column —
+ * Decodes a stored {@link SQLiteValue} back to its JS value for a declared column —
  * the exact inverse of {@link encodeValue}.
  *
  * @remarks
@@ -420,7 +420,7 @@ export function decodeValue(value: SQLiteValue, column: ColumnSchema): unknown {
 }
 
 /**
- * Encode a whole {@link Row} to a {@link SQLiteRow} by its table's schema.
+ * Encodes a whole {@link Row} to a {@link SQLiteRow} by its table's schema.
  *
  * @remarks
  * Encodes each declared column's value with {@link encodeValue}; columns the row
@@ -445,7 +445,7 @@ export function encodeRow(row: Row, schema: TableSchema): SQLiteRow {
 }
 
 /**
- * Extract a stored row's values in a declared positional order.
+ * Extracts a stored row's values in a declared positional order.
  *
  * @remarks
  * SQLite statements bind arrays positionally. Every requested column must be
@@ -483,7 +483,7 @@ export function extractValues(
 }
 
 /**
- * Decode a stored {@link SQLiteRow} back to a {@link Row} by its table's schema.
+ * Decodes a stored {@link SQLiteRow} back to a {@link Row} by its table's schema.
  *
  * @remarks
  * Decodes each declared column with {@link decodeValue} and **omits** any column
@@ -515,7 +515,7 @@ export function decodeRow(row: SQLiteRow, schema: TableSchema): Row {
 // === Persisted names
 
 /**
- * Build a collision-free SQL index name for a table + column-group index —
+ * Builds a collision-free SQL index name for a table + column-group index —
  * shared by the compiler module's `schemaToIndexes` and `stepToSQL`,
  * so a plan-built index name always matches one `open` would have created.
  *

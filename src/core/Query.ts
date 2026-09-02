@@ -11,7 +11,7 @@ import type {
 import { computeAggregate, validatePage } from './helpers.js'
 
 /**
- * A fluent query builder bound to one table.
+ * Builds a read against one table through a fluent chain.
  *
  * @remarks
  * Accumulates typed conditions, ordering, JS filters, and a page. Each builder
@@ -87,7 +87,7 @@ export class Query<T = Row> implements QueryInterface<T> {
 	}
 
 	/**
-	 * Lazily evaluate conditions, filters, offset, and limit.
+	 * Evaluates conditions, filters, offset, and limit lazily.
 	 *
 	 * @param options - Optional abort options
 	 * @returns Matching rows in storage order

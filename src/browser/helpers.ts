@@ -80,7 +80,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
 }
 
 /**
- * Plan an IndexedDB read for a {@link QueryInput} — pick the index (or the primary
+ * Plans an IndexedDB read for a {@link QueryInput} — picks the index (or the primary
  * store) and {@link IDBKeyRange} to narrow by, falling back to a full scan.
  *
  * @remarks
@@ -182,7 +182,7 @@ export function selectPlan(
 }
 
 /**
- * Map a backend {@link IndexedDBError} to the portable `DatabaseError` taxonomy
+ * Maps a backend {@link IndexedDBError} to the portable `DatabaseError` taxonomy
  * — the default mapping used everywhere except inside `migrate()`.
  *
  * @remarks
@@ -228,7 +228,7 @@ export function mapIndexedDBError(error: IndexedDBError): DatabaseError {
 }
 
 /**
- * Map a backend {@link IndexedDBError} to the portable `DatabaseError` taxonomy
+ * Maps a backend {@link IndexedDBError} to the portable `DatabaseError` taxonomy
  * for use INSIDE `migrate()` — the one context where `UPGRADE` means the
  * migration itself failed, not a generic driver fault.
  *
@@ -251,7 +251,7 @@ export function mapMigrationError(error: IndexedDBError): DatabaseError {
 }
 
 /**
- * Derive an IndexedDB index name for a declared column group — a bare column
+ * Derives an IndexedDB index name for a declared column group — a bare column
  * name for a single-column index, a deterministic collision-free encoding for a
  * compound one.
  *
@@ -285,7 +285,7 @@ export function deriveIndexedDBIndexName(columns: readonly string[]): string {
 }
 
 /**
- * Project a table schema into the IndexedDB wrapper's store definition.
+ * Projects a table schema into the IndexedDB wrapper's store definition.
  *
  * @param schema - Portable table schema
  * @returns Store definition with declared indexes

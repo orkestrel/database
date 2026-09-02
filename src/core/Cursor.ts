@@ -1,7 +1,7 @@
 import type { CursorInterface, Key, Row } from './types.js'
 
 /**
- * A forward row cursor for bulk in-place mutation.
+ * Walks a table's rows forward for bulk in-place mutation.
  *
  * @remarks
  * Iterates a snapshot of the table's keys captured when the cursor was opened,

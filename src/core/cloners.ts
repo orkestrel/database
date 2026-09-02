@@ -4,7 +4,7 @@ import { DatabaseError } from './errors.js'
 import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators.js'
 
 /**
- * Clone unknown driver metadata into a distinct deeply frozen snapshot.
+ * Clones unknown driver metadata into a distinct deeply frozen snapshot.
  *
  * @param value - Unknown metadata
  * @returns Owned driver metadata
@@ -26,7 +26,7 @@ export function cloneDriverMetadata(value: unknown): DriverMetadata {
 }
 
 /**
- * Clone unknown driver schema into a distinct deeply frozen snapshot.
+ * Clones unknown driver schema into a distinct deeply frozen snapshot.
  *
  * @param value - Unknown table schema collection
  * @returns Owned driver schema
@@ -48,7 +48,7 @@ export function cloneDriverSchema(value: unknown): readonly TableSchema[] {
 }
 
 /**
- * Clone unknown migration input into a distinct deeply frozen snapshot.
+ * Clones unknown migration input into a distinct deeply frozen snapshot.
  *
  * @param value - Unknown migration input
  * @returns Owned migration input

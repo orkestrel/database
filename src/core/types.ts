@@ -20,7 +20,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 // === Primitives
 
 /**
- * A primary key — the value identifying a row within its table.
+ * Represents a primary key — the value identifying a row within its table.
  *
  * @remarks
  * `string | number` is the intersection of what IndexedDB key ranges and SQL
@@ -30,7 +30,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 export type Key = string | number
 
 /**
- * A key-generating function.
+ * Represents a key-generating function.
  *
  * @remarks
  * Supplied through {@link DatabaseOptions.generator} as an authoritative
@@ -40,13 +40,13 @@ export type Key = string | number
  */
 export type KeyFunction = () => Key
 
-/** A table row — a plain record of column values keyed by column name. */
+/** Represents a table row — a plain record of column values keyed by column name. */
 export type Row = Record<string, unknown>
 
 // === Query input
 
 /**
- * A WHERE operator — the comparison a single {@link Condition} applies.
+ * Represents a WHERE operator — the comparison a single {@link Condition} applies.
  *
  * @remarks
  * Each maps to a SQL operator and an IndexedDB read strategy (a key range where
@@ -70,11 +70,11 @@ export type ConditionOperator =
 	| 'absent'
 	| 'present'
 
-/** How a {@link Condition} joins to the running result of the conditions before it. */
+/** Names how a {@link Condition} joins to the running result of the conditions before it. */
 export type ConditionConnector = 'and' | 'or'
 
 /**
- * One compiled WHERE condition.
+ * Represents one compiled WHERE condition.
  *
  * @remarks
  * `values` carries the operands the operator needs — none for `absent` /
@@ -91,17 +91,17 @@ export interface Condition {
 	readonly connector: ConditionConnector
 }
 
-/** A sort direction. */
+/** Names a sort direction. */
 export type OrderDirection = 'ascending' | 'descending'
 
-/** One ordering term — a column ({@link FieldPath}, flat or nested) and its direction. */
+/** Represents one ordering term — a column ({@link FieldPath}, flat or nested) and its direction. */
 export interface Order {
 	readonly column: FieldPath
 	readonly direction: OrderDirection
 }
 
 /**
- * A serializable read specification — everything a backend needs to compile one
+ * Represents a serializable read specification — everything a backend needs to compile one
  * read, free of JS callbacks so any backend can honor it.
  *
  * @remarks
@@ -117,7 +117,7 @@ export interface QueryInput {
 	readonly offset?: number
 }
 
-/** An aggregate computed over a numeric column. */
+/** Names an aggregate computed over a numeric column. */
 export type AggregateOperation = 'count' | 'sum' | 'average' | 'minimum' | 'maximum'
 
 /**
@@ -135,11 +135,11 @@ export interface OperationOptions {
 
 // === Lifecycle
 
-/** The lifecycle state of a {@link DatabaseInterface}. */
+/** Names the lifecycle state of a {@link DatabaseInterface}. */
 export type DatabaseStatus = 'idle' | 'open' | 'closed'
 
 /**
- * The admission boundary a scoped operation enters before it runs.
+ * Represents the admission boundary a scoped operation enters before it runs.
  *
  * @remarks
  * The one contract the root database context and a transaction scope both
@@ -154,7 +154,7 @@ export interface AdmissionInterface {
 	track<R>(operation: () => Promise<R>): Promise<R>
 }
 
-/** A machine-readable {@link DatabaseError} code. */
+/** Names a machine-readable {@link DatabaseError} code. */
 export type DatabaseErrorCode =
 	| 'CLOSED'
 	| 'NOT_FOUND'
@@ -166,7 +166,7 @@ export type DatabaseErrorCode =
 	| 'DRIVER'
 
 /**
- * One violated invariant from the driver-conformance battery.
+ * Represents one violated invariant from the driver-conformance battery.
  *
  * @remarks
  * Mirrors the payload shape of a `DatabaseError` `CONFORMANCE` `context` —
@@ -180,7 +180,7 @@ export interface ConformanceFinding {
 }
 
 /**
- * The push observation surface of a {@link DatabaseInterface} — the
+ * Describes the push observation surface of a {@link DatabaseInterface} — the
  * connection + transaction lifecycle a fire-and-forget observer (logging, metrics,
  * tracing, cache invalidation) subscribes to.
  *
@@ -202,22 +202,22 @@ export interface ConformanceFinding {
  * required index signature.
  */
 export type DatabaseEventMap = {
-	/** The driver connected (`open`, or the lazy first-use connect completed). */
+	/** Signals that the driver connected (`open`, or the lazy first-use connect completed). */
 	readonly open: readonly []
-	/** The database was closed (the driver released). */
+	/** Signals that the database was closed (the driver released). */
 	readonly close: readonly []
-	/** A transaction scope began after its native boundary or fallback snapshot was acquired. */
+	/** Signals that a transaction scope began after its native boundary or fallback snapshot was acquired. */
 	readonly transaction: readonly []
-	/** A transaction scope completed successfully (no rollback). */
+	/** Signals that a transaction scope completed successfully (no rollback). */
 	readonly commit: readonly []
-	/** A transaction scope failed and rollback completed — the exact propagated scope error. */
+	/** Signals that a transaction scope failed and rollback completed — the exact propagated scope error. */
 	readonly rollback: readonly [error: unknown]
-	/** A {@link Migration} plan was applied via `migrate` — the applied plan. */
+	/** Signals that a {@link Migration} plan was applied via `migrate` — the applied plan. */
 	readonly migrate: readonly [migration: Migration]
 }
 
 /**
- * The push observation surface of a {@link TableInterface} — the per-row
+ * Describes the push observation surface of a {@link TableInterface} — the per-row
  * mutation moments a fire-and-forget observer (cache invalidation, sync, an audit log)
  * subscribes to, ALONGSIDE the database-level {@link DatabaseEventMap}.
  *
@@ -235,18 +235,18 @@ export type DatabaseEventMap = {
  * `EventMap` is a `type` kind).
  */
 export type TableEventMap = {
-	/** A row was written (set / added / updated) — the affected key (no value payload). */
+	/** Signals that a row was written (set / added / updated) — the affected key (no value payload). */
 	readonly write: readonly [key: Key]
-	/** A row was removed — the affected key. */
+	/** Signals that a row was removed — the affected key. */
 	readonly remove: readonly [key: Key]
-	/** The table was cleared (every row removed). */
+	/** Signals that the table was cleared (every row removed). */
 	readonly clear: readonly []
 }
 
 // === Driver contract
 
 /**
- * A portable storage type for a column — the backend maps it to its native type
+ * Names a portable storage type for a column — the backend maps it to its native type
  * (SQLite affinity, an IndexedDB value). Derived from a column's `ContractShape`
  * by `shapeToColumnStorage`; `json` covers object/array/union/raw values a backend stores
  * as JSON text and can `json_extract` for nested-field queries.
@@ -254,7 +254,7 @@ export type TableEventMap = {
 export type ColumnStorage = 'text' | 'integer' | 'real' | 'boolean' | 'json' | 'blob'
 
 /**
- * One column of a {@link TableSchema} — its name, portable {@link ColumnStorage}, and
+ * Represents one column of a {@link TableSchema} — its name, portable {@link ColumnStorage}, and
  * whether it independently accepts absence (`optional`) and explicit `null`
  * (`nullable`).
  */
@@ -266,7 +266,7 @@ export interface ColumnSchema {
 }
 
 /**
- * Persisted schema metadata a versioning driver owns as an immutable snapshot.
+ * Represents persisted schema metadata a versioning driver owns as an immutable snapshot.
  *
  * @remarks
  * A driver snapshots metadata when it enters through `stamp` or a
@@ -282,7 +282,7 @@ export interface DriverMetadata {
 }
 
 /**
- * A backend-agnostic description of one table — what `open` hands each driver so a
+ * Represents a backend-agnostic description of one table — what `open` hands each driver so a
  * native backend can create real tables and indexes.
  *
  * @remarks
@@ -299,7 +299,7 @@ export interface TableSchema {
 }
 
 /**
- * One step of a {@link Migration} plan — a single schema change applied to one
+ * Represents one step of a {@link Migration} plan — a single schema change applied to one
  * table.
  *
  * @remarks
@@ -321,7 +321,7 @@ export type MigrationStep =
 	  }
 
 /**
- * A schema migration plan — an ordered set of {@link MigrationStep}s moving a
+ * Represents a schema migration plan — an ordered set of {@link MigrationStep}s moving a
  * database from one schema version to another.
  *
  * @remarks
@@ -336,7 +336,7 @@ export interface Migration {
 }
 
 /**
- * One atomic migration request.
+ * Represents one atomic migration request.
  *
  * @remarks
  * `plan` carries the schema changes. `metadata`, when present, is the snapshot that
@@ -349,7 +349,7 @@ export interface MigrationInput {
 }
 
 /**
- * The storage operations available only inside a driver's transaction scope.
+ * Declares the storage operations available only inside a driver's transaction scope.
  *
  * @remarks
  * A driver owns acquisition, commit or rollback, release, and lifetime. This
@@ -380,7 +380,7 @@ export interface StorageInterface {
 }
 
 /**
- * The storage primitive every backend implements — the whole of the bridge.
+ * Declares the storage primitive every backend implements — the whole of the bridge.
  *
  * @remarks
  * The REQUIRED surface is deliberately minimal: keyed read / write / atomic
@@ -406,7 +406,7 @@ export interface DriverInterface extends StorageInterface {
 	open(schema: readonly TableSchema[]): Promise<void>
 	close(): Promise<void>
 	/**
-	 * Capture table rows and return a repeatable thunk that restores those rows —
+	 * Captures table rows and returns a repeatable thunk that restores those rows —
 	 * the primitive transactions are built on.
 	 *
 	 * @remarks
@@ -417,8 +417,8 @@ export interface DriverInterface extends StorageInterface {
 	 */
 	snapshot(tables?: readonly string[]): Promise<() => Promise<void>>
 	/**
-	 * Optional native transaction scope. The driver owns acquisition, commit or
-	 * rollback, release, and invalidation of the scoped capability.
+	 * Opens a native transaction scope — an optional driver hook. The driver owns acquisition,
+	 * commit or rollback, release, and invalidation of the scoped capability.
 	 */
 	transaction?<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R>
 }
@@ -426,7 +426,7 @@ export interface DriverInterface extends StorageInterface {
 // === Database
 
 /**
- * One table's columns — a map of column name to its value {@link ContractShape}.
+ * Represents one table's columns — a map of column name to its value {@link ContractShape}.
  *
  * @remarks
  * This is exactly the property map an `objectShape` takes. A table row is always
@@ -438,7 +438,7 @@ export interface DriverInterface extends StorageInterface {
 export type ColumnMap = Readonly<Record<string, ContractShape>>
 
 /**
- * A database's table schema — a map of table name to its {@link ColumnMap}.
+ * Represents a database's table schema — a map of table name to its {@link ColumnMap}.
  *
  * @remarks
  * Each table's row type is `Infer` of its columns (see {@link RowOf}); primary-key
@@ -447,7 +447,7 @@ export type ColumnMap = Readonly<Record<string, ContractShape>>
 export type TableMap = Readonly<Record<string, ColumnMap>>
 
 /**
- * The row type a table's {@link ColumnMap} describe — `Infer` of the `objectShape`
+ * Represents the row type a table's {@link ColumnMap} describe — `Infer` of the `objectShape`
  * the database wraps them in.
  *
  * @remarks
@@ -466,7 +466,7 @@ export type RowOf<C extends ColumnMap> = Infer<{
 }>
 
 /**
- * Per-table primary-key column overrides — `{ [table]: column }`.
+ * Holds per-table primary-key column overrides — `{ [table]: column }`.
  *
  * @remarks
  * A table absent from this map keys its rows by {@link DEFAULT_PRIMARY} (`id`).
@@ -475,7 +475,7 @@ export type RowOf<C extends ColumnMap> = Infer<{
 export type PrimaryMap = Readonly<Record<string, string>>
 
 /**
- * Per-table secondary indexes — `{ [table]: groups }`, each group one
+ * Holds per-table secondary indexes — `{ [table]: groups }`, each group one
  * (possibly compound) index of column names.
  *
  * @remarks
@@ -502,7 +502,7 @@ export type IndexMap = Readonly<Record<string, ReadonlyArray<readonly string[]>>
 export interface DatabaseOptions<T extends TableMap = TableMap> {
 	readonly on?: EmitterHooks<DatabaseEventMap>
 	/**
-	 * The listener-error handler shared by the database and every table emitter.
+	 * Holds the listener-error handler shared by the database and every table emitter.
 	 *
 	 * @remarks
 	 * Listener throws from root, imported, and transaction-scoped handles route
@@ -516,7 +516,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	readonly indexes?: IndexMap
 	readonly name?: string
 	/**
-	 * The authoritative key-generation override for a keyless write.
+	 * Holds the authoritative key-generation override for a keyless write.
 	 *
 	 * @remarks
 	 * Omit it to use global `crypto.randomUUID()`. A numeric primary requires a
@@ -527,7 +527,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	 */
 	readonly generator?: KeyFunction
 	/**
-	 * The declared schema version.
+	 * Holds the declared schema version.
 	 *
 	 * @remarks
 	 * Only meaningful when the driver implements BOTH {@link DriverInterface.metadata}
@@ -559,7 +559,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 }
 
 /**
- * One table's portable definition, produced by `export` — the unit of schema /
+ * Represents one table's portable definition, produced by `export` — the unit of schema /
  * migration exchange across environments.
  *
  * @remarks
@@ -574,7 +574,7 @@ export interface TableDefinition {
 }
 
 /**
- * A database view valid only inside one {@link DatabaseInterface.transaction}
+ * Represents a database view valid only inside one {@link DatabaseInterface.transaction}
  * scope.
  *
  * @remarks
@@ -588,7 +588,7 @@ export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
 }
 
 /**
- * A database — the ergonomic entry point that owns the driver and its tables.
+ * Represents a database — the ergonomic entry point that owns the driver and its tables.
  *
  * @remarks
  * A database is a typed view over a set of tables on one driver. Tables are
@@ -616,9 +616,9 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
 		options?: OperationOptions,
 	): Promise<R>
 	/**
-	 * Diff a caller-supplied deployed schema against this database's declared
-	 * schema (its `tables`, as configured) via `planMigration`, apply the
-	 * resulting plan through the driver's optional `migrate` hook, and return
+	 * Diffs a caller-supplied deployed schema against this database's declared
+	 * schema (its `tables`, as configured) via `planMigration`, applies the
+	 * resulting plan through the driver's optional `migrate` hook, and returns
 	 * the applied plan.
 	 *
 	 * @param deployed - The schema currently deployed, as {@link TableSchema}s
@@ -648,7 +648,7 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
 // === Table
 
 /**
- * A table — typed keyed CRUD plus fluent query and cursor access.
+ * Exposes typed keyed CRUD plus fluent query and cursor access.
  *
  * @remarks
  * Writes are coerced through the table's contract: a string input to a numeric
@@ -677,7 +677,7 @@ export interface TableInterface<T = Row> {
 	keys(): Promise<readonly Key[]>
 	records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]>
 	/**
-	 * Count contract-valid rows matching `input`'s conditions.
+	 * Counts contract-valid rows matching `input`'s conditions.
 	 *
 	 * @remarks
 	 * Paging is ignored. Like `records()` / `scan()`, `count()` narrows every
@@ -686,7 +686,7 @@ export interface TableInterface<T = Row> {
 	 */
 	count(input?: QueryInput, options?: OperationOptions): Promise<number>
 	/**
-	 * Compute an aggregate over `column` across rows matching `input`'s
+	 * Computes an aggregate over `column` across rows matching `input`'s
 	 * conditions.
 	 *
 	 * @remarks
@@ -703,7 +703,7 @@ export interface TableInterface<T = Row> {
 		options?: OperationOptions,
 	): Promise<number | undefined>
 	/**
-	 * Lazy filtered iteration over the table's rows.
+	 * Iterates the table's rows lazily with filtering.
 	 *
 	 * @remarks
 	 * `input`'s `conditions` / `offset` / `limit` are honored lazily as rows
@@ -714,7 +714,7 @@ export interface TableInterface<T = Row> {
 	 */
 	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T>
 	/**
-	 * Upsert one or more rows.
+	 * Upserts one or more rows.
 	 *
 	 * @param row - The row to upsert
 	 * @param options - Optional abort signal
@@ -722,7 +722,7 @@ export interface TableInterface<T = Row> {
 	 */
 	set(row: T, options?: OperationOptions): Promise<Key>
 	/**
-	 * Upsert one or more rows.
+	 * Upserts one or more rows.
 	 *
 	 * @param rows - The rows to upsert
 	 * @param options - Optional abort signal, checked at entry and between items
@@ -735,7 +735,7 @@ export interface TableInterface<T = Row> {
 	 */
 	set(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
-	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
+	 * Inserts one or more rows, throwing `CONFLICT` on a duplicate key.
 	 *
 	 * @param row - The row to insert
 	 * @param options - Optional abort signal
@@ -743,7 +743,7 @@ export interface TableInterface<T = Row> {
 	 */
 	add(row: T, options?: OperationOptions): Promise<Key>
 	/**
-	 * Insert one or more rows, throwing `CONFLICT` on a duplicate key.
+	 * Inserts one or more rows, throwing `CONFLICT` on a duplicate key.
 	 *
 	 * @param rows - The rows to insert
 	 * @param options - Optional abort signal, checked at entry and between items
@@ -756,16 +756,16 @@ export interface TableInterface<T = Row> {
 	 */
 	add(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
-	 * Apply a partial change to one or more rows.
+	 * Applies a partial change to one or more rows.
 	 *
 	 * @param key - The key of the row to update
 	 * @param changes - The partial changes to apply
 	 * @param options - Optional abort signal
-	 * @returns `true` when the row existed and was updated
+	 * @returns True if the row existed and was updated; false otherwise
 	 */
 	update(key: Key, changes: Partial<T>, options?: OperationOptions): Promise<boolean>
 	/**
-	 * Apply a partial change to one or more rows.
+	 * Applies a partial change to one or more rows.
 	 *
 	 * @param keys - The keys of the rows to update
 	 * @param changes - The partial changes to apply to each row
@@ -783,15 +783,15 @@ export interface TableInterface<T = Row> {
 		options?: OperationOptions,
 	): Promise<readonly boolean[]>
 	/**
-	 * Delete one or more rows.
+	 * Deletes one or more rows.
 	 *
 	 * @param key - The key of the row to remove
 	 * @param options - Optional abort signal
-	 * @returns `true` when the row existed and was removed
+	 * @returns True if the row existed and was removed; false otherwise
 	 */
 	remove(key: Key, options?: OperationOptions): Promise<boolean>
 	/**
-	 * Delete one or more rows.
+	 * Deletes one or more rows.
 	 *
 	 * @param keys - The keys of the rows to remove
 	 * @param options - Optional abort signal, checked at entry and between items
@@ -811,7 +811,7 @@ export interface TableInterface<T = Row> {
 // === Query
 
 /**
- * A fluent query builder.
+ * Builds a read through a fluent chain.
  *
  * @remarks
  * `condition` appends one portable condition and `order` appends one portable
@@ -831,8 +831,8 @@ export interface QueryInterface<T = Row> {
 	find(): Promise<T | undefined>
 	count(): Promise<number>
 	/**
-	 * Lazy per-row evaluation of this query's conditions / filters / offset /
-	 * limit.
+	 * Evaluates this query's conditions / filters / offset / limit lazily, row
+	 * by row.
 	 *
 	 * @remarks
 	 * `order` and its comparators are IGNORED (streaming yields unsorted, as
@@ -847,7 +847,7 @@ export interface QueryInterface<T = Row> {
 // === Cursor
 
 /**
- * A forward row cursor for bulk in-place mutation.
+ * Walks a table's rows forward for bulk in-place mutation.
  *
  * @remarks
  * Iterates a snapshot of the table's keys taken at creation; `update` and
