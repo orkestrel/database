@@ -163,7 +163,7 @@ export function selectPlan(
 		// An array column is a nested FieldPath into a json value — not a key.
 		if (typeof condition.column !== 'string') continue
 		const column = findColumn(condition.column, schema)
-		if (column === undefined || !INDEXABLE_STORAGE.some((storage) => storage === column.storage)) {
+		if (column === undefined || !INDEXABLE_STORAGE.includes(column.storage)) {
 			continue
 		}
 		const range = conditionToRange(condition)

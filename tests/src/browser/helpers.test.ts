@@ -4,6 +4,7 @@ import { IndexedDBError } from '@orkestrel/indexeddb'
 import {
 	conditionToRange,
 	deriveIndexedDBIndexName,
+	INDEXABLE_STORAGE,
 	mapIndexedDBError,
 	mapMigrationError,
 	selectPlan,
@@ -505,5 +506,12 @@ describe('deriveIndexedDBIndexName', () => {
 		// pathological pair like ['a', 'b_c'] and ['a_b', 'c'] both underscore-join
 		// to 'a_b_c' — the length-prefixed encoding must still tell them apart.
 		expect(deriveIndexedDBIndexName(['a', 'b_c'])).not.toBe(deriveIndexedDBIndexName(['a_b', 'c']))
+	})
+})
+
+describe('INDEXABLE_STORAGE', () => {
+	it('is frozen and lists exactly the orderable column storages', () => {
+		expect(Object.isFrozen(INDEXABLE_STORAGE)).toBe(true)
+		expect(INDEXABLE_STORAGE).toEqual(['text', 'integer', 'real'])
 	})
 })

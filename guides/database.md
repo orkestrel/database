@@ -298,21 +298,21 @@ The storage capability a native driver passes into one transaction scope.
 It exposes work, not settlement: the driver commits when the callback fulfills,
 rolls back when it rejects, and invalidates the capability afterward.
 
-| Method      | Returns                                | Behavior                                                          |
-| ----------- | -------------------------------------- | ----------------------------------------------------------------- |
-| `read`      | `Promise<Row \| undefined>`            | Read one row by key inside the transaction.                       |
-| `write`     | `Promise<void>`                        | Write one row at a key inside the transaction.                    |
-| `insert`    | `Promise<void>`                        | Atomically insert one row; reject `CONFLICT` if its key exists.   |
-| `delete`    | `Promise<boolean>`                     | Delete one row by key inside the transaction.                     |
-| `keys`      | `Promise<readonly Key[]>`              | List a table's keys inside the transaction.                       |
-| `scan`      | `AsyncIterable<Row>`                   | Iterate a table's rows inside the transaction.                    |
-| `clear`     | `Promise<void>`                        | Empty a table inside the transaction.                             |
-| `records`   | `Promise<readonly Row[]>`              | Optional native filtered read inside the transaction.             |
-| `aggregate` | `Promise<number \| undefined>`         | Optional native aggregate inside the transaction.                 |
-| `stream`    | `AsyncIterable<Row>`                   | Optional natively filtered lazy iteration inside the transaction. |
-| `migrate`   | `Promise<void>`                        | Optionally apply one atomic `MigrationInput` in the transaction.  |
-| `metadata`  | `Promise<DriverMetadata \| undefined>` | Optional metadata read joined to the transaction.                 |
-| `stamp`     | `Promise<void>`                        | Optional metadata write joined to the transaction.                |
+| Method      | Returns                                | Behavior                                                              |
+| ----------- | -------------------------------------- | --------------------------------------------------------------------- |
+| `read`      | `Promise<Row \| undefined>`            | Read one row by key inside the transaction.                           |
+| `write`     | `Promise<void>`                        | Write one row at a key inside the transaction.                        |
+| `insert`    | `Promise<void>`                        | Atomically insert one row; reject `CONFLICT` if its key exists.       |
+| `delete`    | `Promise<boolean>`                     | Delete one row by key inside the transaction.                         |
+| `keys`      | `Promise<readonly Key[]>`              | List a table's keys inside the transaction.                           |
+| `scan`      | `AsyncIterable<Row>`                   | Iterate a table's rows in ascending key order inside the transaction. |
+| `clear`     | `Promise<void>`                        | Empty a table inside the transaction.                                 |
+| `records`   | `Promise<readonly Row[]>`              | Optional native filtered read inside the transaction.                 |
+| `aggregate` | `Promise<number \| undefined>`         | Optional native aggregate inside the transaction.                     |
+| `stream`    | `AsyncIterable<Row>`                   | Optional natively filtered lazy iteration inside the transaction.     |
+| `migrate`   | `Promise<void>`                        | Optionally apply one atomic `MigrationInput` in the transaction.      |
+| `metadata`  | `Promise<DriverMetadata \| undefined>` | Optional metadata read joined to the transaction.                     |
+| `stamp`     | `Promise<void>`                        | Optional metadata write joined to the transaction.                    |
 
 #### `DriverInterface`
 
@@ -564,7 +564,9 @@ These invariants hold across the core database source tree ↔ this guide:
    outer transaction remains active for unrelated work.
    `IndexedDBDriver` performs a non-empty plan in one versionchange transaction,
    writing `metadata` in that SAME upgrade; a metadata-only input uses one ordinary
-   `__metadata__` readwrite transaction. Both implement the paired `metadata?` /
+   `__metadata__` readwrite transaction. A `column.remove` step that meets a stored
+   value which is not a record fails the migration closed with `MIGRATION` and
+   nothing is rewritten. Both implement the paired `metadata?` /
    `stamp?` into a reserved store name a user table must avoid:
    `SQLiteDriver` uses a single-row `_metadata` table (`METADATA_TABLE`), and
    `IndexedDBDriver` uses an out-of-line `__metadata__` store (`METADATA_STORE`), both

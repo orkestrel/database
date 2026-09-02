@@ -1283,6 +1283,45 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		await driver.open(tableSchemas('users'))
 	})
 
+	it('a column.remove migration fails closed on a non-record stored value', async () => {
+		const deployed: TableSchema = {
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'name', storage: 'text', optional: false, nullable: false },
+				{ name: 'legacy', storage: 'boolean', optional: false, nullable: true },
+			],
+			indexes: [],
+		}
+		await driver.open([deployed])
+		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+		await driver.close()
+		const seeded = createIndexedDBDatabase({
+			name,
+			stores: { users: {} },
+		})
+		await seeded.connect()
+		await putIndexedDBValue(seeded.database, 'users', 'x', 42)
+		seeded.close()
+
+		const corrupted = createIndexedDBDriver(name)
+		await corrupted.open([deployed])
+		const error = await corrupted
+			.migrate?.({
+				plan: {
+					from: 0,
+					to: 1,
+					steps: [{ operation: 'column.remove', table: 'users', column: 'legacy' }],
+				},
+			})
+			.catch((caught: unknown) => caught)
+		expect(error).toMatchObject({ code: 'MIGRATION' })
+		await corrupted.close()
+		driver = createIndexedDBDriver(name)
+		await driver.open(tableSchemas('users'))
+	})
+
 	it('reconnects a yielded wrapper before reading its version for migration', async () => {
 		const inspected = createIndexedDBDatabase({
 			name,

@@ -160,7 +160,7 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
 		return !(column.optional && column.nullable)
 	}
 	if (column.optional || column.nullable) return false
-	if (!EXACT_COLUMN_STORAGE.some((storage) => storage === column.storage)) return false
+	if (!EXACT_COLUMN_STORAGE.includes(column.storage)) return false
 	const first = condition.values[0]
 	const second = condition.values[1]
 	switch (condition.operator) {
@@ -172,12 +172,12 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
 		case 'from':
 		case 'to':
 			return (
-				EXACT_RANGE_COLUMN_STORAGE.some((storage) => storage === column.storage) &&
+				EXACT_RANGE_COLUMN_STORAGE.includes(column.storage) &&
 				matchesDeclaredStorage(first, column.storage)
 			)
 		case 'between':
 			return (
-				EXACT_RANGE_COLUMN_STORAGE.some((storage) => storage === column.storage) &&
+				EXACT_RANGE_COLUMN_STORAGE.includes(column.storage) &&
 				matchesDeclaredStorage(first, column.storage) &&
 				matchesDeclaredStorage(second, column.storage)
 			)
@@ -217,11 +217,7 @@ export function matchesOrderExactly(order: Order, schema: TableSchema): boolean 
 	if (!isString(order.column)) return false
 	const column = findColumn(order.column, schema)
 	if (column === undefined) return false
-	return (
-		!column.optional &&
-		!column.nullable &&
-		EXACT_RANGE_COLUMN_STORAGE.some((storage) => storage === column.storage)
-	)
+	return !column.optional && !column.nullable && EXACT_RANGE_COLUMN_STORAGE.includes(column.storage)
 }
 
 /**

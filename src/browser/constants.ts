@@ -10,7 +10,7 @@ import type { ColumnStorage } from '@src/core'
  * would silently miss rows, so `selectPlan` never pushes a condition down on
  * them and the core engine answers the read instead. A frozen array, matching
  * `EXACT_COLUMN_STORAGE` in `src/server`: a consumer holding it reads the
- * membership with `some` and cannot change the driver's pushdown behavior.
+ * membership with `includes` and cannot change the driver's pushdown behavior.
  */
 export const INDEXABLE_STORAGE: readonly ColumnStorage[] = Object.freeze([
 	'text',

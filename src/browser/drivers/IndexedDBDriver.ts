@@ -748,19 +748,19 @@ export class IndexedDBDriver implements DriverInterface {
 					const store = context.stores.open(step.table)
 					let cursor = await store.cursor()
 					while (cursor !== null) {
-						// A cursor reports `undefined` where the stored value is not a
-						// record. Such a value carries no column to drop, so the step
-						// advances past it rather than rewriting it.
 						const row = cursor.value
-						if (row !== undefined) {
-							const [migrated] = migrateRows([row], [step])
-							if (migrated === undefined) {
-								throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
-									table: step.table,
-								})
-							}
-							await cursor.update(migrated)
+						if (row === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
+								table: step.table,
+							})
 						}
+						const [migrated] = migrateRows([row], [step])
+						if (migrated === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+								table: step.table,
+							})
+						}
+						await cursor.update(migrated)
 						cursor = await cursor.continue()
 					}
 					break
