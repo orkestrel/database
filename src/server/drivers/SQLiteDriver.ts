@@ -37,7 +37,7 @@ import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
 import {
 	compileAggregateSQL,
 	compileQuerySQL,
-	compileWhere,
+	compileWhereSQL,
 	schemaToIndexes,
 	schemaToTable,
 	stepToSQL,
@@ -70,41 +70,40 @@ import { DriverIterator } from '../../core/DriverIterator.js'
  * reopen-safe), and readies a reserved `_metadata` single-row table `metadata()` /
  * `stamp()` read and write — **a user table named `_metadata` collides with it**;
  * avoid the name. Rows cross the boundary through the codecs in `helpers.ts`
- * (`json` columns store / parse JSON text, a `boolean` stores `1` / `0`), so the
- * typed layer above imposes the exact shape. `write` is an
+ * (`json` columns store / parse JSON text, a `boolean` stores `1` / `0`), so
+ * the typed layer above imposes the exact shape. `write` is an
  * `INSERT OR REPLACE` upsert, while `insert` uses a plain `INSERT` and maps its
  * atomic primary-key constraint failure to `CONFLICT`; every other backend
  * `SQLiteError` is contained by the same `DatabaseError` boundary described
- * below. Querying, ordering, paging, and
- * aggregation is native: `records` / `stream` compile a `QueryInput`
- * to SQL with `compileQuerySQL`, and `aggregate` runs a SQL
- * `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (via `compileAggregateSQL`) over the same compiled
- * WHERE. `transaction` runs a callback inside native `BEGIN` / `COMMIT` /
- * `ROLLBACK`, passing a scoped storage capability that becomes invalid after
- * settlement. `migrate` runs the plan's projected DDL
- * ({@link import('../compilers.js').stepToSQL}) inside whichever native
- * transaction is active: joined into the active transaction callback
- * when one exists (the core's versioned reconcile path wraps migrate + stamp
- * in one native `BEGIN`, and node:sqlite rejects a nested `BEGIN`), or inside
- * its own `database.transaction` otherwise — a mid-plan failure rolls back
- * atomically either way, an improvement over the non-atomic `MemoryDriver` /
- * `JSONDriver` migrate; a step referencing an undeclared table throws
+ * below. Querying, ordering, paging, and aggregation is native: `records` /
+ * `stream` compile a `QueryInput` to SQL with `compileQuerySQL`, and
+ * `aggregate` runs a SQL `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (via
+ * `compileAggregateSQL`) over the same compiled WHERE. `transaction` runs a
+ * callback inside native `BEGIN` / `COMMIT` / `ROLLBACK`, passing a scoped
+ * storage capability that becomes invalid after settlement. `migrate` runs the
+ * plan's projected DDL ({@link import('../compilers.js').stepToSQL}) inside
+ * whichever native transaction is active: joined into the active transaction
+ * callback when one exists (the core's versioned reconcile path wraps migrate +
+ * stamp in one native `BEGIN`, and node:sqlite rejects a nested `BEGIN`), or
+ * inside its own `database.transaction` otherwise — a mid-plan failure rolls
+ * back atomically either way, an improvement over the non-atomic `MemoryDriver`
+ * / `JSONDriver` migrate; a step referencing an undeclared table throws
  * `DatabaseError` `MIGRATION` before any DDL for that step runs. `snapshot` is
- * capture-replay (SELECT the
- * named tables' rows, replay via DELETE + INSERT OR REPLACE inside a native
- * transaction on rollback) rather than a SQL `SAVEPOINT`, since the core
- * `transaction` calls the rollback thunk only on failure with no commit-on-
- * success signal — a long-lived `SAVEPOINT` would leave the connection
- * uncommitted (lost on close). Every backend interaction runs through `#guard`,
- * which maps a thrown backend `SQLiteError` (or any unexpected non-`SQLiteError`
- * throw) to a typed {@link DatabaseError} — never a raw backend error escapes
- * `DriverInterface`: `CONSTRAINT` → `CONFLICT`, the wrapper's own `CLOSED` →
- * `CLOSED`, `BUSY` (a locked database that outlasted the configured `timeout`)
- * → a retryable `DRIVER` (`context.retryable` is `true`), and `UNKNOWN` / any
- * other throw → `DRIVER`. The original error is preserved as `context.cause`.
- * A `DatabaseError` this driver throws directly (`CLOSED` from the `#require`
- * gate, `NOT_FOUND` from `#table`, `MIGRATION` from a migration-plan fault)
- * passes through `#guard` unchanged, never re-wrapped.
+ * capture-replay (SELECT the named tables' rows, replay via DELETE + INSERT OR
+ * REPLACE inside a native transaction on rollback) rather than a SQL
+ * `SAVEPOINT`, since the core `transaction` calls the rollback thunk only on
+ * failure with no commit-on-success signal — a long-lived `SAVEPOINT` would
+ * leave the connection uncommitted (lost on close). Every backend interaction
+ * runs through `#guard`, which maps a thrown backend `SQLiteError` (or any
+ * unexpected non-`SQLiteError` throw) to a typed {@link DatabaseError} — never
+ * a raw backend error escapes `DriverInterface`: `CONSTRAINT` → `CONFLICT`, the
+ * wrapper's own `CLOSED` → `CLOSED`, `BUSY` (a locked database that outlasted
+ * the configured `timeout`) → a retryable `DRIVER` (`context.retryable` is
+ * `true`), and `UNKNOWN` / any other throw → `DRIVER`. The original error is
+ * preserved as `context.cause`. A `DatabaseError` this driver throws directly
+ * (`CLOSED` from the `#require` gate, `NOT_FOUND` from `#table`, `MIGRATION`
+ * from a migration-plan fault) passes through `#guard` unchanged, never
+ * re-wrapped.
  */
 export class SQLiteDriver implements DriverInterface {
 	readonly #path: string
@@ -175,13 +174,13 @@ export class SQLiteDriver implements DriverInterface {
 					for (const table of deployed) {
 						const absent = missing.get(table.name)
 						if (absent === undefined) {
-							database.exec(schemaToTable(table))
-							for (const sql of schemaToIndexes(table)) database.exec(sql)
+							database.execute(schemaToTable(table))
+							for (const sql of schemaToIndexes(table)) database.execute(sql)
 						} else {
 							for (const [index, group] of table.indexes.entries()) {
 								if (absent.includes(deriveSQLiteIndexName(table.name, group))) {
 									const sql = schemaToIndexes(table)[index]
-									if (sql !== undefined) database.exec(sql)
+									if (sql !== undefined) database.execute(sql)
 								}
 							}
 						}
@@ -244,13 +243,12 @@ export class SQLiteDriver implements DriverInterface {
 		await this.#clear(table)
 	}
 
-	// A QueryInput whose compiled
-	// SQL is PROVABLY identical to the core engine's semantics (see
-	// `matchesConditionExactly` / `matchesOrderExactly` / `matchesQueryExactly`) runs the fast
-	// native path; otherwise this driver fetches a full scan and refines it
-	// through the SAME core engine `MemoryDriver` and `JSONDriver` already answer
-	// every query with — exact → native, otherwise → refine, never a
-	// silent semantics drift between backends.
+	// A QueryInput whose compiled SQL is PROVABLY identical to the core engine's
+	// semantics (see `matchesConditionExactly` / `matchesOrderExactly` /
+	// `matchesQueryExactly`) runs the fast native path; otherwise this driver
+	// fetches a full scan and refines it through the SAME core engine that
+	// answers every query for `MemoryDriver` and `JSONDriver` — exact → native,
+	// otherwise → refine, never a silent semantics drift between backends.
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)
 		this.#root()
@@ -292,7 +290,7 @@ export class SQLiteDriver implements DriverInterface {
 			return this.#guard(() => {
 				// WHERE-only compile — same rationale as `count`: paging must never
 				// apply to the single aggregate row.
-				const { sql, parameters } = compileWhere(conditions, schema)
+				const { sql, parameters } = compileWhereSQL(conditions, schema)
 				const value = this.#require()
 					.prepare(
 						'SELECT ' +
@@ -378,19 +376,18 @@ export class SQLiteDriver implements DriverInterface {
 	 * ({@link import('../compilers.js').stepToSQL}).
 	 *
 	 * @remarks
-	 * Atomicity is provided by whichever native transaction is active: when
-	 * this driver's own `transaction()` callback is active (the
-	 * core's versioned reconcile / migrate path joins migrate + stamp under
-	 * one native `BEGIN`), the plan's DDL runs directly inside that enclosing
-	 * transaction — a mid-plan failure rejects the callback and the driver
-	 * rolls it back. node:sqlite (and SQLite
-	 * generally) rejects a nested `BEGIN`, so this driver must never open a
+	 * Atomicity is provided by whichever native transaction is active: when this
+	 * driver's own `transaction()` callback is active (the core's versioned
+	 * reconcile / migrate path joins migrate + stamp under one native `BEGIN`),
+	 * the plan's DDL runs directly inside that enclosing transaction — a mid-plan
+	 * failure rejects the callback and the driver rolls it back. node:sqlite (and
+	 * SQLite generally) rejects a nested `BEGIN`, so this driver must never open a
 	 * second native transaction while one is already open. Otherwise (no
 	 * enclosing transaction), `migrate` wraps the plan in its own native
 	 * `database.transaction` — atomic on its own: a mid-plan failure rolls
 	 * back every DDL statement already applied by the plan. A scoped migration
 	 * uses one fixed internal savepoint literal because the published SQLite
-	 * wrapper intentionally exposes raw `exec` but no savepoint manager. That
+	 * wrapper intentionally exposes raw `execute` but no savepoint manager. That
 	 * savepoint contains a caught inner migration so the outer callback
 	 * transaction remains active and may continue safely. A step referencing a
 	 * table not in this driver's declared schema (and that is not itself a
@@ -520,7 +517,7 @@ export class SQLiteDriver implements DriverInterface {
 				const current = this.#require()
 				current.transaction(() => {
 					for (const [name, replacement] of replacements) {
-						current.exec('DELETE FROM ' + quoteIdentifier(name))
+						current.execute('DELETE FROM ' + quoteIdentifier(name))
 						const statement = current.prepare(
 							'INSERT OR REPLACE INTO ' +
 								quoteIdentifier(name) +
@@ -709,7 +706,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	#ensureMetadataTable(database: SQLiteDatabaseInterface): void {
-		database.exec(
+		database.execute(
 			'CREATE TABLE IF NOT EXISTS ' +
 				quoteIdentifier(METADATA_TABLE) +
 				' ("id" INTEGER, "version" INTEGER, "schema" TEXT, PRIMARY KEY ("id"))',
@@ -1008,18 +1005,18 @@ export class SQLiteDriver implements DriverInterface {
 			})
 		}
 		this.#guard(() => {
-			database.exec('SAVEPOINT "_orkestrel_migration"')
+			database.execute('SAVEPOINT "_orkestrel_migration"')
 			try {
 				this.#applyPlan(database, owned)
 				if (owned.metadata !== undefined) {
 					this.#writeMetadata(database, owned.metadata)
 				}
-				database.exec('RELEASE SAVEPOINT "_orkestrel_migration"')
+				database.execute('RELEASE SAVEPOINT "_orkestrel_migration"')
 			} catch (error) {
 				try {
-					database.exec('ROLLBACK TO SAVEPOINT "_orkestrel_migration"')
+					database.execute('ROLLBACK TO SAVEPOINT "_orkestrel_migration"')
 				} finally {
-					database.exec('RELEASE SAVEPOINT "_orkestrel_migration"')
+					database.execute('RELEASE SAVEPOINT "_orkestrel_migration"')
 				}
 				throw error
 			}
@@ -1138,7 +1135,7 @@ export class SQLiteDriver implements DriverInterface {
 	// (native callback active) and self-wrapped (own `database.transaction`) paths.
 	#applyPlan(database: SQLiteDatabaseInterface, input: MigrationInput): void {
 		for (const step of input.plan.steps) {
-			for (const sql of stepToSQL(step)) database.exec(sql)
+			for (const sql of stepToSQL(step)) database.execute(sql)
 		}
 	}
 }

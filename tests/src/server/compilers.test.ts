@@ -4,10 +4,9 @@ import {
 	compileColumnSQL,
 	compileFieldSQL,
 	compileQuerySQL,
-	compileOrder,
-	compilePage,
-	compileWhere,
-	escapeLike,
+	compileOrderSQL,
+	compilePageSQL,
+	compileWhereSQL,
 	compileConditionSQL,
 	schemaToIndexes,
 	schemaToTable,
@@ -482,22 +481,6 @@ describe('compileQuerySQL — order and paging', () => {
 	})
 })
 
-describe('escapeLike', () => {
-	it('escapes %, _, and the escape char (\\) each with a leading backslash', () => {
-		// `\` first (so the escapes it introduces are not re-escaped), then % and _.
-		expect(escapeLike('50%_off')).toBe('50\\%\\_off')
-	})
-
-	it('escapes a leading backslash before the wildcards it precedes', () => {
-		// `a\%` → the literal `\` doubles to `\\` and the `%` escapes to `\%`.
-		expect(escapeLike('a\\%')).toBe('a\\\\\\%')
-	})
-
-	it('returns plain text with no LIKE metacharacters unchanged', () => {
-		expect(escapeLike('plain')).toBe('plain')
-	})
-})
-
 describe('compileConditionSQL', () => {
 	it('builds a flat equals compileConditionSQL encoding the operand by its declared type', () => {
 		// A flat `boolean` column encodes its operand to 1 / 0 via the declared type.
@@ -551,13 +534,13 @@ describe('compileConditionSQL', () => {
 	})
 })
 
-describe('compileWhere', () => {
+describe('compileWhereSQL', () => {
 	it('returns an empty clause and no parameters for zero conditions', () => {
-		expect(compileWhere([], SCHEMA)).toEqual({ sql: '', parameters: [] })
+		expect(compileWhereSQL([], SCHEMA)).toEqual({ sql: '', parameters: [] })
 	})
 
 	it('builds a single-condition WHERE with no wrapping parens', () => {
-		expect(compileWhere([cond('age', 'from', [18])], SCHEMA)).toEqual({
+		expect(compileWhereSQL([cond('age', 'from', [18])], SCHEMA)).toEqual({
 			sql: 'WHERE "age" >= ?',
 			parameters: [18],
 		})
@@ -567,7 +550,7 @@ describe('compileWhere', () => {
 		// Each step wraps the running clause — matching the engine's matchesQuery
 		// fold, NOT SQL's AND-over-OR precedence; the first connector is dropped.
 		expect(
-			compileWhere(
+			compileWhereSQL(
 				[
 					cond('age', 'from', [18], 'or'),
 					cond('name', 'equals', ['A'], 'or'),
@@ -582,14 +565,14 @@ describe('compileWhere', () => {
 	})
 })
 
-describe('compileOrder', () => {
+describe('compileOrderSQL', () => {
 	it('returns ORDER BY the primary key alone for an undefined order', () => {
-		expect(compileOrder(undefined, SCHEMA)).toBe('ORDER BY "id"')
+		expect(compileOrderSQL(undefined, SCHEMA)).toBe('ORDER BY "id"')
 	})
 
 	it('appends the primary key (ASC) as the tie-breaker after explicit non-primary terms', () => {
 		expect(
-			compileOrder(
+			compileOrderSQL(
 				[
 					{ column: 'age', direction: 'descending' },
 					{ column: 'name', direction: 'ascending' },
@@ -600,41 +583,41 @@ describe('compileOrder', () => {
 	})
 
 	it('does not double-append when an explicit term is already the primary', () => {
-		expect(compileOrder([{ column: 'id', direction: 'descending' }], SCHEMA)).toBe(
+		expect(compileOrderSQL([{ column: 'id', direction: 'descending' }], SCHEMA)).toBe(
 			'ORDER BY "id" DESC',
 		)
 	})
 
 	it('compiles a nested FieldPath order term to json_extract', () => {
-		expect(compileOrder([{ column: ['meta', 'score'], direction: 'ascending' }], SCHEMA)).toBe(
+		expect(compileOrderSQL([{ column: ['meta', 'score'], direction: 'ascending' }], SCHEMA)).toBe(
 			'ORDER BY json_extract("meta", \'$.score\') ASC, "id"',
 		)
 	})
 })
 
-describe('compilePage', () => {
+describe('compilePageSQL', () => {
 	it('compiles LIMIT then OFFSET when both are present', () => {
-		expect(compilePage(10, 5)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [10, 5] })
+		expect(compilePageSQL(10, 5)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [10, 5] })
 	})
 
 	it('compiles LIMIT alone', () => {
-		expect(compilePage(10, undefined)).toEqual({ sql: 'LIMIT ?', parameters: [10] })
+		expect(compilePageSQL(10, undefined)).toEqual({ sql: 'LIMIT ?', parameters: [10] })
 	})
 
 	it('compiles an offset without a limit to LIMIT -1 OFFSET ?', () => {
 		// SQLite needs a LIMIT for OFFSET to apply; -1 means "no limit".
-		expect(compilePage(undefined, 5)).toEqual({ sql: 'LIMIT -1 OFFSET ?', parameters: [5] })
+		expect(compilePageSQL(undefined, 5)).toEqual({ sql: 'LIMIT -1 OFFSET ?', parameters: [5] })
 	})
 
 	it('returns an empty clause when neither limit nor offset is set', () => {
-		expect(compilePage(undefined, undefined)).toEqual({ sql: '', parameters: [] })
+		expect(compilePageSQL(undefined, undefined)).toEqual({ sql: '', parameters: [] })
 	})
 
 	it('rejects invalid direct page values and accepts zero', () => {
-		expect(() => compilePage(-1, undefined)).toThrow('Query limit must be a nonnegative integer')
-		expect(() => compilePage(undefined, Number.NaN)).toThrow(
+		expect(() => compilePageSQL(-1, undefined)).toThrow('Query limit must be a nonnegative integer')
+		expect(() => compilePageSQL(undefined, Number.NaN)).toThrow(
 			'Query offset must be a nonnegative integer',
 		)
-		expect(compilePage(0, 0)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [0, 0] })
+		expect(compilePageSQL(0, 0)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [0, 0] })
 	})
 })

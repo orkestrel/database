@@ -3,14 +3,7 @@ import type { IndexedDBError } from '@orkestrel/indexeddb'
 import type { StoreDefinition } from '@orkestrel/indexeddb'
 import type { QueryPlan } from './types.js'
 import { compareValues, DatabaseError, findColumn, isKey } from '@src/core'
-import {
-	rangeAboveKey,
-	rangeBelowKey,
-	rangeBetweenKeys,
-	rangeExactKey,
-	rangeFromKey,
-	rangeToKey,
-} from '@orkestrel/indexeddb'
+import { rangeAboveKey, rangeBelowKey, rangeFromKey, rangeToKey } from '@orkestrel/indexeddb'
 import { INDEXABLE_STORAGE } from './constants.js'
 
 // The IndexedDB driver's pushdown planner. A pure function over the portable
@@ -55,7 +48,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
 	const second = condition.values[1]
 	switch (condition.operator) {
 		case 'equals':
-			return isKey(first) ? rangeExactKey(first) : undefined
+			return isKey(first) ? IDBKeyRange.only(first) : undefined
 		case 'above':
 			return isKey(first) ? rangeAboveKey(first) : undefined
 		case 'below':
@@ -71,7 +64,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
 			// the correct, empty result over `compareValues(value, first) >= 0 &&
 			// compareValues(value, second) <= 0`, which no row can satisfy).
 			return isKey(first) && isKey(second) && compareValues(first, second) <= 0
-				? rangeBetweenKeys(first, second)
+				? IDBKeyRange.bound(first, second)
 				: undefined
 		case 'not':
 		case 'like':
@@ -170,7 +163,9 @@ export function selectPlan(
 		// An array column is a nested FieldPath into a json value — not a key.
 		if (typeof condition.column !== 'string') continue
 		const column = findColumn(condition.column, schema)
-		if (column === undefined || !INDEXABLE_STORAGE.has(column.storage)) continue
+		if (column === undefined || !INDEXABLE_STORAGE.some((storage) => storage === column.storage)) {
+			continue
+		}
 		const range = conditionToRange(condition)
 		if (range === undefined) continue
 		if (condition.column === schema.primary) return { range }

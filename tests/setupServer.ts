@@ -448,8 +448,8 @@ export async function createForeignKeyFixture(
 	const database = createSQLiteDatabase({ path: storage.path })
 	try {
 		database.connect()
-		database.exec('CREATE TABLE "parents" ("id" TEXT NOT NULL, PRIMARY KEY ("id"))')
-		database.exec(
+		database.execute('CREATE TABLE "parents" ("id" TEXT NOT NULL, PRIMARY KEY ("id"))')
+		database.execute(
 			'CREATE TABLE "children" ("id" TEXT NOT NULL, "parent" TEXT NOT NULL, PRIMARY KEY ("id"), FOREIGN KEY ("parent") REFERENCES "parents" ("id"))',
 		)
 	} finally {

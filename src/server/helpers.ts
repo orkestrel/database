@@ -91,8 +91,8 @@ export function matchesAbsentPath(error: unknown): boolean {
 // contract-validated write can store ("declared-type trust"). These guards
 // decide, per condition/order/input, whether that proof holds; when it does
 // not, the driver falls back to a full scan refined through the same core
-// engine that `MemoryDriver` and `JSONDriver` already answer every query with —
-// exact → native, otherwise → refine, never a silent semantics drift.
+// engine that answers every query for `MemoryDriver` and `JSONDriver` — exact →
+// native, otherwise → refine, never a silent semantics drift.
 
 /**
  * Reports whether a value's runtime type matches a column's declared exact type

@@ -108,14 +108,13 @@ None of these import a SQLite package; they speak strings and values only.
 
 | API                       | Kind     | Summary                                                                                                                                  |
 | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `escapeLike`              | function | Escape `\` / `%` / `_` so an operand matches literally under a caller-assembled `LIKE … ESCAPE '\'` clause; no compile here emits one.   |
 | `findColumnStorage`       | function | The declared `ColumnStorage` of a flat column, read from the schema.                                                                     |
 | `inferValueStorage`       | function | The `ColumnStorage` a nested (`json_extract`) operand encodes as, derived from its runtime value.                                        |
 | `compileJSONTypeSQL`      | function | Compile a nested `FieldPath` to its `json_type(<col>, <path>)` SQL expression — disambiguates a present JSON `null` from an absent path. |
 | `compileConditionSQL`     | function | Compile one `Condition` to its parameterized SQL fragment plus bound values.                                                             |
-| `compileWhere`            | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold.                                       |
-| `compileOrder`            | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                                                      |
-| `compilePage`             | function | Compile the `LIMIT` / `OFFSET` clause.                                                                                                   |
+| `compileWhereSQL`         | function | Fold conditions into one `WHERE …` clause, parenthesized left-to-right to match the engine's fold.                                       |
+| `compileOrderSQL`         | function | Compile the `ORDER BY …` clause, always ending with the primary key as tie-breaker.                                                      |
+| `compilePageSQL`          | function | Compile the `LIMIT` / `OFFSET` clause.                                                                                                   |
 | `compileQuerySQL`         | function | Compile a `QueryInput` into the full SQL clause (`WHERE` + `ORDER BY` + `LIMIT`) plus bound parameters.                                  |
 | `quoteIdentifier`         | function | Quote a SQL identifier (table / column name), doubling an embedded quote.                                                                |
 | `compileFieldSQL`         | function | Compile a `FieldPath` to the SQL expression that reads it (a column, or a `json_extract` path).                                          |
@@ -142,7 +141,7 @@ lossy.
 | -------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `selectPlan`               | function  | Plan an IndexedDB read for a `QueryInput` — pick the index (or primary store) and `IDBKeyRange` to narrow by, falling back to a full scan.                    |
 | `conditionToRange`         | function  | The `IDBKeyRange` one `Condition` maps to when its operator is an exact key comparison over a scalar operand, else `undefined`.                               |
-| `INDEXABLE_STORAGE`        | const     | The `ColumnStorage`s that are valid, orderable IndexedDB keys (`text` / `integer` / `real`).                                                                  |
+| `INDEXABLE_STORAGE`        | const     | The declared `ColumnStorage`s that are valid, orderable IndexedDB keys (`text` / `integer` / `real`), as a frozen array.                                      |
 | `METADATA_STORE`           | const     | The reserved out-of-line store name (`__metadata__`) `IndexedDBDriver` stamps its `DriverMetadata` into — a user table named `__metadata__` collides with it. |
 | `QueryPlan`                | interface | `{ index?, range? }` — the optional index and `IDBKeyRange`; an empty object selects a full store scan.                                                       |
 | `mapIndexedDBError`        | function  | Map a backend `IndexedDBError` fault to its `DatabaseError` equivalent — no raw wrapper error crosses `IndexedDBDriver`'s `DriverInterface` surface.          |
@@ -202,11 +201,11 @@ transform. Versioning drivers persist reconciliation metadata through the paired
 
 ### Conformance
 
-| API              | Kind     | Behavior                                                                                                                                                                    |
-| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conformDriver`  | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
-| `driverFindings` | function | Lazy `AsyncIterable` over the same battery, one phase per yield (17 phases) — a fresh factory-minted driver per phase; an unexpected phase crash is captured as a finding.  |
-| `auditDriver`    | function | Drain `driverFindings` to completion and collect every violation — `[]` means the driver is fully conformant.                                                               |
+| API             | Kind     | Behavior                                                                                                                                                                    |
+| --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conformDriver` | function | Run the framework-agnostic driver-conformance battery against a fresh `DriverInterface` per phase — throws a `CONFORMANCE` `DatabaseError` on the first violated invariant. |
+| `scanDriver`    | function | Lazy `AsyncIterable` over the same battery, one phase per yield — a fresh factory-minted driver per phase; an unexpected phase crash is captured as a finding.              |
+| `auditDriver`   | function | Drain `scanDriver` to completion and collect every violation — `[]` means the driver is fully conformant.                                                                   |
 
 ### Helpers & guards
 
@@ -215,7 +214,6 @@ Pure helpers behind the query engine's pattern matching.
 | API                      | Kind     | Behavior                                                                                                                                                                                                                   |
 | ------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloneDriverMetadata`    | function | Own and validate unknown metadata as a deeply frozen `DriverMetadata`; malformed or hostile input throws `VALIDATION` at `context.path === 'metadata'`, never a raw Contract or caller error.                              |
-| `matchesFuzzy`           | function | Match a case-folded query as an ordered, possibly non-contiguous subsequence of a candidate; an empty query matches every candidate.                                                                                       |
 | `matchesWildcardPattern` | function | Match a value against a wildcard pattern in LINEAR time (greedy two-pointer, no backtracking) — the ReDoS-safe engine; injected `any` run + `single` char + case-fold flag; throws `VALIDATION` over `MAX_PATTERN_LENGTH`. |
 | `matchesLikePattern`     | function | Match a value against a SQL `LIKE` pattern via `matchesWildcardPattern` (case-INSENSITIVE; `%` → any run, `_` → any char).                                                                                                 |
 | `matchesGlobPattern`     | function | Match a value against a `GLOB` pattern via `matchesWildcardPattern` (case-SENSITIVE; `*` → any run, `?` → any char).                                                                                                       |
@@ -258,7 +256,7 @@ Pure helpers behind the query engine's pattern matching.
 | `DatabaseStatus`           | type      | `'idle' \| 'open' \| 'closed'`.                                                                                                                                                                                                                                                                                                  |
 | `AdmissionInterface`       | interface | `{ accepting, track }` — the admission boundary a scoped operation enters; the root context and a transaction scope both expose it.                                                                                                                                                                                              |
 | `DatabaseErrorCode`        | type      | `'CLOSED' \| 'NOT_FOUND' \| 'CONFLICT' \| 'VALIDATION' \| 'ABORTED' \| 'MIGRATION' \| 'CONFORMANCE' \| 'DRIVER'`.                                                                                                                                                                                                                |
-| `ConformanceFinding`       | interface | `{ check, message, context }` — one violated invariant yielded by `driverFindings` / collected by `auditDriver`.                                                                                                                                                                                                                 |
+| `ConformanceFinding`       | interface | `{ check, message, context }` — one violated invariant yielded by `scanDriver` / collected by `auditDriver`.                                                                                                                                                                                                                     |
 | `DatabaseEventMap`         | type      | The database's push observation surface (§13) — `open` · `close` · `transaction` · `commit` · `rollback(error)` · `migrate(migration)`.                                                                                                                                                                                          |
 | `TableEventMap`            | type      | A table's push observation surface (§13) — `write(key)` · `remove(key)` · `clear` (key only, no value).                                                                                                                                                                                                                          |
 | `ColumnMap`                | type      | `Readonly<Record<string, ContractShape>>` — one table's `column → shape` map (an `objectShape`'s properties).                                                                                                                                                                                                                    |
@@ -320,13 +318,28 @@ rolls back when it rejects, and invalidates the capability afterward.
 
 The complete backend extends `StorageInterface` with lifecycle, the
 snapshot floor, and an optional native transaction callback. The inherited
-storage/query/migration/metadata methods are documented above.
+storage/query/migration/metadata methods carry the same contract they carry on
+`StorageInterface`, addressed against the whole backend rather than one
+transaction scope.
 
-| Method     | Returns                        | Behavior                                                                                                                |
-| ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `open`     | `Promise<void>`                | Ready the tables from a derived `TableSchema[]` (a native backend builds tables/indexes; a scan-only one reads `name`). |
-| `close`    | `Promise<void>`                | Release the backend.                                                                                                    |
-| `snapshot` | `Promise<() => Promise<void>>` | Capture state; omitted tables means the whole store, while a list scopes capture/restore to those tables.               |
+| Method      | Returns                                | Behavior                                                                                                                |
+| ----------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `open`      | `Promise<void>`                        | Ready the tables from a derived `TableSchema[]` (a native backend builds tables/indexes; a scan-only one reads `name`). |
+| `close`     | `Promise<void>`                        | Release the backend.                                                                                                    |
+| `snapshot`  | `Promise<() => Promise<void>>`         | Capture state; omitted tables means the whole store, while a list scopes capture/restore to those tables.               |
+| `read`      | `Promise<Row \| undefined>`            | Read one row by key.                                                                                                    |
+| `write`     | `Promise<void>`                        | Write one row at a key.                                                                                                 |
+| `insert`    | `Promise<void>`                        | Atomically insert one row; reject `CONFLICT` if its key exists.                                                         |
+| `delete`    | `Promise<boolean>`                     | Delete one row by key.                                                                                                  |
+| `keys`      | `Promise<readonly Key[]>`              | List a table's keys.                                                                                                    |
+| `scan`      | `AsyncIterable<Row>`                   | Iterate a table's rows in ascending key order.                                                                          |
+| `clear`     | `Promise<void>`                        | Empty a table.                                                                                                          |
+| `records`   | `Promise<readonly Row[]>`              | Optional native filtered read; the core engine answers over `scan` without it.                                          |
+| `aggregate` | `Promise<number \| undefined>`         | Optional native aggregate; the core engine answers over `scan` without it.                                              |
+| `stream`    | `AsyncIterable<Row>`                   | Optional natively filtered lazy iteration.                                                                              |
+| `migrate`   | `Promise<void>`                        | Optionally apply one atomic `MigrationInput`.                                                                           |
+| `metadata`  | `Promise<DriverMetadata \| undefined>` | Optional read of the persisted `DriverMetadata`, as a deeply frozen copy.                                               |
+| `stamp`     | `Promise<void>`                        | Optional write of the persisted `DriverMetadata`, snapshot at entry.                                                    |
 
 Its optional generic `transaction?<R>(scope)` callback is documented in
 [Native transactions](#native-transactions); the installed guide parser does
@@ -546,7 +559,7 @@ These invariants hold across the core database source tree ↔ this guide:
    SQLite transaction (`stepToSQL` projects each step's DDL), while a migration
    invoked inside an existing callback transaction uses one fixed internal
    savepoint SQL literal. The published `@orkestrel/sqlite` wrapper
-   intentionally exposes raw `exec` but no savepoint manager; the savepoint
+   intentionally exposes raw `execute` but no savepoint manager; the savepoint
    contains a caught inner migration so it cannot leak partial DDL and the
    outer transaction remains active for unrelated work.
    `IndexedDBDriver` performs a non-empty plan in one versionchange transaction,
@@ -1728,8 +1741,8 @@ const findings = await auditDriver(() => createMemoryDriver())
 for (const finding of findings) console.log(`${finding.check}: ${finding.message}`)
 
 // The lower-level generator these two build on — one phase per yield, lazy:
-import { driverFindings } from '@orkestrel/database'
-for await (const finding of driverFindings(() => createMemoryDriver())) {
+import { scanDriver } from '@orkestrel/database'
+for await (const finding of scanDriver(() => createMemoryDriver())) {
 	console.log(finding.check, finding.context)
 }
 ```
@@ -1960,7 +1973,6 @@ import {
 	equalsValue,
 	extractKey,
 	filterRows,
-	matchesFuzzy,
 	matchesGlobPattern,
 	matchesLikePattern,
 	matchesCondition,
@@ -1972,7 +1984,6 @@ import {
 } from '@orkestrel/database'
 
 compareValues(1, 2) // -1 — a total order over mixed types
-matchesFuzzy('database', 'dbe') // true — case-folded, ordered, non-contiguous
 matchesWildcardPattern('hello', 'h%o', '%', '_', true) // true — the shared LIKE/GLOB engine
 matchesLikePattern('hello', 'h%o') // true — case-insensitive
 matchesGlobPattern('hello', 'h*o') // true — case-sensitive
@@ -2219,7 +2230,7 @@ corrupting metadata. `open()` creates only `_metadata` first, reads
 `Database` reconciles it with the declaration. A root
 `migrate({ plan, metadata })` uses one native transaction for DDL, row changes, and
 metadata. The same call inside a callback transaction uses a SQLite savepoint:
-the wrapper deliberately provides raw `exec`, not a savepoint manager, so the
+the wrapper deliberately provides raw `execute`, not a savepoint manager, so the
 driver owns one guarded fixed internal SQL literal. If caller code catches its
 failure, the failed inner migration is rolled back to that savepoint while the
 surrounding transaction remains active and may continue safely. Snapshot
@@ -2383,8 +2394,8 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ compiler-resolved public-entry bijection across `src/core`, `src/server`, and `src/browser`, including fail-closed temporary-project coverage for barrel resolution and unsupported exports, plus each interface ↔ implementing-class method bijection.
 - [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — `cloneDriverMetadata` ownership: normalized deeply frozen distinct output, caller-mutation isolation, and `VALIDATION` translation for malformed, cyclic, functional, accessor, and hostile/revoked-proxy inputs without leaking raw Contract or caller errors.
-- [`tests/src/core/validators.test.ts`](../tests/src/core/validators.test.ts) — total boundary guards for keys, columns, tables, driver schemas, migrations, inputs, and metadata, plus the strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero.
-- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `compareValues` total order, `matchesFuzzy` ordered case-folded subsequences and Unicode lowercasing boundaries, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `equalsValue`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and `conformDriver`'s battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
+- [`tests/src/core/validators.test.ts`](../tests/src/core/validators.test.ts) — total boundary guards for keys, columns, tables, driver schemas, migrations, inputs, and metadata.
+- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `validatePage`'s strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero; `findColumn`'s flat-column lookup and its `undefined` miss; `resolvePrimary`'s declared-or-default key and `resolveColumns`'s typed map lookup with its `NOT_FOUND` throw; `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — via `equalsValue`, including `NaN`-equals-`NaN`; the range family via `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and the `scanDriver` / `conformDriver` / `auditDriver` battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
 - [`tests/src/core/drivers/MemoryDriver.test.ts`](../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear + `snapshot` rollback, duplicate-insert `CONFLICT`, non-JSON row isolation via native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
 - [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
 - [`tests/src/core/ScopedIterator.test.ts`](../tests/src/core/ScopedIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, the readiness thunk running before every advance and its failure preempting the source, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
@@ -2397,6 +2408,7 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 - [`tests/src/server/drivers/SQLiteDriver.test.ts`](../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s native surface: deployed-metadata-first open and reconciliation; fail-closed malformed metadata, physical schema disagreement, and persisted-table loss before DDL, including deterministic first-loss evidence, physical non-recreation, external repair, and same-driver retry; root/scoped stamp/migration ownership and distinct deeply frozen copy-out; atomic insert/duplicate `CONFLICT`; point-mutation abort boundaries; strict direct records/aggregate/stream paging; native exact-or-refine query and aggregate paths; repeatable schema-aware snapshot capture/replay plus real dropped-table and exclusive-lock failure containment/recovery; atomic `MigrationInput` schema/rows/metadata at the root; fixed-literal savepoint containment for a caught migration failure while its callback transaction remains active; candidate-schema publication only after commit; callback transaction barriers/invalidation including root continuation cleanup; payload-safe rejection; post-native-rollback rejection replacement; backend-fault mapping; and engine parity.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the SQLite bridge: `quoteIdentifier`, codecs, row extraction, `deriveSQLiteIndexName` exact bytes, and the `matchesConditionExactly` / `matchesOrderExactly` / `matchesQueryExactly` / `matchesAggregateExactly` / `matchesSQLiteAffinity` predicates.
 - [`tests/src/server/compilers.test.ts`](../tests/src/server/compilers.test.ts) — the coherent SQL-emitter cluster: column/field/aggregate compilation, table/index/migration DDL, and the strict-page `QueryInput` → SQL pipeline with exact statements and parameters.
+- [`tests/src/server/inferers.test.ts`](../tests/src/server/inferers.test.ts) — `inferValueStorage`'s nested-operand storage inference: the `ColumnStorage` a `json_extract` operand must encode as, over booleans, integral and fractional numbers, bigints, objects and arrays, strings, `null`, and `undefined`.
 - [`tests/src/server/integration.test.ts`](../tests/src/server/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `SQLiteDriver` (both exact-path and refine-path queries) produce identical rows/counts/aggregates.
 - [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, native narrow-then-refine queries, snapshot capture-replay, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
 - [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the pushdown planner: `conditionToRange` over every comparison operator, `selectPlan` index/primary selection and lossless fallbacks, backend-error mapping, and exact `deriveIndexedDBIndexName` bytes.

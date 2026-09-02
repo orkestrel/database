@@ -384,21 +384,20 @@ export interface StorageInterface {
  *
  * @remarks
  * The REQUIRED surface is deliberately minimal: keyed read / write / atomic
- * insert / delete, an ordered `scan`, a key listing, and a `snapshot` that backs
- * transactions — the irreducible primitive. There is **no** required query,
- * count, or aggregate
- * here: all of that is one query engine in the core (`helpers.ts`) running over
- * `scan`, so a new backend implements a handful of tiny methods rather than
- * re-deriving WHERE compilation. `open` now receives a derived
- * {@link TableSchema}`[]` (columns, types, primary, indexes) so a native backend
- * can build real tables and indexes; a scan-only backend reads only `name`. The
- * optional `records?` / `aggregate?` are native overrides the engine
- * falls back from. The API is async (Promises) because IndexedDB is; synchronous
- * backends resolve immediately. Lookups that may miss return `undefined` /
- * `false` rather than throwing. Metadata has the same ownership
+ * insert / delete, an ordered `scan`, a key listing, and a `snapshot` that
+ * backs transactions — the irreducible primitive. There is **no** required
+ * query, count, or aggregate here: all of that is one query engine in the core
+ * (`helpers.ts`) running over `scan`, so a new backend implements a handful of
+ * tiny methods rather than re-deriving WHERE compilation. `open` receives a
+ * derived {@link TableSchema}`[]` (columns, types, primary, indexes) so a
+ * native backend can build real tables and indexes; a scan-only backend reads
+ * only `name`. The optional `records?` / `aggregate?` are native overrides the
+ * engine falls back from. The API is async (Promises) because IndexedDB is;
+ * synchronous backends resolve immediately. Lookups that may miss return
+ * `undefined` / `false` rather than throwing. Metadata has the same ownership
  * boundary across every implementation: `stamp` and `migrate` snapshot
- * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply frozen
- * snapshot. A durable driver returns `undefined` only when it proves the
+ * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply
+ * frozen snapshot. A durable driver returns `undefined` only when it proves the
  * metadata record or durable store is absent. Existing unreadable or malformed
  * durable state fails `open` / `metadata` closed; it is never treated as fresh,
  * rewritten, or repaired automatically.
@@ -522,9 +521,9 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	 * @remarks
 	 * Omit it to use global `crypto.randomUUID()`. A numeric primary requires a
 	 * custom generator. Explicit primary values never invoke this function. A
-	 * custom generator throw is `VALIDATION`; a host
-	 * `crypto.randomUUID()` failure is `DRIVER`. An invalid returned key is
-	 * `VALIDATION`; neither branch falls back or retries.
+	 * custom generator throw is `VALIDATION`; a host `crypto.randomUUID()` failure
+	 * is `DRIVER`. An invalid returned key is `VALIDATION`; neither branch falls
+	 * back or retries.
 	 */
 	readonly generator?: KeyFunction
 	/**
@@ -534,12 +533,12 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	 * Only meaningful when the driver implements BOTH {@link DriverInterface.metadata}
 	 * and {@link DriverInterface.stamp} (a versioning driver); unset, or a
 	 * non-versioning driver, leaves `open()` unchanged from today's behavior.
-	 * When set and the driver versions, `open()` reconciles against the
-	 * driver's persisted {@link DriverMetadata}:
+	 * When set and the driver versions, `open()` reconciles against the driver's
+	 * persisted {@link DriverMetadata}:
 	 * - **Fresh store** (`metadata()` returns `undefined` after the durable
 	 *   driver proves absence) — no migration is possible (there is nothing
-	 *   deployed to diff against), so `open()` simply `stamp`s
-	 *   `{ version, schema }` for next time.
+	 *   deployed to diff against), so `open()` stamps `{ version, schema }` for
+	 *   next time.
 	 * - **Stored version < `version`** — `planMigration(stored.schema, declared
 	 *   schema)` computes the upgrade plan, applied via the driver's optional
 	 *   `migrate` hook. If `migrate` is absent and the plan is non-empty,
@@ -818,10 +817,9 @@ export interface TableInterface<T = Row> {
  * `condition` appends one portable condition and `order` appends one portable
  * ordering term. `filter` adds a post-fetch JavaScript predicate (applied after
  * the backend read, before paging). The terminals (`collect` / `find` / `count`
- * / `aggregate`) execute against the table; each
- * call mutates and returns the same builder, so a chain reads as one statement.
- * Every `column` is a {@link FieldPath} — a string is one column, an array
- * descends a nested value.
+ * / `aggregate`) execute against the table; each call mutates and returns the
+ * same builder, so a chain reads as one statement. Every `column` is a
+ * {@link FieldPath} — a string is one column, an array descends a nested value.
  */
 export interface QueryInterface<T = Row> {
 	condition(input: Condition): QueryInterface<T>

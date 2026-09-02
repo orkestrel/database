@@ -92,11 +92,12 @@ import { METADATA_STORE } from '../constants.js'
  * @remarks
  * This unit deliberately OMITS `aggregate` / `transaction`. There is no native
  * `aggregate` (IndexedDB has no native SUM/AVG); the engine over the narrowed
- * `records` covers it. `transaction` is impossible here: the wrapper auto-commits
- * an `IDBTransaction` when control yields outside its request chain, so arbitrary
- * callback awaits cannot remain inside one native transaction. Every atomic
- * multi-operation sequence in this driver
- * (`snapshot`'s rollback) instead runs entirely inside ONE `db.write(...)` scope.
+ * `records` covers it. `transaction` is impossible here: the wrapper
+ * auto-commits an `IDBTransaction` when control yields outside its request
+ * chain, so arbitrary callback awaits cannot remain inside one native
+ * transaction. Every atomic multi-operation sequence in this driver
+ * (`snapshot`'s rollback) instead runs entirely inside ONE `db.write(...)`
+ * scope.
  */
 export class IndexedDBDriver implements DriverInterface {
 	readonly #name: string
@@ -721,39 +722,45 @@ export class IndexedDBDriver implements DriverInterface {
 		context: IndexedDBUpgradeContext,
 	): Promise<void> {
 		for (const name of added) {
-			if (name !== METADATA_STORE && context.stores.includes(name)) {
-				context.drop(name)
+			if (name !== METADATA_STORE && context.stores.names.includes(name)) {
+				context.stores.drop(name)
 			}
 		}
 		for (const step of input.plan.steps) {
 			switch (step.operation) {
 				case 'table.add':
-					context.create(step.table.name, schemaToStore(step.table))
+					context.stores.create(step.table.name, schemaToStore(step.table))
 					break
 				case 'table.remove':
-					context.drop(step.table)
+					context.stores.drop(step.table)
 					break
 				case 'index.add': {
 					const name = deriveIndexedDBIndexName(step.index)
 					const [column] = step.index
 					const path = step.index.length === 1 && column !== undefined ? column : [...step.index]
-					context.index(step.table, { name, path })
+					context.indexes.create(step.table, { name, path })
 					break
 				}
 				case 'index.remove':
-					context.deindex(step.table, deriveIndexedDBIndexName(step.index))
+					context.indexes.drop(step.table, deriveIndexedDBIndexName(step.index))
 					break
 				case 'column.remove': {
-					const store = context.store(step.table)
+					const store = context.stores.open(step.table)
 					let cursor = await store.cursor()
 					while (cursor !== null) {
-						const [migrated] = migrateRows([cursor.value], [step])
-						if (migrated === undefined) {
-							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
-								table: step.table,
-							})
+						// A cursor reports `undefined` where the stored value is not a
+						// record. Such a value carries no column to drop, so the step
+						// advances past it rather than rewriting it.
+						const row = cursor.value
+						if (row !== undefined) {
+							const [migrated] = migrateRows([row], [step])
+							if (migrated === undefined) {
+								throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+									table: step.table,
+								})
+							}
+							await cursor.update(migrated)
 						}
-						await cursor.update(migrated)
 						cursor = await cursor.continue()
 					}
 					break
@@ -763,7 +770,7 @@ export class IndexedDBDriver implements DriverInterface {
 			}
 		}
 		if (input.metadata !== undefined) {
-			await context.store(METADATA_STORE).set(
+			await context.stores.open(METADATA_STORE).set(
 				{
 					version: input.metadata.version,
 					schema: input.metadata.schema,

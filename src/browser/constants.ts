@@ -8,9 +8,11 @@ import type { ColumnStorage } from '@src/core'
  * column declared with one of them can back a store or index range read.
  * `boolean` / `json` / `blob` are not valid `IDBValidKey`s and a range over one
  * would silently miss rows, so `selectPlan` never pushes a condition down on
- * them and the core engine answers the read instead.
+ * them and the core engine answers the read instead. A frozen array, matching
+ * `EXACT_COLUMN_STORAGE` in `src/server`: a consumer holding it reads the
+ * membership with `some` and cannot change the driver's pushdown behavior.
  */
-export const INDEXABLE_STORAGE: ReadonlySet<ColumnStorage> = new Set<ColumnStorage>([
+export const INDEXABLE_STORAGE: readonly ColumnStorage[] = Object.freeze([
 	'text',
 	'integer',
 	'real',

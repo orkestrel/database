@@ -213,38 +213,6 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
- * Match a query against a value as a case-insensitive ordered subsequence.
- *
- * @remarks
- * Every query character must appear in order in the value, but the characters
- * do not need to be contiguous. Query characters are literal, including
- * whitespace. Matching applies JavaScript `toLowerCase()` to both inputs
- * without locale-specific folding or Unicode normalization. An empty query
- * matches every value.
- *
- * @param value - The text searched for the query's characters
- * @param query - The characters that must all appear in order
- * @returns Whether the case-folded query is a subsequence of the case-folded value
- *
- * @example
- * ```ts
- * matchesFuzzy('Database', 'dbe') // true
- * matchesFuzzy('Database', 'abd') // false
- * ```
- */
-export function matchesFuzzy(value: string, query: string): boolean {
-	const folded = value.toLowerCase()
-	const wanted = query.toLowerCase()
-	let cursor = 0
-	for (const char of wanted) {
-		const found = folded.indexOf(char, cursor)
-		if (found === -1) return false
-		cursor = found + 1
-	}
-	return true
-}
-
-/**
  * Match a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
@@ -808,13 +776,12 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  *
  * A column present in BOTH schemas under the same name but with a different
  * `storage`, `optional`, or `nullable` value throws a `MIGRATION`
- * {@link DatabaseError} naming the
- * table, the column, and the from→to difference — a name-only diff would
- * otherwise silently produce NO step for the drift, and versioned
- * reconciliation would stamp over it. There is no automatic in-place
- * type-change step: the manual path is to add a new column, copy/convert the
- * data at the application layer, then remove the old column — two separate
- * plans, never a single implicit "alter" step.
+ * {@link DatabaseError} naming the table, the column, and the from→to
+ * difference — a name-only diff would otherwise silently produce NO step for
+ * the drift, and versioned reconciliation would stamp over it. There is no
+ * automatic in-place type-change step: the manual path is to add a new column,
+ * copy/convert the data at the application layer, then remove the old column —
+ * two separate plans, never a single implicit "alter" step.
  *
  * @param deployed - The table schemas currently applied
  * @param declared - The table schemas the caller wants applied
@@ -1133,7 +1100,7 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 // === Conformance
 
 /**
- * Run the driver-conformance battery against a fresh {@link DriverInterface}
+ * Walks the driver-conformance battery against a fresh {@link DriverInterface}
  * per phase, yielding one {@link ConformanceFinding} per violated invariant —
  * the shared invariant suite every backend (in-memory, SQLite, IndexedDB)
  * must uphold to be a drop-in {@link DriverInterface}.
@@ -1144,26 +1111,26 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * driver's own README. Opens a fixed two-table schema (`users` keyed by the
  * default `id`, `posts` keyed by a non-id `slug`) and, calling `factory()`
  * fresh for each phase so failures stay isolated, verifies: `open`/`close`;
- * `read` of a missing key returns `undefined`; `write`/`read` round-trip with
- * DEEP copy-in/copy-out isolation (mutating the caller's row — including a
- * NESTED field — after `write`, or a row `read` returns, never perturbs
- * stored state) and upsert-overwrite; simultaneous same-key `insert` calls
- * produce exactly one commit and one `CONFLICT`; pre-aborted `write`,
- * `insert`, and `delete` calls leave storage unchanged; `delete` returns
- * `true` then `false`;
- * `keys`/`scan` yield in ascending key order; `clear` empties only its target
- * table; `snapshot`'s rollback thunk restores pre-snapshot state, including a
- * NESTED field mutated in place on a read-back row between capture and
- * restore; a scoped `snapshot(['users'])` rolls back only the named table,
- * leaving a concurrent mutation to another table intact; a
- * non-`id` primary key (`posts.slug`) round-trips; a nested-object row
- * round-trips structurally (via {@link equalsValue}). The optional surface is
- * presence-gated: when `migrate` exists, a `column.remove` plan strips the
- * column from stored rows and a plan referencing an unknown table throws
- * `DatabaseError` `MIGRATION`; when `stream` exists, it yields only
- * condition-matching rows and honors `offset`/`limit`; when `transaction`
- * exists, `commit` persists and `rollback` restores; when both `metadata` and
- * `stamp` exist, a fresh store's `metadata()` is `undefined`, and after
+ * `read` of a missing key returns `undefined`; `write`/`read` round-trip
+ * with DEEP copy-in/copy-out isolation (mutating the caller's row —
+ * including a NESTED field — after `write`, or a row `read` returns, never
+ * perturbs stored state) and upsert-overwrite; simultaneous same-key
+ * `insert` calls produce exactly one commit and one `CONFLICT`; pre-aborted
+ * `write`, `insert`, and `delete` calls leave storage unchanged; `delete`
+ * returns `true` then `false`; `keys`/`scan` yield in ascending key order;
+ * `clear` empties only its target table; `snapshot`'s rollback thunk
+ * restores pre-snapshot state, including a NESTED field mutated in place on
+ * a read-back row between capture and restore; a scoped
+ * `snapshot(['users'])` rolls back only the named table, leaving a
+ * concurrent mutation to another table intact; a non-`id` primary key
+ * (`posts.slug`) round-trips; a nested-object row round-trips structurally
+ * (via {@link equalsValue}). The optional surface is presence-gated: when
+ * `migrate` exists, a `column.remove` plan strips the column from stored
+ * rows and a plan referencing an unknown table throws `DatabaseError`
+ * `MIGRATION`; when `stream` exists, it yields only condition-matching rows
+ * and honors `offset`/`limit`; when `transaction` exists, `commit` persists
+ * and `rollback` restores; when both `metadata` and `stamp` exist, a fresh
+ * store's `metadata()` is `undefined`, and after
  * `stamp({ version, schema })`, `metadata()` returns the exact stamped value.
  *
  * Each phase runs within a `try`/`catch`: an EXPECTED mismatch yields a
@@ -1182,14 +1149,14 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  *
  * @example
  * ```ts
- * import { createMemoryDriver, driverFindings } from '@orkestrel/database'
+ * import { createMemoryDriver, scanDriver } from '@orkestrel/database'
  *
- * for await (const finding of driverFindings(() => createMemoryDriver())) {
+ * for await (const finding of scanDriver(() => createMemoryDriver())) {
  * 	console.log(finding.check, finding.message)
  * }
  * ```
  */
-export async function* driverFindings(
+export async function* scanDriver(
 	factory: () => DriverInterface,
 ): AsyncIterable<ConformanceFinding> {
 	// a. open with the shared two-table schema, then close cleanly.
@@ -1860,12 +1827,12 @@ export async function* driverFindings(
 }
 
 /**
- * Run the driver-conformance battery, throwing on the first violated
+ * Runs the driver-conformance battery, throwing on the first violated
  * invariant — the fail-fast entry point most callers (test setup, CI smoke
  * checks) want.
  *
  * @remarks
- * A thin driver over {@link driverFindings}: because that generator is
+ * A thin driver over {@link scanDriver}: because that generator is
  * lazy, consuming only its first yielded value means every LATER phase
  * never runs — true fail-fast, not merely "report only the first". The
  * thrown error is byte-compatible with the historical shape: a
@@ -1884,7 +1851,7 @@ export async function* driverFindings(
  * ```
  */
 export async function conformDriver(factory: () => DriverInterface): Promise<void> {
-	for await (const finding of driverFindings(factory)) {
+	for await (const finding of scanDriver(factory)) {
 		throw new DatabaseError('CONFORMANCE', finding.message, {
 			check: finding.check,
 			...finding.context,
@@ -1893,12 +1860,12 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 }
 
 /**
- * Run the FULL driver-conformance battery and collect every violation — the
+ * Runs the FULL driver-conformance battery and collects every violation — the
  * audit entry point for a driver author who wants a complete report rather
  * than a single fail-fast throw.
  *
  * @remarks
- * Drains {@link driverFindings} to completion: every phase runs regardless
+ * Drains {@link scanDriver} to completion: every phase runs regardless
  * of earlier violations, so a driver breaking two independent invariants
  * reports both. An empty array means the driver is fully conformant.
  *
@@ -1917,6 +1884,6 @@ export async function auditDriver(
 	factory: () => DriverInterface,
 ): Promise<readonly ConformanceFinding[]> {
 	const findings: ConformanceFinding[] = []
-	for await (const finding of driverFindings(factory)) findings.push(finding)
+	for await (const finding of scanDriver(factory)) findings.push(finding)
 	return findings
 }

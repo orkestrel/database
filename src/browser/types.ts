@@ -1,7 +1,7 @@
 // The IndexedDB driver's own module types. Types are the source of truth:
 // implementation and tests conform to them. The shared database vocabulary
-// (`QueryInput`, `TableSchema`, `Row`,
-// …) lives in `@orkestrel/database`; only this driver's pushdown-planning shape is local.
+// (`QueryInput`, `TableSchema`, `Row`, …) lives in `@orkestrel/database`; only
+// this driver's pushdown-planning shape is local.
 
 /**
  * A pushdown plan — an optional index and optional `IDBKeyRange` used to narrow

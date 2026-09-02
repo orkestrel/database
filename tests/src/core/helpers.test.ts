@@ -9,10 +9,9 @@ import {
 	conformDriver,
 	createMemoryDriver,
 	equalsValue,
-	driverFindings,
+	scanDriver,
 	extractKey,
 	filterRows,
-	matchesFuzzy,
 	matchesGlobPattern,
 	isDatabaseError,
 	isDriverMetadata,
@@ -227,50 +226,6 @@ describe('matchesCondition', () => {
 	it('keeps scalar equality behavior unchanged (cross-type equals still false)', () => {
 		expect(matchesCondition(row, buildCondition('age', 'equals', ['30']))).toBe(false)
 		expect(matchesCondition(row, buildCondition('name', 'equals', ['Alice']))).toBe(true)
-	})
-})
-
-describe('matchesFuzzy', () => {
-	it('matches query characters in order, including a non-contiguous subsequence', () => {
-		expect(matchesFuzzy('database', 'data')).toBe(true)
-		expect(matchesFuzzy('database', 'dbe')).toBe(true)
-		expect(matchesFuzzy('database', 'abd')).toBe(false)
-		expect(matchesFuzzy('database', 'dbz')).toBe(false)
-	})
-
-	it('folds case on both the candidate and query', () => {
-		expect(matchesFuzzy('Ada Lovelace', 'aL')).toBe(true)
-		expect(matchesFuzzy('OpenAI Supervisor', 'OaSv')).toBe(true)
-	})
-
-	it('matches an empty query against every candidate', () => {
-		expect(matchesFuzzy('database', '')).toBe(true)
-		expect(matchesFuzzy('', '')).toBe(true)
-	})
-
-	it('does not match a non-empty query against an empty candidate', () => {
-		expect(matchesFuzzy('', 'a')).toBe(false)
-	})
-
-	it('requires repeated characters and preserves query order', () => {
-		expect(matchesFuzzy('balloon', 'lloo')).toBe(true)
-		expect(matchesFuzzy('balloon', 'llll')).toBe(false)
-		expect(matchesFuzzy('balloon', 'nob')).toBe(false)
-	})
-
-	it('treats pattern metacharacters as literal query characters', () => {
-		expect(matchesFuzzy('a.*[b]', '.*[')).toBe(true)
-		expect(matchesFuzzy('a.*[b]', '[*.')).toBe(false)
-		expect(matchesFuzzy('alpha beta', 'a b')).toBe(true)
-		expect(matchesFuzzy('alphabeta', 'a b')).toBe(false)
-	})
-
-	it('uses JavaScript Unicode lowercasing without expansion or normalization', () => {
-		expect(matchesFuzzy('STRAẞE', 'straße')).toBe(true)
-		expect(matchesFuzzy('Straße', 'strasse')).toBe(false)
-		expect(matchesFuzzy('İstanbul', 'i\u0307s')).toBe(true)
-		expect(matchesFuzzy('Éclair', 'e\u0301')).toBe(false)
-		expect(matchesFuzzy('A😀B', '😀b')).toBe(true)
 	})
 })
 
@@ -1296,16 +1251,16 @@ function createCrashingDriver(): DriverInterface {
 	}
 }
 
-describe('driverFindings', () => {
+describe('scanDriver', () => {
 	it('yields no findings for a conformant driver (the reference memory driver)', async () => {
 		const findings: unknown[] = []
-		for await (const finding of driverFindings(() => createMemoryDriver())) findings.push(finding)
+		for await (const finding of scanDriver(() => createMemoryDriver())) findings.push(finding)
 		expect(findings).toEqual([])
 	})
 
 	it('yields lazily — breaking after the first finding never throws and never drains the rest', async () => {
 		const collected: string[] = []
-		for await (const finding of driverFindings(() => createDoublyBrokenDriver())) {
+		for await (const finding of scanDriver(() => createDoublyBrokenDriver())) {
 			collected.push(finding.check)
 			break
 		}
@@ -1314,7 +1269,7 @@ describe('driverFindings', () => {
 
 	it('yields a finding (not an escaped throw) when a driver method throws unexpectedly', async () => {
 		const findings: Array<{ check: string; message: string }> = []
-		for await (const finding of driverFindings(() => createCrashingDriver())) {
+		for await (const finding of scanDriver(() => createCrashingDriver())) {
 			findings.push({ check: finding.check, message: finding.message })
 		}
 		expect(findings.some((finding) => finding.message === 'scan exploded')).toBe(true)
@@ -1322,29 +1277,27 @@ describe('driverFindings', () => {
 
 	it('runs the metadata/stamp phase for a driver that implements both hooks and finds a mismatched read', async () => {
 		const findings: string[] = []
-		for await (const finding of driverFindings(() => createMismatchedMetadataDriver())) {
+		for await (const finding of scanDriver(() => createMismatchedMetadataDriver())) {
 			findings.push(finding.check)
 		}
 		expect(findings).toContain('metadata-fresh')
 
 		// And the reference MemoryDriver — which implements metadata/stamp — passes cleanly.
 		const clean: string[] = []
-		for await (const finding of driverFindings(() => createMemoryDriver()))
-			clean.push(finding.check)
+		for await (const finding of scanDriver(() => createMemoryDriver())) clean.push(finding.check)
 		expect(clean.some((check) => check.startsWith('metadata'))).toBe(false)
 	})
 
 	it('runs the scoped-snapshot phase and finds a violation when snapshot rolls back the whole store instead of only the named table', async () => {
 		const findings: string[] = []
-		for await (const finding of driverFindings(() => createWholeSnapshotDriver())) {
+		for await (const finding of scanDriver(() => createWholeSnapshotDriver())) {
 			findings.push(finding.check)
 		}
 		expect(findings).toContain('snapshot-scoped-posts')
 
 		// And the reference MemoryDriver honors the scope and passes cleanly.
 		const clean: string[] = []
-		for await (const finding of driverFindings(() => createMemoryDriver()))
-			clean.push(finding.check)
+		for await (const finding of scanDriver(() => createMemoryDriver())) clean.push(finding.check)
 		expect(clean.some((check) => check.startsWith('snapshot-scoped'))).toBe(false)
 	})
 })
@@ -1362,7 +1315,7 @@ describe('auditDriver', () => {
 	})
 })
 
-describe('conformDriver (fail-fast over driverFindings)', () => {
+describe('conformDriver (fail-fast over scanDriver)', () => {
 	it('throws only the FIRST violation of a driver breaking two independent invariants', async () => {
 		const error = await conformDriver(() => createDoublyBrokenDriver()).catch(
 			(caught: unknown) => caught,

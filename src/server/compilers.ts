@@ -109,28 +109,6 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 // type-only and cannot couple the emitted JavaScript to the native package.
 
 /**
- * Escapes `\`, `%`, and `_` (each with a leading `\`) so an operand is matched
- * literally under a `LIKE … ESCAPE '\'` clause.
- *
- * @remarks
- * No compile in this module emits `LIKE … ESCAPE '\'` — `starts` / `ends`
- * compile through `substr`, and `like` binds the caller's pattern verbatim so
- * its wildcards stay live. This escaper is for a consumer assembling its own
- * `LIKE` clause over a literal operand.
- *
- * @param text - The raw operand text
- * @returns The text with LIKE metacharacters escaped
- *
- * @example
- * ```ts
- * escapeLike('50%_off') // '50\\%\\_off'
- * ```
- */
-export function escapeLike(text: string): string {
-	return text.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')
-}
-
-/**
  * Compile one condition to its `<column> <operator>` SQL fragment and the parameters
  * it binds — engine-exact under SQL's three-valued NULL logic.
  *
@@ -324,7 +302,7 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 }
 
 /**
- * Fold the conditions into one WHERE clause, parenthesizing progressively
+ * Folds the conditions into one WHERE clause, parenthesizing progressively
  * left-to-right so the grouping matches the engine's `matchesQuery` fold.
  *
  * @remarks
@@ -340,11 +318,14 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
  *
  * @example
  * ```ts
- * compileWhere([{ column: 'age', operator: 'from', values: [18], connector: 'and' }], schema)
+ * compileWhereSQL([{ column: 'age', operator: 'from', values: [18], connector: 'and' }], schema)
  * // { sql: 'WHERE "age" >= ?', parameters: [18] }
  * ```
  */
-export function compileWhere(conditions: readonly Condition[], schema: TableSchema): CompiledSQL {
+export function compileWhereSQL(
+	conditions: readonly Condition[],
+	schema: TableSchema,
+): CompiledSQL {
 	const [first, ...remaining] = conditions
 	if (first === undefined) return { sql: '', parameters: [] }
 	const head = compileConditionSQL(first, schema)
@@ -360,7 +341,7 @@ export function compileWhere(conditions: readonly Condition[], schema: TableSche
 }
 
 /**
- * Compile the ORDER BY clause from the order terms, always ending with the
+ * Compiles the ORDER BY clause from the order terms, always ending with the
  * primary key as the final determinant.
  *
  * @remarks
@@ -381,11 +362,11 @@ export function compileWhere(conditions: readonly Condition[], schema: TableSche
  *
  * @example
  * ```ts
- * compileOrder([{ column: 'age', direction: 'descending' }], schema)
+ * compileOrderSQL([{ column: 'age', direction: 'descending' }], schema)
  * // 'ORDER BY "age" DESC, "id"'
  * ```
  */
-export function compileOrder(order: readonly Order[] | undefined, schema: TableSchema): string {
+export function compileOrderSQL(order: readonly Order[] | undefined, schema: TableSchema): string {
 	const terms = (order ?? []).map(
 		(term) => compileFieldSQL(term.column) + (term.direction === 'descending' ? ' DESC' : ' ASC'),
 	)
@@ -397,7 +378,7 @@ export function compileOrder(order: readonly Order[] | undefined, schema: TableS
 }
 
 /**
- * Compile the LIMIT / OFFSET clause.
+ * Compiles the LIMIT / OFFSET clause.
  *
  * @remarks
  * An offset without a limit uses `LIMIT -1` (SQLite's "no limit") so OFFSET is
@@ -409,10 +390,10 @@ export function compileOrder(order: readonly Order[] | undefined, schema: TableS
  *
  * @example
  * ```ts
- * compilePage(undefined, 5) // { sql: 'LIMIT -1 OFFSET ?', parameters: [5] }
+ * compilePageSQL(undefined, 5) // { sql: 'LIMIT -1 OFFSET ?', parameters: [5] }
  * ```
  */
-export function compilePage(limit: number | undefined, offset: number | undefined): CompiledSQL {
+export function compilePageSQL(limit: number | undefined, offset: number | undefined): CompiledSQL {
 	validatePage({
 		...(limit === undefined ? {} : { limit }),
 		...(offset === undefined ? {} : { offset }),
@@ -458,9 +439,9 @@ export function compilePage(limit: number | undefined, offset: number | undefine
  */
 export function compileQuerySQL(input: QueryInput | undefined, schema: TableSchema): CompiledSQL {
 	validatePage(input)
-	const where = compileWhere(input?.conditions ?? [], schema)
-	const orderBy = compileOrder(input?.order, schema)
-	const page = compilePage(input?.limit, input?.offset)
+	const where = compileWhereSQL(input?.conditions ?? [], schema)
+	const orderBy = compileOrderSQL(input?.order, schema)
+	const page = compilePageSQL(input?.limit, input?.offset)
 	const sql = [where.sql, orderBy, page.sql].filter((part) => part !== '').join(' ')
 	return {
 		sql,

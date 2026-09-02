@@ -225,8 +225,8 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 			version: version + 1,
 			stores: { __metadata__: {}, users: {}, posts: {}, audit: {} },
 			upgrade: (context) => {
-				context.drop('users')
-				context.drop('posts')
+				context.stores.drop('users')
+				context.stores.drop('posts')
 			},
 		})
 		await damaged.connect()
@@ -1718,7 +1718,7 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			version: version + 1,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 			upgrade: (context) => {
-				context.index('audit', {
+				context.indexes.create('audit', {
 					name: deriveIndexedDBIndexName(['id']),
 					path: 'id',
 				})
@@ -1827,8 +1827,8 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			version: version + 1,
 			stores: { __metadata__: {}, audit: {}, users: { path: 'id' } },
 			upgrade: (context) => {
-				context.drop('users')
-				context.create('users', { path: 'id' })
+				context.stores.drop('users')
+				context.stores.create('users', { path: 'id' })
 			},
 		})
 		await incompatible.connect()
@@ -1845,8 +1845,8 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			version: version + 2,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 			upgrade: (context) => {
-				context.drop('users')
-				context.create('users', {})
+				context.stores.drop('users')
+				context.stores.create('users', {})
 			},
 		})
 		await repaired.connect()

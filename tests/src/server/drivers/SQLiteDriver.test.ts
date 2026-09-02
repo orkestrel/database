@@ -79,7 +79,7 @@ async function rejectPhysicalOpen(
 	const target = createSQLiteDriver({ path: temp.path })
 	try {
 		native.connect()
-		for (const statement of statements) native.exec(statement)
+		for (const statement of statements) native.execute(statement)
 		native.close()
 		const opened = await target.open(schema).catch((caught: unknown) => caught)
 		const after = await target.keys(schema[0]?.name ?? 'missing').catch((caught: unknown) => caught)
@@ -240,7 +240,7 @@ describe('SQLiteDriver — open', () => {
 		const opened = createSQLiteDriver({ path: temp.path })
 		try {
 			native.connect()
-			native.exec(
+			native.execute(
 				'CREATE TABLE "users" (' +
 					'"id" TEXT NOT NULL, "name" TEXT NOT NULL, "age" TEXT NOT NULL, ' +
 					'"active" INTEGER NOT NULL, "meta" TEXT, PRIMARY KEY ("id"))',
@@ -265,7 +265,7 @@ describe('SQLiteDriver — open', () => {
 			await first.open(SCHEMA)
 			await first.close()
 			native.connect()
-			native.exec(
+			native.execute(
 				'CREATE TRIGGER "users_guard" BEFORE INSERT ON "users" ' +
 					"BEGIN SELECT RAISE(ABORT, 'guarded'); END",
 			)
@@ -290,8 +290,8 @@ describe('SQLiteDriver — open', () => {
 			await first.open(SCHEMA)
 			await first.close()
 			native.connect()
-			native.exec('DROP INDEX "idx_5_users_4_name"')
-			native.exec('CREATE INDEX "idx_5_users_4_name" ON "users" ("age")')
+			native.execute('DROP INDEX "idx_5_users_4_name"')
+			native.execute('CREATE INDEX "idx_5_users_4_name" ON "users" ("age")')
 			native.close()
 			const error = await reopened.open(SCHEMA).catch((caught: unknown) => caught)
 			expect(isDatabaseError(error) ? error.code : 'not-database').toBe('DRIVER')
@@ -313,7 +313,7 @@ describe('SQLiteDriver — open', () => {
 			await first.open(SCHEMA)
 			await first.close()
 			native.connect()
-			native.exec('DROP INDEX "idx_5_users_4_name"')
+			native.execute('DROP INDEX "idx_5_users_4_name"')
 			native.close()
 			await reopened.open(SCHEMA)
 			await reopened.close()
@@ -432,10 +432,10 @@ describe('SQLiteDriver — open', () => {
 		const target = createSQLiteDriver({ path: temp.path })
 		try {
 			native.connect()
-			native.exec(USERS_SQL)
-			native.exec(POSTS_SQL)
-			native.exec('CREATE INDEX "users_legacy_age" ON "users" ("age")')
-			native.exec('CREATE TABLE "legacy" ("id" TEXT PRIMARY KEY)')
+			native.execute(USERS_SQL)
+			native.execute(POSTS_SQL)
+			native.execute('CREATE INDEX "users_legacy_age" ON "users" ("age")')
+			native.execute('CREATE TABLE "legacy" ("id" TEXT PRIMARY KEY)')
 			native.close()
 			await target.open(SCHEMA)
 			expect(await target.keys('users')).toEqual([])
@@ -478,8 +478,8 @@ describe('SQLiteDriver — open', () => {
 		]
 		try {
 			native.connect()
-			native.exec('CREATE TABLE "logs" ("id" TEXT NOT NULL, PRIMARY KEY ("id"))')
-			native.exec('CREATE TABLE "broken" ("id" INTEGER NOT NULL, PRIMARY KEY ("id"))')
+			native.execute('CREATE TABLE "logs" ("id" TEXT NOT NULL, PRIMARY KEY ("id"))')
+			native.execute('CREATE TABLE "broken" ("id" INTEGER NOT NULL, PRIMARY KEY ("id"))')
 			native.close()
 			const error = await target.open(deployed).catch((caught: unknown) => caught)
 			const after = await target.keys('logs').catch((caught: unknown) => caught)
@@ -550,7 +550,7 @@ describe('SQLiteDriver — open', () => {
 			await target.close()
 
 			native.connect()
-			native.exec('DROP TABLE "users"')
+			native.execute('DROP TABLE "users"')
 			native.close()
 
 			const error = await target.open(SCHEMA).catch((caught: unknown) => caught)
@@ -570,8 +570,8 @@ describe('SQLiteDriver — open', () => {
 				.get(['intro'])
 			expect(absent).toBeUndefined()
 			expect(preserved?.title).toBe('Preserved')
-			native.exec(schemaToTable(users))
-			for (const sql of schemaToIndexes(users)) native.exec(sql)
+			native.execute(schemaToTable(users))
+			for (const sql of schemaToIndexes(users)) native.execute(sql)
 			native.close()
 
 			await target.open(SCHEMA)
@@ -602,8 +602,8 @@ describe('SQLiteDriver — open', () => {
 			await target.stamp?.({ version: 1, schema: SCHEMA })
 			await target.close()
 			native.connect()
-			native.exec('DROP TABLE "users"')
-			native.exec('DROP TABLE "posts"')
+			native.execute('DROP TABLE "users"')
+			native.execute('DROP TABLE "posts"')
 			native.close()
 
 			await expect(target.open(SCHEMA)).rejects.toMatchObject({
@@ -627,7 +627,7 @@ describe('SQLiteDriver — open', () => {
 		const temp = tempDatabasePath()
 		const native = createSQLiteDatabase({ path: temp.path })
 		native.connect()
-		native.exec(
+		native.execute(
 			'CREATE TABLE "_metadata" ("id" INTEGER, "version" INTEGER, "schema" TEXT, PRIMARY KEY ("id"))',
 		)
 		native.prepare('INSERT INTO "_metadata" ("id", "version", "schema") VALUES (1, ?, ?)').run([
@@ -1270,7 +1270,7 @@ describe('SQLiteDriver — snapshot', () => {
 			})
 			await target.write('posts', 'p1', { slug: 'p1', title: 'Changed' })
 			native.connect()
-			native.exec(
+			native.execute(
 				'CREATE TRIGGER "posts_replay_guard" BEFORE INSERT ON "posts" ' +
 					"BEGIN SELECT RAISE(ABORT, 'replay blocked'); END",
 			)
@@ -1281,7 +1281,7 @@ describe('SQLiteDriver — snapshot', () => {
 			expect((await target.read('posts', 'p1'))?.title).toBe('Changed')
 
 			native.connect()
-			native.exec('DROP TRIGGER "posts_replay_guard"')
+			native.execute('DROP TRIGGER "posts_replay_guard"')
 			native.close()
 			await rollback()
 			expect((await target.read('users', 'u1'))?.name).toBe('Ada')
@@ -1300,7 +1300,7 @@ describe('SQLiteDriver — snapshot', () => {
 		try {
 			await onDisk.open(SCHEMA)
 			native.connect()
-			native.exec('DROP TABLE "posts"')
+			native.execute('DROP TABLE "posts"')
 			const error = await onDisk.snapshot().catch((caught: unknown) => caught)
 			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
 			expect(error.code).toBe('DRIVER')
@@ -1333,7 +1333,7 @@ describe('SQLiteDriver — snapshot', () => {
 				active: false,
 			})
 			locker.connect()
-			locker.exec('BEGIN EXCLUSIVE')
+			locker.execute('BEGIN EXCLUSIVE')
 			locked = true
 			const error = await rollback().catch((caught: unknown) => caught)
 			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
@@ -1445,7 +1445,7 @@ describe('SQLiteDriver — persistence across reopen (temp file)', () => {
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
 			.get(['audit'])
 		const stored = native.prepare('SELECT "version" FROM "_metadata" WHERE "id" = 1').get()?.version
-		native.exec(
+		native.execute(
 			'CREATE TRIGGER "block_metadata_insert" BEFORE INSERT ON "_metadata" ' +
 				"BEGIN SELECT RAISE(ABORT, 'metadata rewritten'); END",
 		)
@@ -2271,7 +2271,7 @@ describe('SQLiteDriver — stream laziness', () => {
 		try {
 			await onDisk.open(SCHEMA)
 			native.connect()
-			native.exec('DROP TABLE "users"')
+			native.execute('DROP TABLE "users"')
 			const stream = onDisk.stream?.('users', {})
 			if (stream === undefined) throw new Error('Expected stream capability')
 			const error = await collect(stream).catch((caught: unknown) => caught)

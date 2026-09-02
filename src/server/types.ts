@@ -30,11 +30,11 @@ export interface CompiledSQL {
  * {@link DatabaseError}); `timeout` is the busy-timeout in milliseconds before
  * a locked database fails `BUSY`; `references` enables or disables foreign-key
  * constraint enforcement, while omission retains the upstream default.
- * `pragmas` is an ordered record of PRAGMA name to
- * value, applied via the wrapper's `pragma()` right after `connect()`, in
- * insertion order (e.g. `{ journal_mode: 'WAL' }`). Core rows are
- * number-typed — this driver never surfaces a `bigint`, so a stored integer
- * beyond `Number.MAX_SAFE_INTEGER` reads back imprecisely (the wrapper's own
+ * `pragmas` is an ordered record of PRAGMA name to value, applied via the
+ * wrapper's `pragma()` right after `connect()`, in insertion order (for
+ * example `{ journal_mode: 'WAL' }`). Core rows are number-typed — this driver
+ * never surfaces a `bigint`, so a stored integer beyond
+ * `Number.MAX_SAFE_INTEGER` reads back imprecisely (the wrapper's own
  * `bigints` option is not exposed here).
  */
 export interface SQLiteDriverOptions {
