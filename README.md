@@ -26,7 +26,7 @@ npm install @orkestrel/database
 Pre-release (`0.0.7`): the core engine and the memory, JSON file, SQLite,
 and IndexedDB drivers are all implemented and tested, but the public API is
 still unstable and may change without notice. See
-[guides/src/database.md](./guides/src/database.md) for the full documented
+[guides/database.md](./guides/database.md) for the full documented
 surface.
 
 ## Package
