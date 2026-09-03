@@ -456,7 +456,7 @@ describe('Table — coercion and validation', () => {
 describe('Table — records / count / aggregate (engine path)', () => {
 	// A plain MemoryDriver has no native hooks, so these all exercise the core
 	// engine running over `scan` (applyQuery / matchesQuery / computeAggregate).
-	it('records honors conditions, order, and paging via the engine', async () => {
+	it('records honors conditions, order, and paging through the engine', async () => {
 		const users = await createSeededUsersTable()
 		const all = await users.records()
 		expect(all).toHaveLength(3)
@@ -568,7 +568,7 @@ describe('Table — scan (lazy streaming)', () => {
 		expect(rows.map((row) => row.id).sort()).toEqual(['u1', 'u2'])
 	})
 
-	it('applies offset and limit via lazy counting', async () => {
+	it('applies offset and limit through lazy counting', async () => {
 		const users = await createSeededUsersTable()
 		const rows = await collect(users.scan({ offset: 1, limit: 1 }))
 		expect(rows.map((row) => row.id)).toEqual(['u2'])

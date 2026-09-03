@@ -904,7 +904,7 @@ describe('Database — emitter (push observation surface)', () => {
 // ── migrate() ─────────────────────────────────────────────────────────────────
 //
 // Diffs a caller-supplied `deployed` schema against the database's declared schema
-// via `planMigration`, applies the resulting plan through the driver's optional
+// by using `planMigration`, applies the resulting plan through the driver's optional
 // `migrate` hook, and returns the applied plan. Throws `MIGRATION` when the driver
 // lacks the hook (propagated driver errors, e.g. unknown-table, pass through as-is —
 // covered by `MemoryDriver`'s own tests and `conformDriver`). Checks abort at entry.

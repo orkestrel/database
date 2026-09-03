@@ -390,7 +390,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 
 		// Open the SAME database through the wrapper directly, declaring the same
 		// indexes so `store.index(...)` is reachable. The compound `['city', 'age']`
-		// index is named via `deriveIndexedDBIndexName` — a length-prefixed encoding, NOT the
+		// index is named by using `deriveIndexedDBIndexName` — a length-prefixed encoding, NOT the
 		// naive `'city_age'` join, so it can never collide with a single-column
 		// index over a column literally named `city_age` (AGENTS/Unit 6).
 		const compoundName = deriveIndexedDBIndexName(['city', 'age'])
@@ -999,7 +999,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		expect(stamped).toMatchObject({ version: 2 })
 	})
 
-	it('table.add creates a usable store via migrate', async () => {
+	it('table.add creates a usable store by using migrate', async () => {
 		await driver.migrate?.({
 			plan: {
 				from: 0,
@@ -1021,7 +1021,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
 	})
 
-	it('table.remove drops a store via migrate', async () => {
+	it('table.remove drops a store by using migrate', async () => {
 		await driver.open(tableSchemas('users', 'posts'))
 		await driver.write('posts', 'p1', { id: 'p1' })
 		await driver.migrate?.({
@@ -2030,7 +2030,7 @@ describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compoun
 			},
 		})
 		// Both indexes gone — the column is no longer pushable, but the table
-		// still reads correctly via a full scan.
+		// still reads correctly through a full scan.
 		const afterRemove = await collision.records?.('items', {
 			conditions: [buildCondition('a_b', 'equals', ['z'])],
 		})

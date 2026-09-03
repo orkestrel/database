@@ -204,7 +204,7 @@ describe('compileQuerySQL — operators', () => {
 	it('compiles starts to a case-sensitive substr(col, 1, N) = ? check (N = code-point count)', () => {
 		// Case-sensitive and exact — replaces the old LIKE-based compile (which
 		// was ASCII-only case-INsensitive, diverging from the engine's
-		// case-sensitive startsWith). N is a code-point count via Array.from,
+		// case-sensitive startsWith). N is a code-point count by using Array.from,
 		// not `.length` (matters for astral characters).
 		expect(compile({ conditions: [cond('name', 'starts', ['A_d%'])] })).toEqual({
 			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", 1, 4) = ?) ORDER BY "id"',
@@ -483,7 +483,7 @@ describe('compileQuerySQL — order and paging', () => {
 
 describe('compileConditionSQL', () => {
 	it('builds a flat equals compileConditionSQL encoding the operand by its declared type', () => {
-		// A flat `boolean` column encodes its operand to 1 / 0 via the declared type.
+		// A flat `boolean` column encodes its operand to 1 / 0 through the declared type.
 		expect(compileConditionSQL(cond('active', 'equals', [true]), SCHEMA)).toEqual({
 			sql: '"active" = ?',
 			parameters: [1],

@@ -733,7 +733,7 @@ describe('SQLiteDriver — keyed CRUD', () => {
 		expect(await driver.read('users', 'nope')).toBeUndefined()
 	})
 
-	it('reports whether a delete removed a row via changes', async () => {
+	it('reports whether a delete removed a row through changes', async () => {
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
 		expect(await driver.delete('users', 'u1')).toBe(true)
 		expect(await driver.delete('users', 'u1')).toBe(false)
@@ -2681,7 +2681,7 @@ describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
 	it('between with reversed bounds is empty on both the native and the refine path', async () => {
 		const input: QueryInput = { conditions: [buildCondition('rank', 'between', [20, 10])] }
 		expect(await collectSQLiteRecords(refineDriver, 'users', input)).toEqual([])
-		// A null-operand condition forces refine for the whole input via the
+		// A null-operand condition forces refine for the whole input through the
 		// same reversed-bounds semantics.
 		const forcedRefine: QueryInput = {
 			conditions: [

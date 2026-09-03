@@ -216,7 +216,7 @@ describe('matchesCondition', () => {
 		)
 	})
 
-	it('equals/any use SameValueZero via equalsValue — NaN now equals NaN', () => {
+	it('equals/any use SameValueZero by using equalsValue — NaN now equals NaN', () => {
 		const nanRow = { n: Number.NaN }
 		expect(matchesCondition(nanRow, buildCondition('n', 'equals', [Number.NaN]))).toBe(true)
 		expect(matchesCondition(nanRow, buildCondition('n', 'any', [1, Number.NaN]))).toBe(true)

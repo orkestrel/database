@@ -472,7 +472,7 @@ These invariants hold across the core database source tree ↔ this guide:
    `stream?` and `migrate?` (`MemoryDriver.stream` lazily filters `scan` through
    the engine; `JSONDriver.stream` delegates to its inner `MemoryDriver`).
    `MemoryDriver` still lacks a native `transaction?`, so its transactions
-   always use the snapshot floor; `JSONDriver` now DOES implement
+   always use the snapshot floor; `JSONDriver` DOES implement
    `transaction?` — it clones the committed memory/schema/metadata into an
    isolated candidate, passes only that candidate's capability to the callback,
    and publishes it with one atomic file replacement only when the callback
@@ -485,7 +485,7 @@ These invariants hold across the core database source tree ↔ this guide:
    exactly once, and terminalizes the iterator; the transaction and driver
    remain usable. Memory and IndexedDB need no equivalent root wrapper because
    neither exposes a callback transaction. `Database.transaction` over a `JSONDriver`
-   therefore prefers this native path over the snapshot floor. Both reference drivers now also
+   therefore prefers this native path over the snapshot floor. Both reference drivers also
    implement the paired `metadata?` / `stamp?` — `MemoryDriver` in-process only
    (the owned `DriverMetadata` snapshot lives in instance memory), `JSONDriver` persisted:
    the file is `{ metadata?: DriverMetadata, tables }`, with `metadata` present only
@@ -660,9 +660,9 @@ These invariants hold across the core database source tree ↔ this guide:
    every REQUIRED method and adds none beyond the interface (optional members
    like `records?` / `aggregate?` / `transaction?` / `stream?` /
    `migrate?` / `metadata?` / `stamp?` may be omitted). `MemoryDriver` and
-   `JSONDriver` both omit `records?` / `aggregate?`, and both now
+   `JSONDriver` both omit `records?` / `aggregate?`, and both
    implement `stream?` / `migrate?` / `metadata?` / `stamp?`; `MemoryDriver` still
-   omits `transaction?` (snapshot floor only) while `JSONDriver` now
+   omits `transaction?` (snapshot floor only) while `JSONDriver`
    implements `transaction?` too (isolated candidate state plus one atomic
    publish on callback fulfillment). `SQLiteDriver` implements EVERY optional hook — `records?` /
    `aggregate?` / `transaction?` / `stream?` / `migrate?` / `metadata?`
@@ -737,7 +737,7 @@ These invariants hold across the core database source tree ↔ this guide:
     are no-ops here) — a driver's own `migrate` decides how to apply it to
     stored rows. This caller-driven path remains the way to migrate against
     an UNVERSIONED driver (one that implements neither `metadata` nor `stamp`),
-    which still owns knowing what is currently deployed. A driver that DOES
+    which still owns knowing what is deployed. A driver that DOES
     implement both `metadata` and `stamp` can instead opt into automatic
     reconciliation by passing `DatabaseOptions.version`. A versioning driver's
     `open()` first discovers persisted `DriverMetadata.schema` and opens that
@@ -775,7 +775,7 @@ These invariants hold across the core database source tree ↔ this guide:
     fields must copy-in/copy-out isolated, not only its top-level fields),
     and a dedicated `snapshot-nested` phase asserts the same nested isolation
     across a `snapshot()` capture/restore round-trip — a driver that
-    shallow-copies anywhere in its write/read/scan/snapshot boundary now
+    shallow-copies anywhere in its write/read/scan/snapshot boundary
     fails conformance (`MemoryDriver` passes by deep-copying through
     `structuredClone` at every one of those boundaries). The first violated
     invariant throws a `CONFORMANCE` `DatabaseError` naming the failed check.
@@ -823,7 +823,7 @@ reference `MemoryDriver`, and three persistent backends. `JSONDriver` in
 JSON file — every primitive delegates to the inner memory driver, so
 querying, key-order `scan` / `keys`, and capture-replay `snapshot` are
 inherited unchanged; `JSONDriver.migrate` additionally persists the migrated
-state, and every flush is now atomic — written to a sibling temp file and
+state, and every flush is atomic — written to a sibling temp file and
 `rename`d onto the target path, so a crash mid-flush can never truncate or
 corrupt the previous good file. Outside a `transaction`, `JSONDriver` still
 flushes once per mutation (`write` / `insert` / `delete` / `clear`); its native
@@ -1558,7 +1558,7 @@ migrateRows(rows, [{ operation: 'column.remove', table: 'users', column: 'legacy
 
 `Database.migrate(deployed, options?)` wraps that same diff-then-apply
 orchestration against the database's OWN declared `tables`, so the caller
-only has to track what is currently deployed:
+only has to track what is deployed:
 
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
@@ -1939,7 +1939,7 @@ const db = createDatabase({
 	driver: createMemoryDriver(),
 	tables: { users: { id: stringShape() } },
 })
-await db.open() // connects now — table() calls after this never wait on it
+await db.open() // connects immediately — table() calls after this never wait on it
 ```
 
 Concurrent eager and lazy callers share one readiness attempt. A physical

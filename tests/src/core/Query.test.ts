@@ -237,7 +237,7 @@ describe('Query — stream (lazy streaming)', () => {
 })
 
 describe('Query — nested fields (FieldPath)', () => {
-	it('filters / sorts / aggregates a nested value via an array path', async () => {
+	it('filters / sorts / aggregates a nested value through an array path', async () => {
 		const people = await createNestedPeopleTable()
 		// array path descends; string would be ONE (flat) column.
 		expect(
