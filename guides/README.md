@@ -1,7 +1,7 @@
 # Guides
 
 A dual-axis index into this repository's guides — by concept, and by
-directory (AGENTS §22).
+directory (see `.claude/rules/documentation.md` § Parity).
 
 ## By concept
 
@@ -55,4 +55,4 @@ driver is built from without leaving this guide set.
 
 ## See also
 
-- [`AGENTS.md`](../AGENTS.md) — the rules; §22 documentation-as-contracts.
+- [`AGENTS.md`](../AGENTS.md) — the rules; see § Documentation contract.

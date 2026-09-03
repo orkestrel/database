@@ -27,8 +27,9 @@ describe('driver conformance — JSONDriver', () => {
 	})
 })
 
-// The JSON driver's nine DriverInterface primitives over a real temp file (no
-// mocks, AGENTS §16): open + keyed read/write/delete/keys/scan(KEY order)/clear,
+// The JSON driver's DriverInterface primitives over a real temp file (no
+// mocks — `.claude/rules/tests.md` § Test contract): open + keyed
+// read/write/delete/keys/scan(KEY order)/clear,
 // persistence across a close / reopen, snapshot rollback restoring BOTH memory and
 // the file, and fail-closed recovery on every existing invalid file.
 // It is a decorator over MemoryDriver, so key order and capture-replay snapshot are
@@ -36,7 +37,8 @@ describe('driver conformance — JSONDriver', () => {
 
 // The shared driver-conformance schema (a text-primary `users` table + a non-`id`
 // primary `posts` table, proving the key is recovered from each table's own primary
-// column on load) — see `driverSchema` in setupServer (AGENTS §16.1). The JSON battery
+// column on load) — see `driverSchema` in setupServer
+// (`.claude/rules/tests.md` § Shared test infrastructure). The JSON battery
 // uses the default single `['name']` index on `users`.
 const SCHEMA = driverSchema()
 

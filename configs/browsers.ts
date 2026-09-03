@@ -8,8 +8,8 @@ import { accessSync, constants as FS_CONSTANTS, globSync, readdirSync, statSync 
 import { basename, dirname, join, resolve as resolvePath } from 'node:path'
 
 /**
- * Lists the Chromium executable layouts inside a `chromium-<revision>` browsers-directory
- * entry, per platform.
+ * Chromium executable layouts inside a `chromium-<revision>` browsers-directory entry, per
+ * platform.
  *
  * @remarks
  * The current Playwright build ships Chrome for Testing on macOS. The trailing `Chromium.app`
@@ -27,17 +27,17 @@ export const CHROMIUM_LAYOUTS = Object.freeze([
 	'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium',
 ])
 
-/** Matches the `chromium-<revision>` entry name Playwright installs one managed build into. */
+/** The `chromium-<revision>` entry name Playwright installs one managed build into. */
 export const CHROMIUM_ENTRY_PATTERN = /^chromium-\d+$/
 
-/** Matches the revision number carried by any path containing a `chromium-<revision>` segment. */
+/** The revision number carried by any path containing a `chromium-<revision>` segment. */
 export const CHROMIUM_REVISION_PATTERN = /chromium-(\d+)/
 
-/** Names the directory a managed Linux container installs its bundled Playwright browsers into. */
+/** The directory a managed Linux container installs its bundled Playwright browsers into. */
 export const BUNDLED_BROWSERS_ROOT = '/opt/pw-browsers'
 
 /**
- * Lists the bundled Chromium layouts under the managed-container browsers root, as glob patterns.
+ * Bundled Chromium layouts under the managed-container browsers root, as glob patterns.
  *
  * @remarks
  * The revision directory and its inner layout both drift across Playwright builds, and the
@@ -49,7 +49,7 @@ export const BUNDLED_CHROMIUM_LAYOUTS = Object.freeze([
 	'chromium-*/chrome-linux/chrome',
 ])
 
-/** Lists the stable Playwright Chromium channels and their standard executable layouts. */
+/** Stable Playwright Chromium channels and their standard executable layouts. */
 export const SYSTEM_BROWSER_CHANNELS = Object.freeze([
 	Object.freeze({
 		channel: 'chrome',
@@ -70,10 +70,10 @@ export const SYSTEM_BROWSER_CHANNELS = Object.freeze([
 ])
 
 /**
- * Determines whether a path identifies an executable regular file.
+ * Determine whether a path identifies an executable regular file.
  *
  * @param path - The filesystem path to inspect.
- * @returns True if the path is a regular file with execute access; false otherwise.
+ * @returns Whether the path is a regular file with execute access.
  *
  * @example
  * ```ts
@@ -91,7 +91,7 @@ export function isBrowserExecutable(path: string): boolean {
 }
 
 /**
- * Orders two Chromium paths so the highest revision sorts first.
+ * Order two Chromium paths so the highest revision sorts first.
  *
  * @param left - The first path or directory entry to compare.
  * @param right - The second path or directory entry to compare.
@@ -114,7 +114,7 @@ export function compareRevisions(left: string, right: string): number {
 }
 
 /**
- * Reads the executable path of Playwright's pinned Chromium revision.
+ * Read the executable path of Playwright's pinned Chromium revision.
  *
  * @returns The pinned executable path, or `undefined` when this platform has none.
  *
@@ -137,7 +137,7 @@ export function resolvePinnedBrowser(): string | undefined {
 }
 
 /**
- * Resolves a launchable Playwright-managed Chromium executable: the pinned revision when installed,
+ * Resolve a launchable Playwright-managed Chromium executable: the pinned revision when installed,
  * otherwise a `chromium` / `chromium.exe` alias or any other `chromium-*` revision under the same
  * Playwright browsers directory. A pinned-revision miss is not Chromium absence — managed
  * containers ship one usable build, often behind a revision-agnostic alias, for many Playwright
@@ -184,7 +184,7 @@ export function resolveManagedBrowser(pinned: string): string | undefined {
 }
 
 /**
- * Resolves the Chromium a managed Linux container bundles outside the Playwright cache.
+ * Resolve the Chromium a managed Linux container bundles outside the Playwright cache.
  *
  * @param platform - The Node platform the container runs on.
  * @param root - The bundled browsers directory to search.
@@ -213,7 +213,7 @@ export function resolveBundledBrowser(platform: NodeJS.Platform, root: string): 
 }
 
 /**
- * Resolves the first installed stable system Chromium channel.
+ * Resolve the first installed stable system Chromium channel.
  *
  * @param platform - The Node platform whose standard layouts this call probes.
  * @param environment - The process environment supplying Windows installation roots.
@@ -257,7 +257,7 @@ export function resolveSystemBrowser(
 }
 
 /**
- * Resolves Playwright provider options for whatever browser this host can actually launch.
+ * Resolve Playwright provider options for whatever browser this host can actually launch.
  *
  * @param pinned - The executable path for Playwright's pinned Chromium revision, when it has one.
  * @param platform - The Node platform whose standard layouts this call probes.

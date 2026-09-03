@@ -27,7 +27,8 @@ import { createDatabase, createMemoryDriver } from '@src/core'
 // Shared, environment-agnostic scenario builders for the `database` module's tests — a
 // seeded table over the real in-memory reference driver, condition/schema
 // literal factories, and a recording driver for the native-hook dispatch pins
-// (AGENTS §16.1: real implementations and recorders, never mocks).
+// (see `.claude/rules/tests.md` § Test contract: real implementations and
+// recorders, never mocks).
 
 /**
  * Collect sorted ids from the parity suite's optional-rank stream case.
@@ -102,7 +103,8 @@ export interface UserRow {
  * Build one canonical `users` row (`{ id, name, age }`) — the single most-repeated row
  * literal across the database / driver / relations tests, folded into a factory with a
  * sensible default (`{ id: 'u1', name: 'Ada', age: 36 }`) plus per-call overrides so a
- * test names only the field its scenario varies (AGENTS §16.1). A plain data builder; the
+ * test names only the field its scenario varies (see `.claude/rules/tests.md`
+ * § Shared test infrastructure). A plain data builder; the
  * shape matches {@link INTEGRATION_TABLES}` users`.
  *
  * @param overrides - Fields to override on the default row
@@ -115,7 +117,8 @@ export function createUserRow(overrides?: Partial<UserRow>): UserRow {
 /**
  * The recurring three-row `users` seed — `Ada` / `Grace` / `Edsger` (`u1` / `u2` / `u3`)
  * — the trio the densest CRUD / batch / query tests `set([...])` before exercising reads
- * (AGENTS §16.1). Built fresh each call (a new array of fresh rows) so a mutating test
+ * (see `.claude/rules/tests.md` § Shared test infrastructure). Built fresh each
+ * call (a new array of fresh rows) so a mutating test
  * never leaks into the next; each row is a {@link createUserRow} so the shape stays in one
  * place.
  *
@@ -132,7 +135,8 @@ export function userRows(): readonly UserRow[] {
 /**
  * Stand up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `database`
  * entity tests — `createDatabase({ driver: createMemoryDriver(), tables: { users: columns } })`,
- * seed the rows, and return `db.table('users')` (AGENTS §16.1). The shared form of the per-file
+ * seed the rows, and return `db.table('users')` (see `.claude/rules/tests.md`
+ * § Shared test infrastructure). The shared form of the per-file
  * `seeded()` the `Cursor` / `Query` tests each hand-rolled (each over the SAME base
  * `id` / `name` / `age` columns plus its own 4th column — a `role` literal, a `nickname` optional).
  * The caller passes its FULL `columns` map and `rows`; because `columns` is captured as a `const`
@@ -158,7 +162,8 @@ export async function seedUsersTable<const C extends ColumnMap>(
 /**
  * Stand up a constrained `users` {@link import('@src/core').DatabaseInterface} — the shared
  * shape `Database.test.ts`'s local `userDatabase()` and `Table.test.ts`'s local `userTable()`
- * each hand-rolled byte-for-byte (AGENTS §16.1): `createDatabase({ driver: createMemoryDriver(),
+ * each hand-rolled byte-for-byte (see `.claude/rules/tests.md`
+ * § Shared test infrastructure): `createDatabase({ driver: createMemoryDriver(),
  * name: 'app', tables: { users: { id, name: min(1), age: min(0) } } })`. `error` forwards to the
  * database's own `EmitterErrorHandler` (the one axis `userDatabase` varied); a fresh database is
  * built on every call so a mutating test never leaks.
@@ -344,7 +349,8 @@ export interface RecordingAggregate {
 
 /**
  * A recording {@link DriverInterface} over the real Memory driver that ALSO implements
- * the optional native `records` / `aggregate` hooks (AGENTS §21). Rows are
+ * the optional native `records` / `aggregate` hooks (see
+ * `.claude/rules/architecture.md` § System constraints). Rows are
  * stored (so a scan WOULD return them), but the two hooks
  * short-circuit to a fixed sentinel and record what they were handed, so a test can
  * prove `Table` preferred the hook over the scan engine.

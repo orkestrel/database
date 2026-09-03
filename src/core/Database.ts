@@ -17,13 +17,13 @@ import type {
 	TableMap,
 	TableSchema,
 } from './types.js'
+import type { TransactionScope } from './TransactionScope.js'
 import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
 import { DatabaseError } from './errors.js'
-import { resolveColumns, resolvePrimary, shapeToColumnSchema } from './helpers.js'
+import { requireColumns, resolvePrimary, shapeToColumnSchema } from './helpers.js'
 import { DatabaseContext } from './DatabaseContext.js'
 import { DatabaseTransaction } from './DatabaseTransaction.js'
 import { Table } from './Table.js'
-import type { TransactionScope } from './TransactionScope.js'
 
 /**
  * Exposes a typed view over one shared internal lifecycle and storage context.
@@ -68,7 +68,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 				name: this.#context.name,
 			})
 		}
-		const columns = resolveColumns(this.#tables, name)
+		const columns = requireColumns(this.#tables, name)
 		return this.#build(
 			name,
 			resolvePrimary(this.#primary, name),
@@ -83,7 +83,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 	export(): Readonly<Record<string, TableDefinition>> {
 		const result: Record<string, TableDefinition> = {}
 		for (const name of Object.keys(this.#tables)) {
-			const columns = resolveColumns(this.#tables, name)
+			const columns = requireColumns(this.#tables, name)
 			result[name] = {
 				primary: resolvePrimary(this.#primary, name),
 				columns,
@@ -152,7 +152,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 
 	#schema(): readonly TableSchema[] {
 		return Object.keys(this.#tables).map((name) => {
-			const columns = resolveColumns(this.#tables, name)
+			const columns = requireColumns(this.#tables, name)
 			return {
 				name,
 				primary: resolvePrimary(this.#primary, name),

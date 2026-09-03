@@ -7,6 +7,28 @@
  * before and after advancing the source. A failed continuation terminalizes the
  * iterator, discards any row produced before the post-advance guard failed, and
  * attempts source cleanup exactly once.
+ *
+ * A driver implementing the published `DriverInterface` extension seam wraps its
+ * own source iterator in one so a root `scan` / `stream` cannot outlive the
+ * driver state it was opened against.
+ *
+ * @typeParam T - The value the wrapped source yields
+ *
+ * @example
+ * ```ts
+ * import type { Row } from '@orkestrel/database'
+ * import { DatabaseError, DriverIterator } from '@orkestrel/database'
+ *
+ * // Inside a driver's `scan`, over its own row source and root-state guard.
+ * declare const rows: AsyncIterator<Row>
+ * declare const transacting: () => boolean
+ * const scan = new DriverIterator(rows, () => {
+ * 	if (transacting()) {
+ * 		throw new DatabaseError('CONFLICT', 'scan: a transaction is active')
+ * 	}
+ * })
+ * for await (const row of scan) row // one row at a time, guarded around each advance
+ * ```
  */
 export class DriverIterator<T> implements AsyncIterableIterator<T> {
 	readonly #source: AsyncIterator<T>
@@ -14,6 +36,12 @@ export class DriverIterator<T> implements AsyncIterableIterator<T> {
 	#terminal = false
 	#cleaned = false
 
+	/**
+	 * Wraps one source iterator in the continuation boundary.
+	 *
+	 * @param source - The driver's own row iterator, advanced once per `next`
+	 * @param guard - The root-state check, run immediately before and after each advance; it throws to terminalize the iteration
+	 */
 	constructor(source: AsyncIterator<T>, guard: () => void) {
 		this.#source = source
 		this.#guard = guard

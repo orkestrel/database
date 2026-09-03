@@ -10,8 +10,8 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  * wraps each in an `objectShape`, so you never write `objectShape` at the table
  * level. The `const` type parameter captures the literal names and columns, so
  * `db.table('users')` is checked against the schema and typed by `Infer` of its
- * columns — no annotations. Name a non-`id` primary-key column per table via the
- * optional `primary` and `indexes` maps.
+ * columns — no annotations. Name a non-`id` primary-key column per table through
+ * the optional `primary` and `indexes` maps.
  *
  * @param options - The driver, `tables`, and optional `primary`, `indexes`,
  *   `name`, `generator`, `version`, and emitter hooks

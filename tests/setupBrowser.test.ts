@@ -28,14 +28,14 @@ describe('uniqueName', () => {
 
 	it('numbers every name from one shared counter, whatever the prefix', () => {
 		const first = readCounter(uniqueName())
-		const prefixed = readCounter(uniqueName('taverna-idb-parity'))
+		const prefixed = readCounter(uniqueName('database-idb-parity'))
 		const last = readCounter(uniqueName())
 		expect(prefixed).toBeGreaterThan(first)
 		expect(last).toBeGreaterThan(prefixed)
 	})
 
-	it('defaults its prefix to taverna-idb and honours a supplied one', () => {
-		expect(uniqueName()).toMatch(/^taverna-idb-\d+$/)
+	it('defaults its prefix to database-idb and honours a supplied one', () => {
+		expect(uniqueName()).toMatch(/^database-idb-\d+$/)
 		expect(uniqueName('corruption')).toMatch(/^corruption-\d+$/)
 	})
 })

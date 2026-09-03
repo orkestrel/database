@@ -38,10 +38,10 @@ let databaseCounter = 0
  * A process-unique IndexedDB database name — a monotonic counter under an
  * optional prefix, so concurrent tests never collide on a shared store.
  *
- * @param prefix - A readable name segment (defaults to `taverna-idb`)
+ * @param prefix - A readable name segment (defaults to `database-idb`)
  * @returns A name no earlier call has returned
  */
-export function uniqueName(prefix = 'taverna-idb'): string {
+export function uniqueName(prefix = 'database-idb'): string {
 	databaseCounter += 1
 	return `${prefix}-${databaseCounter}`
 }

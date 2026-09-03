@@ -9,6 +9,14 @@ import type {
 	Row,
 	TableSchema,
 } from '@src/core'
+import type {
+	IndexedDBDatabaseInterface,
+	IndexedDBStoreInterface,
+	IndexedDBTransactionStoreInterface,
+	IndexedDBUpgradeContext,
+	StoreDefinition,
+} from '@orkestrel/indexeddb'
+import type { QueryPlan } from '../types.js'
 import {
 	applyQuery,
 	bindRowKey,
@@ -28,15 +36,7 @@ import {
 	projectMigrationSchema,
 	validatePage,
 } from '@src/core'
-import type {
-	IndexedDBDatabaseInterface,
-	IndexedDBStoreInterface,
-	IndexedDBTransactionStoreInterface,
-	IndexedDBUpgradeContext,
-	StoreDefinition,
-} from '@orkestrel/indexeddb'
 import { createIndexedDBDatabase, isIndexedDBError } from '@orkestrel/indexeddb'
-import type { QueryPlan } from '../types.js'
 import {
 	deriveIndexedDBIndexName,
 	mapIndexedDBError,
@@ -69,7 +69,7 @@ import { METADATA_STORE } from '../constants.js'
  * key-range pushdown over the primary key or a single-column secondary index,
  * fetching a candidate **superset** that the core engine (`applyQuery` /
  * `matchesQuery`) then refines — so a native read is byte-identical to a full
- * scan, just cheaper. Pushdown is conservative: only the exact-comparison
+ * scan, only cheaper. Pushdown is conservative: only the exact-comparison
  * operators over orderable columns narrow to a range; everything else falls back
  * to a full scan + the engine.
  *
@@ -83,7 +83,7 @@ import { METADATA_STORE } from '../constants.js'
  * transaction (`onupgradeneeded`), so `migrate` closes the current connection
  * and opens a FRESH one at `version + 1` with an `upgrade` hook that walks the
  * plan's steps — dropping stores, adding/removing indexes on the raw
- * `IDBTransaction`, and rewriting rows for `column.remove` via a cursor walk
+ * `IDBTransaction`, and rewriting rows for `column.remove` through a cursor walk
  * (the one step needing to touch existing data; `column.add` is a no-op — this
  * driver stores whatever a row carries, so there is nothing to backfill). A
  * step referencing an unknown table is validated BEFORE the reconnect, so a
@@ -745,7 +745,7 @@ export class IndexedDBDriver implements DriverInterface {
 					context.indexes.drop(step.table, deriveIndexedDBIndexName(step.index))
 					break
 				case 'column.remove': {
-					const store = context.stores.open(step.table)
+					const store = context.stores.store(step.table)
 					let cursor = await store.cursor()
 					while (cursor !== null) {
 						const row = cursor.value
@@ -770,7 +770,7 @@ export class IndexedDBDriver implements DriverInterface {
 			}
 		}
 		if (input.metadata !== undefined) {
-			await context.stores.open(METADATA_STORE).set(
+			await context.stores.store(METADATA_STORE).set(
 				{
 					version: input.metadata.version,
 					schema: input.metadata.schema,

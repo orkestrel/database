@@ -9,10 +9,10 @@ import type {
 	TableMap,
 	StorageInterface,
 } from './types.js'
-import { createContract, objectShape } from '@orkestrel/contract'
-import { resolveColumns, resolvePrimary } from './helpers.js'
-import { Table } from './Table.js'
 import type { TransactionScope } from './TransactionScope.js'
+import { createContract, objectShape } from '@orkestrel/contract'
+import { requireColumns, resolvePrimary } from './helpers.js'
+import { Table } from './Table.js'
 
 /**
  * Binds a table-only database view to one driver transaction scope.
@@ -53,7 +53,7 @@ export class DatabaseTransaction<
 
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
 		this.#scope.check()
-		const columns = resolveColumns(this.#tables, name)
+		const columns = requireColumns(this.#tables, name)
 		return this.#build(
 			name,
 			resolvePrimary(this.#primary, name),

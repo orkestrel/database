@@ -14,6 +14,7 @@ import type {
 	TableInterface,
 	StorageInterface,
 } from './types.js'
+import type { TransactionScope } from './TransactionScope.js'
 import { isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
@@ -30,7 +31,6 @@ import {
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 import { ScopedIterator } from './ScopedIterator.js'
-import type { TransactionScope } from './TransactionScope.js'
 
 /**
  * Exposes typed keyed CRUD plus fluent query and cursor access over a driver.
@@ -203,7 +203,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	 * conditions.
 	 *
 	 * @remarks
-	 * Like {@link count}, `aggregate` operates on STORED rows WITHOUT the
+	 * Unlike {@link count}, `aggregate` operates on STORED rows WITHOUT the
 	 * contract guard {@link records} / {@link scan} apply — a non-conforming
 	 * stored row still contributes to the computed aggregate when it matches
 	 * the conditions, even though it would never appear in `records()`'s

@@ -13,6 +13,7 @@ import type {
 import {
 	bindRowKey,
 	DatabaseError,
+	DriverIterator,
 	MemoryDriver,
 	checkAbort,
 	cloneDriverMetadata,
@@ -29,7 +30,6 @@ import {
 import { isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { DriverIterator } from '../../core/DriverIterator.js'
 import { matchesAbsentPath } from '../helpers.js'
 
 /**

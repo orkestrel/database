@@ -417,7 +417,7 @@ export function compilePageSQL(limit: number | undefined, offset: number | undef
  * over a JS `scan`. The WHERE fold is parenthesized **left-to-right** to mirror
  * the core engine's `matchesQuery` (not SQL's native AND-over-OR precedence),
  * so a native and an engine read return identical rows. Each operand is encoded
- * via `encodeValue`: a flat column uses its declared schema type, while a nested
+ * through `encodeValue`: a flat column uses its declared schema type, while a nested
  * `FieldPath` (a `json_extract` read) encodes each operand as the native scalar
  * the extract returns — derived from the operand's runtime type — so it compares.
  * Every operator maps per the databases guide's operator table, with

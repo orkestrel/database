@@ -2,7 +2,7 @@ import type { DatabaseErrorCode } from './types.js'
 
 // Invalid operations and programmer errors `throw`, always a
 // `DatabaseError` carrying a machine-readable `code` so a `catch` branches on
-// `error.code` instead of parsing the message. Lookups that may simply miss
+// `error.code` instead of parsing the message. Lookups that may miss
 // (`get`, `has`, `remove`) return `undefined` / `false` — they never throw.
 
 /**
@@ -17,7 +17,7 @@ import type { DatabaseErrorCode } from './types.js'
  * `context`), an inapplicable {@link Migration} plan (`MIGRATION`), a
  * driver that violates a {@link DriverInterface} invariant, thrown by the
  * `conformDriver` helper (`CONFORMANCE`), and an unexpected infrastructure
- * fault surfaced by a driver seam — e.g. a filesystem failure while
+ * fault surfaced by a driver seam — for example a filesystem failure while
  * persisting (`DRIVER`) — as opposed to expected domain conditions, which
  * keep their specific codes.
  */

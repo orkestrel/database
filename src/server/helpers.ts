@@ -25,29 +25,6 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
 // persisted-name derivation. Its SQLite import is type-only and cannot couple
 // the emitted JavaScript to the native package.
 
-// === Schema lookups
-
-/**
- * Reads the declared storage type of a flat (string) column out of the schema.
- *
- * @remarks
- * The narrow read for a caller that needs only the storage type. A caller that
- * also needs `optional` or `nullable` reads the whole declaration through
- * `findColumn` instead, so one lookup answers every declared-column question.
- *
- * @param column - The column name
- * @param schema - The table's schema
- * @returns The column's {@link ColumnStorage}, or `undefined` when the schema does not declare it
- *
- * @example
- * ```ts
- * findColumnStorage('age', schema) // 'integer'
- * ```
- */
-export function findColumnStorage(column: string, schema: TableSchema): ColumnStorage | undefined {
-	return findColumn(column, schema)?.storage
-}
-
 // === Filesystem classification
 
 /**

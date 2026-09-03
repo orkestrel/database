@@ -1,13 +1,51 @@
 // The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
 // this repo's own `guides/README.md` manifest — one row (Database) spanning the
-// core/browser/server faces as a multi-dir `GuideModule` (AGENTS §22 — one guide per
-// package). The five constants below are this package's own.
+// core/browser/server faces as a multi-dir `GuideModule` (`.claude/rules/documentation.md`
+// § Parity — one guide per package). The constants below are this package's own.
 
 import type { SurfaceSymbol } from '@orkestrel/guide'
+import type { AdmissionInterface, Condition, TableSchema } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
+import {
+	auditDriver,
+	cloneDriverMetadata,
+	compareValues,
+	computeAggregate,
+	createDatabase,
+	createMemoryDriver,
+	equalsValue,
+	extractKey,
+	filterRows,
+	isKey,
+	matchesCondition,
+	matchesGlobPattern,
+	matchesLikePattern,
+	matchesQuery,
+	matchesWildcardPattern,
+	migrateRows,
+	planMigration,
+	shapeToColumnStorage,
+} from '@src/core'
+import {
+	compileAggregateSQL,
+	compileColumnSQL,
+	compileFieldSQL,
+	compileQuerySQL,
+	deriveSQLiteIndexName,
+	matchesAggregateExactly,
+	matchesConditionExactly,
+	matchesOrderExactly,
+	matchesQueryExactly,
+	matchesSQLiteAffinity,
+	quoteIdentifier,
+	schemaToIndexes,
+	schemaToTable,
+} from '@src/server'
+import { deriveIndexedDBIndexName } from '@src/browser'
 import {
 	computeSymbolKey,
 	createGuide,
@@ -40,7 +78,7 @@ const MODULES = Object.freeze({
 /**
  * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
  *
- * `Cursor`, `DatabaseContext`, `DatabaseTransaction`, `DriverIterator`, `Query`,
+ * `Cursor`, `DatabaseContext`, `DatabaseTransaction`, `Query`,
  * `ScopedIterator`, `Table`, and `TransactionScope` are each exported from their
  * own implementation file (one-class-per-file) but never star-exported from their face's
  * `index.ts`, so they are unreachable through the published barrel — only their `*Interface`
@@ -51,7 +89,6 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class Cursor',
 	'class DatabaseContext',
 	'class DatabaseTransaction',
-	'class DriverIterator',
 	'class Query',
 	'class ScopedIterator',
 	'class Table',
@@ -309,6 +346,245 @@ describe('executable guide fences', () => {
 		expect(() => checkGuideFences(join(ROOT, 'tsconfig.json'), document, fences)).toThrow(
 			`Fence 1 (guide line ${line})`,
 		)
+	})
+})
+
+// `checkGuideFences` compiles each fence with `noEmit`, so it proves every name resolves
+// and nothing more: a fence whose `// value` comment the code contradicts still passes it.
+// These cases transcribe the fences that state a value and assert that value against the
+// real sources, so a changed return breaks here rather than shipping. Each transcription
+// names the guide line it mirrors. Change a fence, change the transcription beside it.
+describe('flagship fences: core helpers', () => {
+	it('migrateRows drops the removed column (guides/database.md:1554-1556)', () => {
+		const rows = [{ id: 'a', name: 'Ada', legacy: true }]
+		expect(
+			migrateRows(rows, [{ operation: 'column.remove', table: 'users', column: 'legacy' }]),
+		).toEqual([{ id: 'a', name: 'Ada' }])
+	})
+
+	it('cloneDriverMetadata returns a deeply frozen distinct copy (guides/database.md:1667-1669)', () => {
+		const source = {
+			version: 3,
+			schema: [
+				{
+					name: 'users',
+					primary: 'id',
+					columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+					indexes: [],
+				},
+			],
+		}
+		const metadata = cloneDriverMetadata(source)
+		expect(Object.isFrozen(metadata)).toBe(true)
+		expect(Object.isFrozen(metadata.schema[0])).toBe(true)
+		expect(metadata !== source).toBe(true)
+	})
+
+	it('the comparison and pattern helpers return what the fence claims (guides/database.md:2020-2023)', () => {
+		expect(compareValues(1, 2)).toBe(-1)
+		expect(matchesWildcardPattern('hello', 'h%o', '%', '_', true)).toBe(true)
+		expect(matchesLikePattern('hello', 'h%o')).toBe(true)
+		expect(matchesGlobPattern('hello', 'h*o')).toBe(true)
+	})
+
+	it('the condition helpers return what the fence claims (guides/database.md:2031-2033)', () => {
+		const condition: Condition = {
+			column: 'age',
+			operator: 'above',
+			values: [18],
+			connector: 'and',
+		}
+		expect(matchesCondition({ age: 36 }, condition)).toBe(true)
+		expect(matchesQuery({ age: 36 }, [condition])).toBe(true)
+		expect(filterRows([{ age: 36 }, { age: 12 }], [condition])).toEqual([{ age: 36 }])
+	})
+
+	it('the aggregate and projection helpers return what the fence claims (guides/database.md:2038-2042)', () => {
+		expect(computeAggregate([{ age: 36 }, { age: 18 }], 'average', 'age')).toBe(27)
+		expect(extractKey({ id: 'u1' }, 'id')).toBe('u1')
+		expect(shapeToColumnStorage(integerShape())).toBe('integer')
+		expect(equalsValue({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true)
+	})
+
+	it('planMigration returns the versioned step plan the fence claims (guides/database.md:1548)', () => {
+		const deployed: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+				indexes: [],
+			},
+		]
+		const declared: readonly TableSchema[] = [
+			{
+				name: 'users',
+				primary: 'id',
+				columns: [
+					{ name: 'id', storage: 'text', optional: false, nullable: false },
+					{ name: 'age', storage: 'integer', optional: true, nullable: true },
+				],
+				indexes: [],
+			},
+		]
+		const plan = planMigration(deployed, declared)
+		expect(plan.from).toBe(0)
+		expect(plan.to).toBe(1)
+		expect(plan.steps).toEqual([
+			{
+				operation: 'column.add',
+				table: 'users',
+				column: { name: 'age', storage: 'integer', optional: true, nullable: true },
+			},
+		])
+	})
+
+	it('auditDriver resolves an empty finding list for a conformant driver (guides/database.md:1770-1771)', async () => {
+		const findings = await auditDriver(() => createMemoryDriver())
+		expect(findings).toEqual([])
+	})
+
+	// This case is a type-conformance transcription of a caller-supplied `AdmissionInterface`
+	// literal: the fence's compile against the interface proves the shape, not an implementor's
+	// behaviour. `tests/src/core/DatabaseContext.test.ts` and `tests/src/core/TransactionScope.test.ts`
+	// drive the real implementors of this boundary.
+	it('the admission boundary reports accepting and returns the tracked result (guides/database.md:1472-1473)', async () => {
+		const boundary: AdmissionInterface = {
+			accepting: true,
+			track: (operation) => operation(),
+		}
+		expect(boundary.accepting).toBe(true)
+		expect(await boundary.track(async () => 42)).toBe(42)
+	})
+})
+
+describe('flagship fences: server helpers', () => {
+	const schema: TableSchema = {
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		],
+		indexes: [],
+	}
+
+	it('compileQuerySQL emits the fence text and parameters (guides/database.md:2135-2138)', () => {
+		expect(
+			compileQuerySQL(
+				{ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] },
+				schema,
+			),
+		).toEqual({ sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18] })
+	})
+
+	it('the SQL emitters return what the fence claims (guides/database.md:2140-2148)', () => {
+		expect(quoteIdentifier('order')).toBe('"order"')
+		expect(deriveSQLiteIndexName('users', ['age'])).toBe('idx_5_users_3_age')
+		expect(compileColumnSQL('integer')).toBe('INTEGER')
+		expect(compileFieldSQL(['profile', 'score'])).toBe('json_extract("profile", \'$.score\')')
+		expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
+		expect(matchesAggregateExactly('minimum', 'age', schema)).toBe(true)
+		expect(matchesSQLiteAffinity('INTEGER', 'integer')).toBe(true)
+		expect(schemaToTable(schema)).toContain('CREATE TABLE IF NOT EXISTS')
+		expect(schemaToIndexes(schema)).toEqual([])
+	})
+
+	it('the exactness predicates return what the fence claims (guides/database.md:2197-2212)', () => {
+		const exact: Condition = { column: 'age', operator: 'above', values: [18], connector: 'and' }
+		const notExact: Condition = {
+			column: 'age',
+			operator: 'above',
+			values: [null],
+			connector: 'and',
+		}
+		expect(matchesConditionExactly(exact, schema)).toBe(true)
+		expect(matchesConditionExactly(notExact, schema)).toBe(false)
+		expect(matchesOrderExactly({ column: 'age', direction: 'ascending' }, schema)).toBe(true)
+		expect(
+			matchesQueryExactly(
+				{ conditions: [exact], order: [{ column: 'age', direction: 'ascending' }] },
+				schema,
+			),
+		).toBe(true)
+	})
+})
+
+// The browser fence's `conditionToRange` / `selectPlan` claims return `IDBKeyRange`
+// values, which this Node project has no host for; `tests/src/browser/helpers.test.ts`
+// asserts them in real Chromium. The two host-independent claims transcribe here.
+describe('flagship fences: browser helpers', () => {
+	it('isKey and deriveIndexedDBIndexName return what the fence claims (guides/database.md:2362-2364)', () => {
+		expect(isKey('u1')).toBe(true)
+		expect(isKey(true)).toBe(false)
+		expect(deriveIndexedDBIndexName(['city', 'age'])).toBe('2#4:city3:age')
+	})
+})
+
+describe('flagship fences: the database stack', () => {
+	it('reports the default and the overridden primary column (guides/database.md:891-892)', () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			name: 'app',
+			tables: {
+				users: {
+					id: stringShape(),
+					name: stringShape({ min: 1 }),
+					age: integerShape({ min: 0 }),
+					role: literalShape(['admin', 'member', 'guest']),
+					bio: optionalShape(stringShape()),
+				},
+				posts: { slug: stringShape(), title: stringShape() },
+			},
+			primary: { posts: 'slug' },
+			indexes: { posts: [['title']] },
+		})
+		expect(db.table('users').primary).toBe('id')
+		expect(db.table('posts').primary).toBe('slug')
+	})
+
+	it('stores the coerced number a numeric string parsed to (guides/database.md:1145)', async () => {
+		const users = createDatabase({
+			driver: createMemoryDriver(),
+			tables: {
+				users: {
+					id: stringShape(),
+					name: stringShape(),
+					age: integerShape(),
+					role: stringShape(),
+				},
+			},
+		}).table('users')
+		const normalized = users.contract.parse({ id: 'u2', name: 'Bo', age: '41', role: 'member' })
+		if (normalized === undefined) throw new Error('Expected the row to parse')
+		await users.set(normalized)
+		expect((await users.get('u2'))?.age).toBe(41)
+	})
+
+	it('mints a fresh key and honours the configured generator (guides/database.md:1798, :1805)', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { posts: { id: optionalShape(stringShape()), title: stringShape() } },
+		})
+		const minted = await db.table('posts').set({ title: 'Hello' })
+		expect(typeof minted).toBe('string')
+		const numbered = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { events: { id: optionalShape(integerShape()), name: stringShape() } },
+			generator: () => 42,
+		})
+		expect(await numbered.table('events').set({ name: 'opened' })).toBe(42)
+	})
+
+	it('exports a portable definition naming its primary column (guides/database.md:1907-1909)', () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const exported = db.export().users
+		if (exported === undefined) throw new Error('Expected the users definition')
+		expect(exported.primary).toBe('id')
+		expect(exported.schema).toMatchObject({ type: 'object' })
+		expect(Object.keys(exported.columns)).toEqual(['id', 'name'])
 	})
 })
 

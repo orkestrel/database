@@ -27,7 +27,7 @@ import {
 
 // Database-level behavior only — lazy connect / close lifecycle, the per-table
 // `keys` / `indexes` options, the typed `table()` accessor, `import` / `export`,
-// `transaction`, and the push observation `emitter` (§13). Keyed CRUD, batch
+// `transaction`, and the push observation `emitter`. Keyed CRUD, batch
 // overloads, coercion / error paths, and contract introspection are `Table`'s own
 // surface and live in `Table.test.ts`.
 
@@ -124,7 +124,7 @@ describe('table() accessor', () => {
 		expect(users.primary).toBe('id')
 	})
 
-	// Type-level regression lock (§2 types-first): a `db.table('x')` result annotated
+	// Type-level regression lock (`AGENTS.md` § TTTDD, types first): a `db.table('x')` result annotated
 	// against a concrete `TableInterface<UserRow>` — exactly what `setup.ts`'s
 	// `createConstrainedUsersDatabase` does (its `db`, inferred through
 	// `createDatabase<const T>`, only widens to `DatabaseInterface` in the returned
@@ -672,12 +672,14 @@ describe('transaction() abort signal (snapshot floor)', () => {
 	})
 })
 
-// ── Emitter — the PUSH observation surface (AGENTS §13) ──────────────────────
+// ── Emitter — the PUSH observation surface ───────────────────────────────────
 //
+// `.claude/rules/patterns.md` § Stateful emitters owns this pattern.
 // The Database exposes a typed `emitter` (`DatabaseEventMap`) carrying its connection +
 // transaction lifecycle for fire-and-forget observers. Every event is emitted directly; the
 // emitter isolates a listener throw (it can never escape into the snapshot / commit / rollback
-// flow, AGENTS §13), routing it to the emitter's own `error` handler (the `error` option), and
+// flow — `.claude/rules/patterns.md` § Listener isolation), routing it to the emitter's own
+// `error` handler (the `error` option), and
 // every emit sits AFTER its transition (`commit` after the scope succeeds, `rollback` after
 // every table is restored — and the `rollback` emit OBSERVES the propagated error, never
 // swallowing it). These pin: each event fires at the right moment; `on?` wires initial
@@ -686,7 +688,8 @@ describe('transaction() abort signal (snapshot floor)', () => {
 // `error` handler fires.
 
 // The DatabaseEventMap event names recorded across the emitter tests — fed to the shipped
-// `createRecorders` (AGENTS §16.1: the per-event wiring lives in `@orkestrel/test`; this file
+// `createRecorders` (`.claude/rules/tests.md` § Shared test infrastructure: the per-event
+// wiring lives in `@orkestrel/test`; this file
 // keeps only the names its scenarios observe). Each list carries its own exact union rather
 // than `keyof DatabaseEventMap`, because a name in the type argument that the array omits
 // reads `undefined` at runtime under a non-optional recorder type.
@@ -905,7 +908,7 @@ describe('Database — emitter (push observation surface)', () => {
 // `migrate` hook, and returns the applied plan. Throws `MIGRATION` when the driver
 // lacks the hook (propagated driver errors, e.g. unknown-table, pass through as-is —
 // covered by `MemoryDriver`'s own tests and `conformDriver`). Checks abort at entry.
-// Emits `migrate` AFTER a successful apply (AGENTS §13).
+// Emits `migrate` AFTER a successful apply (`.claude/rules/patterns.md` § Stateful emitters).
 
 describe('migrate()', () => {
 	it('applies a column.remove plan, strips stored rows, and emits migrate once', async () => {
@@ -1074,7 +1077,8 @@ describe('migrate()', () => {
 //
 // When `version` is set and the driver implements BOTH `metadata` and `stamp`, `open()`
 // reconciles the driver's persisted `DriverMetadata` against the declared version INSIDE the
-// same lazy-connect chain, AFTER the `open` event (AGENTS §13 emit-after-transition).
+// same lazy-connect chain, AFTER the `open` event (`.claude/rules/patterns.md`
+// § Stateful emitters — emit after the transition).
 
 describe('version reconciliation (open())', () => {
 	it('fresh memory driver: stamps { version, declared schema }, no migrate event', async () => {

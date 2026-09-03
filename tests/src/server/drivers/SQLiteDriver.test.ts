@@ -41,7 +41,8 @@ import {
 } from '../../../setupServer.js'
 
 // The SQLite driver's DriverInterface primitives over a real SQLite database
-// (`:memory:` and temp files, no mocks, AGENTS §16): the shared conformance
+// (`:memory:` and temp files, no mocks — `.claude/rules/tests.md`
+// § Test contract): the shared conformance
 // battery, keyed CRUD, codec round-trips, the CLOSED gate, native aggregate,
 // snapshot, migrate atomicity, metadata/stamp persistence, a native transaction
 // through both the driver directly and the core `Database.transaction`, stream
@@ -58,7 +59,8 @@ describe('driver conformance — SQLiteDriver', () => {
 
 // The shared driver-conformance schema — `users` (one of each codec-relevant
 // column type) + a non-`id` primary `posts` table — see `driverSchema` in
-// setupServer (AGENTS §16.1). The SQLite battery additionally builds a
+// setupServer (`.claude/rules/tests.md` § Shared test infrastructure). The
+// SQLite battery additionally builds a
 // composite `['age', 'name']` index on `users`.
 const SCHEMA = driverSchema({ indexes: [['name'], ['age', 'name']] })
 const USERS_SQL =
@@ -630,7 +632,7 @@ describe('SQLiteDriver — open', () => {
 		native.execute(
 			'CREATE TABLE "_metadata" ("id" INTEGER, "version" INTEGER, "schema" TEXT, PRIMARY KEY ("id"))',
 		)
-		native.prepare('INSERT INTO "_metadata" ("id", "version", "schema") VALUES (1, ?, ?)').run([
+		native.prepare('INSERT INTO "_metadata" ("id", "version", "schema") VALUES (1, ?, ?)').execute([
 			1,
 			JSON.stringify([
 				{
@@ -1749,7 +1751,7 @@ describe('SQLiteDriver — metadata / stamp across reopen (temp file)', () => {
 			native.connect()
 			native
 				.prepare('INSERT OR REPLACE INTO "_metadata" ("id", "version", "schema") VALUES (1, ?, ?)')
-				.run([version, schema])
+				.execute([version, schema])
 			const before = native
 				.prepare('SELECT "version", "schema" FROM "_metadata" WHERE "id" = 1')
 				.get()
@@ -2299,7 +2301,7 @@ describe('SQLiteDriver — stream laziness', () => {
 				meta: { valid: true },
 			})
 			native.connect()
-			native.prepare('UPDATE "users" SET "meta" = ? WHERE "id" = ?').run(['{bad', 'u1'])
+			native.prepare('UPDATE "users" SET "meta" = ? WHERE "id" = ?').execute(['{bad', 'u1'])
 			const stream = onDisk.stream?.('users', {})
 			if (stream === undefined) throw new Error('Expected stream capability')
 			expect(await collect(stream)).toEqual([{ id: 'u1', name: 'Ada', age: 36, active: true }])

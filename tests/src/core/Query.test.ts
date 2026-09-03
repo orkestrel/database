@@ -11,7 +11,8 @@ import { seedUsersTable } from '../../setup.js'
 
 // The base `id` / `name` / `age` columns plus this file's own `role` literal. The
 // `createDatabase` + seed wiring is the shared `seedUsersTable` (tests/setup.ts,
-// AGENTS §16.1); `columns` stays local so `Users` infers its exact row (no `as`).
+// `.claude/rules/tests.md` § Shared test infrastructure); `columns` stays local
+// so `Users` infers its exact row (no `as`).
 const columns = {
 	id: stringShape(),
 	name: stringShape(),

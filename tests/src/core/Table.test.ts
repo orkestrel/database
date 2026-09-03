@@ -317,7 +317,7 @@ describe('Table — batch overloads (array in → array out, same order)', () =>
 	})
 })
 
-describe('Table — batch write abort signal (AGENTS §9.2)', () => {
+describe('Table — batch write abort signal (`.claude/rules/patterns.md` § Batch operations)', () => {
 	it('throws ABORTED and applies nothing when the signal is already fired before a batch set', async () => {
 		const users = userTable()
 		const controller = new AbortController()
@@ -391,7 +391,8 @@ describe('Table — batch write abort signal (AGENTS §9.2)', () => {
 			error = caught
 		}
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
-		// The first item is already applied — no rollback (AGENTS §9.2 remarks).
+		// The first item is already applied — no rollback (`.claude/rules/patterns.md`
+		// § Batch operations).
 		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
 		expect(await users.get('u2')).toBeUndefined()
 	})
@@ -818,21 +819,24 @@ describe('Table — native hook dispatch', () => {
 	})
 })
 
-// ── Emitter — the PUSH observation surface (AGENTS §13) ──────────────────────
+// ── Emitter — the PUSH observation surface ───────────────────────────────────
 //
+// `.claude/rules/patterns.md` § Stateful emitters owns this pattern.
 // Alongside the database-level lifecycle, each Table exposes a typed `emitter`
 // (`TableEventMap`) carrying its per-row mutation moments — `write` (set / add / update),
 // `remove`, `clear` — for fire-and-forget observers (cache invalidation, sync). Events
 // carry the affected KEY only (no value payload). Every event is emitted directly; the
-// emitter isolates a listener throw (it can never escape into a write or its transaction,
-// AGENTS §13), and every emit sits AFTER the driver write / delete / clear completes. A Table
+// emitter isolates a listener throw (it can never escape into a write or its transaction —
+// `.claude/rules/patterns.md` § Listener isolation), and every emit sits AFTER the driver
+// write / delete / clear completes. A Table
 // receives the Database's shared `error` handler, so a listener throw is reported without
 // escaping. These pin: each event fires with the right key;
 // `set` / `add` / `update` all emit one `write`; a no-op delete / update emits nothing; and
 // the emit-safety guarantee — a throwing observer cannot corrupt the written state.
 
 // The TableEventMap event names recorded across the emitter tests — fed to the shipped
-// `createRecorders` (AGENTS §16.1: the per-event wiring lives in `@orkestrel/test`; this file
+// `createRecorders` (`.claude/rules/tests.md` § Shared test infrastructure: the per-event
+// wiring lives in `@orkestrel/test`; this file
 // keeps only the names its scenarios observe). The list carries its own exact union rather
 // than `keyof TableEventMap`, because a name in the type argument that the array omits reads
 // `undefined` at runtime under a non-optional recorder type.

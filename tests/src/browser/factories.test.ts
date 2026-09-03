@@ -22,7 +22,7 @@ afterEach(async () => {
 
 describe('createIndexedDBDriver', () => {
 	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
-		name = uniqueName('taverna-idbdriver-factory')
+		name = uniqueName('database-idbdriver-factory')
 		await deleteDatabase(name)
 		const driver = createIndexedDBDriver(name)
 		await driver.open(tableSchemas('items'))
@@ -35,7 +35,7 @@ describe('createIndexedDBDriver', () => {
 	})
 
 	it('drives the core createDatabase stack (a typed-row round-trip over IndexedDB)', async () => {
-		name = uniqueName('taverna-idbdriver-stack')
+		name = uniqueName('database-idbdriver-stack')
 		await deleteDatabase(name)
 		const db = createDatabase({
 			driver: createIndexedDBDriver(name),

@@ -6,7 +6,7 @@ import type { CursorInterface, Key, Row } from './types.js'
  * @remarks
  * Iterates a snapshot of the table's keys captured when the cursor was opened,
  * reading each row lazily through the owning table — so a mutation made during
- * iteration cannot corrupt the walk, and a key removed mid-iteration is simply
+ * iteration cannot corrupt the walk, and a key removed mid-iteration is
  * skipped. `update` and `remove` act on the row at the current position.
  */
 export class Cursor<T = Row> implements CursorInterface<T> {

@@ -23,7 +23,7 @@ import {
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
-	resolveColumns,
+	requireColumns,
 	resolvePrimary,
 	findColumn,
 	shapeToColumnSchema,
@@ -124,11 +124,11 @@ describe('resolvePrimary', () => {
 	})
 })
 
-describe('resolveColumns', () => {
+describe('requireColumns', () => {
 	it('reads a declared table and throws NOT_FOUND for an undeclared one', () => {
 		const tables = { users: { id: stringShape() } }
-		expect(resolveColumns(tables, 'users')).toBe(tables.users)
-		expect(captureError(() => resolveColumns(tables, 'posts'))).toMatchObject({
+		expect(requireColumns(tables, 'users')).toBe(tables.users)
+		expect(captureError(() => requireColumns(tables, 'posts'))).toMatchObject({
 			code: 'NOT_FOUND',
 			context: { table: 'posts' },
 		})
@@ -659,8 +659,8 @@ describe('normalizeDriverSchema', () => {
 })
 
 // Local schema-literal builder — kept file-local since only this file diffs
-// TableSchema literals directly (AGENTS §16.1: extract once it serves a
-// second file).
+// TableSchema literals directly (`.claude/rules/tests.md` § Shared test
+// infrastructure: extract after it serves a second file).
 function schema(overrides: Partial<TableSchema> & { name: string }): TableSchema {
 	const columns: readonly ColumnSchema[] = [
 		{ name: 'id', storage: 'text', optional: false, nullable: false },

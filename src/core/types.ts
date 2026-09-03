@@ -148,6 +148,17 @@ export type DatabaseStatus = 'idle' | 'open' | 'closed'
  * boundary can contain everything already accepted. A streamed read enters each
  * continuation independently through the same pair, so an idle iterator never
  * pins the boundary open.
+ *
+ * @example
+ * ```ts
+ * import type { AdmissionInterface } from '@orkestrel/database'
+ *
+ * const boundary: AdmissionInterface = {
+ * 	accepting: true,
+ * 	track: (operation) => operation(),
+ * }
+ * await boundary.track(async () => 42) // 42
+ * ```
  */
 export interface AdmissionInterface {
 	readonly accepting: boolean
@@ -194,7 +205,7 @@ export interface ConformanceFinding {
  * relevant transition: `commit` only after the scope succeeds, `rollback` only after the
  * rollback operation completes (it OBSERVES the propagated scope error; that exact reason
  * still propagates). A rollback failure propagates instead and emits no misleading
- * `rollback` event. Subscribe via `database.emitter.on(...)`.
+ * `rollback` event. Subscribe through `database.emitter.on(...)`.
  *
  * Declared as a `type` alias (not `interface extends EventMap` — `EventMap` is a
  * `type` kind): a type-literal satisfies the `EventMap` constraint
@@ -212,7 +223,7 @@ export type DatabaseEventMap = {
 	readonly commit: readonly []
 	/** Signals that a transaction scope failed and rollback completed — the exact propagated scope error. */
 	readonly rollback: readonly [error: unknown]
-	/** Signals that a {@link Migration} plan was applied via `migrate` — the applied plan. */
+	/** Signals that a {@link Migration} plan was applied through `migrate` — the applied plan. */
 	readonly migrate: readonly [migration: Migration]
 }
 
@@ -231,7 +242,7 @@ export type DatabaseEventMap = {
  * every event is emitted directly and a listener throw is routed to the emitter's `error`
  * handler (the `error` option), never onto this map, and sits AFTER the driver write / delete
  * / clear has completed — so a throwing observer can never corrupt a write or perturb a
- * transaction. Subscribe via `table.emitter.on(...)`. Declared as a `type` alias (
+ * transaction. Subscribe through `table.emitter.on(...)`. Declared as a `type` alias (
  * `EventMap` is a `type` kind).
  */
 export type TableEventMap = {
@@ -287,7 +298,7 @@ export interface DriverMetadata {
  *
  * @remarks
  * Derived by the database from its `tables` contract shapes ({@link ColumnSchema}
- * per column, via `shapeToColumnStorage`), its `primary`, and its `indexes` option
+ * per column, through `shapeToColumnStorage`), its `primary`, and its `indexes` option
  * (`indexes`, each entry one possibly-compound index of column names). A scan-only
  * backend (the reference `MemoryDriver`) ignores everything but `name`.
  */
@@ -326,7 +337,7 @@ export type MigrationStep =
  *
  * @remarks
  * `from` / `to` are the source and target schema versions; `steps` runs in
- * order. Applied natively via {@link DriverInterface.migrate} when a driver
+ * order. Applied natively through {@link DriverInterface.migrate} when a driver
  * implements it.
  */
 export interface Migration {
@@ -442,7 +453,7 @@ export type ColumnMap = Readonly<Record<string, ContractShape>>
  *
  * @remarks
  * Each table's row type is `Infer` of its columns (see {@link RowOf}); primary-key
- * columns are named separately via {@link PrimaryMap}.
+ * columns are named separately through {@link PrimaryMap}.
  */
 export type TableMap = Readonly<Record<string, ColumnMap>>
 
@@ -452,7 +463,7 @@ export type TableMap = Readonly<Record<string, ColumnMap>>
  *
  * @remarks
  * Contract 0.0.4's non-distributive `Infer` resolves the OPEN case (the broad
- * `ColumnMap` — e.g. when a database is held at its default type) directly:
+ * `ColumnMap` — for example when a database is held at its default type) directly:
  * `RowOf<ColumnMap>` and {@link Row} are mutually assignable, so no short-circuit
  * to `Row` and no `additionalProperties: false` pin are needed — `Infer` no
  * longer trips TS's instantiation-depth guard over the open shape, and the
@@ -461,7 +472,7 @@ export type TableMap = Readonly<Record<string, ColumnMap>>
  * concrete column map.
  */
 export type RowOf<C extends ColumnMap> = Infer<{
-	readonly type: 'object'
+	readonly category: 'object'
 	readonly properties: C
 }>
 
@@ -540,7 +551,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	 *   deployed to diff against), so `open()` stamps `{ version, schema }` for
 	 *   next time.
 	 * - **Stored version < `version`** — `planMigration(stored.schema, declared
-	 *   schema)` computes the upgrade plan, applied via the driver's optional
+	 *   schema)` computes the upgrade plan, applied through the driver's optional
 	 *   `migrate` hook. If `migrate` is absent and the plan is non-empty,
 	 *   `open()` throws `DatabaseError` `MIGRATION`. On success, `open()`
 	 *   `stamp`s the new `{ version, schema }` and emits the `migrate` event.
@@ -564,7 +575,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
  *
  * @remarks
  * `schema` is the JSON Schema (universally portable, serializable); `columns` is
- * the source column map, which re-imports losslessly via `import` within a
+ * the source column map, which re-imports losslessly through `import` within a
  * TypeScript environment. `primary` is the primary-key column.
  */
 export interface TableDefinition {
@@ -617,7 +628,7 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
 	): Promise<R>
 	/**
 	 * Diffs a caller-supplied deployed schema against this database's declared
-	 * schema (its `tables`, as configured) via `planMigration`, applies the
+	 * schema (its `tables`, as configured) through `planMigration`, applies the
 	 * resulting plan through the driver's optional `migrate` hook, and returns
 	 * the applied plan.
 	 *

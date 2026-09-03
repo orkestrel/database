@@ -7,7 +7,6 @@ import {
 	encodeValue,
 	extractValues,
 	deriveSQLiteIndexName,
-	findColumnStorage,
 	matchesAbsentPath,
 	matchesAggregateExactly,
 	matchesConditionExactly,
@@ -467,27 +466,5 @@ describe('matchesAbsentPath', () => {
 			expect(() => matchesAbsentPath(hostile)).not.toThrow()
 			expect(matchesAbsentPath(hostile)).toBe(false)
 		}
-	})
-})
-
-describe('findColumnStorage', () => {
-	const schema: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-			{ name: 'meta', storage: 'json', optional: false, nullable: true },
-		],
-		indexes: [],
-	}
-
-	it('returns the declared storage type of a known column', () => {
-		expect(findColumnStorage('age', schema)).toBe('integer')
-		expect(findColumnStorage('meta', schema)).toBe('json')
-	})
-
-	it('returns undefined for a column the schema does not carry', () => {
-		expect(findColumnStorage('missing', schema)).toBeUndefined()
 	})
 })

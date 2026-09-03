@@ -763,7 +763,7 @@ describe('cross-backend parity — MemoryDriver vs IndexedDBDriver', () => {
 	let indexedDB: DatabaseInterface<{ readonly users: typeof USERS }>
 
 	beforeEach(async () => {
-		name = uniqueName('taverna-idb-parity')
+		name = uniqueName('database-idb-parity')
 		await deleteDatabase(name)
 		memory = memoryDatabase()
 		indexedDB = indexedDBDatabase(name)

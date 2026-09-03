@@ -130,7 +130,7 @@ export function compareValues(left: unknown, right: unknown): number {
  * @remarks
  * Primitives compare by SameValueZero (`NaN` equals itself; `+0` equals `-0`).
  * Arrays compare by index (same length, every element `equalsValue`). Plain
- * records (via `isRecord`) compare by their OWN enumerable keys: same key
+ * records (through `isRecord`) compare by their OWN enumerable keys: same key
  * COUNT and, for every key in `left`, `right` has that key (`Object.hasOwn`)
  * with a `equalsValue` value — so a key present with value `undefined` is NOT
  * equal to that key being absent (both differ in `Object.keys` membership).
@@ -262,7 +262,7 @@ export function matchesWildcardPattern(
 	let vi = 0
 	let pi = 0
 	// The greedy backtrack point: the pattern index of the LAST `any` wildcard + the value
-	// index it was taken at. On a mismatch we resume just past it and let it absorb one more
+	// index it was taken at. On a mismatch the walk resumes immediately past it and lets it absorb one more
 	// char (`mark += 1`) — O(value × pattern), never a regex's exponential backtracking.
 	let star = -1
 	let mark = 0
@@ -356,7 +356,7 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  * on leaves, so `NaN` now equals `NaN` under `equals` / `any` (it never matched
  * anything under the old rank-based comparison). `like` / `glob` / `starts` /
  * `ends` match only strings; `absent` / `present` test nullishness. Total — a
- * type mismatch is simply a non-match.
+ * type mismatch is a non-match.
  *
  * @param row - The row to test
  * @param condition - The condition to apply
@@ -602,7 +602,7 @@ export function bindRowKey(row: Row, primary: string, key: Key): Row {
  * ```
  */
 export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
-	switch (shape.type) {
+	switch (shape.category) {
 		case 'string':
 			return 'text'
 		case 'number':
@@ -692,7 +692,7 @@ export function resolvePrimary(primary: PrimaryMap, name: string): string {
 }
 
 /**
- * Resolves one declared table's columns out of a table map.
+ * Requires one declared table's columns out of a table map.
  *
  * @remarks
  * The overload preserves the map's own value type for a statically known table
@@ -707,15 +707,15 @@ export function resolvePrimary(primary: PrimaryMap, name: string): string {
  *
  * @example
  * ```ts
- * resolveColumns({ users: { id: stringShape() } }, 'users') // { id: … }
+ * requireColumns({ users: { id: stringShape() } }, 'users') // { id: … }
  * ```
  */
-export function resolveColumns<T extends TableMap, K extends keyof T & string>(
+export function requireColumns<T extends TableMap, K extends keyof T & string>(
 	tables: T,
 	name: K,
 ): T[K]
-export function resolveColumns(tables: TableMap, name: string): ColumnMap
-export function resolveColumns(tables: TableMap, name: string): ColumnMap {
+export function requireColumns(tables: TableMap, name: string): ColumnMap
+export function requireColumns(tables: TableMap, name: string): ColumnMap {
 	const columns = tables[name]
 	if (columns === undefined) {
 		throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
@@ -1124,7 +1124,7 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * `snapshot(['users'])` rolls back only the named table, leaving a
  * concurrent mutation to another table intact; a non-`id` primary key
  * (`posts.slug`) round-trips; a nested-object row round-trips structurally
- * (via {@link equalsValue}). The optional surface is presence-gated: when
+ * (through {@link equalsValue}). The optional surface is presence-gated: when
  * `migrate` exists, a `column.remove` plan strips the column from stored
  * rows and a plan referencing an unknown table throws `DatabaseError`
  * `MIGRATION`; when `stream` exists, it yields only condition-matching rows
@@ -1194,7 +1194,7 @@ export async function* scanDriver(
 	}
 
 	// c. write/read round-trip, copy-in/copy-out isolation (including NESTED
-	// fields, not just top-level ones), upsert-overwrite.
+	// fields, not only top-level ones), upsert-overwrite.
 	writeRead: {
 		try {
 			const driver = factory()
@@ -1564,7 +1564,7 @@ export async function* scanDriver(
 		}
 	}
 
-	// i. nested-object row round-trip (structural, via equalsValue).
+	// i. nested-object row round-trip (structural, through equalsValue).
 	try {
 		const driver = factory()
 		await driver.open(CONFORMANCE_SCHEMA)
@@ -1832,9 +1832,9 @@ export async function* scanDriver(
  * checks) want.
  *
  * @remarks
- * A thin driver over {@link scanDriver}: because that generator is
- * lazy, consuming only its first yielded value means every LATER phase
- * never runs — true fail-fast, not merely "report only the first". The
+ * Consumes only the first value {@link scanDriver} yields: because that
+ * generator is lazy, every LATER phase never runs — true fail-fast, not
+ * merely "report only the first". The
  * thrown error is byte-compatible with the historical shape: a
  * `CONFORMANCE` {@link DatabaseError} whose `message` is the finding's
  * `message` and whose `context` is `{ check, ...finding.context }`.

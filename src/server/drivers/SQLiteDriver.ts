@@ -21,6 +21,7 @@ import {
 	computeAggregate,
 	checkAbort,
 	DatabaseError,
+	DriverIterator,
 	filterRows,
 	equalsValue,
 	extractKey,
@@ -55,7 +56,6 @@ import {
 	quoteIdentifier,
 } from '../helpers.js'
 import { METADATA_TABLE } from '../constants.js'
-import { DriverIterator } from '../../core/DriverIterator.js'
 
 /**
  * Implements the {@link DriverInterface} over SQLite — the server-native, trusted-mode
@@ -77,7 +77,7 @@ import { DriverIterator } from '../../core/DriverIterator.js'
  * `SQLiteError` is contained by the same `DatabaseError` boundary described
  * below. Querying, ordering, paging, and aggregation is native: `records` /
  * `stream` compile a `QueryInput` to SQL with `compileQuerySQL`, and
- * `aggregate` runs a SQL `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (via
+ * `aggregate` runs a SQL `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (through
  * `compileAggregateSQL`) over the same compiled WHERE. `transaction` runs a
  * callback inside native `BEGIN` / `COMMIT` / `ROLLBACK`, passing a scoped
  * storage capability that becomes invalid after settlement. `migrate` runs the
@@ -85,11 +85,11 @@ import { DriverIterator } from '../../core/DriverIterator.js'
  * whichever native transaction is active: joined into the active transaction
  * callback when one exists (the core's versioned reconcile path wraps migrate +
  * stamp in one native `BEGIN`, and node:sqlite rejects a nested `BEGIN`), or
- * inside its own `database.transaction` otherwise — a mid-plan failure rolls
+ * inside its own `database.transact` otherwise — a mid-plan failure rolls
  * back atomically either way, an improvement over the non-atomic `MemoryDriver`
  * / `JSONDriver` migrate; a step referencing an undeclared table throws
  * `DatabaseError` `MIGRATION` before any DDL for that step runs. `snapshot` is
- * capture-replay (SELECT the named tables' rows, replay via DELETE + INSERT OR
+ * capture-replay (SELECT the named tables' rows, replay through DELETE + INSERT OR
  * REPLACE inside a native transaction on rollback) rather than a SQL
  * `SAVEPOINT`, since the core `transaction` calls the rollback thunk only on
  * failure with no commit-on-success signal — a long-lived `SAVEPOINT` would
@@ -152,7 +152,7 @@ export class SQLiteDriver implements DriverInterface {
 				}
 				const map = new Map<string, TableSchema>()
 				const identities = new Map<string, object>()
-				database.transaction(() => {
+				database.transact(() => {
 					this.#ensureMetadataTable(database)
 					const stored = this.#readMetadata(database)
 					const deployed = normalizeDriverSchema(stored?.schema ?? owned)
@@ -284,7 +284,7 @@ export class SQLiteDriver implements DriverInterface {
 		// conditions need to be exact; every other aggregate coerces the column
 		// numerically (parseNumber) — only a flat, declared integer/real column
 		// is provably exact (a text/json/blob column may hold non-numeric cells
-		// the engine skips via parseNumber, which SQL's numeric aggregates do not).
+		// the engine skips through parseNumber, which SQL's numeric aggregates do not).
 		const columnExact = matchesAggregateExactly(operation, column, schema)
 		if (conditionsExact && columnExact) {
 			return this.#guard(() => {
@@ -412,7 +412,7 @@ export class SQLiteDriver implements DriverInterface {
 			})
 		}
 		this.#guard(() => {
-			database.transaction(() => {
+			database.transact(() => {
 				this.#applyPlan(database, owned)
 				if (owned.metadata !== undefined) {
 					this.#writeMetadata(database, owned.metadata)
@@ -515,7 +515,7 @@ export class SQLiteDriver implements DriverInterface {
 			}
 			this.#guard(() => {
 				const current = this.#require()
-				current.transaction(() => {
+				current.transact(() => {
 					for (const [name, replacement] of replacements) {
 						current.execute('DELETE FROM ' + quoteIdentifier(name))
 						const statement = current.prepare(
@@ -527,7 +527,7 @@ export class SQLiteDriver implements DriverInterface {
 								replacement.names.map(() => '?').join(', ') +
 								')',
 						)
-						for (const values of replacement.values) statement.run(values)
+						for (const values of replacement.values) statement.execute(values)
 					}
 				})
 			})
@@ -568,7 +568,7 @@ export class SQLiteDriver implements DriverInterface {
 					')',
 			)
 			checkAbort(options?.signal)
-			statement.run(values)
+			statement.execute(values)
 		})
 	}
 
@@ -588,7 +588,7 @@ export class SQLiteDriver implements DriverInterface {
 					')',
 			)
 			checkAbort(options?.signal)
-			statement.run(values)
+			statement.execute(values)
 		})
 	}
 
@@ -603,7 +603,7 @@ export class SQLiteDriver implements DriverInterface {
 					' = ?',
 			)
 			checkAbort(options?.signal)
-			const result = statement.run([this.#key(key, schema)])
+			const result = statement.execute([this.#key(key, schema)])
 			return result.changes > 0
 		})
 	}
@@ -697,7 +697,7 @@ export class SQLiteDriver implements DriverInterface {
 		this.#guard(() => {
 			this.#require()
 				.prepare('DELETE FROM ' + quoteIdentifier(table))
-				.run()
+				.execute()
 		})
 	}
 
@@ -913,7 +913,7 @@ export class SQLiteDriver implements DriverInterface {
 					quoteIdentifier(METADATA_TABLE) +
 					' ("id", "version", "schema") VALUES (1, ?, ?)',
 			)
-			.run([metadata.version, JSON.stringify(metadata.schema)])
+			.execute([metadata.version, JSON.stringify(metadata.schema)])
 	}
 
 	#capability(token: object): StorageInterface {

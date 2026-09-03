@@ -28,7 +28,7 @@ import { INDEXABLE_STORAGE } from './constants.js'
  * one). `starts` is excluded — its prefix range can miss strings past U+FFFF;
  * the membership / negation / pattern / existence operators (`not`/`like`/`glob`/
  * `ends`/`any`/`none`/`absent`/`present`) have no single exact range. The operand
- * guard (`typeof` string/number) rejects a non-scalar value (e.g. an array, a
+ * guard (`typeof` string/number) rejects a non-scalar value (for example an array, a
  * boolean) that is not a usable key. `between` additionally guards against a
  * REVERSED pair (`first > second`): native `IDBKeyRange.bound` throws a raw
  * `DataError` `DOMException` for a lower bound above the upper bound, so a
@@ -153,7 +153,7 @@ export function selectPlan(
 	// A single condition's range is a SUPERSET of the result only when the result
 	// implies that condition — which holds iff every condition is `and`-joined (the
 	// fold is `c1 && c2 && … && cn`, so the result is a subset of each). A single
-	// `or` breaks that (a row can match via a later condition the range excludes),
+	// `or` breaks that (a row can match through a later condition the range excludes),
 	// so any `or` forces a full scan. The first condition's connector only seeds the
 	// fold and is ignored (AGENTS — the `Condition.connector` contract).
 	if (conditions.slice(1).some((condition) => condition.connector === 'or')) {

@@ -2,7 +2,7 @@
 // `src:server` test project. `node:fs` / `node:path` imports belong here, never
 // in `setup.ts`, which browser projects also load. Anchor every path to a
 // `createScratch` directory or to a caller-supplied config path, so the runner's
-// cwd never matters (AGENTS §16.1).
+// cwd never matters (see `.claude/rules/tests.md` § Shared test infrastructure).
 
 import type { DriverInterface, TableSchema } from '@src/core'
 import type { ExportKind, SurfaceSymbol } from '@orkestrel/guide'
@@ -404,7 +404,7 @@ export function replaceTransactionFailure(
 // A fresh on-disk database path under the OS temp dir, with a `cleanup` thunk
 // that removes its directory. Used by tests that need real file persistence
 // across a close / reopen. Call `cleanup` in `afterEach` so no temp file leaks
-// (AGENTS §16.1).
+// (see `.claude/rules/tests.md` § Shared test infrastructure).
 export function tempDatabasePath(): { readonly path: string; readonly cleanup: () => void } {
 	const scratch = createScratch({ prefix: 'database-json-' })
 	return {
@@ -471,7 +471,8 @@ export async function createForeignKeyFixture(
 
 /**
  * Build the shared driver-conformance schema the JSON `DriverInterface` battery
- * runs against (AGENTS §16.1) — a `users` table carrying one of each codec-relevant
+ * runs against (see `.claude/rules/tests.md` § Shared test infrastructure) — a
+ * `users` table carrying one of each codec-relevant
  * column type (text, `integer`, `boolean`, a nullable `json`) and a `posts` table
  * keyed by a non-`id` primary column (`slug`), so the driver test proves the CRUD /
  * key-order / snapshot / codec contract.

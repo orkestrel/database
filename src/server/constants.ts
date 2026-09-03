@@ -17,7 +17,7 @@ import type { ColumnStorage } from '@src/core'
  * TEXT byte-for-byte as UTF-8 — equivalent to Unicode CODE-POINT order —
  * while the core engine's `compareValues` orders JS strings with `<`, which
  * compares UTF-16 CODE-UNIT order. The two orders diverge for supplementary-
- * plane characters (code points ≥ U+10000, e.g. many emoji): a lead surrogate
+ * plane characters (code points ≥ U+10000, for example many emoji): a lead surrogate
  * (`\uD800`–`\uDBFF`) sorts BELOW ``–`￿` in code-unit order, while
  * its code point sorts ABOVE them. So `matchesConditionExactly`'s range family and
  * `matchesOrderExactly` exclude `text`, refining through the core engine instead.
