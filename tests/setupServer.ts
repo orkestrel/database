@@ -5,7 +5,7 @@
 // cwd never matters (see `.claude/rules/tests.md` § Shared test infrastructure).
 
 import type { DriverInterface, TableSchema } from '@src/core'
-import type { ExportKind, SurfaceSymbol } from '@orkestrel/guide'
+import type { ExportKeyword, SurfaceSymbol } from '@orkestrel/guide'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { Diagnostic, Symbol as CompilerSymbol, TypeChecker } from 'typescript'
 import { createSQLiteDriver } from '@src/server'
@@ -202,12 +202,12 @@ export function resolveEntrySymbol(checker: TypeChecker, symbol: CompilerSymbol)
  *
  * @param symbol - The resolved defining symbol
  * @param declaration - One declaration contributing to that symbol
- * @returns Its Guide surface kind, or `undefined` when unsupported
+ * @returns Its Guide surface keyword, or `undefined` when unsupported
  */
 export function classifyEntryDeclaration(
 	symbol: CompilerSymbol,
 	declaration: ts.Declaration,
-): ExportKind | undefined {
+): ExportKeyword | undefined {
 	if ((symbol.flags & ts.SymbolFlags.TypeAlias) !== 0 && ts.isTypeAliasDeclaration(declaration)) {
 		return 'type'
 	}
@@ -237,7 +237,7 @@ export function classifyEntryDeclaration(
  * @param checker - The program's type checker
  * @param exported - The public entry export symbol
  * @param entry - The entry path used for error context
- * @returns One symbol per distinct supported declaration kind
+ * @returns One symbol per distinct supported declaration keyword
  */
 export function shapeEntrySymbols(
 	checker: TypeChecker,
@@ -255,15 +255,15 @@ export function shapeEntrySymbols(
 	if (declarations === undefined || declarations.length === 0) {
 		throw new Error(`Entry '${entry}' export '${exported.name}' has no declaration`)
 	}
-	const kinds = new Set<ExportKind>()
+	const keywords = new Set<ExportKeyword>()
 	for (const declaration of declarations) {
-		const kind = classifyEntryDeclaration(target, declaration)
-		if (kind === undefined) {
+		const keyword = classifyEntryDeclaration(target, declaration)
+		if (keyword === undefined) {
 			throw new Error(`Entry '${entry}' export '${exported.name}' has unsupported declaration`)
 		}
-		kinds.add(kind)
+		keywords.add(keyword)
 	}
-	return Array.from(kinds, (kind) => ({ name: exported.name, kind }))
+	return Array.from(keywords, (keyword) => ({ name: exported.name, keyword }))
 }
 
 /**
@@ -326,7 +326,7 @@ export function deriveEntrySurfaces(
 		}
 		symbols.sort((left, right) => {
 			const name = left.name.localeCompare(right.name)
-			return name === 0 ? left.kind.localeCompare(right.kind) : name
+			return name === 0 ? left.keyword.localeCompare(right.keyword) : name
 		})
 		surfaces.set(entry, symbols)
 	}

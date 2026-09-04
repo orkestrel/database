@@ -334,7 +334,7 @@ describe('resolveEntrySymbol', () => {
 })
 
 describe('classifyEntryDeclaration', () => {
-	it('names each supported declaration kind and refuses an unsupported one', () => {
+	it('names each supported declaration keyword and refuses an unsupported one', () => {
 		const program = readEntryProgram(
 			{
 				'src/index.ts':
@@ -358,7 +358,7 @@ describe('classifyEntryDeclaration', () => {
 })
 
 describe('shapeEntrySymbols', () => {
-	it('returns one symbol per distinct declaration kind a name carries', () => {
+	it('returns one symbol per distinct declaration keyword a name carries', () => {
 		const program = readEntryProgram(
 			{
 				'src/index.ts':
@@ -373,7 +373,7 @@ describe('shapeEntrySymbols', () => {
 				'src/index.ts',
 			)
 			expect(shaped.map((symbol) => symbol.name)).toEqual(['Engine', 'Engine'])
-			expect([...shaped.map((symbol) => symbol.kind)].sort()).toEqual(['const', 'interface'])
+			expect([...shaped.map((symbol) => symbol.keyword)].sort()).toEqual(['const', 'interface'])
 		} finally {
 			program.scratch.destroy()
 		}
@@ -417,14 +417,16 @@ describe('deriveEntrySurfaces', () => {
 			const surfaces = deriveEntrySurfaces(project.config, ['src/index.ts', 'src/extra.ts'])
 			const entry = requireValue(surfaces.get('src/index.ts'))
 			expect([...surfaces.keys()]).toEqual(['src/index.ts', 'src/extra.ts'])
-			expect(entry.map((symbol) => `${symbol.name}:${symbol.kind}`)).toEqual([
+			expect(entry.map((symbol) => `${symbol.name}:${symbol.keyword}`)).toEqual([
 				'build:function',
 				'Engine:class',
 				'Label:type',
 				'LIMIT:const',
 				'Shape:interface',
 			])
-			expect(requireValue(surfaces.get('src/extra.ts'))).toEqual([{ name: 'EXTRA', kind: 'const' }])
+			expect(requireValue(surfaces.get('src/extra.ts'))).toEqual([
+				{ name: 'EXTRA', keyword: 'const' },
+			])
 		} finally {
 			project.scratch.destroy()
 		}
@@ -462,7 +464,7 @@ describe('deriveEntrySurfaces', () => {
 		try {
 			const surfaces = deriveEntrySurfaces(project.config, ['src/index.ts'])
 			expect(requireValue(surfaces.get('src/index.ts'))).toEqual([
-				{ name: 'BROKEN', kind: 'const' },
+				{ name: 'BROKEN', keyword: 'const' },
 			])
 		} finally {
 			project.scratch.destroy()

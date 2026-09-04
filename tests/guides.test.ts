@@ -135,7 +135,7 @@ it('manifest lists at least one guide', () => {
 // per-test budget cannot hold it under a full-suite run. The timeout states that
 // cost once for the block rather than inflating a unit test's.
 describe('compiler entry surfaces', () => {
-	it('resolves every supported kind through nested barrels in stable order', () => {
+	it('resolves every supported keyword through nested barrels in stable order', () => {
 		const project = tempTypeScriptProject({
 			'src/definitions.ts': [
 				'export type Value = string',
@@ -153,40 +153,40 @@ describe('compiler entry surfaces', () => {
 		try {
 			const surfaces = deriveEntrySurfaces(project.config, ['src/index.ts'])
 			expect(surfaces.get('src/index.ts')).toEqual([
-				{ name: 'Alpha', kind: 'class' },
-				{ name: 'Beta', kind: 'const' },
-				{ name: 'Callable', kind: 'function' },
-				{ name: 'Merged', kind: 'class' },
-				{ name: 'Merged', kind: 'interface' },
-				{ name: 'Shape', kind: 'interface' },
-				{ name: 'Value', kind: 'type' },
+				{ name: 'Alpha', keyword: 'class' },
+				{ name: 'Beta', keyword: 'const' },
+				{ name: 'Callable', keyword: 'function' },
+				{ name: 'Merged', keyword: 'class' },
+				{ name: 'Merged', keyword: 'interface' },
+				{ name: 'Shape', keyword: 'interface' },
+				{ name: 'Value', keyword: 'type' },
 			])
 		} finally {
 			project.scratch.destroy()
 		}
 	})
 
-	it('tracks add, remove, rename, and kind changes at the entry', () => {
+	it('tracks add, remove, rename, and keyword changes at the entry', () => {
 		const project = tempTypeScriptProject({
 			'src/index.ts': "export * from './extra.js'",
 			'src/extra.ts': 'export const Added = 1',
 		})
 		try {
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
-				{ name: 'Added', kind: 'const' },
+				{ name: 'Added', keyword: 'const' },
 			])
 			project.scratch.write('src/extra.ts', 'export class Renamed {}')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
-				{ name: 'Renamed', kind: 'class' },
+				{ name: 'Renamed', keyword: 'class' },
 			])
 			project.scratch.write('src/extra.ts', 'export function Renamed(): void {}')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
-				{ name: 'Renamed', kind: 'function' },
+				{ name: 'Renamed', keyword: 'function' },
 			])
 			project.scratch.write('src/index.ts', 'export const Local = true')
 			project.scratch.remove('src/extra.ts')
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
-				{ name: 'Local', kind: 'const' },
+				{ name: 'Local', keyword: 'const' },
 			])
 		} finally {
 			project.scratch.destroy()
@@ -200,7 +200,7 @@ describe('compiler entry surfaces', () => {
 		})
 		try {
 			expect(deriveEntrySurfaces(project.config, ['src/index.ts']).get('src/index.ts')).toEqual([
-				{ name: 'Public', kind: 'const' },
+				{ name: 'Public', keyword: 'const' },
 			])
 		} finally {
 			project.scratch.destroy()
@@ -656,7 +656,7 @@ for (const entry of manifest) {
 				.map((fence) => fence.code)
 			const names = guide
 				.surface()
-				.filter((symbol) => symbol.kind === 'function')
+				.filter((symbol) => symbol.keyword === 'function')
 				.map((symbol) => symbol.name)
 			expect(findUnexampled(names, fences, source.examples())).toEqual([])
 		})
