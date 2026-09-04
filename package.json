@@ -100,7 +100,7 @@
 		"@microsoft/api-extractor": "^7.59.0",
 		"@orkestrel/guide": "^0.0.17",
 		"@orkestrel/probe": "^0.0.12",
-		"@orkestrel/scaffold": "^0.0.62",
+		"@orkestrel/scaffold": "^0.0.63",
 		"@orkestrel/test": "^0.0.13",
 		"@types/node": "^26.4.1",
 		"@vitest/browser-playwright": "^4.1.11",

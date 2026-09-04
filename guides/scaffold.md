@@ -13,8 +13,11 @@ does not work. Scaffold makes the shared set data — a vendored data root shipp
 write the difference back.
 
 That root stages the vendored set and the instruction canon, and a target meets them differently.
-`HOST_PATHS` names the vendored set — the toolchain, the policy proofs, the bench scripts, and the
-harness permission file — and every target carries its own copy, which the verbs write and compare.
+`HOST_PATHS` names the vendored set — the licence, the harness permission file, the
+session-start hooks, the shared policy register, the shared policy proof, the shared policy plugin,
+the shared configuration leaf and its proof, the byte-identical root dotfiles, and the guide mirrors
+a generated workspace starts from, never its own guide — and each target carries its own copy of
+the paths it selects, which the verbs write and compare.
 `CANON_PATHS` names the instruction canon — the coding and orchestration contracts, the rules, the
 skills, the templates, the transport contracts, the agent roles, the bench configuration, and the
 MCP registrations — which stays in one place and is published for reading. A target carries the
@@ -110,6 +113,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `BIN_ENTRY_PATH`                  | const | The executable entry whose presence makes a workspace `bin`.                                     |
 | `CANON_PATHS`                     | const | The instruction-canon paths staged for reading rather than for a target, frozen.                 |
 | `CATALOG_AGENT_PATH`              | const | The agent file whose marker-bounded package table the catalog verb alone owns.                   |
+| `CATALOG_CLOSING_MARKER`          | const | The marker closing the package table inside the catalog agent file.                              |
+| `CATALOG_OPENING_MARKER`          | const | The marker opening the package table inside the catalog agent file.                              |
 | `CONFIG_TEMPLATES`                | const | Formatter-stable template text for every configuration artifact.                                 |
 | `CONFORMANCE_TEST_PATH`           | const | The official-tooling drift proof whose presence makes a workspace `conformance`.                 |
 | `CONTROL_CHARACTER_PATTERN`       | const | Unicode controls, formatting controls, and line and paragraph separators rejected in text.       |
@@ -205,6 +210,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 
 | Name                        | Kind     | Summary                                                                       |
 | --------------------------- | -------- | ----------------------------------------------------------------------------- |
+| `artifactToFinding`         | function | Project one planned artifact and the bytes found at its path into a verdict.  |
 | `artifactToHex`             | function | Project an artifact to the exact bytes it claims, as hexadecimal.             |
 | `bytesToHex`                | function | Encode bytes as exact lowercase hexadecimal text.                             |
 | `catalogToLayers`           | function | Project a catalog into the layers it publishes in.                            |
@@ -219,6 +225,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `inferGroup`                | function | Infer the `Group` a path belongs to.                                          |
 | `isCanonPath`               | function | Test whether a path belongs to the instruction canon a target reads.          |
 | `isDeferredPath`            | function | Test whether another surface owns the vendored bytes at a path.               |
+| `isFloorPath`               | function | Test whether a destination's floor bytes survive a live overlay.              |
+| `isRetainedPath`            | function | Test whether another surface owns a target's present bytes at a path.         |
 | `manifestToDependencies`    | function | Project a manifest's `@orkestrel/*` declarations into separate section lists. |
 | `manifestToName`            | function | Project a package manifest's text to its own name.                            |
 | `matchesDriftReachability`  | function | Test whether `inferDrift` could have produced a finding for an ownership.     |
@@ -232,13 +240,13 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `selectGroups`              | function | Select the groups a compile covers, in plan order.                            |
 | `selectHostPaths`           | function | Select the host paths a named workspace vendors.                              |
 | `serializeTypeScriptString` | function | Serialize one string as a single-quoted TypeScript literal.                   |
+| `srcToRoot`                 | function | Select the single published environment a package root points at.             |
 
 #### Compilers
 
 | Name                                | Kind     | Summary                                                                         |
 | ----------------------------------- | -------- | ------------------------------------------------------------------------------- |
 | `applyOverrides`                    | function | Replace the content of every drafted artifact an override names.                |
-| `artifactToFinding`                 | function | Project one planned artifact and the bytes found at its path into a verdict.    |
 | `artifactsToQuestions`              | function | Measure a drafted artifact list against the laws a whole plan decides.          |
 | `blueprintToConfigArtifacts`        | function | Compile every artifact in the `configs` group.                                  |
 | `blueprintToDevDependencies`        | function | Project a blueprint into the development dependencies its manifest declares.    |
@@ -265,7 +273,6 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `replacePlanRanges`                 | function | Replace writable ranges in a plan's manifest and recompute its identity.        |
 | `srcToEntry`                        | function | Project a published selection into the manifest's entry fields.                 |
 | `srcToExports`                      | function | Project a published selection into the manifest's `exports` map.                |
-| `srcToRoot`                         | function | Select the single published environment a package root points at.               |
 
 #### Factories
 
@@ -296,12 +303,16 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 
 | Name                    | Kind      | Summary                                                                              |
 | ----------------------- | --------- | ------------------------------------------------------------------------------------ |
+| `BytesReadResult`       | interface | The outcome of one bounded read whose body is taken as exact bytes.                  |
 | `Host`                  | interface | A whole vendored host supplied as a value rather than read from a directory.         |
+| `HostInventory`         | interface | The committed vendored-file inventory as one call's reads are decided against.       |
 | `HostManifest`          | interface | The complete vendored-host inventory.                                                |
 | `ManifestEntry`         | interface | One file record of the vendored host's manifest, including its exact-byte digest.    |
 | `MaterializeResult`     | interface | The outcome of one mutation of a target.                                             |
 | `MaterializerInterface` | interface | The mutation contract: the package's only filesystem writer.                         |
 | `MaterializerOptions`   | interface | Options for the materializer.                                                        |
+| `ReadAllowance`         | interface | The byte allowance one whole upstream call spends across every read it makes.        |
+| `TextReadResult`        | interface | The outcome of one bounded read whose body is taken as text.                         |
 | `Worktree`              | interface | What git reports about a target's working tree.                                      |
 | `UpstreamInterface`     | interface | The upstream contract: the package's only network reader, and it never writes.       |
 | `UpstreamOptions`       | interface | Options for the upstream reader.                                                     |
@@ -315,6 +326,12 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | Name                                | Kind  | Summary                                                                                  |
 | ----------------------------------- | ----- | ---------------------------------------------------------------------------------------- |
 | `BRANCH_PATTERN`                    | const | The Git branch syntax the repository endpoint accepts.                                   |
+| `DEFAULT_BRANCH`                    | const | The repository branch a raw content read addresses when a caller names none.             |
+| `DEFAULT_REGISTRY_BASE`             | const | The registry a version read addresses when a caller names none.                          |
+| `DEFAULT_REPOSITORY_BASE`           | const | The raw content host a repository read addresses when a caller names none.               |
+| `DEFAULT_UPSTREAM_CONCURRENCY`      | const | The simultaneous upstream requests a reader opens with.                                  |
+| `DEFAULT_UPSTREAM_RETRIES`          | const | The retries one upstream request is given when a caller names none.                      |
+| `DEFAULT_UPSTREAM_TIMEOUT`          | const | The timeout one upstream request is given when a caller names none, in milliseconds.     |
 | `DIGEST_PATTERN`                    | const | The exact SHA-256 syntax a digest is stated in: sixty-four lowercase hexadecimal digits. |
 | `DRIVE_PATTERN`                     | const | The drive prefix a Windows host path may open with.                                      |
 | `INVALID_SEGMENT_CHARACTER_PATTERN` | const | Visible characters no host path segment may carry.                                       |
@@ -327,7 +344,11 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `MAX_UPSTREAM_CONCURRENCY`          | const | Maximum simultaneous upstream requests.                                                  |
 | `MAX_UPSTREAM_RETRIES`              | const | Maximum retries one upstream request may be given after a transport fault.               |
 | `MAX_UPSTREAM_TIMEOUT`              | const | Maximum timeout one upstream request may be given, in milliseconds.                      |
+| `ORKESTREL_SCOPE`                   | const | The npm scope and repository owner the fleet's packages and sources are published under. |
+| `PACKUMENT_MEDIA_TYPE`              | const | The media type that selects the registry's abbreviated packument.                        |
 | `RESERVED_SEGMENT_PATTERN`          | const | The Windows device names that stay reserved even when an extension follows.              |
+| `SCAFFOLD_REPOSITORY`               | const | The repository this package's own vendored files are served from.                        |
+| `UNREADABLE_VERSION_NOTE`           | const | The note a release carries when its packument names no readable latest version.          |
 
 #### Guards
 
@@ -367,7 +388,7 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `isPhysicalDirectory`     | function | Test whether a path is a physical directory this package will read or write into.     |
 | `isPhysicalFile`          | function | Test whether a path is a physical file this package will read or replace.             |
 | `isVacant`                | function | Test whether a target is safe to write a fresh workspace into.                        |
-| `listCanonPaths`          | function | Lists the canon paths a target holds, filtered to a plan's groups.                    |
+| `listCanonPaths`          | function | List the canon paths a target holds, filtered to a plan's groups.                     |
 | `listDirectories`         | function | List a directory's descendant directories as sorted root-relative paths.              |
 | `listFiles`               | function | List a directory's files as sorted root-relative paths.                               |
 | `matchesAnchor`           | function | Test whether a captured directory is still the same directory.                        |
@@ -379,7 +400,7 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `matchesProtectedPath`    | function | Test whether a target-relative path is one no verb may delete.                        |
 | `matchesSensitivePath`    | function | Test whether a path names local configuration or a credential.                        |
 | `pathToStorage`           | function | Project a target-relative path to the storage name a vendored host holds it under.    |
-| `pruneEmptiedDirectories` | function | Removes every directory one set of deletions emptied.                                 |
+| `pruneEmptiedDirectories` | function | Remove every directory one set of deletions emptied.                                  |
 | `readAnchor`              | function | Capture one directory's physical identity.                                            |
 | `readExpectation`         | function | Capture what one destination holds before a write.                                    |
 | `readFileHex`             | function | Read one contained file as its exact bytes in lowercase hexadecimal.                  |
@@ -1172,10 +1193,11 @@ generating a workspace with no network receives.
 The vendored data root is the shared file set, staged into the published package as plain data.
 Staging walks `HOST_PATHS` and `CANON_PATHS`, and a release ships what both name.
 
-`HOST_PATHS` is the vendored set, and a target receives a copy of each path it selects: the licence,
-the harness permission file, the bench scripts, the shared policy register, the byte-identical root
-dotfiles, and the guide mirrors a generated workspace starts from. It is a candidate list rather than
-a plan, because a workspace never mirrors its own guide.
+`HOST_PATHS` is the vendored set, and a target receives a copy of each path it selects: the
+licence, the harness permission file, the session-start hooks, the shared policy register, the
+shared policy proof, the shared policy plugin, the shared configuration leaf and its proof, the
+byte-identical root dotfiles, and the guide mirrors a generated workspace starts from. It is a
+candidate list rather than a plan, because a workspace never mirrors its own guide.
 
 `CANON_PATHS` is the instruction canon, staged for reading instead: the `AGENTS.md` coding contract,
 the `CLAUDE.md` harness bridge, the `.agents/orchestration.md` agent-operation contract, the rules
@@ -1486,10 +1508,13 @@ value it asked for. A verb that creates a workspace throws it, because it chose 
 nothing to hand back. A blocking question closed the gate; a non-blocking one is a shape the package
 can describe and declines to create.
 
-Every entity publishes an emitter. The compiler emits `compile`, `audit`, `block`, `error`, and
-`destroy`; the materializer emits `write`, `remove`, `finish`, `error`, and `destroy`; the upstream
-reader emits `release`, `mirror`, `error`, and `destroy`. Errors are emitted immediately before they
-are thrown, so an observer sees a refusal even where the caller catches it.
+The compiler, the materializer, and the upstream reader each publish an emitter; `WriteTransaction`
+publishes none and reports through its return values and its thrown errors. The compiler emits
+`compile`, `audit`, `block`, `error`, and `destroy`; the materializer emits `write`, `remove`,
+`finish`, `error`, and `destroy`; the upstream reader emits `release`, `mirror`, `file`, `error`,
+and `destroy`. Every error raised after construction is emitted on `error` immediately before it is
+thrown, so an observer sees a refusal even where the caller catches it; a constructor refusal
+precedes the emitter and is thrown alone.
 
 ## Limits
 
