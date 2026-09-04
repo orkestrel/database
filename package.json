@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/database",
-	"version": "0.0.12",
+	"version": "0.0.13",
 	"description": "A typed database abstraction for the @orkestrel line — a single core engine over pluggable storage drivers. Part of the @orkestrel line.",
 	"keywords": [
 		"database",
@@ -91,17 +91,17 @@
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.15",
-		"@orkestrel/emitter": "^0.0.8",
-		"@orkestrel/indexeddb": "^0.0.9",
-		"@orkestrel/sqlite": "^0.0.9"
+		"@orkestrel/contract": "^0.0.16",
+		"@orkestrel/emitter": "^0.0.9",
+		"@orkestrel/indexeddb": "^0.0.10",
+		"@orkestrel/sqlite": "^0.0.10"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
-		"@orkestrel/guide": "^0.0.15",
+		"@orkestrel/guide": "^0.0.16",
 		"@orkestrel/probe": "^0.0.11",
-		"@orkestrel/scaffold": "^0.0.60",
-		"@orkestrel/test": "^0.0.12",
+		"@orkestrel/scaffold": "^0.0.61",
+		"@orkestrel/test": "^0.0.13",
 		"@types/node": "^26.4.0",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.65.0",
