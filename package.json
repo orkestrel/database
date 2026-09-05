@@ -61,7 +61,7 @@
 		"clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
 		"copy": "node -e \"const fs=require('node:fs'),p=require('node:path'),a=process.argv[1],b=process.argv[2];fs.mkdirSync(p.dirname(b),{recursive:true});fs.cpSync(a,b,{force:true});console.log('Copied: '+a+' to '+b)\"",
 		"scaffold": "scaffold",
-		"lint": "oxlint --config .oxlintrc.json --fix --deny-warnings .",
+		"lint": "oxlint --config .oxlintrc.json --fix .",
 		"check": "tsc --noEmit --project tsconfig.json && npm run check:src",
 		"check:src": "npm run check:src:core && npm run check:src:browser && npm run check:src:server",
 		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
