@@ -6,6 +6,11 @@ import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators
 /**
  * Clones unknown driver metadata into a distinct deeply frozen snapshot.
  *
+ * @remarks
+ * The clone is validated as {@link DriverMetadata} before it is returned, so a
+ * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * `context.path === 'metadata'` rather than surfacing a raw Contract or caller error.
+ *
  * @param value - Unknown metadata
  * @returns Owned driver metadata
  */
@@ -28,6 +33,11 @@ export function cloneDriverMetadata(value: unknown): DriverMetadata {
 /**
  * Clones unknown driver schema into a distinct deeply frozen snapshot.
  *
+ * @remarks
+ * The clone is validated as a table-schema collection before it is returned, so a
+ * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * `context.path === 'schema'` rather than surfacing a raw Contract or caller error.
+ *
  * @param value - Unknown table schema collection
  * @returns Owned driver schema
  */
@@ -49,6 +59,11 @@ export function cloneDriverSchema(value: unknown): readonly TableSchema[] {
 
 /**
  * Clones unknown migration input into a distinct deeply frozen snapshot.
+ *
+ * @remarks
+ * The clone is validated as a {@link MigrationInput} before it is returned, so a
+ * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * `context.path === 'migration'` rather than surfacing a raw Contract or caller error.
  *
  * @param value - Unknown migration input
  * @returns Owned migration input

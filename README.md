@@ -1,11 +1,15 @@
 # @orkestrel/database
 
-A typed database abstraction for the `@orkestrel` line — one public
-`Database` over internal table/query engines and pluggable storage drivers at
-the seams. Consumers use `TableInterface` and `QueryInterface`. Built to sit beside
-`@orkestrel/contract` (validation) and `@orkestrel/emitter` (observable
-lifecycle), reusing both directly. `TableInterface.cursor()` exposes the
-`CursorInterface` contract for serial bulk mutation.
+> One typed database API for keyed rows, fluent queries, cursors, and
+> whole-store transactions, running unchanged over an in-memory map, a JSON
+> file, SQLite, or IndexedDB.
+
+Declare your tables with the `createDatabase` function, hold each
+`TableInterface` it hands back, and reach rows by key or through the fluent
+`query()` builder. `TableInterface.cursor()` opens the `CursorInterface`
+contract for serial bulk mutation. Built on `@orkestrel/contract` for
+validation and `@orkestrel/emitter` for the observation surface, reusing both
+directly. Part of the `@orkestrel` line.
 
 ## Install
 

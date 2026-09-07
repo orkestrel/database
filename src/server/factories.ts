@@ -4,7 +4,7 @@ import { JSONDriver } from './drivers/JSONDriver.js'
 import { SQLiteDriver } from './drivers/SQLiteDriver.js'
 
 /**
- * Creates a persistent JSON-file {@link DriverInterface} for the core database layer.
+ * Creates a persistent JSON-file {@link DriverInterface} for a given path.
  *
  * @remarks
  * Pass it to `createDatabase` from `@orkestrel/database` to run the typed
@@ -38,7 +38,8 @@ export function createJSONDriver(path: string): DriverInterface {
 }
 
 /**
- * Creates a trusted-mode SQLite {@link DriverInterface} for the core database layer.
+ * Creates a trusted-mode, server-native SQLite {@link DriverInterface} for a database path,
+ * or for `:memory:` when the options bag omits one.
  *
  * @remarks
  * Pass it to `createDatabase` from `@orkestrel/database` to run the typed

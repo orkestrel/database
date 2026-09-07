@@ -127,7 +127,8 @@ export type AggregateOperation = 'count' | 'sum' | 'average' | 'minimum' | 'maxi
  * When `signal` aborts, the operation throws a {@link DatabaseError} with code
  * `ABORTED` carrying `signal.reason` in `context`. Reads check at their
  * documented boundaries; point mutations propagate the signal through the
- * driver to the backend commit point.
+ * driver to the backend commit point. A streamed read — {@link TableInterface.scan}
+ * or {@link QueryInterface.stream} — checks the signal before each yield.
  */
 export interface OperationOptions {
 	readonly signal?: AbortSignal
@@ -162,6 +163,10 @@ export type DatabaseStatus = 'idle' | 'open' | 'closed'
  */
 export interface AdmissionInterface {
 	readonly accepting: boolean
+	/**
+	 * Enters one operation into the boundary's ledger so whoever stops the boundary
+	 * contains everything already accepted.
+	 */
 	track<R>(operation: () => Promise<R>): Promise<R>
 }
 
@@ -182,7 +187,8 @@ export type DatabaseErrorCode =
  * @remarks
  * Mirrors the payload shape of a `DatabaseError` `CONFORMANCE` `context` —
  * `check` names the invariant, `message` describes the violation, and
- * `context` carries the offending table / key / value that failed it.
+ * `context` carries the offending table / key / value that failed it. Yielded one at a
+ * time by {@link scanDriver} and collected whole by {@link auditDriver}.
  */
 export interface ConformanceFinding {
 	readonly check: string
@@ -370,23 +376,62 @@ export interface MigrationInput {
  * callers fall back to `scan` when a native read hook is absent.
  */
 export interface StorageInterface {
+	/**
+	 * Reads one row by key.
+	 */
 	read(table: string, key: Key): Promise<Row | undefined>
+	/**
+	 * Writes one row at a key.
+	 */
 	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	/**
+	 * Inserts one row atomically, rejecting `CONFLICT` when its key already exists.
+	 */
 	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	/**
+	 * Deletes one row by key.
+	 */
 	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	/**
+	 * Lists a table's keys.
+	 */
 	keys(table: string): Promise<readonly Key[]>
+	/**
+	 * Iterates a table's rows in ascending key order.
+	 */
 	scan(table: string): AsyncIterable<Row>
+	/**
+	 * Empties a table.
+	 */
 	clear(table: string): Promise<void>
+	/**
+	 * Reads the rows matching a {@link QueryInput} natively — an optional hook.
+	 */
 	records?(table: string, input: QueryInput): Promise<readonly Row[]>
+	/**
+	 * Computes an aggregate over a column natively — an optional hook.
+	 */
 	aggregate?(
 		table: string,
 		operation: AggregateOperation,
 		column: FieldPath,
 		input: QueryInput,
 	): Promise<number | undefined>
+	/**
+	 * Iterates the natively filtered rows lazily — an optional hook.
+	 */
 	stream?(table: string, input: QueryInput): AsyncIterable<Row>
+	/**
+	 * Applies one atomic {@link MigrationInput} — an optional hook.
+	 */
 	migrate?(input: MigrationInput): Promise<void>
+	/**
+	 * Reads the persisted {@link DriverMetadata} as a deeply frozen copy — an optional hook.
+	 */
 	metadata?(): Promise<DriverMetadata | undefined>
+	/**
+	 * Writes the persisted {@link DriverMetadata}, snapshot at entry — an optional hook.
+	 */
 	stamp?(metadata: DriverMetadata): Promise<void>
 }
 
@@ -414,7 +459,17 @@ export interface StorageInterface {
  * rewritten, or repaired automatically.
  */
 export interface DriverInterface extends StorageInterface {
+	/**
+	 * Readies the tables from a derived {@link TableSchema} list.
+	 *
+	 * @remarks
+	 * A native backend builds real tables and indexes from the derived columns,
+	 * types, primary, and index groups; a scan-only backend reads `name` alone.
+	 */
 	open(schema: readonly TableSchema[]): Promise<void>
+	/**
+	 * Releases the backend.
+	 */
 	close(): Promise<void>
 	/**
 	 * Captures table rows and returns a repeatable thunk that restores those rows —
@@ -595,6 +650,12 @@ export interface TableDefinition {
  * after the scope settles.
  */
 export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
+	/**
+	 * Returns a table bound to the active transaction scope.
+	 *
+	 * @remarks
+	 * The returned table throws `CONFLICT` for work started after the scope settles.
+	 */
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
 }
 
@@ -617,11 +678,35 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
 	readonly emitter: EmitterInterface<DatabaseEventMap>
 	readonly name: string
 	readonly status: DatabaseStatus
+	/**
+	 * Returns the typed handle for a declared table.
+	 */
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
+	/**
+	 * Defines a further shape map of tables as a typed view over the same driver and storage.
+	 */
 	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U>
+	/**
+	 * Returns one portable {@link TableDefinition} per declared table.
+	 */
 	export(): Readonly<Record<string, TableDefinition>>
+	/**
+	 * Connects the driver eagerly, ahead of the lazy connect on first use.
+	 */
 	open(): Promise<void>
+	/**
+	 * Closes the database and releases its driver.
+	 */
 	close(): Promise<void>
+	/**
+	 * Runs a scope over a {@link DatabaseStorageInterface}, committing when the callback
+	 * fulfills and rolling back when it rejects.
+	 *
+	 * @remarks
+	 * A native driver transaction carries the scope where the driver offers one;
+	 * otherwise the universal whole-store snapshot floor does. `options.signal` is
+	 * checked once, at entry.
+	 */
 	transaction<R>(
 		scope: (transaction: DatabaseStorageInterface<T>) => Promise<R>,
 		options?: OperationOptions,
@@ -679,13 +764,28 @@ export interface TableInterface<T = Row> {
 	readonly name: string
 	readonly primary: string
 	readonly contract: ContractInterface<T>
+	/**
+	 * Reads one row by key, or one row per key for a list — `undefined` for each miss.
+	 */
 	get(key: Key): Promise<T | undefined>
 	get(keys: readonly Key[]): Promise<ReadonlyArray<T | undefined>>
+	/**
+	 * Reads one row by key, or one row per key for a list, throwing `NOT_FOUND` on a miss.
+	 */
 	resolve(key: Key): Promise<T>
 	resolve(keys: readonly Key[]): Promise<readonly T[]>
+	/**
+	 * Reports whether one key exists, or one result per key for a list.
+	 */
 	has(key: Key): Promise<boolean>
 	has(keys: readonly Key[]): Promise<readonly boolean[]>
+	/**
+	 * Lists every primary key in order.
+	 */
 	keys(): Promise<readonly Key[]>
+	/**
+	 * Reads the contract-valid rows matching an optional {@link QueryInput}.
+	 */
 	records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]>
 	/**
 	 * Counts contract-valid rows matching `input`'s conditions.
@@ -814,8 +914,17 @@ export interface TableInterface<T = Row> {
 	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
 	 */
 	remove(keys: readonly Key[], options?: OperationOptions): Promise<readonly boolean[]>
+	/**
+	 * Empties the table.
+	 */
 	clear(): Promise<void>
+	/**
+	 * Opens a fluent query builder over the table.
+	 */
 	query(): QueryInterface<T>
+	/**
+	 * Opens a forward row cursor for bulk mutation.
+	 */
 	cursor(): Promise<CursorInterface<T>>
 }
 
@@ -833,13 +942,37 @@ export interface TableInterface<T = Row> {
  * {@link FieldPath} — a string is one column, an array descends a nested value.
  */
 export interface QueryInterface<T = Row> {
+	/**
+	 * Adds one portable condition, including its explicit connector.
+	 */
 	condition(input: Condition): QueryInterface<T>
+	/**
+	 * Adds one portable ordering term — a column and a direction.
+	 */
 	order(input: Order): QueryInterface<T>
+	/**
+	 * Adds a post-fetch JavaScript predicate.
+	 */
 	filter(predicate: (row: T) => boolean): QueryInterface<T>
+	/**
+	 * Caps the result count.
+	 */
 	limit(count: number): QueryInterface<T>
+	/**
+	 * Skips the leading rows.
+	 */
 	offset(count: number): QueryInterface<T>
+	/**
+	 * Executes the accumulated read and collects every matching row.
+	 */
 	collect(): Promise<readonly T[]>
+	/**
+	 * Executes the accumulated read and returns the first match, or `undefined`.
+	 */
 	find(): Promise<T | undefined>
+	/**
+	 * Executes the accumulated read and returns the match count.
+	 */
 	count(): Promise<number>
 	/**
 	 * Evaluates this query's conditions / filters / offset / limit lazily, row
@@ -852,6 +985,9 @@ export interface QueryInterface<T = Row> {
 	 * yield, and breaking out early closes the underlying source.
 	 */
 	stream(options?: OperationOptions): AsyncIterable<T>
+	/**
+	 * Executes a named aggregate over one column.
+	 */
 	aggregate(operation: AggregateOperation, column: FieldPath): Promise<number | undefined>
 }
 
@@ -873,8 +1009,20 @@ export interface CursorInterface<T = Row> {
 	readonly value: T | undefined
 	readonly index: number
 	readonly done: boolean
+	/**
+	 * Advances to the next present row.
+	 */
 	next(): Promise<void>
+	/**
+	 * Merges changes into the row at the current position.
+	 */
 	update(changes: Partial<T>): Promise<void>
+	/**
+	 * Deletes the row at the current position.
+	 */
 	remove(): Promise<void>
+	/**
+	 * Closes the cursor terminally, so every later operation is a no-op.
+	 */
 	close(): void
 }

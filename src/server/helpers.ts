@@ -96,7 +96,7 @@ export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): 
 }
 
 /**
- * Reports whether one {@link Condition} compiles to SQL that is PROVABLY
+ * Reports whether one {@link Condition} compiles to SQL that is provably
  * identical to the core engine's `matchesCondition` for every value its
  * column's declared type can store.
  *
@@ -184,7 +184,10 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
  * orders TEXT by Unicode code point while the core engine's `compareValues`
  * orders JS strings by UTF-16 code unit, and the two diverge for
  * supplementary-plane characters (see {@link EXACT_COLUMN_STORAGE}'s remarks) —
- * a `text` order term REFINES through the core engine instead.
+ * a `text` order term REFINES through the core engine instead. The column must
+ * also be REQUIRED and NON-NULL: an optional or nullable column refines, because
+ * SQL orders its `NULL`s ahead of every value while the core total order ranks
+ * `undefined` before `null` before every other value.
  *
  * @param order - The order term to test
  * @param schema - The table's schema
@@ -201,6 +204,10 @@ export function matchesOrderExactly(order: Order, schema: TableSchema): boolean 
  * Reports whether a whole {@link QueryInput} is exact — every condition and
  * every order term is exact. `limit` / `offset` never affect exactness (SQL
  * `LIMIT` / `OFFSET` are always engine-identical).
+ *
+ * @remarks
+ * The gate {@link import('./drivers/SQLiteDriver.js').SQLiteDriver} checks before
+ * trusting a native SQL read over a full-scan refine through the core engine.
  *
  * @param input - The query input to test
  * @param schema - The table's schema

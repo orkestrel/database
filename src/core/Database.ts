@@ -33,6 +33,10 @@ import { Table } from './Table.js'
  * generator. Imported views register their physical schemas with the same
  * internal context before opening begins, so every view observes one driver,
  * merged schema, emitter, status, transaction boundary, and terminal close.
+ *
+ * The view owns the driver and its declared `tables`, connects that driver lazily on
+ * first use, `import`s further tables and `export`s their portable definitions, and
+ * runs `transaction` scopes over the shared context.
  */
 export class Database<T extends TableMap = TableMap> implements DatabaseInterface<T> {
 	#context: DatabaseContext

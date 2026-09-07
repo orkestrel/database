@@ -287,6 +287,11 @@ export function deriveIndexedDBIndexName(columns: readonly string[]): string {
 /**
  * Projects a table schema into the IndexedDB wrapper's store definition.
  *
+ * @remarks
+ * The definition is what an ordered versionchange migration creates the store
+ * from, carrying each declared index under the name {@link deriveIndexedDBIndexName}
+ * derives for its column group.
+ *
  * @param schema - Portable table schema
  * @returns Store definition with declared indexes
  */

@@ -17,20 +17,29 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  *   `name`, `generator`, `version`, and emitter hooks
  * @returns A typed {@link DatabaseInterface}
  *
- * @example
+ * @example Create a database
  * ```ts
  * import { createDatabase, createMemoryDriver } from '@orkestrel/database'
  * import { integerShape, stringShape } from '@orkestrel/contract'
  *
  * const db = createDatabase({
- * 	driver: createMemoryDriver(),
+ * 	driver: createMemoryDriver(), // any DriverInterface — a persistent backend swaps in, same API
  * 	tables: {
- * 		users: { id: stringShape(), age: integerShape() },
+ * 		users: { id: stringShape(), name: stringShape(), age: integerShape() },
  * 		posts: { slug: stringShape(), title: stringShape() },
  * 	},
- * 	primary: { posts: 'slug' },
+ * 	primary: { posts: 'slug' }, // non-`id` primary-key columns, per table
  * })
- * await db.table('users').set({ id: 'u1', age: 36 }) // typed; coerced + validated
+ *
+ * const users = db.table('users') // hold the handle; TableInterface<{ id; name; age }>
+ *
+ * await users.set({ id: 'u1', name: 'Ada', age: 36 }) // coerced + validated through the contract
+ * await users.get('u1') // typed { id; name; age } | undefined — narrowed, never `as`
+ * await users
+ * 	.query()
+ * 	.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
+ * 	.order({ column: 'age', direction: 'descending' })
+ * 	.collect() // typed rows
  * ```
  */
 export function createDatabase<const T extends TableMap>(

@@ -39,6 +39,10 @@ export function compileColumnSQL(storage: ColumnStorage): string {
 /**
  * Compiles a {@link FieldPath} to the SQL expression that reads it.
  *
+ * @remarks
+ * A flat path compiles to the quoted column; a nested path compiles to a
+ * `json_extract` over the head column with the rest of the path as its accessor.
+ *
  * @param path - The field path
  * @returns The SQL expression selecting the value
  */
@@ -477,6 +481,10 @@ export function schemaToTable(schema: TableSchema): string {
 /**
  * Projects a {@link TableSchema} to its declared SQLite indexes.
  *
+ * @remarks
+ * Each statement is a `CREATE INDEX IF NOT EXISTS` named by
+ * {@link deriveSQLiteIndexName}, so a reopen re-issues the set safely.
+ *
  * @param schema - The table schema
  * @returns One statement per declared index
  */
@@ -495,6 +503,10 @@ export function schemaToIndexes(schema: TableSchema): readonly string[] {
 
 /**
  * Projects one {@link MigrationStep} to SQLite DDL.
+ *
+ * @remarks
+ * These are the statements the SQLite driver's `migrate` executes for the step,
+ * inside whichever native transaction is active.
  *
  * @param step - The migration step
  * @returns The statements that apply the step

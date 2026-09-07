@@ -22,6 +22,10 @@ export function isKey(value: unknown): value is Key {
 /**
  * Checks whether a value is a portable column schema.
  *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
+ *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link ColumnSchema}; false otherwise
  */
@@ -53,6 +57,10 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
 
 /**
  * Checks whether a value is a portable table schema.
+ *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link TableSchema}; false otherwise
@@ -100,6 +108,10 @@ export function isTableSchema(value: unknown): value is TableSchema {
 /**
  * Checks whether a value is a complete portable driver schema.
  *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
+ *
  * @param value - The value to test
  * @returns True if `value` is a table-schema collection with unique table names; false otherwise
  */
@@ -116,6 +128,10 @@ export function isDriverSchema(value: unknown): value is readonly TableSchema[] 
 
 /**
  * Checks whether a value is one ordered migration step.
+ *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link MigrationStep}; false otherwise
@@ -186,6 +202,10 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 /**
  * Checks whether a value is an ordered migration plan.
  *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
+ *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link Migration}; false otherwise
  */
@@ -213,6 +233,12 @@ export function isMigration(value: unknown): value is Migration {
 /**
  * Checks whether a value is persisted driver metadata.
  *
+ * @remarks
+ * The boundary check a versioning driver's `metadata()` narrows a stored or
+ * deserialized record through, so no call site needs an assertion. Total over any
+ * input: a hostile getter, a revoked proxy, or a cyclic value is contained as a
+ * non-match rather than a throw.
+ *
  * @param value - The value to test
  * @returns True if `value` is complete {@link DriverMetadata}; false otherwise
  */
@@ -235,6 +261,10 @@ export function isDriverMetadata(value: unknown): value is DriverMetadata {
 
 /**
  * Checks whether a value is one atomic migration request.
+ *
+ * @remarks
+ * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link MigrationInput}; false otherwise

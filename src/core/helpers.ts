@@ -213,7 +213,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
- * Matches a value against a wildcard pattern in LINEAR time — the shared, ReDoS-SAFE
+ * Matches a value against a wildcard pattern in linear time — the shared, ReDoS-safe
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
  * @remarks
@@ -910,6 +910,8 @@ export function planMigration(
 
 /**
  * Projects migration steps sequentially over a canonical validated owned schema.
+ *
+ * @remarks
  * Adding a required non-null column to an existing table rejects with
  * `MIGRATION`; optional-only and nullable-only additions remain portable.
  *
@@ -1837,7 +1839,9 @@ export async function* scanDriver(
  * merely "report only the first". The
  * thrown error is byte-compatible with the historical shape: a
  * `CONFORMANCE` {@link DatabaseError} whose `message` is the finding's
- * `message` and whose `context` is `{ check, ...finding.context }`.
+ * `message` and whose `context` is `{ check, ...finding.context }`. The battery
+ * takes a driver factory and reports through a throw, so it binds no test
+ * framework and runs from any runner.
  *
  * @param factory - Mints a fresh, unopened driver instance (called once per phase)
  * @returns Nothing — resolves once every phase has passed

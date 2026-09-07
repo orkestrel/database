@@ -71,7 +71,9 @@ export const CONFORMANCE_POSTS_SCHEMA: TableSchema = Object.freeze({
  *
  * @remarks
  * Each phase mints a fresh driver and opens this exact schema, so a finding
- * names a violated invariant rather than a setup difference between phases.
+ * names a violated invariant rather than a setup difference between phases. The
+ * array and each schema in it are frozen, so a consumer holding it cannot change
+ * what a later phase opens.
  */
 export const CONFORMANCE_SCHEMA: readonly TableSchema[] = Object.freeze([
 	CONFORMANCE_USERS_SCHEMA,

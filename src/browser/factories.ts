@@ -2,7 +2,7 @@ import type { DriverInterface } from '@src/core'
 import { IndexedDBDriver } from './drivers/IndexedDBDriver.js'
 
 /**
- * Creates a persistent IndexedDB {@link DriverInterface} for the core database layer.
+ * Creates a persistent IndexedDB {@link DriverInterface} for a browser database name.
  *
  * @remarks
  * Pass it to `createDatabase` from `@orkestrel/database` to run the typed database

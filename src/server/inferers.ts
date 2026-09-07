@@ -5,7 +5,7 @@ import type { ColumnStorage } from '@src/core'
 
 /**
  * Reads the storage type a nested (`json_extract`) operand encodes as from its
- * RUNTIME value — NOT `json`.
+ * runtime value, never as `json`.
  *
  * @remarks
  * `json_extract` returns the unquoted, natively-typed scalar (a JSON boolean as
