@@ -384,7 +384,7 @@ export class MemoryDriver implements DriverInterface {
 		}
 	}
 
-	// Resolve only a currently declared table. `open` creates every backing map,
+	// Resolve only a declared table. `open` creates every backing map,
 	// so a missing map is a lookup failure rather than an implicit declaration.
 	#store(table: string): Map<Key, Row> {
 		this.#table(table)

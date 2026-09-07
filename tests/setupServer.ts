@@ -33,7 +33,7 @@ const SOURCE_EXTENSIONS: readonly string[] = ['.ts', '.tsx', '.mts', '.cts']
 const COMPILED_SUFFIX = /\.(?:m|c)?js$/u
 
 /**
- * One executable guide fence and its exact source location.
+ * Carries one executable guide fence and its exact source location.
  */
 export interface GuideFenceModule {
 	readonly ordinal: number
@@ -43,7 +43,7 @@ export interface GuideFenceModule {
 }
 
 /**
- * One module the parser read: whether its source is a module or a script, the
+ * Describes one module the parser read: whether its source is a module or a script, the
  * parser's first refusal, and the top-level statements it carries.
  */
 export interface ParsedModule {
@@ -53,7 +53,7 @@ export interface ParsedModule {
 }
 
 /**
- * Format compiler diagnostics for a fail-closed entry-surface error.
+ * Formats compiler diagnostics for a fail-closed entry-surface error.
  *
  * @param diagnostics - The compiler diagnostics to format
  * @returns Stable newline-delimited diagnostic text
@@ -63,7 +63,7 @@ export function formatCompilerDiagnostics(diagnostics: readonly Diagnostic[]): s
 }
 
 /**
- * Throw when a compiler phase produced diagnostics.
+ * Throws when a compiler phase produced diagnostics.
  *
  * @param phase - The compiler phase being checked
  * @param diagnostics - Diagnostics produced by that phase
@@ -74,7 +74,7 @@ export function checkCompilerDiagnostics(phase: string, diagnostics: readonly Di
 }
 
 /**
- * Read one module's top-level statements off the parser Vite re-exports.
+ * Reads one module's top-level statements off the parser Vite re-exports.
  *
  * @param source - The module text to parse
  * @param name - The filename the parser reads the source language from
@@ -102,7 +102,7 @@ export function scanModuleSource(source: string, name: string): ParsedModule {
 }
 
 /**
- * Read one module file's top-level statements.
+ * Reads one module file's top-level statements.
  *
  * @param path - The absolute module path
  * @returns The parsed module
@@ -118,7 +118,7 @@ export function readModuleStatements(path: string): ParsedModule {
 }
 
 /**
- * Resolve the source file one module specifier names.
+ * Resolves the source file one module specifier names.
  *
  * @param from - The module the specifier is written in
  * @param specifier - The relative specifier to resolve
@@ -146,7 +146,7 @@ export function resolveModuleFile(from: string, specifier: string): string {
 }
 
 /**
- * Read the names one top-level declaration binds.
+ * Reads the names one top-level declaration binds.
  *
  * @param statement - The statement to read
  * @returns Each name the statement declares, an empty list for a statement that declares none, or
@@ -176,7 +176,7 @@ export function readDeclaredNames(statement: ESTree.Statement): readonly string[
 }
 
 /**
- * Read the export name one module export specifier carries.
+ * Reads the export name one module export specifier carries.
  *
  * @param name - The specifier's local or exported name node
  * @returns The name as written
@@ -186,7 +186,7 @@ export function readExportName(name: ESTree.ModuleExportName): string {
 }
 
 /**
- * Whether one re-export form is explicitly type-only.
+ * Reports whether one re-export form is explicitly type-only.
  *
  * @param statement - The re-exporting statement
  * @param specifier - The specifier being read, or `undefined` for `export *`
@@ -205,7 +205,7 @@ export function isTypeOnlyExport(
 }
 
 /**
- * Classify one supported top-level declaration.
+ * Classifies one supported top-level declaration.
  *
  * @param statement - The declaration to classify
  * @returns Its Guide surface keyword, or `undefined` when the form is unsupported
@@ -224,7 +224,7 @@ export function classifyEntryDeclaration(statement: ESTree.Statement): ExportKey
 }
 
 /**
- * Resolve one exported name to the keywords its declarations carry.
+ * Resolves one exported name to the keywords its declarations carry.
  *
  * @param path - The module the name is read from
  * @param name - The exported name to resolve
@@ -296,7 +296,7 @@ export function resolveExportKeywords(
 }
 
 /**
- * Read the public Guide surface one module exports.
+ * Reads the public Guide surface one module exports.
  *
  * @param path - The module to read
  * @param entry - The entry path used for error context
@@ -384,7 +384,7 @@ export function shapeEntrySymbols(
 }
 
 /**
- * Read the path aliases one TypeScript project resolves to, as absolute targets.
+ * Reads the path aliases one TypeScript project resolves to, as absolute targets.
  *
  * @param config - The TypeScript configuration to read
  * @returns Each declared alias mapped to its absolute targets, empty when the project declares none
@@ -430,7 +430,7 @@ export function readProjectAliases(config: string): Readonly<Record<string, read
 }
 
 /**
- * Compile one file set against the caller's project and read what the compiler reported.
+ * Compiles one file set against the caller's project and reads what the compiler reported.
  *
  * @param config - The TypeScript configuration the scratch project extends
  * @param files - The absolute files the scratch project selects
@@ -486,7 +486,7 @@ export function readProjectDiagnostics(
 }
 
 /**
- * Fail closed on every diagnostic the entry graph's own sources carry.
+ * Fails closed on every diagnostic the entry graph's own sources carry.
  *
  * @param config - The TypeScript configuration governing the entries
  * @param files - The absolute entry files to compile
@@ -528,7 +528,7 @@ export function checkEntryDiagnostics(config: string, files: readonly string[]):
 }
 
 /**
- * Locate Guide-extracted fence bodies in their original document.
+ * Locates Guide-extracted fence bodies in their original document.
  *
  * @param document - The complete guide text
  * @param fences - Verbatim bodies returned by `Guide.patterns()`
@@ -556,7 +556,7 @@ export function locateGuideFences(
 }
 
 /**
- * Attribute one compiler diagnostic to the fences it reads against.
+ * Attributes one compiler diagnostic to the fences it reads against.
  *
  * @param modules - Every fence the compile covered
  * @param diagnostic - The diagnostic to attribute
@@ -582,7 +582,7 @@ export function attributeGuideFences(
 }
 
 /**
- * Format one executable-fence compiler diagnostic with guide provenance.
+ * Formats one executable-fence compiler diagnostic with guide provenance.
  *
  * @param diagnostic - The compiler diagnostic
  * @param fence - The fence being read
@@ -606,7 +606,7 @@ export function formatGuideFenceDiagnostic(
 }
 
 /**
- * Compile every Guide-extracted TypeScript fence as a standalone module.
+ * Compiles every Guide-extracted TypeScript fence as a standalone module.
  *
  * @param config - The package TypeScript configuration
  * @param document - The complete guide text
@@ -662,7 +662,7 @@ export function checkGuideFences(
 }
 
 /**
- * Resolve the public Guide surface reachable from each TypeScript entry barrel.
+ * Resolves the public Guide surface reachable from each TypeScript entry barrel.
  *
  * @param config - The TypeScript config governing the entries
  * @param entries - Absolute or config-relative source entry paths
@@ -710,7 +710,7 @@ export function deriveEntrySurfaces(
 }
 
 /**
- * Create a real source-backed temporary TypeScript project.
+ * Creates a real source-backed temporary TypeScript project.
  *
  * @param files - Project-relative source paths and their contents
  * @returns Its owned scratch directory and config path
@@ -742,7 +742,7 @@ export function tempTypeScriptProject(files: Readonly<Record<string, string>>): 
 }
 
 /**
- * Wrap a real native-transaction driver and replace only a rejected native
+ * Wraps a real native-transaction driver and replaces only a rejected native
  * transaction's reason after the backend has completed its own rollback.
  *
  * @param driver - The real driver whose required primitives and transaction run
@@ -790,7 +790,7 @@ export function tempDatabasePath(): { readonly path: string; readonly cleanup: (
 }
 
 /**
- * The portable declaration matching the real foreign-key fixture tables.
+ * Declares the portable schema matching the real foreign-key fixture tables.
  */
 export const FOREIGN_KEY_SCHEMA: readonly TableSchema[] = Object.freeze([
 	{
@@ -811,7 +811,7 @@ export const FOREIGN_KEY_SCHEMA: readonly TableSchema[] = Object.freeze([
 ])
 
 /**
- * Create and open a real SQLite driver over tables carrying a native foreign key.
+ * Creates and opens a real SQLite driver over tables carrying a native foreign key.
  *
  * @param references - The driver's foreign-key enforcement option, or `undefined`
  *   to preserve the upstream default
@@ -846,7 +846,7 @@ export async function createForeignKeyFixture(
 }
 
 /**
- * Build the shared driver-conformance schema the JSON `DriverInterface` battery
+ * Builds the shared driver-conformance schema the JSON `DriverInterface` battery
  * runs against (see `.claude/rules/tests.md` § Shared test infrastructure) — a
  * `users` table carrying one of each codec-relevant
  * column type (text, `integer`, `boolean`, a nullable `json`) and a `posts` table

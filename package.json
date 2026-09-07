@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/database",
-	"version": "0.0.13",
+	"version": "0.0.14",
 	"description": "A typed database abstraction for the @orkestrel line — a single core engine over pluggable storage drivers. Part of the @orkestrel line.",
 	"keywords": [
 		"database",
@@ -88,7 +88,8 @@
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
 		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
 		"prepack": "npm run build",
-		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
+		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
+		"docs": "node --experimental-strip-types scripts/docs.ts"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.16",

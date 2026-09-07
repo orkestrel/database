@@ -1,10 +1,10 @@
-/** The syntax-node fields supplied to every policy visitor. */
+/** Describes the syntax-node fields supplied to every policy visitor. */
 export interface PolicyNode {
 	readonly type: string
 	readonly range: [number, number]
 }
 
-/** The expression fields inspected by the policy rules. */
+/** Describes the expression fields the policy rules inspect. */
 export interface PolicyExpression extends PolicyNode {
 	readonly parent?: PolicyExpression | null
 	readonly name?: unknown
@@ -32,41 +32,73 @@ export interface PolicyExpression extends PolicyNode {
 	readonly imported?: PolicyExpression
 }
 
-/** One declared module function paired with the name a prefix rule reads. */
+/** Pairs one declared module function with the name a prefix rule reads. */
 export interface PolicyBinding {
 	readonly node: PolicyExpression
 	readonly name: string | undefined
 }
 
-/** One diagnostic emitted by a policy rule. */
+/** Describes one comment the comment rules read out of a linted file. */
+export interface PolicyComment extends PolicyNode {
+	readonly type: 'Block' | 'Line' | 'Shebang'
+	readonly value: string
+}
+
+/** Lists the Oxlint source-text operations the comment rules read. */
+export interface PolicySourceCode {
+	readonly text: string
+	getAllComments(): readonly PolicyComment[]
+}
+
+/** Pairs one doc block with the declared name its first sentence must not repeat. */
+export interface PolicyDoc {
+	readonly comment: PolicyComment
+	readonly name: string | undefined
+}
+
+/** Describes one banned term, the prose it matches, and the replacement its row names. */
+export interface PolicyTerm {
+	readonly term: string
+	readonly pattern: RegExp
+	readonly replacement: string
+}
+
+/** Pairs one banned-term match with the offset it starts at. */
+export interface PolicyHit {
+	readonly term: PolicyTerm
+	readonly index: number
+}
+
+/** Describes one diagnostic a policy rule emits. */
 export interface PolicyDiagnostic {
-	readonly node: PolicyExpression
+	readonly node: PolicyNode
 	readonly messageId: string
 	readonly data?: Readonly<Record<string, string>>
 }
 
-/** The Oxlint context operations used by the policy rules. */
+/** Lists the Oxlint context operations the policy rules use. */
 export interface PolicyContext {
 	readonly filename: string
-	/** The directory Oxlint resolves `filename` against. */
+	/** Names the directory Oxlint resolves `filename` against. */
 	readonly cwd: string
+	readonly sourceCode: PolicySourceCode
 	report(diagnostic: PolicyDiagnostic): void
 }
 
-/** The rule documentation fields supplied to Oxlint. */
+/** Describes the rule documentation fields supplied to Oxlint. */
 export interface PolicyDocs {
 	readonly [key: string]: unknown
 	readonly description: string
 }
 
-/** The rule metadata fields supplied to Oxlint. */
+/** Describes the rule metadata fields supplied to Oxlint. */
 export interface PolicyMeta {
 	readonly type: 'problem'
 	readonly docs: PolicyDocs
 	readonly messages: Readonly<Record<string, string>>
 }
 
-/** The Oxlint visitor entries used by the policy rules. */
+/** Lists the Oxlint visitor entries the policy rules use. */
 export interface PolicyVisitor {
 	readonly [key: string]: ((node: PolicyNode) => void) | undefined
 	readonly Program?: (node: PolicyNode) => void
@@ -91,13 +123,13 @@ export interface PolicyVisitor {
 	readonly VariableDeclaration?: (node: PolicyNode) => void
 }
 
-/** The complete behavior exposed by one policy rule. */
+/** Describes the complete behavior one policy rule exposes. */
 export interface PolicyRuleInterface {
 	readonly meta: PolicyMeta
 	create(context: PolicyContext): PolicyVisitor
 }
 
-/** Every centralized module named by the architecture kind table. */
+/** Lists every centralized module the architecture kind table names. */
 export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
 	'cloners.ts',
 	'combinators.ts',
@@ -122,7 +154,7 @@ export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
 	'validators.ts',
 ])
 
-/** The exhaustive centralized-file set that permits module functions. */
+/** Lists the exhaustive centralized-file set that permits module functions. */
 export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
 	'cloners.ts',
 	'combinators.ts',
@@ -141,7 +173,7 @@ export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
 	'validators.ts',
 ])
 
-/** Centralized files that permit module data by declaration syntax. */
+/** Lists the centralized files that permit module data by declaration syntax. */
 export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 	'combinators.ts',
 	'constants.ts',
@@ -155,30 +187,30 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 ])
 
 /**
- * Files excluded from the module-data rule because their namespace values hold helper behavior.
- * This exclusion also permits unrelated module data such as `export const RETRIES = 3`.
+ * Lists the files excluded from the module-data rule because their namespace values hold helper
+ * behavior. This exclusion also permits unrelated module data such as `export const RETRIES = 3`.
  */
 export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts'])
 
-/** Fleet-registered folders whose direct modules each contain one named function. */
+/** Lists the fleet-registered folders whose direct modules each contain one named function. */
 export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze([
 	'app/browser/composables',
 	'src/server/execution',
 ])
 
-/** The registered function-domain names no source file may take as its stem. */
+/** Lists the registered function-domain names no source file may take as its stem. */
 export const FUNCTION_DOMAIN_NAMES: readonly string[] = Object.freeze(
 	FUNCTION_DOMAIN_FOLDERS.map((folder) => folder.slice(folder.lastIndexOf('/') + 1)),
 )
 
-/** Every ambient declaration suffix the placement and line-ending rules leave uninspected. */
+/** Lists every ambient declaration suffix the placement and line-ending rules leave uninspected. */
 export const POLICY_AMBIENT_SUFFIXES: readonly string[] = Object.freeze([
 	'.d.cts',
 	'.d.mts',
 	'.d.ts',
 ])
 
-/** TypeScript source extensions whose declaration syntax the placement rules read. */
+/** Lists the TypeScript source extensions whose declaration syntax the placement rules read. */
 export const POLICY_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
 	'cts',
 	'mts',
@@ -186,35 +218,172 @@ export const POLICY_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
 	'tsx',
 ])
 
-/** The lint populations the placement rules run over, as the Oxlint configuration declares them. */
+/**
+ * Matches the lint populations the placement rules run over, as the Oxlint configuration declares
+ * them.
+ */
 export const POLICY_PLACEMENT_GLOBS: readonly string[] = Object.freeze([
 	`app/**/*.{${POLICY_SOURCE_EXTENSIONS.join(',')}}`,
 	`src/**/*.{${POLICY_SOURCE_EXTENSIONS.join(',')}}`,
 ])
 
-/** The lint population the line-ending rule runs over, as the Oxlint configuration declares it. */
+/**
+ * Matches the lint population the line-ending rule runs over, as the Oxlint configuration declares
+ * it.
+ */
 export const POLICY_ENDING_GLOBS: readonly string[] = Object.freeze([
 	'app/**/*.ts',
 	'configs/**/*.ts',
 	'src/**/*.ts',
 ])
 
-/** The file name shape an implementation file takes, holding the class that matches its stem. */
+/**
+ * Matches the file name shape an implementation file takes, holding the class that matches its
+ * stem.
+ */
 export const POLICY_CLASS_PATTERN = /^[A-Z][A-Za-z0-9]*\.ts$/u
 
-/** The name shape every constants.ts declaration takes. */
+/** Matches the name shape every constants.ts declaration takes. */
 export const POLICY_CONSTANT_PATTERN = /^[A-Z][A-Z0-9_]*$/u
 
-/** The file name shape a direct module of a registered function domain takes. */
+/** Matches the file name shape a direct module of a registered function domain takes. */
 export const POLICY_DOMAIN_PATTERN = /^[a-z][A-Za-z0-9]*\.ts$/u
 
-/** The file name a policy rule keys on, read from either host separator. */
+/** Matches a first word that reads as a third-person verb. */
+export const POLICY_VOICE_PATTERN = /^[A-Z][a-z]*s$/u
+
+/** Matches the boundary a description paragraph's first sentence ends at. */
+export const POLICY_SENTENCE_PATTERN = /\.\s|\.$/u
+
+/** Matches the continuation marker a doc block repeats on each line after its opening. */
+export const POLICY_MARKER_PATTERN = /^\s*\*\s?/u
+
+/** Matches one line break in any host's form. */
+export const POLICY_BREAK_PATTERN = /\r\n|\r|\n/u
+
+/** Matches a fenced code block, opening run through closing run. */
+export const POLICY_FENCE_PATTERN = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[^\n]*$/gmu
+
+/** Matches an inline code span, including one a line break runs through. */
+export const POLICY_SPAN_PATTERN = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/gu
+
+/** Matches a link or inherited-documentation tag, whose target is a symbol rather than prose. */
+export const POLICY_TAG_PATTERN = /\{@(?:linkcode|linkplain|link|inheritDoc)\b[^}]*\}/giu
+
+/** Matches a URL, whose segments are an address rather than prose. */
+export const POLICY_URL_PATTERN = /https?:\/\/\S+/gu
+
+/**
+ * Lists the words ending in `s` that open a sentence without being a third-person verb.
+ *
+ * @remarks
+ * The voice rule reads a first word rather than a parsed verb, so a demonstrative, a pronoun, an
+ * adverb, and a singular noun ending in `s` each need naming here to stay refused.
+ */
+export const POLICY_VOICE_STOPWORDS: readonly string[] = Object.freeze([
+	'Access',
+	'Across',
+	'Address',
+	'Alias',
+	'Always',
+	'Analysis',
+	'Assess',
+	'Basis',
+	'Bias',
+	'Bus',
+	'Business',
+	'Canvas',
+	'Chaos',
+	'Class',
+	'Compress',
+	'Cross',
+	'Discuss',
+	'Dismiss',
+	'Express',
+	'Focus',
+	'Gas',
+	'Guess',
+	'Harness',
+	'Its',
+	'Lens',
+	'Miss',
+	'Numerous',
+	'Pass',
+	'Perhaps',
+	'Plus',
+	'Press',
+	'Previous',
+	'Process',
+	'Progress',
+	'Series',
+	'Sometimes',
+	'Status',
+	'Success',
+	'This',
+	'Thus',
+	'Unless',
+	'Various',
+	'Was',
+	'Whereas',
+	'Witness',
+	'Yes',
+])
+
+/**
+ * Lists every substitution-table row whose ban is unconditional, beside its replacement.
+ *
+ * @remarks
+ * Each pattern is case-insensitive, word-bounded, and global, and carries the inflections its row
+ * reaches.
+ */
+export const POLICY_BANNED_TERMS: readonly PolicyTerm[] = Object.freeze([
+	{ term: 'should', pattern: /\bshould\b/giu, replacement: 'must, can, might, or the imperative' },
+	{ term: 'simply', pattern: /\bsimply\b/giu, replacement: 'delete' },
+	{ term: 'easy', pattern: /\beas(?:y|ier|iest|ily)\b/giu, replacement: 'delete' },
+	{ term: 'just', pattern: /\bjust\b/giu, replacement: 'delete' },
+	{ term: 'currently', pattern: /\bcurrently\b/giu, replacement: 'delete, or give the date' },
+	{ term: 'utilize', pattern: /\butiliz(?:e|es|ed|ing|ation)\b/giu, replacement: 'use' },
+	{ term: 'leverage', pattern: /\bleverag(?:e|es|ed|ing)\b/giu, replacement: 'use' },
+	{ term: 'via', pattern: /\bvia\b/giu, replacement: 'through, by using' },
+	{ term: 'in order to', pattern: /\bin order to\b/giu, replacement: 'to' },
+	{ term: 'e.g.', pattern: /\be\.g\./giu, replacement: 'for example' },
+	{ term: 'i.e.', pattern: /\bi\.e\./giu, replacement: 'that is' },
+	{ term: 'etc.', pattern: /\betc\./giu, replacement: 'bound the list, or recast the sentence' },
+	{ term: 'performant', pattern: /\bperformant\b/giu, replacement: 'the measured property' },
+	{ term: 'robust', pattern: /\brobust(?:ly|ness)?\b/giu, replacement: 'the measured property' },
+	{ term: 'allows you to', pattern: /\ballows you to\b/giu, replacement: 'lets you' },
+	{ term: 'and/or', pattern: /\band\/or\b/giu, replacement: 'and, or, or both' },
+	{ term: 'please', pattern: /\bplease\b/giu, replacement: 'delete' },
+	{ term: 'sanity check', pattern: /\bsanity[ -]check/giu, replacement: 'quick check' },
+	{ term: 'dummy', pattern: /\bdumm(?:y|ies)\b/giu, replacement: 'placeholder' },
+	{ term: 'blacklist', pattern: /\bblacklist(?:s|ed|ing)?\b/giu, replacement: 'denylist' },
+	{ term: 'whitelist', pattern: /\bwhitelist(?:s|ed|ing)?\b/giu, replacement: 'allowlist' },
+	{ term: 'slave', pattern: /\bslave\b/giu, replacement: 'replica' },
+])
+
+/**
+ * Lists every substitution-table row a reader rules by sense, which no pattern matches.
+ *
+ * @remarks
+ * Each row carries a permitted sense: a date value, a version value, a causal clause, and the name
+ * a replication topology takes. The currency check proves each row is registered here.
+ */
+export const POLICY_JUDGED_TERMS: readonly string[] = Object.freeze([
+	'now',
+	'new',
+	'latest',
+	'once',
+	'since',
+	'master',
+])
+
+/** Returns the file name a policy rule keys on, read from either host separator. */
 export function pathToPolicyFile(filename: string): string {
 	const normalized = filename.replaceAll('\\', '/')
 	return normalized.slice(normalized.lastIndexOf('/') + 1)
 }
 
-/** The folder path a policy rule keys on, read from either host separator. */
+/** Returns the folder path a policy rule keys on, read from either host separator. */
 export function pathToPolicyFolder(filename: string): string {
 	const normalized = filename.replaceAll('\\', '/')
 	const boundary = normalized.lastIndexOf('/')
@@ -222,12 +391,12 @@ export function pathToPolicyFolder(filename: string): string {
 }
 
 /**
- * The workspace-relative path when the file sits under the directory the linter resolved it
+ * Returns the workspace-relative path when the file sits under the directory the linter resolved it
  * against, else the path as given. The linter resolves each file against its own directory, the
  * workspace root under the `lint` scripts and its package directory under `RuleTester`, so a file
  * outside that directory keeps its path and matches no registered domain folder, because a
- * registered folder is workspace-relative. For a workspace at the filesystem root the prefix is
- * the separator alone. A drive-letter case difference between the two arguments is not folded.
+ * registered folder is workspace-relative. For a workspace at the filesystem root the prefix is the
+ * separator alone. A drive-letter case difference between the two arguments is not folded.
  */
 export function pathToPolicyRelative(filename: string, cwd: string): string {
 	const normalizedFile = filename.replaceAll('\\', '/')
@@ -236,20 +405,20 @@ export function pathToPolicyRelative(filename: string, cwd: string): string {
 	return normalizedFile.startsWith(prefix) ? normalizedFile.slice(prefix.length) : normalizedFile
 }
 
-/** The extensionless stem of one policy file name. */
+/** Returns the extensionless stem of one policy file name. */
 export function fileToPolicyStem(file: string): string {
 	const boundary = file.lastIndexOf('.')
 	return boundary <= 0 ? file : file.slice(0, boundary)
 }
 
-/** Whether a path names an ambient declaration file, which no policy rule inspects. */
+/** Reports whether a path names an ambient declaration file, which no policy rule inspects. */
 export function isPolicyAmbient(filename: string): boolean {
 	const file = pathToPolicyFile(filename)
 	return POLICY_AMBIENT_SUFFIXES.some((suffix) => file.endsWith(suffix))
 }
 
 /**
- * Whether a path is a direct module of a fleet-registered function domain.
+ * Reports whether a path is a direct module of a fleet-registered function domain.
  *
  * The registered folder is a workspace-relative path, compared by equality after the linter's own
  * directory is stripped from the given path.
@@ -267,7 +436,7 @@ export function isPolicyDomain(filename: string, cwd: string): boolean {
 	)
 }
 
-/** The identifier name a node carries, or `undefined` for any other syntax. */
+/** Returns the identifier name a node carries, or `undefined` for any other syntax. */
 export function identifierToPolicyName(
 	node: PolicyExpression | null | undefined,
 ): string | undefined {
@@ -275,7 +444,7 @@ export function identifierToPolicyName(
 	return typeof node.name === 'string' ? node.name : undefined
 }
 
-/** The literal text a node carries, through a single-quasi template literal. */
+/** Returns the literal text a node carries, through a single-quasi template literal. */
 export function expressionToPolicyText(
 	node: PolicyExpression | null | undefined,
 ): string | undefined {
@@ -295,21 +464,21 @@ export function expressionToPolicyText(
 	return typeof cooked === 'string' ? cooked : typeof raw === 'string' ? raw : undefined
 }
 
-/** The single body expression a node holds, excluding a statement list. */
+/** Returns the single body expression a node holds, excluding a statement list. */
 export function expressionToPolicyBody(node: PolicyExpression): PolicyExpression | undefined {
 	const body = node.body
 	if (body === undefined) return undefined
 	return 'type' in body ? body : undefined
 }
 
-/** The top-level statements a program holds. */
+/** Returns the top-level statements a program holds. */
 export function programToPolicyStatements(node: PolicyExpression): readonly PolicyExpression[] {
 	const body = node.body
 	if (body === undefined || 'type' in body) return []
 	return body
 }
 
-/** The declaration a top-level statement holds, through either export form. */
+/** Returns the declaration a top-level statement holds, through either export form. */
 export function statementToPolicyDeclaration(node: PolicyExpression): PolicyExpression | undefined {
 	if (node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration') {
 		return node.declaration
@@ -317,7 +486,7 @@ export function statementToPolicyDeclaration(node: PolicyExpression): PolicyExpr
 	return node
 }
 
-/** Whether a statement sits at module scope, through either export form. */
+/** Reports whether a statement sits at module scope, through either export form. */
 export function isPolicyTop(node: PolicyExpression): boolean {
 	const parent = node.parent
 	if (parent === undefined || parent === null) return false
@@ -328,7 +497,7 @@ export function isPolicyTop(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether a policy expression is runtime function syntax. */
+/** Reports whether a policy expression is runtime function syntax. */
 export function isPolicyFunction(node: PolicyExpression): boolean {
 	return (
 		node.type === 'FunctionDeclaration' ||
@@ -337,17 +506,17 @@ export function isPolicyFunction(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether a node declares a module function, including a signature without a body. */
+/** Reports whether a node declares a module function, including a signature without a body. */
 export function isPolicyDeclaredFunction(node: PolicyExpression): boolean {
 	return node.type === 'FunctionDeclaration' || node.type === 'TSDeclareFunction'
 }
 
-/** Whether a policy function is anonymous. */
+/** Reports whether a policy function is anonymous. */
 export function isPolicyAnonymous(node: PolicyExpression): boolean {
 	return node.type === 'ArrowFunctionExpression' || node.id === null
 }
 
-/** Return the outermost parenthesized expression holding a policy function. */
+/** Returns the outermost parenthesized expression holding a policy function. */
 export function functionToPolicyPosition(node: PolicyExpression): PolicyExpression {
 	let position = node
 	while (position.parent?.type === 'ParenthesizedExpression') {
@@ -356,7 +525,7 @@ export function functionToPolicyPosition(node: PolicyExpression): PolicyExpressi
 	return position
 }
 
-/** Whether a policy function is an anonymous callback passed directly as an argument. */
+/** Reports whether a policy function is an anonymous callback passed directly as an argument. */
 export function isPolicyCallback(node: PolicyExpression): boolean {
 	if (!isPolicyAnonymous(node)) return false
 	const position = functionToPolicyPosition(node)
@@ -367,7 +536,7 @@ export function isPolicyCallback(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether a policy function is an anonymous function returned directly as a result. */
+/** Reports whether a policy function is an anonymous function returned directly as a result. */
 export function isPolicyResult(node: PolicyExpression): boolean {
 	if (!isPolicyAnonymous(node)) return false
 	const position = functionToPolicyPosition(node)
@@ -378,7 +547,7 @@ export function isPolicyResult(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether an Oxlint function expression represents method syntax. */
+/** Reports whether an Oxlint function expression represents method syntax. */
 export function isPolicyMethod(node: PolicyExpression): boolean {
 	const parent = node.parent
 	return (
@@ -390,7 +559,10 @@ export function isPolicyMethod(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether a policy function sits inside another function before any class-expression boundary. */
+/**
+ * Reports whether a policy function sits inside another function before any class-expression
+ * boundary.
+ */
 export function hasPolicyFunctionAncestor(node: PolicyExpression): boolean {
 	let parent = node.parent
 	let method = false
@@ -406,7 +578,7 @@ export function hasPolicyFunctionAncestor(node: PolicyExpression): boolean {
 	return method
 }
 
-/** Whether an arrow is the policy plugin's sanctioned visitor-table delegation. */
+/** Reports whether an arrow is the policy plugin's sanctioned visitor-table delegation. */
 export function isPolicyVisitor(node: PolicyExpression): boolean {
 	const body = expressionToPolicyBody(node)
 	if (
@@ -443,7 +615,7 @@ export function isPolicyVisitor(node: PolicyExpression): boolean {
 }
 
 /**
- * Return the module-scope statement that owns a policy function, or `undefined` when none does.
+ * Returns the module-scope statement that owns a policy function, or `undefined` when none does.
  *
  * A class declaration or class expression on the way up ends the search, because the placement law
  * reads module regions rather than class members.
@@ -460,7 +632,7 @@ export function functionToPolicyRegion(node: PolicyExpression): PolicyExpression
 	return undefined
 }
 
-/** Every module function a top-level statement declares, paired with its declared name. */
+/** Lists every module function a top-level statement declares, paired with its declared name. */
 export function statementToPolicyBindings(node: PolicyExpression): readonly PolicyBinding[] {
 	if (isPolicyDeclaredFunction(node)) {
 		return [{ node, name: identifierToPolicyName(node.id) }]
@@ -477,7 +649,7 @@ export function statementToPolicyBindings(node: PolicyExpression): readonly Poli
 	return bindings
 }
 
-/** Whether a call trims a whole payload before splitting it on a line feed. */
+/** Reports whether a call trims a whole payload before splitting it on a line feed. */
 export function isPolicySplit(node: PolicyExpression): boolean {
 	if (node.type !== 'CallExpression' || node.arguments?.length !== 1) return false
 	const split = node.callee
@@ -494,7 +666,7 @@ export function isPolicySplit(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether an expression reads the host line ending from a binding named os. */
+/** Reports whether an expression reads the host line ending from a binding named os. */
 export function isPolicyTerminator(node: PolicyExpression): boolean {
 	return (
 		node.type === 'MemberExpression' &&
@@ -504,7 +676,7 @@ export function isPolicyTerminator(node: PolicyExpression): boolean {
 	)
 }
 
-/** Whether an import declaration takes the EOL member from the host module. */
+/** Reports whether an import declaration takes the EOL member from the host module. */
 export function importsPolicyTerminator(node: PolicyExpression): boolean {
 	const specifier = expressionToPolicyText(node.source)
 	if (specifier !== 'node:os' && specifier !== 'os') return false
@@ -514,7 +686,165 @@ export function importsPolicyTerminator(node: PolicyExpression): boolean {
 	)
 }
 
-/** Report function syntax nested inside another function body. */
+/**
+ * Blanks every character of a matched region, holding its length and its line breaks.
+ *
+ * @param text - The matched region to blank.
+ * @returns The region with each character outside a line break replaced by a space.
+ */
+export function blankPolicyText(text: string): string {
+	return text.replace(/[^\n]/gu, ' ')
+}
+
+/**
+ * Blanks the regions of a text whose content is code, an address, or a symbol rather than prose.
+ *
+ * @remarks
+ * A fenced block, an inline code span a line break runs through, a link tag, and a URL each carry
+ * tokens a reader is meant to copy rather than read, so a banned term inside one is not prose. Each
+ * region is blanked in place, so every offset the caller reports stays the offset in the original
+ * text.
+ *
+ * @param text - The prose to strip, with any continuation marker already removed.
+ * @returns The same text with every code, tag, and address region replaced by spaces.
+ */
+export function stripPolicyCode(text: string): string {
+	const fenced = text.replace(POLICY_FENCE_PATTERN, blankPolicyText)
+	const spanned = fenced.replace(POLICY_SPAN_PATTERN, blankPolicyText)
+	const tagged = spanned.replace(POLICY_TAG_PATTERN, blankPolicyText)
+	return tagged.replace(POLICY_URL_PATTERN, blankPolicyText)
+}
+
+/**
+ * Reads every banned term a stripped text carries, in offset order.
+ *
+ * @param text - The prose to read, already stripped of its code regions.
+ * @returns One hit per match, each naming its row and the offset the match starts at.
+ */
+export function textToPolicyHits(text: string): readonly PolicyHit[] {
+	const hits: PolicyHit[] = []
+	for (const term of POLICY_BANNED_TERMS) {
+		for (const match of text.matchAll(term.pattern)) hits.push({ term, index: match.index })
+	}
+	return hits.sort((left, right) => left.index - right.index)
+}
+
+/**
+ * Reads one doc block's description paragraph, which ends at its first block tag.
+ *
+ * @param comment - The doc block to read.
+ * @returns The description with continuation markers removed and whitespace collapsed.
+ */
+export function commentToPolicyParagraph(comment: PolicyComment): string {
+	const description: string[] = []
+	for (const line of comment.value.split(POLICY_BREAK_PATTERN)) {
+		const text = line.replace(POLICY_MARKER_PATTERN, '')
+		if (text.trimStart().startsWith('@')) break
+		description.push(text)
+	}
+	return description.join(' ').replace(/\s+/gu, ' ').trim()
+}
+
+/**
+ * Reads the opening word of a description paragraph, punctuation removed.
+ *
+ * @param paragraph - The collapsed description paragraph.
+ * @returns The paragraph's first word reduced to its letters, empty where it has none.
+ */
+export function paragraphToPolicyOpener(paragraph: string): string {
+	const first = paragraph.match(/^\S+/u)?.[0] ?? ''
+	return first.replace(/[^A-Za-z]/gu, '')
+}
+
+/**
+ * Reports whether an opening word reads as a third-person verb.
+ *
+ * @param word - The opening word to judge.
+ * @returns True if the word ends in `s` and names no registered non-verb; false otherwise.
+ */
+export function isPolicyVoiced(word: string): boolean {
+	return POLICY_VOICE_PATTERN.test(word) && !POLICY_VOICE_STOPWORDS.includes(word)
+}
+
+/**
+ * Pairs every exported top-level statement with the doc block written directly above it.
+ *
+ * @remarks
+ * A statement takes the last comment that closes before it, and takes it only where that comment is
+ * a doc block and nothing but whitespace separates the two. A blank line between them is still
+ * whitespace, so the pairing survives one.
+ *
+ * @param node - The program node whose top-level statements are read.
+ * @param sourceCode - The source-text reader supplying the comments and the text between them.
+ * @returns One entry per documented export, each naming its block and its declared symbol.
+ */
+export function programToPolicyDocs(
+	node: PolicyExpression,
+	sourceCode: PolicySourceCode,
+): readonly PolicyDoc[] {
+	const comments = sourceCode.getAllComments()
+	const docs: PolicyDoc[] = []
+	for (const statement of programToPolicyStatements(node)) {
+		if (!statement.type.startsWith('Export')) continue
+		const start = statement.range[0]
+		let previous: PolicyComment | undefined
+		for (const comment of comments) {
+			if (comment.range[1] <= start) previous = comment
+		}
+		if (previous === undefined || previous.type !== 'Block') continue
+		if (!previous.value.startsWith('*')) continue
+		if (sourceCode.text.slice(previous.range[1], start).trim() !== '') continue
+		const declaration = statement.declaration
+		docs.push({
+			comment: previous,
+			name:
+				identifierToPolicyName(declaration?.id) ??
+				identifierToPolicyName(declaration?.declarations?.[0]?.id),
+		})
+	}
+	return docs
+}
+
+/** Reports a doc block whose first sentence is not a third-person summary of its own symbol. */
+export function reportVoice(context: PolicyContext, doc: PolicyDoc): void {
+	const paragraph = commentToPolicyParagraph(doc.comment)
+	if (!isPolicyVoiced(paragraphToPolicyOpener(paragraph))) {
+		context.report({ node: doc.comment, messageId: 'voice' })
+	}
+	const name = doc.name
+	if (name === undefined) return
+	const sentence = paragraph.split(POLICY_SENTENCE_PATTERN)[0] ?? ''
+	const repeat = new RegExp(`(?<![\\w$])${name.replaceAll('$', '\\$')}(?![\\w$])`, 'u')
+	if (repeat.test(sentence)) {
+		context.report({ node: doc.comment, messageId: 'name', data: { name } })
+	}
+}
+
+/** Reports every voice failure among the doc blocks one program's exports carry. */
+export function reportDocs(context: PolicyContext, node: PolicyExpression): void {
+	for (const doc of programToPolicyDocs(node, context.sourceCode)) reportVoice(context, doc)
+}
+
+/** Reports every banned term one comment's prose carries. */
+export function reportTerm(context: PolicyContext, comment: PolicyComment): void {
+	const lines = comment.value
+		.split(POLICY_BREAK_PATTERN)
+		.map((line) => line.replace(POLICY_MARKER_PATTERN, ''))
+	for (const hit of textToPolicyHits(stripPolicyCode(lines.join('\n')))) {
+		context.report({
+			node: comment,
+			messageId: 'term',
+			data: { term: hit.term.term, replacement: hit.term.replacement },
+		})
+	}
+}
+
+/** Reports every banned term the comments of one linted file carry. */
+export function reportComments(context: PolicyContext): void {
+	for (const comment of context.sourceCode.getAllComments()) reportTerm(context, comment)
+}
+
+/** Reports function syntax nested inside another function body. */
 export function reportNested(context: PolicyContext, node: PolicyExpression): void {
 	if (
 		!hasPolicyFunctionAncestor(node) ||
@@ -528,7 +858,7 @@ export function reportNested(context: PolicyContext, node: PolicyExpression): vo
 	context.report({ node, messageId: 'nested' })
 }
 
-/** Report banned calls on the named Vitest and Jest framework objects. */
+/** Reports banned calls on the named Vitest and Jest framework objects. */
 export function reportMocking(context: PolicyContext, node: PolicyExpression): void {
 	const callee = node.callee
 	if (
@@ -572,7 +902,7 @@ export function reportMocking(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
-/** Report TypeScript privacy keywords on class members. */
+/** Reports TypeScript privacy keywords on class members. */
 export function reportPrivacy(context: PolicyContext, node: PolicyExpression): void {
 	if (node.accessibility === 'private' || node.accessibility === 'protected') {
 		context.report({
@@ -583,7 +913,7 @@ export function reportPrivacy(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
-/** Report a centralized declaration that carries no export. */
+/** Reports a centralized declaration that carries no export. */
 export function reportHidden(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	if (!CENTRAL_SOURCE_FILES.includes(pathToPolicyFile(context.filename))) return
@@ -591,14 +921,14 @@ export function reportHidden(context: PolicyContext, node: PolicyExpression): vo
 	context.report({ node, messageId: 'hidden' })
 }
 
-/** Report a type declaration outside types.ts. */
+/** Reports a type declaration outside types.ts. */
 export function reportType(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	if (pathToPolicyFile(context.filename) === 'types.ts') return
 	context.report({ node, messageId: 'type' })
 }
 
-/** Report a class whose file neither names it nor collects errors. */
+/** Reports a class whose file neither names it nor collects errors. */
 export function reportClass(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	const file = pathToPolicyFile(context.filename)
@@ -612,7 +942,7 @@ export function reportClass(context: PolicyContext, node: PolicyExpression): voi
 	context.report({ node, messageId: 'class' })
 }
 
-/** Report module data outside a data-kind file. */
+/** Reports module data outside a data-kind file. */
 export function reportData(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	const file = pathToPolicyFile(context.filename)
@@ -624,7 +954,7 @@ export function reportData(context: PolicyContext, node: PolicyExpression): void
 	}
 }
 
-/** Report module function syntax outside a function-kind file. */
+/** Reports module function syntax outside a function-kind file. */
 export function reportFunction(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	if (FUNCTION_SOURCE_FILES.includes(pathToPolicyFile(context.filename))) return
@@ -640,7 +970,7 @@ export function reportFunction(context: PolicyContext, node: PolicyExpression): 
 	context.report({ node, messageId: 'function' })
 }
 
-/** Report a constants.ts declaration that is mutable, misnamed, or a bare collection. */
+/** Reports a constants.ts declaration that is mutable, misnamed, or a bare collection. */
 export function reportConstant(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	if (pathToPolicyFile(context.filename) !== 'constants.ts') return
@@ -657,7 +987,7 @@ export function reportConstant(context: PolicyContext, node: PolicyExpression): 
 	}
 }
 
-/** Report a parsers.ts function whose name lacks the parse prefix. */
+/** Reports a parsers.ts function whose name lacks the parse prefix. */
 export function reportParser(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	if (pathToPolicyFile(context.filename) !== 'parsers.ts') return
@@ -668,7 +998,7 @@ export function reportParser(context: PolicyContext, node: PolicyExpression): vo
 	}
 }
 
-/** Report a factories.ts function whose name lacks the create prefix. */
+/** Reports a factories.ts function whose name lacks the create prefix. */
 export function reportFactory(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
 	if (pathToPolicyFile(context.filename) !== 'factories.ts') return
@@ -679,7 +1009,7 @@ export function reportFactory(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
-/** Report a registered function domain taken as a file, or a malformed module inside one. */
+/** Reports a registered function domain taken as a file, or a malformed module inside one. */
 export function reportDomain(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	const file = pathToPolicyFile(context.filename)
@@ -708,20 +1038,20 @@ export function reportDomain(context: PolicyContext, node: PolicyExpression): vo
 	if (implementations !== 1 || malformed > 0) context.report({ node, messageId: 'module' })
 }
 
-/** Report source that reads the host line ending or splits arrived text before trimming it. */
+/** Reports source that reads the host line ending or splits arrived text before trimming it. */
 export function reportEnding(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	if (isPolicySplit(node)) context.report({ node, messageId: 'split' })
 	if (isPolicyTerminator(node)) context.report({ node, messageId: 'terminator' })
 }
 
-/** Report an import that takes the host line ending from the operating-system module. */
+/** Reports an import that takes the host line ending from the operating-system module. */
 export function reportEndingImport(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	if (importsPolicyTerminator(node)) context.report({ node, messageId: 'terminator' })
 }
 
-/** Ban function declarations and assignments inside another function body. */
+/** Bans function declarations and assignments inside another function body. */
 export const NESTED_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -742,7 +1072,7 @@ export const NESTED_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban framework mocking, spying, fake clocks, and global or environment stubs. */
+/** Bans framework mocking, spying, fake clocks, and global or environment stubs. */
 export const MOCKING_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -765,7 +1095,7 @@ export const MOCKING_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban compile-time-only TypeScript privacy keywords on class members. */
+/** Bans compile-time-only TypeScript privacy keywords on class members. */
 export const PRIVACY_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -789,7 +1119,7 @@ export const PRIVACY_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a centralized declaration that no export reaches. */
+/** Bans a centralized declaration that no export reaches. */
 export const HIDDEN_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -815,7 +1145,7 @@ export const HIDDEN_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a type declaration outside its module's types.ts. */
+/** Bans a type declaration outside its module's types.ts. */
 export const TYPE_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -836,7 +1166,7 @@ export const TYPE_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a class outside the implementation file that names it. */
+/** Bans a class outside the implementation file that names it. */
 export const CLASS_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -854,7 +1184,7 @@ export const CLASS_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban module data outside a data-kind file. */
+/** Bans module data outside a data-kind file. */
 export const DATA_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -872,7 +1202,7 @@ export const DATA_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban module function syntax outside a function-kind file. */
+/** Bans module function syntax outside a function-kind file. */
 export const FUNCTION_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -895,7 +1225,7 @@ export const FUNCTION_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a constants.ts declaration that is mutable, misnamed, or a bare collection. */
+/** Bans a constants.ts declaration that is mutable, misnamed, or a bare collection. */
 export const CONSTANT_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -916,7 +1246,7 @@ export const CONSTANT_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a parsers.ts function whose name lacks the parse prefix. */
+/** Bans a parsers.ts function whose name lacks the parse prefix. */
 export const PARSER_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -937,7 +1267,7 @@ export const PARSER_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a factories.ts function whose name lacks the create prefix. */
+/** Bans a factories.ts function whose name lacks the create prefix. */
 export const FACTORY_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -958,7 +1288,7 @@ export const FACTORY_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban a malformed module in a registered function domain, and a file named for one. */
+/** Bans a malformed module in a registered function domain, and a file named for one. */
 export const DOMAIN_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -979,7 +1309,7 @@ export const DOMAIN_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Ban host-specific line-ending handling. */
+/** Bans host-specific line-ending handling. */
 export const ENDING_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
@@ -1001,7 +1331,47 @@ export const ENDING_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** The workspace Oxlint plugin. */
+/** Bans a doc block above an export whose first sentence is not a third-person summary. */
+export const VOICE_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow a description paragraph that opens on a word other than a third-person verb, and one that names the symbol it documents.',
+		},
+		messages: {
+			voice:
+				'Open this description with a third-person verb ending in s, such as Creates, Returns, or Checks whether.',
+			name: 'State what the symbol does without naming {{name}} in the first sentence.',
+		},
+	},
+	create(context) {
+		return {
+			Program: (node) => reportDocs(context, node),
+		}
+	},
+}
+
+/** Bans a comment carrying a term the substitution table bans unconditionally. */
+export const TERM_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow an unconditionally banned substitution-table term in comment prose, outside code spans, fenced blocks, link tags, and URLs.',
+		},
+		messages: {
+			term: 'Replace {{term}} in this comment: {{replacement}}.',
+		},
+	},
+	create(context) {
+		return {
+			Program: () => reportComments(context),
+		}
+	},
+}
+
+/** Declares the workspace Oxlint plugin. */
 export default {
 	meta: { name: 'policy' },
 	rules: {
@@ -1018,5 +1388,7 @@ export default {
 		'no-misnamed-factory': FACTORY_RULE,
 		'no-malformed-domain': DOMAIN_RULE,
 		'no-host-line-endings': ENDING_RULE,
+		'no-malformed-summary': VOICE_RULE,
+		'no-banned-term': TERM_RULE,
 	},
 }

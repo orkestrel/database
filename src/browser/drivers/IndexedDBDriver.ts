@@ -411,8 +411,8 @@ export class IndexedDBDriver implements DriverInterface {
 	 * @remarks
 	 * IndexedDB schema DDL is legal only inside `onupgradeneeded`, so this closes
 	 * the current connection and opens a FRESH one at `version + 1`, declaring
-	 * every currently-known store (plus {@link METADATA_STORE}) so nothing is lost,
-	 * and applying `table.remove` / `index.add` / `index.remove` /
+	 * every store known at that point (plus {@link METADATA_STORE}) so nothing is
+	 * lost, and applying `table.remove` / `index.add` / `index.remove` /
 	 * `column.remove` inside `upgrade`. Every step's `table` is validated against
 	 * the driver's own `#schema` BEFORE the reconnect — an unknown-table step
 	 * throws `DatabaseError` `MIGRATION` without ever bumping the version.

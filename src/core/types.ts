@@ -632,7 +632,7 @@ export interface DatabaseInterface<T extends TableMap = TableMap> {
 	 * resulting plan through the driver's optional `migrate` hook, and returns
 	 * the applied plan.
 	 *
-	 * @param deployed - The schema currently deployed, as {@link TableSchema}s
+	 * @param deployed - The deployed schema, as {@link TableSchema}s
 	 * @param options - Optional abort signal, checked at entry
 	 * @returns The applied {@link Migration} plan
 	 *

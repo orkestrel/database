@@ -23,7 +23,10 @@
 		"paths": {
 			"@src/core": ["./src/core/index.ts"],
 			"@src/browser": ["./src/browser/index.ts"],
-			"@src/server": ["./src/server/index.ts"]
+			"@src/server": ["./src/server/index.ts"],
+			"@orkestrel/database/browser": ["./src/browser/index.ts"],
+			"@orkestrel/database/server": ["./src/server/index.ts"],
+			"@orkestrel/database": ["./src/core/index.ts"]
 		}
 	},
 	"exclude": ["node_modules", "dist", "tmp"]

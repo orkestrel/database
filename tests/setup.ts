@@ -31,7 +31,7 @@ import { createDatabase, createMemoryDriver } from '@src/core'
 // recorders, never mocks).
 
 /**
- * Collect sorted ids from the parity suite's optional-rank stream case.
+ * Collects sorted ids from the parity suite's optional-rank stream case.
  *
  * @param table - The real backend table under comparison
  * @returns Matching row ids in stable order
@@ -50,7 +50,7 @@ export async function collectRankStreamIds<T extends { readonly id: string }>(
 }
 
 /**
- * A minimal {@link TableSchema}`[]` for the named tables — each scan-only (empty
+ * Declares a minimal {@link TableSchema}`[]` for the named tables — each scan-only (empty
  * `columns` / `indexes`, `primary: 'id'`), enough to ready a table by name on a
  * driver that reads only `name` (the reference `MemoryDriver`).
  *
@@ -67,7 +67,7 @@ export function tableSchemas(...names: readonly string[]): readonly TableSchema[
 }
 
 /**
- * Build one {@link Condition} for a input/compiler test — the verbose literal
+ * Builds one {@link Condition} for a input/compiler test — the verbose literal
  * (`{ column, operator, values, connector }`) folded into a call.
  *
  * @param column - The {@link FieldPath} the condition reads (a string is ONE
@@ -87,12 +87,12 @@ export function buildCondition(
 	return { column, operator, values, connector }
 }
 
-/** The shared `users` shape map the fixture rows and the native-hook dispatch tests declare. */
+/** Holds the shared `users` shape map the fixture rows and the native-hook dispatch tests declare. */
 export const INTEGRATION_TABLES = {
 	users: { id: stringShape(), name: stringShape(), age: integerShape() },
 } satisfies Readonly<Record<string, ColumnMap>>
 
-/** A row of the canonical `users` table ({@link INTEGRATION_TABLES}` users`). */
+/** Shapes a row of the canonical `users` table ({@link INTEGRATION_TABLES}` users`). */
 export interface UserRow {
 	readonly id: string
 	readonly name: string
@@ -100,7 +100,7 @@ export interface UserRow {
 }
 
 /**
- * Build one canonical `users` row (`{ id, name, age }`) — the single most-repeated row
+ * Builds one canonical `users` row (`{ id, name, age }`) — the single most-repeated row
  * literal across the database / driver / relations tests, folded into a factory with a
  * sensible default (`{ id: 'u1', name: 'Ada', age: 36 }`) plus per-call overrides so a
  * test names only the field its scenario varies (see `.claude/rules/tests.md`
@@ -115,7 +115,7 @@ export function createUserRow(overrides?: Partial<UserRow>): UserRow {
 }
 
 /**
- * The recurring three-row `users` seed — `Ada` / `Grace` / `Edsger` (`u1` / `u2` / `u3`)
+ * Builds the recurring three-row `users` seed — `Ada` / `Grace` / `Edsger` (`u1` / `u2` / `u3`)
  * — the trio the densest CRUD / batch / query tests `set([...])` before exercising reads
  * (see `.claude/rules/tests.md` § Shared test infrastructure). Built fresh each
  * call (a new array of fresh rows) so a mutating test
@@ -133,7 +133,7 @@ export function userRows(): readonly UserRow[] {
 }
 
 /**
- * Stand up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `database`
+ * Stands up a LIVE, seeded `users` {@link import('@src/core').TableInterface} for the `database`
  * entity tests — `createDatabase({ driver: createMemoryDriver(), tables: { users: columns } })`,
  * seed the rows, and return `db.table('users')` (see `.claude/rules/tests.md`
  * § Shared test infrastructure). The shared form of the per-file
@@ -160,7 +160,7 @@ export async function seedUsersTable<const C extends ColumnMap>(
 }
 
 /**
- * Stand up a constrained `users` {@link import('@src/core').DatabaseInterface} — the shared
+ * Stands up a constrained `users` {@link import('@src/core').DatabaseInterface} — the shared
  * shape `Database.test.ts`'s local `userDatabase()` and `Table.test.ts`'s local `userTable()`
  * each hand-rolled byte-for-byte (see `.claude/rules/tests.md`
  * § Shared test infrastructure): `createDatabase({ driver: createMemoryDriver(),
@@ -186,7 +186,7 @@ export function createConstrainedUsersDatabase(error?: EmitterErrorHandler): {
 	return { db, users: db.table('users') }
 }
 
-/** The exact columns used by the Cursor behavior and transaction-lifetime scenarios. */
+/** Declares the exact columns the Cursor behavior and transaction-lifetime scenarios read. */
 export const CURSOR_COLUMNS = {
 	id: stringShape(),
 	name: stringShape(),
@@ -194,10 +194,10 @@ export const CURSOR_COLUMNS = {
 	role: literalShape(['admin', 'member', 'guest']),
 }
 
-/** One row in the shared Cursor scenario. */
+/** Shapes one row in the shared Cursor scenario. */
 export type CursorUserRow = RowOf<typeof CURSOR_COLUMNS>
 
-/** The canonical three-row seed used by Cursor ordering and mutation scenarios. */
+/** Holds the canonical three-row seed the Cursor ordering and mutation scenarios read. */
 export const CURSOR_ROWS: readonly CursorUserRow[] = [
 	{ id: 'u1', name: 'Ada', age: 36, role: 'admin' },
 	{ id: 'u2', name: 'Bo', age: 17, role: 'guest' },
@@ -205,7 +205,7 @@ export const CURSOR_ROWS: readonly CursorUserRow[] = [
 ]
 
 /**
- * Create the shared Cursor database over a caller-selected driver.
+ * Creates the shared Cursor database over a caller-selected driver.
  *
  * @param driver - The storage driver; defaults to a fresh real Memory driver
  * @returns The database and its typed `users` table
@@ -216,7 +216,7 @@ export function createCursorDatabase(driver: DriverInterface = createMemoryDrive
 }
 
 /**
- * Create and seed the shared Cursor database.
+ * Creates and seeds the shared Cursor database.
  *
  * @param driver - The storage driver; defaults to a fresh real Memory driver
  * @returns The database and its seeded typed `users` table
@@ -228,7 +228,7 @@ export async function seedCursorDatabase(driver?: DriverInterface) {
 }
 
 /**
- * Adapt a real Memory driver to only the required DriverInterface primitives.
+ * Adapts a real Memory driver to only the required DriverInterface primitives.
  *
  * @param memory - The real Memory driver to expose
  * @returns A required-surface driver suitable for adding one test-specific hook
@@ -250,7 +250,7 @@ export function createMemoryAdapter(
 	}
 }
 
-/** Optional metadata capabilities exposed by a reconciliation test driver. */
+/** Names the optional metadata capabilities a reconciliation test driver exposes. */
 export interface ReconciliationDriverOptions {
 	readonly metadata: boolean
 	readonly stamp: boolean
@@ -259,7 +259,7 @@ export interface ReconciliationDriverOptions {
 }
 
 /**
- * Create a real Memory-backed driver with an exact optional metadata-hook set.
+ * Creates a real Memory-backed driver with an exact optional metadata-hook set.
  *
  * @param options - Which optional hooks exist and the initial persisted metadata
  * @returns The driver plus call records for reconciliation assertions
@@ -306,7 +306,7 @@ export function createReconciliationDriver(options: ReconciliationDriverOptions)
 	return { driver, metadataCalls, stampCalls, migrateCalls }
 }
 
-/** A reusable host-independent AsyncIterable over one supplied AsyncIterator. */
+/** Wraps one supplied AsyncIterator as a reusable host-independent AsyncIterable. */
 export class IteratorSource<T> implements AsyncIterable<T> {
 	readonly #iterator: AsyncIterator<T>
 
@@ -319,7 +319,7 @@ export class IteratorSource<T> implements AsyncIterable<T> {
 	}
 }
 
-/** An async iterator wrapper that records every delegated source cleanup. */
+/** Wraps an async iterator and records every delegated source cleanup. */
 export class RecordingIterator<T> implements AsyncIterator<T> {
 	readonly #source: AsyncIterator<T>
 	readonly #cleanup: () => void
@@ -340,7 +340,7 @@ export class RecordingIterator<T> implements AsyncIterator<T> {
 	}
 }
 
-/** One recorded call to {@link createRecordingDriver}'s native `aggregate` hook. */
+/** Shapes one recorded call to {@link createRecordingDriver}'s native `aggregate` hook. */
 export interface RecordingAggregate {
 	readonly operation: AggregateOperation
 	readonly column: FieldPath
@@ -348,8 +348,8 @@ export interface RecordingAggregate {
 }
 
 /**
- * A recording {@link DriverInterface} over the real Memory driver that ALSO implements
- * the optional native `records` / `aggregate` hooks (see
+ * Wraps the real Memory driver in a {@link DriverInterface} that ALSO implements the
+ * optional native `records` / `aggregate` hooks and records each call (see
  * `.claude/rules/architecture.md` § System constraints). Rows are
  * stored (so a scan WOULD return them), but the two hooks
  * short-circuit to a fixed sentinel and record what they were handed, so a test can
@@ -367,14 +367,14 @@ export interface RecordingDriverInterface extends DriverInterface {
 	): Promise<number | undefined>
 }
 
-/** The sentinel row {@link createRecordingDriver}'s native `records` hook returns. */
+/** Holds the sentinel row {@link createRecordingDriver}'s native `records` hook returns. */
 export const RECORDING_ROW: Row = { id: 'native', name: 'Native', age: 7 }
 
-/** The sentinel value {@link createRecordingDriver}'s native `aggregate` hook returns. */
+/** Holds the sentinel value {@link createRecordingDriver}'s native `aggregate` hook returns. */
 export const RECORDING_AGGREGATE = 123
 
 /**
- * Create a {@link RecordingDriverInterface} plus the arrays its native hooks
+ * Creates a {@link RecordingDriverInterface} plus the arrays its native hooks
  * record into — a real Memory-backed driver whose `records` / `aggregate`
  * return fixed sentinels ({@link RECORDING_ROW} / {@link RECORDING_AGGREGATE})
  * and push what they receive onto `recordsCalls` / `aggregateCalls`. Lets a test assert the native hook ran (and with

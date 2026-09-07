@@ -906,8 +906,9 @@ describe('Database — emitter (push observation surface)', () => {
 // Diffs a caller-supplied `deployed` schema against the database's declared schema
 // by using `planMigration`, applies the resulting plan through the driver's optional
 // `migrate` hook, and returns the applied plan. Throws `MIGRATION` when the driver
-// lacks the hook (propagated driver errors, e.g. unknown-table, pass through as-is —
-// covered by `MemoryDriver`'s own tests and `conformDriver`). Checks abort at entry.
+// lacks the hook (propagated driver errors, for example unknown-table, pass through
+// as-is — covered by `MemoryDriver`'s own tests and `conformDriver`). Checks abort
+// at entry.
 // Emits `migrate` AFTER a successful apply (`.claude/rules/patterns.md` § Stateful emitters).
 
 describe('migrate()', () => {

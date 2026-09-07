@@ -148,7 +148,7 @@ function readScratchParent(): string {
 	return parent
 }
 
-/** List the scratch directories a prefix currently owns under a probed parent. */
+/** List the scratch directories a prefix owns under a probed parent. */
 function readScratchNames(parent: string, prefix: string): readonly string[] {
 	return readdirSync(parent).filter((name) => name.startsWith(prefix))
 }

@@ -35,7 +35,7 @@ export function deleteDatabase(name: string): Promise<void> {
 let databaseCounter = 0
 
 /**
- * A process-unique IndexedDB database name — a monotonic counter under an
+ * Returns a process-unique IndexedDB database name — a monotonic counter under an
  * optional prefix, so concurrent tests never collide on a shared store.
  *
  * @param prefix - A readable name segment (defaults to `database-idb`)
@@ -47,7 +47,7 @@ export function uniqueName(prefix = 'database-idb'): string {
 }
 
 /**
- * Persist an arbitrary value through a real native IndexedDB transaction.
+ * Persists an arbitrary value through a real native IndexedDB transaction.
  *
  * @remarks
  * Corruption-boundary tests need to seed values outside the wrapper's typed row

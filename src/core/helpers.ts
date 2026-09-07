@@ -783,7 +783,7 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  * copy/convert the data at the application layer, then remove the old column —
  * two separate plans, never a single implicit "alter" step.
  *
- * @param deployed - The table schemas currently applied
+ * @param deployed - The already-applied table schemas
  * @param declared - The table schemas the caller wants applied
  * @param from - The plan's source version label (defaults to `0`)
  * @param to - The plan's target version label (defaults to `1`)

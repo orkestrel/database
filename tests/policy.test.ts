@@ -1,6 +1,7 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { POLICY_BANNED_TERMS, POLICY_JUDGED_TERMS } from '../configs/policy.js'
 import {
 	BRIDGE_POLICY_CONTROLS,
 	createPolicyScratch,
@@ -13,13 +14,27 @@ import {
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
 	inspectSkillBridges,
+	isPolicyFile,
+	isPolicyMirror,
 	isPolicyRecord,
+	isPolicyStray,
 	matchesSkillTrigger,
 	parseSkillFrontmatter,
+	POLICY_CATALOG_FILE,
 	POLICY_CONTROLS,
+	POLICY_MIRROR_PATTERN,
 	POLICY_SUPPRESSION_DIRECTIVE,
+	POLICY_TERM_FILE,
+	POLICY_TERM_HEADING,
 	PORTABILITY_POLICY_CONTROLS,
+	PROSE_POLICY_CONTROLS,
+	PROSE_POLICY_MANIFEST,
+	readPolicyCatalog,
+	readPolicyGuide,
+	readPolicyPackage,
 	readPolicyPaths,
+	readPolicyProse,
+	readPolicyTerms,
 	readSkillFamily,
 	RULES_POLICY_CONTROLS,
 	SKILL_BRIDGE_ROOT,
@@ -172,6 +187,10 @@ describe('policy population controls', () => {
 				membership: 'files outside source, test, config, and script code',
 				rule: 'suppression',
 				files: [
+					// The manifest names the package this guide belongs to, so the prose sweep reads it
+					// as the workspace's own guide rather than as a top-level guide no evidence accounts
+					// for.
+					{ path: 'package.json', content: PROSE_POLICY_MANIFEST },
 					{
 						path: 'guides/sample.md',
 						content: `<!-- ${POLICY_SUPPRESSION_DIRECTIVE} -->\n`,
@@ -338,6 +357,113 @@ describe('portability policy', () => {
 				'src/worker/helpers.ts',
 			]),
 		).toEqual([])
+	})
+})
+
+describe('prose policy', () => {
+	for (const control of PROSE_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			const violations = inspectPolicyControl(control).filter(
+				(violation) => violation.rule === 'prose',
+			)
+			expect(violations).toHaveLength(1)
+			expect(violations[0]?.message).toBe(control.message)
+			expect(violations[0]?.line).toBe(control.line)
+		})
+	}
+
+	// A mirror is excluded from the term sweep, so the exclusion needs evidence rather than
+	// silence. The catalog table is that evidence, and it is a second mechanism: it is regenerated
+	// from the registry and names the fleet, while the guides directory names what this checkout
+	// holds. A guide neither side accounts for reports.
+	it('accounts for every top-level guide as this package, the index, or a catalog row', () => {
+		const root = process.cwd()
+		const own = readPolicyPackage(root)
+		if (own === undefined) throw new Error('The workspace manifest declares no name')
+		const guides = readPolicyProse(root).filter((path) => POLICY_MIRROR_PATTERN.test(path))
+		expect(guides.length).toBeGreaterThan(0)
+		expect(guides.filter((path) => isPolicyStray(root, path))).toEqual([])
+		const other = readPolicyCatalog(root).find((name) => name !== own)
+		if (other === undefined) throw new Error('The catalog registers no other package')
+		expect(isPolicyMirror(root, `guides/${other}.md`)).toBe(true)
+		expect(isPolicyMirror(root, `guides/${own}.md`)).toBe(false)
+		expect(isPolicyMirror(root, 'guides/README.md')).toBe(false)
+		expect(isPolicyStray(root, `guides/${own}.md`)).toBe(false)
+		expect(isPolicyStray(root, 'guides/README.md')).toBe(false)
+		// The control: a name no catalog row registers is a stray whatever the directory holds.
+		expect(isPolicyStray(root, 'guides/absent.md')).toBe(true)
+	})
+
+	it('reads the guide name a top-level path carries for another package to account for', () => {
+		const root = process.cwd()
+		const own = readPolicyPackage(root)
+		if (own === undefined) throw new Error('The workspace manifest declares no name')
+		expect(readPolicyGuide(root, 'guides/other.md')).toBe('other')
+		expect(readPolicyGuide(root, `guides/${own}.md`)).toBeUndefined()
+		expect(readPolicyGuide(root, 'guides/README.md')).toBeUndefined()
+		expect(readPolicyGuide(root, 'guides/nested/other.md')).toBeUndefined()
+		expect(readPolicyGuide(root, 'AGENTS.md')).toBeUndefined()
+	})
+
+	it('reads the authored Markdown population and excludes the directories it names', () => {
+		const paths = readPolicyProse(process.cwd())
+		expect(paths).toContain('README.md')
+		expect(paths).toContain('AGENTS.md')
+		expect(paths).toContain('guides/README.md')
+		expect(paths).toContain(POLICY_CATALOG_FILE)
+		expect(paths.some((path) => path.startsWith('node_modules/'))).toBe(false)
+		expect(paths.some((path) => path.startsWith('dist/'))).toBe(false)
+		expect(paths.some((path) => path.startsWith('tmp/'))).toBe(false)
+		expect(paths.some((path) => path.startsWith('.orkestrel/'))).toBe(false)
+	})
+})
+
+describe('denylist currency', () => {
+	// The denylist is a second copy of one column of the substitution table, so it drifts the
+	// moment a row is added or removed. Reading the table itself is the mechanism that could
+	// disagree with the copy, and every row has to land in exactly one of the two sets: matched
+	// unconditionally, or left to a reader because the row has a permitted sense.
+	// A target reads `.claude/rules/writing.md` from the installed scaffold copy rather than
+	// authoring it (the canon paragraph `src/core/templates.ts` emits into a generated `AGENTS.md`),
+	// so the table exists only where the workspace authors it. There the denylist and the table ship
+	// from one release; here they can drift, so the comparison runs here.
+	it.skipIf(!isPolicyFile(process.cwd(), POLICY_TERM_FILE))(
+		'registers every substitution-table term as either matched or judged',
+		() => {
+			const registered = new Set([
+				...POLICY_BANNED_TERMS.map((entry) => entry.term),
+				...POLICY_JUDGED_TERMS,
+			])
+			const table = readPolicyTerms(readFileSync(join(process.cwd(), POLICY_TERM_FILE), 'utf8'))
+			expect(table.length > 0).toBe(true)
+			expect([...registered].sort()).toEqual([...new Set(table)].sort())
+		},
+	)
+
+	it('reports a table row neither set names', () => {
+		// The control: a table carrying one row outside the membership, which the reader returns
+		// and neither set holds, so the comparison above would fail on it.
+		const fixture = [
+			'# Fixture',
+			'',
+			POLICY_TERM_HEADING,
+			'',
+			'| Term | Replacement |',
+			'| ---- | ----------- |',
+			'| `should` | `must` |',
+			'| `henceforth` (formal) | `after this` |',
+			'',
+			'## Not adopted',
+			'',
+			'| `unreached` | Outside the table |',
+		].join('\n')
+		const table = readPolicyTerms(fixture)
+		expect(table).toEqual(['should', 'henceforth'])
+		const registered = new Set([
+			...POLICY_BANNED_TERMS.map((entry) => entry.term),
+			...POLICY_JUDGED_TERMS,
+		])
+		expect(table.filter((term) => !registered.has(term))).toEqual(['henceforth'])
 	})
 })
 

@@ -441,14 +441,20 @@ export function outputBoundary(output: string): Plugin {
 	}
 }
 
-/** The compiler scope a face resolves to, as its declaration emit and its roll-up both read it. */
+/**
+ * Describes the compiler scope a face resolves to, as its declaration emit and its roll-up both
+ * read it.
+ */
 export interface ProjectScope {
 	readonly lib: readonly string[]
 	readonly types: readonly string[]
 	readonly root: string
 }
 
-/** The `overrideTsconfig` a declaration roll-up hands the extractor, and every option it may read. */
+/**
+ * Describes the `overrideTsconfig` a declaration roll-up hands the extractor, and every option it
+ * may read.
+ */
 export interface ExtractorOverride {
 	readonly compilerOptions: {
 		readonly types: readonly string[]
@@ -462,7 +468,10 @@ export interface ExtractorOverride {
 	readonly files: readonly string[]
 }
 
-/** The extractor exports a declaration roll-up dereferences, named as that package publishes them. */
+/**
+ * Lists the extractor exports a declaration roll-up dereferences, named as that package publishes
+ * them.
+ */
 export interface ExtractorModule {
 	readonly Extractor: { readonly invoke: (config: unknown, options: unknown) => unknown }
 	readonly ExtractorConfig: { readonly prepare: (options: unknown) => unknown }

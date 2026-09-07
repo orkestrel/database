@@ -35,10 +35,21 @@ import policyPlugin, {
 	MOCKING_RULE,
 	NESTED_RULE,
 	PARSER_RULE,
+	POLICY_BANNED_TERMS,
 	POLICY_ENDING_GLOBS,
+	POLICY_JUDGED_TERMS,
 	POLICY_PLACEMENT_GLOBS,
+	POLICY_VOICE_STOPWORDS,
 	PRIVACY_RULE,
+	TERM_RULE,
 	TYPE_RULE,
+	VOICE_RULE,
+	blankPolicyText,
+	commentToPolicyParagraph,
+	isPolicyVoiced,
+	paragraphToPolicyOpener,
+	stripPolicyCode,
+	textToPolicyHits,
 } from '../configs/policy.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
@@ -1324,6 +1335,393 @@ describe('policy plugin', () => {
 		],
 	})
 
+	tester.run('no-malformed-summary', VOICE_RULE, {
+		valid: [
+			{
+				name: 'accepts a third-person opener',
+				code: ['/** Creates a control. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a whether clause',
+				code: ['/** Checks whether the reader is ready. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts a two-letter third-person opener',
+				code: ['/** Is the value a reader receives. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a reporting opener',
+				code: ['/** Reports whether the reader is ready. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts an anonymous default export',
+				code: ['/** Declares the fixture plugin. */', 'export default { meta: 1 }'].join('\n'),
+			},
+			{
+				name: 'accepts a doc block on a declaration no export reaches',
+				code: ['/** The opener, a noun phrase. */', 'const CONTROL = 1', 'void CONTROL'].join('\n'),
+			},
+			{
+				name: 'accepts a doc block on a class member',
+				code: [
+					'/** Holds one value. */',
+					'export class Holder {',
+					'\t/** The member value, a noun phrase. */',
+					'\tvalue = 1',
+					'}',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a single-star block comment before an export',
+				code: ['/* The opener, a noun phrase. */', 'export const CONTROL = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a word from the stop set after the opener',
+				code: ['/** Reports whether this process passes. */', 'export const READY = true'].join(
+					'\n',
+				),
+			},
+			{
+				name: 'accepts a block tag naming the symbol after the description [membership: text before the first block tag]',
+				code: [
+					'/**',
+					' * Creates a control',
+					' *',
+					' * @param value - The value readControl reads.',
+					' */',
+					'export function readControl(value: number): number {',
+					'\treturn value',
+					'}',
+				].join('\n'),
+			},
+			{ name: 'accepts an export carrying no doc block', code: 'export const CONTROL = 1' },
+		],
+		invalid: [
+			{
+				name: 'rejects a noun-phrase opener [membership: doc blocks directly above a top-level export]',
+				code: ['/** The opener, a noun phrase. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects an imperative opener [membership: doc blocks directly above a top-level export]',
+				code: ['/** Create a control. */', 'export function createControl(): void {}'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects an opener from the stop set [membership: opening words ending in s that name no verb]',
+				code: ['/** This holds one value. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects a first sentence naming its own class [membership: the declared identifier inside the first sentence]',
+				code: ['/** Returns the value ControlTwo carries. */', 'export class ControlTwo {}'].join(
+					'\n',
+				),
+				errors: [{ messageId: 'name', data: { name: 'ControlTwo' } }],
+			},
+			{
+				name: 'rejects a first sentence naming its own constant [membership: the declared identifier inside the first sentence]',
+				code: ['/** Returns the value CONTROL carries. */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'name', data: { name: 'CONTROL' } }],
+			},
+			{
+				name: 'rejects an empty doc block [membership: description paragraphs, the empty one included]',
+				code: ['/** */', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+			{
+				name: 'rejects a doc block a blank line separates from its export [membership: doc blocks whitespace alone separates from a top-level export]',
+				code: ['/** The opener, a noun phrase. */', '', 'export const CONTROL = 1'].join('\n'),
+				errors: [{ messageId: 'voice' }],
+			},
+		],
+	})
+
+	tester.run('no-banned-term', TERM_RULE, {
+		valid: [
+			{ name: 'accepts a term inside a code span', code: '// A `should` token names one row.' },
+			{
+				name: 'accepts a term inside a fenced example',
+				code: [
+					'/**',
+					' * Reads one value.',
+					' *',
+					' * @example',
+					' * ```text',
+					' * should stay',
+					' * ```',
+					' */',
+					'export const CONTROL = 1',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a term inside a link target',
+				code: '/** Reports the state. {@link Example.should} */',
+			},
+			{
+				name: 'accepts a term inside an address',
+				code: '// Read https://example.test/should/row for the shape.',
+			},
+			{
+				name: 'accepts a term inside a code span a line break runs through',
+				code: ['/**', ' * A span `that', ' * spans lines with should` here.', ' */'].join('\n'),
+			},
+			{ name: 'accepts a judged term', code: '// The new value is read once now.' },
+			{
+				name: 'accepts a longer word carrying a term',
+				code: '// A justice viable pleased reader.',
+			},
+			{ name: 'accepts prose carrying no term', code: '// Reads the value a reader receives.' },
+		],
+		invalid: [
+			{
+				name: 'rejects should [membership: comment prose outside code, tags, and addresses]',
+				code: '// A reader should meet this row.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'should', replacement: 'must, can, might, or the imperative' },
+					},
+				],
+			},
+			{
+				name: 'rejects should in a block comment [membership: block and line comments alike]',
+				code: '/** Reports the state a reader should meet. */',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'should', replacement: 'must, can, might, or the imperative' },
+					},
+				],
+			},
+			{
+				name: 'rejects simply [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader simply reads.',
+				errors: [{ messageId: 'term', data: { term: 'simply', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects easy [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is easy.',
+				errors: [{ messageId: 'term', data: { term: 'easy', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects easiest [membership: the inflections one row reaches]',
+				code: '// The path is easiest.',
+				errors: [{ messageId: 'term', data: { term: 'easy', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects just [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader just reads.',
+				errors: [{ messageId: 'term', data: { term: 'just', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects currently [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader currently reads.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'currently', replacement: 'delete, or give the date' },
+					},
+				],
+			},
+			{
+				name: 'rejects utilizes [membership: the inflections one row reaches]',
+				code: '// The reader utilizes the path.',
+				errors: [{ messageId: 'term', data: { term: 'utilize', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects utilizing [membership: the inflections one row reaches]',
+				code: '// The reader is utilizing the path.',
+				errors: [{ messageId: 'term', data: { term: 'utilize', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects leverages [membership: the inflections one row reaches]',
+				code: '// The reader leverages the path.',
+				errors: [{ messageId: 'term', data: { term: 'leverage', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects leveraged [membership: the inflections one row reaches]',
+				code: '// The reader leveraged the path.',
+				errors: [{ messageId: 'term', data: { term: 'leverage', replacement: 'use' } }],
+			},
+			{
+				name: 'rejects via [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader arrives via the path.',
+				errors: [{ messageId: 'term', data: { term: 'via', replacement: 'through, by using' } }],
+			},
+			{
+				name: 'rejects in order to [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader reads in order to learn.',
+				errors: [{ messageId: 'term', data: { term: 'in order to', replacement: 'to' } }],
+			},
+			{
+				name: 'rejects the abbreviated for example [membership: dotted rows read with their dots]',
+				code: '// The reader reads one path, e.g. the front page.',
+				errors: [{ messageId: 'term', data: { term: 'e.g.', replacement: 'for example' } }],
+			},
+			{
+				name: 'rejects the abbreviated that is [membership: dotted rows read with their dots]',
+				code: '// The reader reads one path, i.e. the front page.',
+				errors: [{ messageId: 'term', data: { term: 'i.e.', replacement: 'that is' } }],
+			},
+			{
+				name: 'rejects the abbreviated list ending [membership: dotted rows read with their dots]',
+				code: '// The reader reads paths, files, etc.',
+				errors: [
+					{
+						messageId: 'term',
+						data: { term: 'etc.', replacement: 'bound the list, or recast the sentence' },
+					},
+				],
+			},
+			{
+				name: 'rejects performant [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is performant.',
+				errors: [
+					{ messageId: 'term', data: { term: 'performant', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects robust [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path is robust.',
+				errors: [
+					{ messageId: 'term', data: { term: 'robust', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects robustness [membership: the inflections one row reaches]',
+				code: '// The path has robustness.',
+				errors: [
+					{ messageId: 'term', data: { term: 'robust', replacement: 'the measured property' } },
+				],
+			},
+			{
+				name: 'rejects allows you to [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path allows you to read.',
+				errors: [{ messageId: 'term', data: { term: 'allows you to', replacement: 'lets you' } }],
+			},
+			{
+				name: 'rejects the conjunction pair [membership: comment prose outside code, tags, and addresses]',
+				code: '// The reader reads a path and/or a file.',
+				errors: [{ messageId: 'term', data: { term: 'and/or', replacement: 'and, or, or both' } }],
+			},
+			{
+				name: 'rejects please [membership: comment prose outside code, tags, and addresses]',
+				code: '// Read the path, please.',
+				errors: [{ messageId: 'term', data: { term: 'please', replacement: 'delete' } }],
+			},
+			{
+				name: 'rejects the hyphenated quick check [membership: rows written with a space or a hyphen]',
+				code: '// Run a sanity-check over the path.',
+				errors: [{ messageId: 'term', data: { term: 'sanity check', replacement: 'quick check' } }],
+			},
+			{
+				name: 'rejects dummy [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path names a dummy value.',
+				errors: [{ messageId: 'term', data: { term: 'dummy', replacement: 'placeholder' } }],
+			},
+			{
+				name: 'rejects dummies [membership: the inflections one row reaches]',
+				code: '// The path names two dummies.',
+				errors: [{ messageId: 'term', data: { term: 'dummy', replacement: 'placeholder' } }],
+			},
+			{
+				name: 'rejects the refused list name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path reads a blacklist.',
+				errors: [{ messageId: 'term', data: { term: 'blacklist', replacement: 'denylist' } }],
+			},
+			{
+				name: 'rejects the refused permit name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path reads a whitelist.',
+				errors: [{ messageId: 'term', data: { term: 'whitelist', replacement: 'allowlist' } }],
+			},
+			{
+				name: 'rejects the refused replica name [membership: comment prose outside code, tags, and addresses]',
+				code: '// The path names a slave copy.',
+				errors: [{ messageId: 'term', data: { term: 'slave', replacement: 'replica' } }],
+			},
+		],
+	})
+
+	it('blanks a matched region without moving a line break', () => {
+		expect(blankPolicyText('abc')).toBe('   ')
+		expect(blankPolicyText('ab\ncd')).toBe('  \n  ')
+	})
+
+	it('blanks every code, tag, and address region while holding each later offset', () => {
+		const text = [
+			'A `should` span.',
+			'```text',
+			'should stay',
+			'```',
+			'A {@link Example.should} tag.',
+			'Read https://example.test/should/row here.',
+			'A reader should meet this row.',
+		].join('\n')
+		const stripped = stripPolicyCode(text)
+		expect(stripped).toHaveLength(text.length)
+		expect(stripped.split('\n')).toHaveLength(text.split('\n').length)
+		const hits = textToPolicyHits(stripped)
+		expect(hits.map((hit) => hit.term.term)).toEqual(['should'])
+		expect(text.slice(hits[0]?.index ?? -1, (hits[0]?.index ?? 0) + 6)).toBe('should')
+	})
+
+	it('reads every banned-term hit in offset order with the row it matched', () => {
+		const hits = textToPolicyHits('The reader utilizes a path and arrives via a file.')
+		expect(hits.map((hit) => hit.term.term)).toEqual(['utilize', 'via'])
+		expect(hits.map((hit) => hit.term.replacement)).toEqual(['use', 'through, by using'])
+		expect(hits[0]?.index).toBeLessThan(hits[1]?.index ?? 0)
+		expect(textToPolicyHits('The reader reads one path.')).toEqual([])
+	})
+
+	it('reads a description paragraph up to its first block tag', () => {
+		expect(
+			commentToPolicyParagraph({
+				type: 'Block',
+				value: '*\n * Creates a control.\n *\n * @param value - Reports the state.\n ',
+				range: [0, 0],
+			}),
+		).toBe('Creates a control.')
+		expect(
+			commentToPolicyParagraph({ type: 'Block', value: '* Creates a control. ', range: [0, 0] }),
+		).toBe('Creates a control.')
+		expect(commentToPolicyParagraph({ type: 'Block', value: '* ', range: [0, 0] })).toBe('')
+	})
+
+	it('reads the opening word of a paragraph as its letters alone', () => {
+		expect(paragraphToPolicyOpener('Creates a control.')).toBe('Creates')
+		expect(paragraphToPolicyOpener('"Creates" a control.')).toBe('Creates')
+		expect(paragraphToPolicyOpener('')).toBe('')
+	})
+
+	it('admits a third-person opener and refuses a registered non-verb', () => {
+		expect(isPolicyVoiced('Creates')).toBe(true)
+		expect(isPolicyVoiced('Is')).toBe(true)
+		expect(isPolicyVoiced('This')).toBe(false)
+		expect(isPolicyVoiced('Status')).toBe(false)
+		expect(isPolicyVoiced('Create')).toBe(false)
+		expect(isPolicyVoiced('')).toBe(false)
+		expect(POLICY_VOICE_STOPWORDS.every((word) => /^[A-Z][a-z]*s$/u.test(word))).toBe(true)
+	})
+
+	it('keeps the matched and judged term sets disjoint and frozen', () => {
+		const matched = POLICY_BANNED_TERMS.map((entry) => entry.term)
+		expect(matched.filter((term) => POLICY_JUDGED_TERMS.includes(term))).toEqual([])
+		expect(new Set(matched).size).toBe(matched.length)
+		expect(Object.isFrozen(POLICY_BANNED_TERMS)).toBe(true)
+		expect(Object.isFrozen(POLICY_JUDGED_TERMS)).toBe(true)
+		expect(Object.isFrozen(POLICY_VOICE_STOPWORDS)).toBe(true)
+		// Every judged row reaches this file as prose, so a pattern that matched one would red the
+		// workspace sweep on the rule file that names it.
+		for (const term of POLICY_JUDGED_TERMS) {
+			expect(textToPolicyHits(`The reader reads ${term} here.`)).toEqual([])
+		}
+	})
+
 	it('registers handlers as a function kind and routes as a data kind', () => {
 		expect(FUNCTION_SOURCE_FILES).toContain('handlers.ts')
 		expect(FUNCTION_SOURCE_FILES).not.toContain('routes.ts')
@@ -1357,6 +1755,7 @@ describe('policy plugin', () => {
 			scratch.write(
 				'src/violations/fixture.ts',
 				[
+					'// A reader should meet this term.',
 					"vi.mock('./x')",
 					'class PrivateMember { private value = 1 }',
 					'class ParameterMember { constructor(readonly value: string) {} }',
@@ -1365,6 +1764,7 @@ describe('policy plugin', () => {
 					"import * as os from 'node:os'",
 					"import { EOL } from 'node:os'",
 					'export interface ValueInterface { readonly id: string }',
+					'/** The opener, a noun phrase. */',
 					"export const STATUS = 'ready'",
 					"export const lines = text.trim().split('\\n')",
 					'export const ending = os.EOL + EOL',
@@ -1399,6 +1799,8 @@ describe('policy plugin', () => {
 			scratch.write(
 				'src/clean/CleanMember.ts',
 				[
+					'// Reads the value a caller receives.',
+					'/** Holds one runtime-private value. */',
 					'export class CleanMember {',
 					'\t#value = 1',
 					'\tvalue(): number { return this.#value }',
@@ -1484,6 +1886,8 @@ describe('policy plugin', () => {
 				'policy(no-malformed-constant) src/violations/constants.ts',
 				'policy(no-malformed-domain) src/violations/composables.ts',
 				'policy(no-malformed-domain) app/browser/composables/useTheme.ts',
+				'policy(no-banned-term) src/violations/fixture.ts',
+				'policy(no-malformed-summary) src/violations/fixture.ts',
 				'typescript(parameter-properties) src/violations/fixture.ts',
 				'typescript(explicit-member-accessibility) src/violations/fixture.ts',
 			]) {
@@ -1734,36 +2138,51 @@ describe('configuration helpers', () => {
 
 	it('reads the compiler scope and fixed extractor override a declaration roll-up requires', () => {
 		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
-		const project = resolve(root, 'configs/src/tsconfig.core.json')
+		// The order mirrors ENVIRONMENTS in src/core/constants.ts; a server-only workspace vendors
+		// no core project, so this walks to the first face the workspace actually carries.
+		const faces = ['core', 'browser', 'server']
+		const face = faces.find((candidate) =>
+			existsSync(resolve(root, `configs/src/tsconfig.${candidate}.json`)),
+		)
+		if (face === undefined) throw new Error('The workspace declares no face project')
+		const project = resolve(root, `configs/src/tsconfig.${face}.json`)
 		const declared: unknown = JSON.parse(readFileSync(project, 'utf8'))
 		if (typeof declared !== 'object' || declared === null) {
-			throw new Error('The core project is not a TypeScript configuration record')
+			throw new Error(`The ${face} project is not a TypeScript configuration record`)
 		}
 		const declaredOptions: unknown = Object.getOwnPropertyDescriptor(
 			declared,
 			'compilerOptions',
 		)?.value
 		if (typeof declaredOptions !== 'object' || declaredOptions === null) {
-			throw new Error('The core project carries no compiler options')
+			throw new Error(`The ${face} project carries no compiler options`)
 		}
 		const declaredLib: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'lib')?.value
 		const declaredTypes: unknown = Object.getOwnPropertyDescriptor(declaredOptions, 'types')?.value
 		if (!configHelpers.isStringList(declaredLib) || !configHelpers.isStringList(declaredTypes)) {
-			throw new Error('The core project declares no lib or types')
+			throw new Error(`The ${face} project declares no lib or types`)
 		}
+		const declaredRootDir: unknown = Object.getOwnPropertyDescriptor(
+			declaredOptions,
+			'rootDir',
+		)?.value
+		if (typeof declaredRootDir !== 'string') {
+			throw new Error(`The ${face} project declares no rootDir`)
+		}
+		const expectedRoot = resolve(dirname(project), declaredRootDir)
 
 		const scope = configHelpers.parseProjectScope(
 			configHelpers.readCompilerOutput(compiler, ['--showConfig', '-p', project]),
 			project,
 		)
-		if (scope === undefined) throw new Error('The core project resolved no compiler scope')
+		if (scope === undefined) throw new Error(`The ${face} project resolved no compiler scope`)
 		// The compiler lowercases every resolved library name, so the committed project is the
 		// second mechanism this reading is compared against rather than the reading itself.
 		expect(scope.lib.map((entry) => entry.toLowerCase())).toStrictEqual(
 			declaredLib.map((entry) => entry.toLowerCase()),
 		)
 		expect(scope.types).toStrictEqual(declaredTypes)
-		expect(scope.root).toBe(resolve(root, 'src/core'))
+		expect(scope.root).toBe(expectedRoot)
 
 		expect(configHelpers.parseProjectScope('not a configuration', project)).toBeUndefined()
 		expect(

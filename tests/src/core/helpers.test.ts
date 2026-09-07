@@ -347,7 +347,7 @@ describe('matchesWildcardPattern — the linear, ReDoS-safe engine', () => {
 		const elapsed = performance.now() - started
 		expect(matched).toBe(false)
 		// A backtracking regex takes seconds-to-forever; the linear matcher finishes near-instantly.
-		// A generous ceiling leaves no room for a blow-up while staying robust on a slow CI box.
+		// A generous ceiling leaves no room for a blow-up while still passing on a slow CI box.
 		expect(elapsed).toBeLessThan(200)
 	})
 })

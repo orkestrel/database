@@ -57,7 +57,9 @@
 		"vitest/warn-todo": "off",
 
 		"policy/no-mocking": "error",
-		"policy/no-keyword-privacy": "error"
+		"policy/no-keyword-privacy": "error",
+		"policy/no-malformed-summary": "error",
+		"policy/no-banned-term": "error"
 	},
 	"categories": {
 		"correctness": "error",
