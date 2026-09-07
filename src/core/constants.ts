@@ -67,7 +67,7 @@ export const CONFORMANCE_POSTS_SCHEMA: TableSchema = Object.freeze({
 })
 
 /**
- * Holds the fixed two-table schema every driver-conformance phase opens.
+ * Holds the fixed `users` and `posts` schema every driver-conformance phase opens.
  *
  * @remarks
  * Each phase mints a fresh driver and opens this exact schema, so a finding

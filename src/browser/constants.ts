@@ -19,12 +19,12 @@ export const INDEXABLE_STORAGE: readonly ColumnStorage[] = Object.freeze([
 ])
 
 /**
- * Names the reserved out-of-line store the {@link IndexedDBDriver} stamps its
- * {@link DriverMetadata} into.
+ * Names the reserved out-of-line store `__metadata__` the {@link IndexedDBDriver}
+ * stamps its {@link DriverMetadata} into.
  *
  * @remarks
- * Backs the driver's `metadata` / `stamp` hooks. A user table declared with this
- * exact name collides with the driver's own bookkeeping, so a caller must avoid
- * it; the collision is caught at `open`.
+ * Backs the driver's `metadata` / `stamp` hooks. A user table named `__metadata__`
+ * collides with the driver's own bookkeeping, so a caller must avoid it; the
+ * collision is caught at `open`.
  */
 export const METADATA_STORE = '__metadata__'

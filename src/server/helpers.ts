@@ -76,7 +76,7 @@ export function matchesAbsentPath(error: unknown): boolean {
  * — the operand side of the declared-type-trust proof.
  *
  * @remarks
- * `text` ↔ string, `integer` / `real` ↔ FINITE number (`NaN` / `±Infinity`
+ * `text` ↔ string, `integer` / `real` ↔ finite number (`NaN` / `±Infinity`
  * fail), `boolean` ↔ boolean. Backs {@link matchesConditionExactly}'s operand checks.
  *
  * @param value - The condition operand to test
@@ -110,18 +110,18 @@ export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): 
  * Required non-null `equals` / `not` require an operand matching the declared
  * storage and exclude `json` / `blob`. `above` / `below` / `from` / `to` /
  * `between` are exact only for {@link EXACT_RANGE_COLUMN_STORAGE} (`integer` /
- * `real` / `boolean`) — a `text` column's range conditions REFINE, because
- * SQLite's default BINARY collation orders TEXT by Unicode CODE POINT while
- * the core engine's `compareValues` orders JS strings by UTF-16 CODE UNIT,
+ * `real` / `boolean`) — a `text` column's range conditions refine, because
+ * SQLite's default BINARY collation orders TEXT by Unicode code point while
+ * the core engine's `compareValues` orders JS strings by UTF-16 code unit,
  * and the two diverge for supplementary-plane characters (see
  * {@link EXACT_COLUMN_STORAGE}'s remarks for the full rationale).
- * `any` / `none` require a NON-EMPTY list where every element matches (an empty
+ * `any` / `none` require a non-empty list where every element matches (an empty
  * list is exact under neither: the engine's `any([])` matches nothing while
  * `none([])` matches everything, and SQL `IN ()` is a syntax error) — these
  * stay exact on `text` (byte equality is collation-independent and engine-
  * identical). `starts` / `ends` are exact only on a `text` column with a
  * string operand (case-sensitive `substr` compile, see {@link compileConditionSQL}) —
- * likewise collation-independent. `like` / `glob` are NEVER exact — SQLite
+ * likewise collation-independent. `like` / `glob` are never exact — SQLite
  * `LIKE` folds case ASCII-only against the engine's Unicode fold, and `GLOB`
  * has character classes the engine treats literally.
  *
@@ -180,12 +180,12 @@ export function matchesConditionExactly(condition: Condition, schema: TableSchem
  * @remarks
  * `false` for a nested `FieldPath`, a column absent from `schema`, or a
  * declared type outside {@link EXACT_RANGE_COLUMN_STORAGE} (`integer` / `real` /
- * `boolean`). `text` is NOT exact here: SQLite's default BINARY collation
+ * `boolean`). `text` is not exact here: SQLite's default BINARY collation
  * orders TEXT by Unicode code point while the core engine's `compareValues`
  * orders JS strings by UTF-16 code unit, and the two diverge for
  * supplementary-plane characters (see {@link EXACT_COLUMN_STORAGE}'s remarks) —
- * a `text` order term REFINES through the core engine instead. The column must
- * also be REQUIRED and NON-NULL: an optional or nullable column refines, because
+ * a `text` order term refines through the core engine instead. The column must
+ * also be required and non-null: an optional or nullable column refines, because
  * SQL orders its `NULL`s ahead of every value while the core total order ranks
  * `undefined` before `null` before every other value.
  *
@@ -504,7 +504,7 @@ export function decodeRow(row: SQLiteRow, schema: TableSchema): Row {
  * so a plan-built index name always matches one `open` would have created.
  *
  * @remarks
- * A naive `idx_<table>_<cols joined by _>` is AMBIGUOUS: table `'a_b'` with
+ * A naive `idx_<table>_<cols joined by _>` is ambiguous: table `'a_b'` with
  * column `'c'` and table `'a'` with columns `['b', 'c']` both produce
  * `idx_a_b_c`. This encodes each part (the table name, then each column name)
  * length-prefixed (`<len>_<part>`) so the boundary between parts is always

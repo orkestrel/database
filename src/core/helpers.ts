@@ -1864,7 +1864,7 @@ export async function conformDriver(factory: () => DriverInterface): Promise<voi
 }
 
 /**
- * Runs the FULL driver-conformance battery and collects every violation — the
+ * Runs the full driver-conformance battery and collects every violation — the
  * audit entry point for a driver author who wants a complete report rather
  * than a single fail-fast throw.
  *

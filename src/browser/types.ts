@@ -8,7 +8,8 @@
  * a read. An omitted `index` selects the primary store; an omitted `range`
  * performs a full scan. The plan is always a superset of the matching rows;
  * the core engine refines it to the exact result. An empty plan (`{}`) is a
- * primary-store full scan.
+ * primary-store full scan. The `@orkestrel/database/browser` entry point exports
+ * this type.
  */
 export interface QueryPlan {
 	readonly index?: string

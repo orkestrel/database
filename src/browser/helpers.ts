@@ -229,7 +229,7 @@ export function mapIndexedDBError(error: IndexedDBError): DatabaseError {
 
 /**
  * Maps a backend {@link IndexedDBError} to the portable `DatabaseError` taxonomy
- * for use INSIDE `migrate()` — the one context where `UPGRADE` means the
+ * for use inside `migrate()` — the one context where `UPGRADE` means the
  * migration itself failed, not a generic driver fault.
  *
  * @remarks

@@ -6,7 +6,8 @@ import type { SQLiteValue } from '@orkestrel/sqlite'
 // host-independent and never speaks SQL.
 
 /**
- * Represents a parameterized SQL fragment or statement plus its bind values.
+ * Represents a parameterized SQL fragment or statement plus its bind values. The
+ * `@orkestrel/database/server` entry point exports this type.
  *
  * @remarks
  * Produced by the pure SQL compilers (`compilers.ts`) that turn a core
@@ -21,7 +22,8 @@ export interface CompiledSQL {
 }
 
 /**
- * Options for {@link import('./factories.js').createSQLiteDriver}.
+ * Configures {@link import('./factories.js').createSQLiteDriver}. The
+ * `@orkestrel/database/server` entry point exports this type.
  *
  * @remarks
  * Threaded into the underlying `@orkestrel/sqlite` wrapper's connection.

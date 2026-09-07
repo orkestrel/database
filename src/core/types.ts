@@ -236,7 +236,7 @@ export type DatabaseEventMap = {
 /**
  * Describes the push observation surface of a {@link TableInterface} — the per-row
  * mutation moments a fire-and-forget observer (cache invalidation, sync, an audit log)
- * subscribes to, ALONGSIDE the database-level {@link DatabaseEventMap}.
+ * subscribes to, alongside the database-level {@link DatabaseEventMap}.
  *
  * @remarks
  * Events carry the affected KEY only — never the row value — to keep fan-out lean and

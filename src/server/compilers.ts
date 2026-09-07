@@ -79,9 +79,9 @@ export function compileAggregateSQL(operation: AggregateOperation, column: Field
 }
 
 /**
- * Compiles a NESTED {@link FieldPath} to the `json_type(<col>, <path>)` SQL
+ * Compiles a nested {@link FieldPath} to the `json_type(<col>, <path>)` SQL
  * expression — the {@link compileFieldSQL} `json_extract` sibling used to tell a
- * PRESENT JSON `null` apart from an ABSENT path (both read back as SQL `NULL`
+ * present JSON `null` apart from an absent path (both read back as SQL `NULL`
  * through `json_extract`, but `json_type` reports `'null'` for the former and
  * SQL `NULL` for the latter).
  *
