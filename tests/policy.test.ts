@@ -5,24 +5,20 @@ import {
 	BRIDGE_POLICY_CONTROLS,
 	createPolicyScratch,
 	createSkillMetadata,
-	FUNCTION_SOURCE_FILES,
-	GENERIC_POLICY_SOURCES,
 	inspectPolicyControl,
 	inspectPolicyFilenamePaths,
 	inspectPolicyMirrorPaths,
 	inspectPolicyPortability,
-	inspectPolicySources,
+	inspectPolicyWiring,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
 	inspectSkillBridges,
+	isPolicyRecord,
 	matchesSkillTrigger,
 	parseSkillFrontmatter,
 	POLICY_CONTROLS,
 	POLICY_SUPPRESSION_DIRECTIVE,
 	PORTABILITY_POLICY_CONTROLS,
-	PORTABILITY_POLICY_EXCLUSION,
-	PORTABILITY_POLICY_LOCAL,
-	PORTABILITY_POLICY_SPLIT,
 	readPolicyPaths,
 	readSkillFamily,
 	RULES_POLICY_CONTROLS,
@@ -55,15 +51,6 @@ describe('policy scratch', () => {
 })
 
 describe('fleet policy register', () => {
-	it('keeps handlers in the function set and routes out', () => {
-		expect(FUNCTION_SOURCE_FILES).toContain('handlers.ts')
-		expect(FUNCTION_SOURCE_FILES).not.toContain('routes.ts')
-	})
-
-	it('accepts a differently shaped workspace without a core environment', () => {
-		expect(inspectPolicySources(GENERIC_POLICY_SOURCES)).toEqual([])
-	})
-
 	it('accepts matching mirrors across arbitrary axes and environments', () => {
 		const tests = [
 			'tests/src/worker/Worker.test.ts',
@@ -173,152 +160,6 @@ describe('policy population controls', () => {
 				files: [
 					{ path: 'tests/app/core/setup.ts', content: '' },
 					{ path: 'tests/app/core/setup.test.ts', content: '' },
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('excludes a .d.ts ambient declaration from placement', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'excludes a .d.ts ambient declaration from placement',
-				membership: 'ambient TypeScript declarations',
-				rule: 'type',
-				files: [
-					{
-						path: 'app/browser/env.d.ts',
-						content: 'export interface EnvironmentInterface {}\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('excludes a .d.mts ambient declaration from placement', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'excludes a .d.mts ambient declaration from placement',
-				membership: 'ambient TypeScript declarations',
-				rule: 'type',
-				files: [
-					{
-						path: 'app/browser/env.d.mts',
-						content: 'export interface EnvironmentInterface {}\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('excludes a .d.cts ambient declaration from placement', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'excludes a .d.cts ambient declaration from placement',
-				membership: 'ambient TypeScript declarations',
-				rule: 'type',
-				files: [
-					{
-						path: 'app/browser/env.d.cts',
-						content: 'export interface EnvironmentInterface {}\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('accepts a direct callback argument in constants.ts', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'accepts a direct callback argument in constants.ts',
-				membership: 'anonymous callbacks passed directly as call arguments',
-				rule: 'function',
-				files: [
-					{
-						path: 'app/edge/constants.ts',
-						content: 'export const LABELS = Object.freeze(COLUMNS.map((column) => column.label))\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('accepts a helper namespace in helpers.ts', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'accepts a helper namespace in helpers.ts',
-				membership: 'camelCase helper namespaces containing function behavior',
-				rule: 'data',
-				files: [
-					{
-						path: 'app/edge/helpers.ts',
-						content: 'export const formatters = Object.freeze({ money: build(fmt) })\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('accepts a concise-body direct return in constants.ts', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'accepts a concise-body direct return in constants.ts',
-				membership: 'anonymous functions returned directly through a concise arrow body',
-				rule: 'function',
-				files: [
-					{
-						path: 'app/edge/constants.ts',
-						content: 'export const WRAPPED = wrap(() => () => 1)\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('accepts a returned function inside a direct callback', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'accepts a returned function inside a direct callback',
-				membership: 'anonymous functions returned directly by a return statement',
-				rule: 'function',
-				files: [
-					{
-						path: 'app/edge/constants.ts',
-						content:
-							'export const LABELS = Object.freeze(COLUMNS.map((column) => { return () => column.label }))\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('accepts directly returned functions through callback control flow', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'accepts directly returned functions through callback control flow',
-				membership: 'anonymous functions returned directly through control-flow branches',
-				rule: 'function',
-				files: [
-					{
-						path: 'app/edge/constants.ts',
-						content:
-							'export const VALUES = Object.freeze(C.map((c) => { if (c) return () => 1; return () => 2 }))\n',
-					},
-				],
-			}),
-		).toEqual([])
-	})
-
-	it('excludes Vue text from the placement population', () => {
-		expect(
-			inspectPolicyControl({
-				label: 'excludes Vue text from the placement population',
-				membership: 'files outside the declared TypeScript source extensions',
-				rule: 'type',
-				files: [
-					{
-						path: 'app/browser/Panel.vue',
-						content: '<script setup lang="ts">\nexport interface PanelInterface {}\n</script>\n',
-					},
 				],
 			}),
 		).toEqual([])
@@ -467,16 +308,6 @@ describe('portability policy', () => {
 		})
 	}
 
-	for (const control of [
-		PORTABILITY_POLICY_EXCLUSION,
-		PORTABILITY_POLICY_LOCAL,
-		PORTABILITY_POLICY_SPLIT,
-	]) {
-		it(`${control.label} [membership: ${control.membership}]`, () => {
-			expect(inspectPolicyControl(control)).toEqual([])
-		})
-	}
-
 	it('rejects a character Windows refuses inside a path segment', () => {
 		// A Windows host refuses to create this name, so the population itself is the control.
 		expect(inspectPolicyFilenamePaths(['src/worker/read<write>.ts'])).toEqual([
@@ -511,7 +342,7 @@ describe('portability policy', () => {
 })
 
 describe('repository policy', () => {
-	it('enforces placement and mirrors over the real workspace', () => {
+	it('enforces the mirror, suppression, skill, bridge, and portability laws over the real workspace', () => {
 		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
 	})
 
@@ -567,5 +398,32 @@ describe('repository policy', () => {
 
 	it('keeps every workspace path, script, and source portable', () => {
 		expect(inspectPolicyPortability(process.cwd())).toEqual([])
+	})
+})
+
+describe('policy configuration wiring', () => {
+	it('reports a rule no top-level or override rules record enables', () => {
+		const configuration = { rules: {}, overrides: [{ files: ['*.ts'], rules: {} }] }
+		expect(inspectPolicyWiring(configuration, ['policy/no-mocking'], [])).toEqual([
+			'policy/no-mocking is enabled by no top-level or override rules record',
+		])
+	})
+
+	it('reports a population no override files list declares exactly', () => {
+		const configuration = { rules: {}, overrides: [{ files: ['app/**/*.ts'], rules: {} }] }
+		expect(inspectPolicyWiring(configuration, [], [['src/**/*.ts', 'app/**/*.ts']])).toEqual([
+			'no override files list declares the population exactly: src/**/*.ts app/**/*.ts',
+		])
+	})
+
+	it('reports a configuration that is not a record', () => {
+		expect(inspectPolicyWiring([], [], [])).toEqual(['Oxlint configuration must be a record'])
+	})
+
+	it('admits a plain record and refuses an array, null, and a primitive', () => {
+		expect(isPolicyRecord({})).toBe(true)
+		expect(isPolicyRecord([])).toBe(false)
+		expect(isPolicyRecord(null)).toBe(false)
+		expect(isPolicyRecord('record')).toBe(false)
 	})
 })

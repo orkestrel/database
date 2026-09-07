@@ -1,18 +1,24 @@
 import type { Plugin, Rolldown } from 'vite'
 import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { fileURLToPath } from 'node:url'
-import { isBuiltin } from 'node:module'
+import { spawnSync } from 'node:child_process'
+import { createRequire, isBuiltin } from 'node:module'
+import { tmpdir } from 'node:os'
 import {
 	closeSync,
 	constants as FS_CONSTANTS,
 	existsSync,
 	fstatSync,
 	lstatSync,
+	mkdtempSync,
 	openSync,
+	readFileSync,
 	readSync,
 	realpathSync,
+	rmSync,
+	writeFileSync,
 } from 'node:fs'
-import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path'
 
 export function hasAsciiUrlControl(value: string): boolean {
 	for (const character of value) {
@@ -431,6 +437,300 @@ export function outputBoundary(output: string): Plugin {
 		},
 		buildStart() {
 			if (build) enforceOutputPath(configured, expected)
+		},
+	}
+}
+
+/** The compiler scope a face resolves to, as its declaration emit and its roll-up both read it. */
+export interface ProjectScope {
+	readonly lib: readonly string[]
+	readonly types: readonly string[]
+	readonly root: string
+}
+
+/** The `overrideTsconfig` a declaration roll-up hands the extractor, and every option it may read. */
+export interface ExtractorOverride {
+	readonly compilerOptions: {
+		readonly types: readonly string[]
+		readonly lib: readonly string[]
+		readonly target: string
+		readonly module: string
+		readonly moduleResolution: string
+		readonly skipLibCheck: boolean
+		readonly strict: boolean
+	}
+	readonly files: readonly string[]
+}
+
+/** The extractor exports a declaration roll-up dereferences, named as that package publishes them. */
+export interface ExtractorModule {
+	readonly Extractor: { readonly invoke: (config: unknown, options: unknown) => unknown }
+	readonly ExtractorConfig: { readonly prepare: (options: unknown) => unknown }
+}
+
+/**
+ * Configures one published face's declaration roll-up.
+ *
+ * @remarks
+ * `project` is the absolute path of that face's TypeScript project file. `types` overrides the
+ * `types` the extractor's own program reads, and defaults to the face's resolved `types`. `rewrite`
+ * receives the finished roll-up and returns what the face ships; a face that omits it ships the
+ * roll-up as the extractor wrote it.
+ */
+export interface DeclarationRollupOptions {
+	readonly project: string
+	readonly types?: readonly string[]
+	readonly rewrite?: (content: string) => string
+}
+
+/**
+ * Checks whether a value is a list of strings.
+ *
+ * @param value - The value to check.
+ * @returns True if the value is an array whose every member is a string; false otherwise.
+ */
+export function isStringList(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.every((entry: unknown) => typeof entry === 'string')
+}
+
+/**
+ * Checks whether a value exposes the extractor entry a declaration roll-up calls.
+ *
+ * @param value - The loaded extractor module.
+ * @returns True if the value carries the `Extractor.invoke` and `ExtractorConfig.prepare` entry
+ * points; false otherwise.
+ *
+ * @remarks
+ * The guard reads each member through `Reflect.get`. A loader can hand back a module object whose
+ * members are reachable only through its prototype, so an own-descriptor read misses them and
+ * refuses a module that carries `Extractor.invoke` and `ExtractorConfig.prepare`.
+ */
+export function isExtractorModule(value: unknown): value is ExtractorModule {
+	if (typeof value !== 'object' || value === null) return false
+	const extractor: unknown = Reflect.get(value, 'Extractor')
+	const configuration: unknown = Reflect.get(value, 'ExtractorConfig')
+	if (typeof extractor !== 'function' || typeof configuration !== 'function') return false
+	return (
+		typeof Reflect.get(extractor, 'invoke') === 'function' &&
+		typeof Reflect.get(configuration, 'prepare') === 'function'
+	)
+}
+
+/**
+ * Returns the standard output of the workspace TypeScript compiler run as a process.
+ *
+ * @param compiler - The absolute path of the compiler's JavaScript entry.
+ * @param args - The compiler arguments that follow that entry.
+ * @returns The compiler's standard output.
+ * @throws An error carrying the compiler's own output when it fails or exits non-zero.
+ */
+export function readCompilerOutput(compiler: string, args: readonly string[]): string {
+	const result = spawnSync(process.execPath, [compiler, ...args], {
+		cwd: WORKSPACE_ROOT,
+		encoding: 'utf8',
+	})
+	if (result.error !== undefined || result.status !== 0) {
+		throw new Error(
+			`[orkestrel-declaration-rollup] The declaration compiler failed:\n${result.stdout ?? ''}${result.stderr ?? ''}`,
+		)
+	}
+	return result.stdout ?? ''
+}
+
+/**
+ * Parses a `tsc --showConfig` reading into the compiler scope a face's roll-up requires.
+ *
+ * @param text - The compiler's `--showConfig` output.
+ * @param project - The absolute path of the project file that produced that output.
+ * @returns That scope with `root` resolved against the project file, or `undefined` when the
+ * project resolves no `lib`, no `types`, or no `rootDir`.
+ */
+export function parseProjectScope(text: string, project: string): ProjectScope | undefined {
+	try {
+		const parsed: unknown = JSON.parse(text)
+		if (typeof parsed !== 'object' || parsed === null) return undefined
+		const options: unknown = Object.getOwnPropertyDescriptor(parsed, 'compilerOptions')?.value
+		if (typeof options !== 'object' || options === null) return undefined
+		const lib: unknown = Object.getOwnPropertyDescriptor(options, 'lib')?.value
+		const types: unknown = Object.getOwnPropertyDescriptor(options, 'types')?.value
+		const root: unknown = Object.getOwnPropertyDescriptor(options, 'rootDir')?.value
+		if (!isStringList(lib) || !isStringList(types) || typeof root !== 'string') return undefined
+		return { lib, types, root: resolvePath(dirname(project), root) }
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Builds the `overrideTsconfig` the extractor analyses one emitted face entry under.
+ *
+ * @param entry - The absolute path of the emitted declaration entry.
+ * @param lib - The face's own resolved `lib`.
+ * @param types - The `types` the extractor's program reads.
+ * @returns That override.
+ *
+ * @remarks
+ * The extractor runs its own bundled compiler engine, so the override carries the face's resolved
+ * `lib` and `types` and nothing else the face resolved. Passing the face's full options, a `paths`
+ * table, or a `typescriptCompilerFolder` leaves that engine unable to follow a symbol.
+ */
+export function buildExtractorOverride(
+	entry: string,
+	lib: readonly string[],
+	types: readonly string[],
+): ExtractorOverride {
+	return {
+		compilerOptions: {
+			types,
+			lib,
+			target: 'ESNext',
+			module: 'ESNext',
+			moduleResolution: 'bundler',
+			skipLibCheck: true,
+			strict: true,
+		},
+		files: [entry],
+	}
+}
+
+/**
+ * Rewrites every core specifier in a roll-up to the workspace package's published name.
+ *
+ * @param content - The finished roll-up.
+ * @returns That roll-up with each core specifier replaced.
+ * @throws An error when the workspace manifest names no package.
+ *
+ * @remarks
+ * A browser or server face reaches core through an `@src/core` alias or a relative core path, and
+ * the extractor keeps either external and writes it through unchanged. Neither spelling exists in
+ * the published tarball, so both become the package's own root export. A core face passes no
+ * `rewrite` at all, because that face's declarations quote both spellings as documentation.
+ */
+export function rewriteCoreSpecifier(content: string): string {
+	const name = packageManifestName(WORKSPACE_ROOT)
+	if (name === undefined) {
+		throw new Error('[orkestrel-declaration-rollup] The workspace manifest names no package')
+	}
+	return content.replaceAll(/(?:\.\.\/)+core\/index\.[jt]s/g, name).replaceAll('@src/core', name)
+}
+
+/**
+ * Rolls one published face's declarations into the single file that face ships.
+ *
+ * @param options - The face's roll-up options.
+ * @returns The Vite plugin that performs that roll-up.
+ *
+ * @remarks
+ * At `closeBundle`, after Vite has written every format of the face, the plugin emits the face's
+ * declarations with the workspace compiler run as a process into a scratch directory made fresh
+ * under the host temporary directory, hands the emitted entry to the extractor's own engine,
+ * applies `rewrite`, and removes the scratch directory. Keeping the scratch outside the face's own
+ * output means its unconditional removal can never take a sibling the face already published, such
+ * as its own `declarations` folder. The extractor is a publishing workspace's development
+ * dependency, so this vendored leaf defers loading it to that hook: a workspace that publishes no
+ * library installs no extractor, never reaches the hook, and never resolves the package at build
+ * or at check.
+ */
+export function declarationRollup(options: DeclarationRollupOptions): Plugin {
+	let output = WORKSPACE_ROOT
+	let source = ''
+	let build = false
+	return {
+		name: 'orkestrel-declaration-rollup',
+		configResolved(config) {
+			build = config.command === 'build'
+			output = resolvePath(config.root, config.build.outDir)
+			source =
+				config.build.lib !== false && typeof config.build.lib.entry === 'string'
+					? config.build.lib.entry
+					: ''
+		},
+		closeBundle() {
+			if (!build) return
+			const declaration = source.replace(/\.tsx?$/, '.d.ts')
+			if (declaration === source) {
+				throw new Error(
+					'[orkestrel-declaration-rollup] The face must build one TypeScript library entry',
+				)
+			}
+			const load = createRequire(import.meta.url)
+			const compiler = load.resolve('typescript/bin/tsc')
+			const scope = parseProjectScope(
+				readCompilerOutput(compiler, ['--showConfig', '-p', options.project]),
+				options.project,
+			)
+			if (scope === undefined) {
+				throw new Error(
+					'[orkestrel-declaration-rollup] The face project must resolve its lib, types, and root',
+				)
+			}
+			const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-declarations-'))
+			const rollup = resolvePath(output, 'index.d.ts')
+			try {
+				readCompilerOutput(compiler, [
+					'-p',
+					options.project,
+					'--declaration',
+					'--emitDeclarationOnly',
+					'--noEmit',
+					'false',
+					'--outDir',
+					scratch,
+				])
+				const entry = resolvePath(scratch, relative(scope.root, declaration))
+				// A literal `import()` of the extractor reddens `tsc` in a workspace that does not
+				// install it, and a variable specifier reddens `import/no-dynamic-require`, so the
+				// literal `createRequire` call is the form that clears every gate in an app-only
+				// workspace.
+				const loaded: unknown = load('@microsoft/api-extractor')
+				if (!isExtractorModule(loaded)) {
+					throw new Error(
+						'[orkestrel-declaration-rollup] The declaration extractor exposes no entry point',
+					)
+				}
+				const prepared: unknown = loaded.ExtractorConfig.prepare({
+					configObject: {
+						projectFolder: WORKSPACE_ROOT,
+						mainEntryPointFilePath: entry,
+						bundledPackages: [],
+						compiler: {
+							overrideTsconfig: buildExtractorOverride(
+								entry,
+								scope.lib,
+								options.types ?? scope.types,
+							),
+						},
+						apiReport: { enabled: false },
+						docModel: { enabled: false },
+						tsdocMetadata: { enabled: false },
+						dtsRollup: { enabled: true, untrimmedFilePath: rollup },
+						messages: {
+							compilerMessageReporting: { default: { logLevel: 'none' } },
+							extractorMessageReporting: { default: { logLevel: 'none' } },
+							tsdocMessageReporting: { default: { logLevel: 'none' } },
+						},
+					},
+					configObjectFullPath: resolvePath(WORKSPACE_ROOT, 'api-extractor.json'),
+					packageJsonFullPath: resolvePath(WORKSPACE_ROOT, 'package.json'),
+				})
+				const outcome: unknown = loaded.Extractor.invoke(prepared, {
+					localBuild: true,
+					showVerboseMessages: false,
+					showDiagnostics: false,
+				})
+				const succeeded: unknown =
+					typeof outcome === 'object' && outcome !== null
+						? Reflect.get(outcome, 'succeeded')
+						: undefined
+				if (succeeded !== true) {
+					throw new Error('[orkestrel-declaration-rollup] The declaration roll-up failed')
+				}
+				if (options.rewrite !== undefined) {
+					writeFileSync(rollup, options.rewrite(readFileSync(rollup, 'utf8')), 'utf8')
+				}
+			} finally {
+				rmSync(scratch, { recursive: true, force: true })
+			}
 		},
 	}
 }

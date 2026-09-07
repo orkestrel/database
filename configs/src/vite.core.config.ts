@@ -1,6 +1,5 @@
 import { defineConfig, mergeConfig } from 'vite'
-import dts from 'vite-plugin-dts'
-import { environmentBoundary, outputBoundary } from '../helpers.js'
+import { declarationRollup, environmentBoundary, outputBoundary } from '../helpers.js'
 import { peers, srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
@@ -9,17 +8,9 @@ export default defineConfig(
 		plugins: [
 			outputBoundary('dist/src/core'),
 			environmentBoundary('src/core'),
-			dts({
-				tsconfigPath: resolveWorkspacePath('configs/src/tsconfig.core.json'),
-				bundleTypes: {
-					extractorConfig: {
-						compiler: {
-							overrideTsconfig: {
-								compilerOptions: { types: ['node'] },
-							},
-						},
-					},
-				},
+			declarationRollup({
+				project: resolveWorkspacePath('configs/src/tsconfig.core.json'),
+				types: ['node'],
 			}),
 		],
 		build: {

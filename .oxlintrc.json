@@ -90,6 +90,26 @@
 			}
 		},
 		{
+			"files": ["app/**/*.{cts,mts,ts,tsx}", "src/**/*.{cts,mts,ts,tsx}"],
+			"rules": {
+				"policy/no-hidden-declaration": "error",
+				"policy/no-misplaced-type": "error",
+				"policy/no-misplaced-class": "error",
+				"policy/no-misplaced-data": "error",
+				"policy/no-misplaced-function": "error",
+				"policy/no-malformed-constant": "error",
+				"policy/no-misnamed-parser": "error",
+				"policy/no-misnamed-factory": "error",
+				"policy/no-malformed-domain": "error"
+			}
+		},
+		{
+			"files": ["app/**/*.ts", "configs/**/*.ts", "src/**/*.ts"],
+			"rules": {
+				"policy/no-host-line-endings": "error"
+			}
+		},
+		{
 			"files": ["*.vue"],
 			"rules": {
 				"import/no-default-export": "off",
@@ -122,6 +142,10 @@
 							{
 								"regex": "\\\\",
 								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
 							},
 							{
 								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
@@ -168,6 +192,10 @@
 								"message": "import paths must use portable forward slashes"
 							},
 							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
 								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
 								"message": "src environments must not depend on private app modules"
 							},
@@ -206,6 +234,10 @@
 							{
 								"regex": "\\\\",
 								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
 							},
 							{
 								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
@@ -252,6 +284,10 @@
 								"message": "import paths must use portable forward slashes"
 							},
 							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
 								"regex": "\\.(?:css|less|sass|scss|styl|stylus|pcss|postcss|sss)(?:[?#]|$)",
 								"message": "app/core must not import browser stylesheets"
 							},
@@ -292,6 +328,10 @@
 								"message": "import paths must use portable forward slashes"
 							},
 							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
 								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@app/server(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
 								"message": "app/browser must not depend on Node or server-only modules"
 							}
@@ -326,6 +366,10 @@
 							{
 								"regex": "\\\\",
 								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
 							},
 							{
 								"regex": "\\.(?:css|less|sass|scss|styl|stylus|pcss|postcss|sss)(?:[?#]|$)",
@@ -368,6 +412,10 @@
 								"message": "import paths must use portable forward slashes"
 							},
 							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
 								"regex": "\\.(?:css|less|sass|scss|styl|stylus|pcss|postcss|sss)(?:[?#]|$)",
 								"message": "src/bin must not import browser stylesheets"
 							},
@@ -378,6 +426,27 @@
 							{
 								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@src/browser(?:[/?#]|$)|@orkestrel/[^/]+/browser(?:[/?#]|$)|(?:\\.\\./)+(?:browser|src/browser|app/browser)(?:[/?#]|$))",
 								"message": "src/bin must not depend on browser-only modules"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": [
+				"tests/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"configs/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"scripts/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"*.{cjs,cts,js,mjs,mts,ts}"
+			],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
 							}
 						]
 					}

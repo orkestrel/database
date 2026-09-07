@@ -20,17 +20,23 @@ import {
 	writeFileSync,
 } from 'node:fs'
 import { createServer } from 'node:http'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { build } from 'vite'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
-import ts from 'typescript'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+// The compiler this workspace installs, run as a command rather than called in
+// process: the command and its plain-text diagnostics are the same across the
+// compiler majors this toolchain supports, and its in-process API is not. It is
+// resolved from the workspace under proof, so a consumer of the packed artifact is
+// checked by the same compiler that workspace's own `check` script runs.
+const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
 // Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
 // batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
 // rather than an exit code a caller can read. Every following argument is a literal or
@@ -47,6 +53,12 @@ const RELEASE = import.meta.env.MODE === 'release'
 // Node and the miss is silent.
 const BROWSER_OUTPUT = './dist/src/browser/'
 const ABSENT_SUBPATH = '/no-subpath-is-published-under-this-name'
+// A compiler diagnostic that says where it is: the path relative to the directory
+// the compiler ran in, the 1-based line and column, the code, and the message. The
+// diagnostics are the verdict rather than the exit code, which differs between the
+// compiler majors this toolchain supports, so a reported line matching nothing here
+// came from something other than a check of a consumer module.
+const DIAGNOSTIC_PATTERN = /^(.+?)\(\d+,\d+\): error TS\d+: /u
 const PING = ['ping', '--fetch-retries=0', '--fetch-timeout=5000', '--loglevel=silent']
 const ESM_DRIVER = 'drive.mjs'
 const CJS_DRIVER = 'drive.cjs'
@@ -92,8 +104,8 @@ const DECLARATION_CONDITIONS = Object.freeze({
 
 interface Resolution {
 	readonly label: string
-	readonly resolution: ts.ModuleResolutionKind
-	readonly module: ts.ModuleKind
+	readonly resolution: string
+	readonly module: string
 	readonly conditions: Readonly<Record<Format, readonly string[]>>
 }
 
@@ -101,29 +113,37 @@ interface TargetResolution {
 	readonly target: string
 }
 
-// Each compile driver carries the conditions TypeScript applies for its resolution
-// and importing format. A `require`-only subpath therefore stays in each CommonJS
-// probe that can resolve it.
+// Each compile driver carries the compiler options its scratch project sets and
+// the conditions TypeScript applies for that resolution and importing format. A
+// `require`-only subpath therefore stays in each CommonJS probe that can resolve it.
+// The option values are the spellings the project file takes, so nothing here needs
+// the compiler's own API to name them.
 const RESOLUTIONS: readonly Resolution[] = [
 	{
 		label: 'node16',
-		resolution: ts.ModuleResolutionKind.Node16,
-		module: ts.ModuleKind.Node16,
+		resolution: 'node16',
+		module: 'node16',
 		conditions: DECLARATION_CONDITIONS,
 	},
 	{
 		label: 'nodenext',
-		resolution: ts.ModuleResolutionKind.NodeNext,
-		module: ts.ModuleKind.NodeNext,
+		resolution: 'nodenext',
+		module: 'nodenext',
 		conditions: DECLARATION_CONDITIONS,
 	},
 	{
 		label: 'bundler',
-		resolution: ts.ModuleResolutionKind.Bundler,
-		module: ts.ModuleKind.ESNext,
+		resolution: 'bundler',
+		module: 'esnext',
 		conditions: BUNDLER_CONDITIONS,
 	},
 ]
+
+// The driver a bundled consumer reads declarations under. A browser application
+// compiles through a bundler, so the browser drive answers under this one alone,
+// and naming it here is what keeps that selection tied to the driver it selects.
+const BROWSER_DRIVER = RESOLUTIONS.find((candidate) => candidate.label === 'bundler')
+if (BROWSER_DRIVER === undefined) throw new Error("RESOLUTIONS carries no 'bundler' row")
 
 const FORMATS: ReadonlyArray<readonly [extension: string, format: Format]> = [
 	['ts', 'module'],
@@ -131,16 +151,17 @@ const FORMATS: ReadonlyArray<readonly [extension: string, format: Format]> = [
 ]
 
 // One published subpath, resolved to what this proof can drive: the specifier a
-// consumer writes, the declarations its consumer formats name, whether its target
-// is a browser bundle, and whether it answers `import` and `require` at all.
+// consumer writes, whether the declarations its consumer formats resolve at all,
+// whether its target is a browser bundle, and whether it answers `import` and
+// `require` at all.
 interface Entry {
 	readonly subpath: string
 	readonly specifier: string
 	readonly mapping: unknown
 	readonly declaration: {
-		readonly module: string | undefined
-		readonly commonjs: string | undefined
-		readonly browser: string | undefined
+		readonly module: boolean
+		readonly commonjs: boolean
+		readonly browser: boolean
 	}
 	readonly browser: boolean
 	readonly module: boolean
@@ -398,7 +419,14 @@ function isDeclaration(target: string): boolean {
 // against. Each field uses the conditions of the TypeScript consumer paired with
 // that runtime. A JavaScript target resolves through TypeScript's adjacent
 // declaration substitution rather than standing in for the declaration itself.
-function readDeclaration(entry: unknown, installed: string): Entry['declaration'] {
+function readDeclaration(
+	entry: unknown,
+	installed: string,
+): {
+	readonly module: string | undefined
+	readonly commonjs: string | undefined
+	readonly browser: string | undefined
+} {
 	return {
 		module: resolveDeclaration(entry, DECLARATION_CONDITIONS.module, installed),
 		commonjs: resolveDeclaration(entry, DECLARATION_CONDITIONS.commonjs, installed),
@@ -415,6 +443,15 @@ function selectEntries(entries: readonly Entry[], conditions: readonly string[])
 	)
 }
 
+// The compile drivers whose conditions reach one entry under one importing format.
+// A driver that resolves no target for that entry compiles nothing, so a consumer
+// written under it would report a resolution failure this package never made.
+function selectDrivers(entry: Entry, format: Format): readonly Resolution[] {
+	return RESOLUTIONS.filter(
+		(driver) => selectEntries([entry], driver.conditions[format]).length > 0,
+	)
+}
+
 // Require-loadable entries that declare CommonJS support but a typed CommonJS
 // consumer cannot compile against. A default branch resolving under the require
 // condition set makes no CommonJS claim.
@@ -428,55 +465,111 @@ function selectUntypable(entries: readonly Entry[], installed: string): readonly
 	)
 }
 
-// The value exports a declaration publishes, read through the compiler's checker
-// over the module symbol rather than off the declaration text. An alias resolves to
-// what it names, so a re-export counts as the thing it re-exports, and a type-only
-// symbol is dropped because no runtime publishes one.
-function readDeclaredExports(declaration: string): readonly string[] {
-	const program = ts.createProgram([declaration], {
-		module: ts.ModuleKind.ESNext,
-		moduleResolution: ts.ModuleResolutionKind.Bundler,
-		noEmit: true,
-		skipLibCheck: true,
-		target: ts.ScriptTarget.ESNext,
-	})
-	const source = program.getSourceFile(declaration)
-	if (source === undefined) throw new Error(`The declaration ${declaration} was not read`)
-	const checker = program.getTypeChecker()
-	const symbol = checker.getSymbolAtLocation(source)
-	if (symbol === undefined) throw new Error(`${declaration} declares no module symbol`)
-	const values: string[] = []
-	for (const exported of checker.getExportsOfModule(symbol)) {
-		const direct = (exported.flags & ts.SymbolFlags.Alias) === 0
-		const resolved = direct ? exported : checker.getAliasedSymbol(exported)
-		if ((resolved.flags & ts.SymbolFlags.Value) !== 0) values.push(exported.getName())
-	}
-	return [...values].sort()
+// One surface comparison, written as the consumer module that proves it: the
+// installed entry that consumer imports, the file extension fixing its importing
+// format, the names a real runtime published off it, and the driver whose scratch
+// project compiles it.
+interface Surface {
+	readonly entry: Entry
+	readonly extension: string
+	readonly published: readonly string[]
+	readonly driver: Resolution
 }
 
-// The diagnostics a consumer compiling against the installed declarations reports,
-// flattened to their messages so a failure names what the consumer could not do.
-function compileConsumer(
-	entry: string,
-	resolution: ts.ModuleResolutionKind,
-	module: ts.ModuleKind,
-): readonly string[] {
-	const program = ts.createProgram([entry], {
-		module,
-		moduleResolution: resolution,
-		noEmit: true,
-		skipLibCheck: true,
-		strict: true,
-		target: ts.ScriptTarget.ESNext,
-	})
-	return ts
-		.getPreEmitDiagnostics(program)
-		.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '))
+// A scratch project over named consumer modules, written beside them so their own
+// resolution reaches the installed package. Nothing is emitted and no ambient types
+// are pulled in, so what the check reads is the installed declarations alone.
+function writeProject(
+	stage: Stage,
+	name: string,
+	driver: Resolution,
+	files: readonly string[],
+): string {
+	const path = join(stage.consumer, `tsconfig.${name}.json`)
+	const project = {
+		compilerOptions: {
+			module: driver.module,
+			moduleResolution: driver.resolution,
+			noEmit: true,
+			skipLibCheck: true,
+			strict: true,
+			target: 'esnext',
+			types: [],
+		},
+		files: [...files],
+	}
+	writeFile(path, `${JSON.stringify(project, undefined, '\t')}\n`)
+	return path
+}
+
+// The diagnostics the compiler this workspace installs reports for one scratch
+// project. The compiler runs as a command, so nothing here reaches an API that
+// moves between its majors, and the located lines it prints are the verdict rather
+// than the exit code, which moves between them. A line carrying no location, a line
+// naming the scratch project rather than a consumer module, and anything at all on
+// the error stream are faults of this proof rather than of the package under proof,
+// so each is raised where it happens instead of counted against the package.
+function checkProject(stage: Stage, project: string): readonly string[] {
+	const result = runNode([TSC, '--noEmit', '--pretty', 'false', '-p', project], stage.consumer)
+	const refused = `${result.stderr ?? ''}`.trim()
+	if (refused.length > 0) {
+		throw new Error(`The consumer compiler wrote ${refused} to its error stream`)
+	}
+	const reported: string[] = []
+	for (const line of `${result.stdout ?? ''}`.split(/\r\n|\n/u)) {
+		if (line.trim().length === 0) continue
+		const last = reported.at(-1)
+		// An elaborated diagnostic prints its detail on indented lines under its own
+		// first line, so each of those joins the diagnostic it elaborates.
+		if (/^\s/u.test(line) && last !== undefined) {
+			reported[reported.length - 1] = `${last} ${line.trim()}`
+			continue
+		}
+		const located = DIAGNOSTIC_PATTERN.exec(line)?.[1]
+		if (located === undefined) {
+			throw new Error(`The consumer compiler reported ${line}, which names no location`)
+		}
+		if (resolve(stage.consumer, located) === project) {
+			throw new Error(`The scratch project is itself at fault: ${line}`)
+		}
+		reported.push(line)
+	}
+	if (reported.length === 0 && result.status !== 0) {
+		throw new Error(`The consumer compiler refused the project: ${readOutput(result)}`)
+	}
+	return reported
+}
+
+// One installed entry's published names checked against its own declarations by
+// the compiler this workspace installs, in the direction each divergence surfaces
+// under. The runtime's key list is written into the consumer as a literal, so the
+// published side comes from a real process and the declared side from the
+// declarations that process's package ships, and the two can disagree. A name the
+// declarations carry and the runtime does not lands on `declared`. A name the
+// runtime carries and the declarations do not, and a name the declarations publish
+// as a type alone, land on `surfaced`: a variable widens into the type
+// `declared` annotates, and only `surfaced` reads the literal's own keys back.
+// Each names the member it is about, so the failure says which export moved.
+function checkSurface(stage: Stage, surface: Surface): readonly string[] {
+	const slug = surface.entry.subpath.replaceAll(/[^\w]+/gu, '-')
+	const name = `surface.${surface.driver.label}${slug}.${surface.extension}`
+	const module = `${name}`
+	const keys = surface.published.map((key) => `${JSON.stringify(key)}: true`).join(', ')
+	writeFile(
+		join(stage.consumer, module),
+		`import * as entry from ${JSON.stringify(surface.entry.specifier)}
+const published = {${keys.length === 0 ? '' : ` ${keys} `}} as const
+const declared: Record<keyof typeof entry, true> = published
+const surfaced: Record<keyof typeof published, true> = declared
+`,
+	)
+	const project = writeProject(stage, name, surface.driver, [`./${module}`])
+	return checkProject(stage, project).map((line) => `${surface.driver.label}: ${line}`)
 }
 
 // One consumer module importing every installed entry, written where its own
 // resolution finds the installed package.
-function writeConsumerProbe(stage: Stage, path: string, specifiers: readonly string[]): string {
+function writeConsumerProbe(stage: Stage, path: string, specifiers: readonly string[]): void {
 	const names: string[] = []
 	const bindings: string[] = []
 	for (const [index, specifier] of specifiers.entries()) {
@@ -484,9 +577,8 @@ function writeConsumerProbe(stage: Stage, path: string, specifiers: readonly str
 		names.push(binding)
 		bindings.push(`import * as ${binding} from ${JSON.stringify(specifier)}`)
 	}
-	const target = join(stage.consumer, path)
-	writeFile(target, `${bindings.join('\n')}\nexport const surface = [${names.join(', ')}]\n`)
-	return target
+	const source = `${bindings.join('\n')}\nexport const surface = [${names.join(', ')}]\n`
+	writeFile(join(stage.consumer, path), source)
 }
 
 // The runtime key set a real process reads off one installed entry under one
@@ -663,11 +755,9 @@ function buildStage(): Stage {
 			specifier: subpath === '.' ? name : `${name}${subpath.slice(1)}`,
 			mapping: entry,
 			declaration: {
-				module: declaration.module === undefined ? undefined : join(installed, declaration.module),
-				commonjs:
-					declaration.commonjs === undefined ? undefined : join(installed, declaration.commonjs),
-				browser:
-					declaration.browser === undefined ? undefined : join(installed, declaration.browser),
+				module: declaration.module !== undefined,
+				commonjs: declaration.commonjs !== undefined,
+				browser: declaration.browser !== undefined,
 			},
 			browser,
 			module: imported !== undefined && !(browser && imported === browserTarget),
@@ -852,16 +942,18 @@ describe('installed package consumer', () => {
 			for (const [extension, format] of FORMATS) {
 				const written = selectEntries(stage.entries, driver.conditions[format])
 				if (written.length === 0) continue
+				const label = `${driver.label}.${extension}`
+				const probe = `probe.${label}`
 				const specifiers = written.map((entry) => entry.specifier)
-				const probe = writeConsumerProbe(stage, `probe.${driver.label}.${extension}`, specifiers)
-				for (const message of compileConsumer(probe, driver.resolution, driver.module)) {
-					reported.push(`${driver.label}.${extension}: ${message}`)
+				writeConsumerProbe(stage, probe, specifiers)
+				const project = writeProject(stage, probe, driver, [`./${probe}`])
+				for (const message of checkProject(stage, project)) {
+					reported.push(`${label}: ${message}`)
 				}
-				const absent = [`${name}${ABSENT_SUBPATH}`]
-				const control = writeConsumerProbe(stage, `control.${driver.label}.${extension}`, absent)
-				if (compileConsumer(control, driver.resolution, driver.module).length === 0) {
-					silent.push(`${driver.label}.${extension}`)
-				}
+				const control = `control.${label}`
+				writeConsumerProbe(stage, control, [`${name}${ABSENT_SUBPATH}`])
+				const refused = writeProject(stage, control, driver, [`./${control}`])
+				if (checkProject(stage, refused).length === 0) silent.push(label)
 			}
 		}
 		expect(reported).toStrictEqual([])
@@ -874,24 +966,41 @@ for (const entry of STAGE?.entries ?? []) {
 		it.runIf(entry.module)(
 			'publishes what it declares to a Node import, and no more',
 			(context) => {
-				const declaration = entry.declaration.module
-				if (declaration === undefined) {
+				const stage = requireStage(context)
+				// The exports-map walk resolved a declaration a typed importer reads, so an
+				// entry reaching this drive without one is reported for that rather than for
+				// what a consumer of a missing declaration goes on to say.
+				if (!entry.declaration.module) {
 					throw new Error(`${entry.subpath} publishes no import declaration`)
 				}
-				const published = driveRuntime(requireStage(context), entry.specifier, ESM_DRIVER)
-				expect(published).toStrictEqual(readDeclaredExports(declaration))
+				const published = driveRuntime(stage, entry.specifier, ESM_DRIVER)
+				const drivers = selectDrivers(entry, 'module')
+				expect(drivers).not.toStrictEqual([])
+				const reported = drivers.flatMap((driver) =>
+					checkSurface(stage, { entry, extension: 'ts', published, driver }),
+				)
+				expect(reported).toStrictEqual([])
 			},
 		)
 
 		it.runIf(entry.required)(
 			'publishes what it declares to a Node require, and no more',
 			(context) => {
-				const declaration = entry.declaration.commonjs
-				if (declaration === undefined) {
+				const stage = requireStage(context)
+				if (!entry.declaration.commonjs) {
 					throw new Error(`${entry.subpath} publishes no require declaration`)
 				}
-				const published = driveRuntime(requireStage(context), entry.specifier, CJS_DRIVER)
-				expect(published).toStrictEqual(readDeclaredExports(declaration))
+				const published = driveRuntime(stage, entry.specifier, CJS_DRIVER)
+				// A subpath whose `require` resolves to a module that no typed CommonJS
+				// consumer can compile against carries no declared side to compare here, and
+				// whether it may publish one at all is the untypable set's question rather
+				// than this drive's. The preceding runtime drive ran either way.
+				const drivers = selectDrivers(entry, 'commonjs')
+				expect(drivers).not.toStrictEqual([])
+				const reported = drivers.flatMap((driver) =>
+					checkSurface(stage, { entry, extension: 'cts', published, driver }),
+				)
+				expect(reported).toStrictEqual([])
 			},
 		)
 
@@ -899,8 +1008,7 @@ for (const entry of STAGE?.entries ?? []) {
 			'publishes what it declares to a real browser, and no more [requires a browser]',
 			async (context) => {
 				const stage = requireStage(context)
-				const declaration = entry.declaration.browser
-				if (declaration === undefined) {
+				if (!entry.declaration.browser) {
 					throw new Error(`${entry.subpath} publishes no browser declaration`)
 				}
 				const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
@@ -911,9 +1019,16 @@ for (const entry of STAGE?.entries ?? []) {
 				})
 				try {
 					const bundle = await bundleEntry(stage, entry)
-					expect(await readBrowserExports(browser, bundle)).toStrictEqual(
-						readDeclaredExports(declaration),
-					)
+					const published = await readBrowserExports(browser, bundle)
+					// A browser consumer reads the installed declarations through a bundler, so
+					// that is the one driver this face answers under.
+					const reported = checkSurface(stage, {
+						entry,
+						extension: 'ts',
+						published,
+						driver: BROWSER_DRIVER,
+					})
+					expect(reported).toStrictEqual([])
 				} finally {
 					await browser.close()
 				}
