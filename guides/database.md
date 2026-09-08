@@ -184,6 +184,10 @@ driver never re-implements.
 | `filterRows`           | function | Filters rows by a list of conditions — the shared basis for a table's count and aggregate paths (no sort/page, unlike `applyQuery`).                                   |
 | `equalsValue`          | function | Compares two values structurally by SameValueZero leaves — the comparator behind conformance checks and any test/fixture that needs "same data", not "same reference". |
 
+For `minimum` and `maximum`, `computeAggregate` compares each numeric value
+with a scalar `Math.min` or `Math.max` call. The helper never passes a
+row-sized argument list.
+
 ### Abort
 
 | API          | Kind     | Summary                                                                                                                   |

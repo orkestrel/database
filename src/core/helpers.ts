@@ -546,7 +546,11 @@ export function computeAggregate(
 		const total = numbers.reduce((sum, value) => sum + value, 0)
 		return operation === 'average' ? total / numbers.length : total
 	}
-	return operation === 'minimum' ? Math.min(...numbers) : Math.max(...numbers)
+	let result = operation === 'minimum' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY
+	for (const value of numbers) {
+		result = operation === 'minimum' ? Math.min(result, value) : Math.max(result, value)
+	}
+	return result
 }
 
 // === Keys
