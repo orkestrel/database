@@ -180,6 +180,10 @@ driver never re-implements.
 | `filterRows`           | function | Filter rows by a condition list — the shared basis behind a table's count and aggregate paths.               |
 | `equalsValue`          | function | Structural equality by SameValueZero leaves — arrays by index, records by own enumerable keys.               |
 
+For `minimum` and `maximum`, `computeAggregate` compares each numeric value
+with a scalar `Math.min` or `Math.max` call. The helper never passes a
+row-sized argument list.
+
 ### Abort
 
 | API          | Kind     | Behavior                                                                                                                                                                      |
