@@ -3,7 +3,7 @@ import type { ColumnSchema, TableSchema } from './types.js'
 // Database constants — frozen plain data.
 
 /**
- * Supplies the primary-key column assumed when {@link PrimaryMap} does not name one.
+ * Supplies the primary-key column, `'id'`, assumed when {@link PrimaryMap} does not name one.
  *
  * @remarks
  * `id` is the convention IndexedDB (`keyPath: 'id'`) and SQL (`id` / rowid) both
@@ -12,7 +12,8 @@ import type { ColumnSchema, TableSchema } from './types.js'
 export const DEFAULT_PRIMARY = 'id'
 
 /**
- * Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts before rejecting it.
+ * Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts, 1024 characters, before
+ * rejecting it.
  *
  * @remarks
  * A `LIKE` / `GLOB` pattern is a caller-supplied operand, so

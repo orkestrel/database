@@ -238,8 +238,8 @@ A `Shape` cell holds the constant's declared type.
 
 | Constant                   | Kind  | Shape                    | Summary                                                                                                       |
 | -------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_PRIMARY`          | const | `'id'`                   | Supplies the primary-key column assumed when `PrimaryMap` does not name one.                                  |
-| `MAX_PATTERN_LENGTH`       | const | `1024`                   | Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts before rejecting it.                    |
+| `DEFAULT_PRIMARY`          | const | `string`                 | Supplies the primary-key column, `'id'`, assumed when `PrimaryMap` does not name one.                         |
+| `MAX_PATTERN_LENGTH`       | const | `number`                 | Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts, 1024 characters, before rejecting it.  |
 | `CONFORMANCE_USERS_SCHEMA` | const | `TableSchema`            | Describes the `users` table the driver-conformance battery opens — keyed by the default `id` primary column.  |
 | `CONFORMANCE_POSTS_SCHEMA` | const | `TableSchema`            | Describes the `posts` table the driver-conformance battery opens — keyed by a non-`id` `slug` primary column. |
 | `CONFORMANCE_SCHEMA`       | const | `readonly TableSchema[]` | Holds the fixed `users` and `posts` schema every driver-conformance phase opens.                              |

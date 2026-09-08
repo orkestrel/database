@@ -659,14 +659,6 @@ for (const entry of manifest) {
 		it('extracts a non-empty documented surface', () => {
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
-
-		it('documents every published entry export', () => {
-			expect(findMissingSymbols(surface, guide.surface())).toEqual([])
-		})
-		it('documents only real entry exports', () => {
-			expect(findMissingSymbols(guide.surface(), surface)).toEqual([])
-		})
-
 		it('re-exports every direct declaration that is not named internal', () => {
 			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
@@ -674,6 +666,15 @@ for (const entry of manifest) {
 		it('names no symbol internal that the barrel already exports', () => {
 			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
+		})
+		it('re-exports only direct declarations', () => {
+			expect(findMissingSymbols(source.surface(), source.exports())).toEqual([])
+		})
+		it('documents every barrel export', () => {
+			expect(findMissingSymbols(source.surface(), guide.surface())).toEqual([])
+		})
+		it('documents only barrel exports', () => {
+			expect(findMissingSymbols(guide.surface(), source.surface())).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
@@ -743,19 +744,6 @@ for (const entry of manifest) {
 			).toEqual([])
 		})
 
-		it('compiles every TypeScript fence against the published entry specifiers', () => {
-			expect(() =>
-				checkGuideFences(
-					join(ROOT, 'tsconfig.json'),
-					requireValue(files[entry.spec], `Missing file: ${entry.spec}`),
-					guide
-						.fences()
-						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
-						.map((fence) => fence.code),
-				),
-			).not.toThrow()
-		}, 60_000)
-
 		for (const group of guide.methods()) {
 			const entity = group.interface.replace(/Interface$/, '')
 			const documented = group.methods.map((method) => method.name)
@@ -789,19 +777,6 @@ for (const entry of manifest) {
 			}
 		})
 
-		it('keeps table, query, and transaction implementations internal', () => {
-			const names = surface.map((symbol) => symbol.name)
-			expect(names).not.toContain('Table')
-			expect(names).not.toContain('Query')
-			expect(names).not.toContain('DatabaseTransaction')
-			expect(names).not.toContain('ScopedIterator')
-			expect(names).not.toContain('TransactionScope')
-			expect(names).toContain('TableInterface')
-			expect(names).toContain('QueryInterface')
-			expect(source.methods('TableInterface').map((method) => method.name)).toContain('count')
-			expect(source.methods('QueryInterface').map((method) => method.name)).toContain('count')
-		})
-
 		it('resolves every relative link', () => {
 			const broken = guide
 				.links()
@@ -816,6 +791,32 @@ for (const entry of manifest) {
 				.map((href) => resolveLink(entry.spec, href))
 				.filter((path) => !source.exists(path))
 			expect(missing).toEqual([])
+		})
+
+		it('compiles every TypeScript fence against the published entry specifiers', () => {
+			expect(() =>
+				checkGuideFences(
+					join(ROOT, 'tsconfig.json'),
+					requireValue(files[entry.spec], `Missing file: ${entry.spec}`),
+					guide
+						.fences()
+						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+						.map((fence) => fence.code),
+				),
+			).not.toThrow()
+		}, 60_000)
+
+		it('keeps table, query, and transaction implementations internal', () => {
+			const names = surface.map((symbol) => symbol.name)
+			expect(names).not.toContain('Table')
+			expect(names).not.toContain('Query')
+			expect(names).not.toContain('DatabaseTransaction')
+			expect(names).not.toContain('ScopedIterator')
+			expect(names).not.toContain('TransactionScope')
+			expect(names).toContain('TableInterface')
+			expect(names).toContain('QueryInterface')
+			expect(source.methods('TableInterface').map((method) => method.name)).toContain('count')
+			expect(source.methods('QueryInterface').map((method) => method.name)).toContain('count')
 		})
 	})
 }
