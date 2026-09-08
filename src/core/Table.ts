@@ -46,10 +46,10 @@ import { ScopedIterator } from './ScopedIterator.js'
  * @remarks
  * - **Observable.** The owned {@link emitter} ({@link TableEventMap}) carries the
  *   per-row mutation moments — `write` (set / add / update), `remove`, `clear` — for
- *   fire-and-forget observers (cache invalidation, sync, an audit log), ALONGSIDE the
- *   database-level lifecycle. Events carry the affected KEY only (no value payload, to
+ *   fire-and-forget observers (cache invalidation, sync, an audit log), alongside the
+ *   database-level lifecycle. Events carry the affected key only (no value payload, to
  *   keep fan-out lean); reads / queries / counts are not emitted. Every event is emitted
- *   directly, strictly AFTER the driver write / delete / clear completes; the emitter
+ *   directly, strictly after the driver write / delete / clear completes; the emitter
  *   isolates a listener throw and routes it to its `error` handler (the `error` option),
  *   so a buggy observer can never corrupt a write or perturb a transaction.
  */
@@ -63,7 +63,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	readonly #generate: KeyFunction | undefined
 	readonly #context: DatabaseContext | undefined
 	readonly #scope: TransactionScope | undefined
-	// The PUSH observation surface — owned, never inherited. The emitter isolates a
+	// The push observation surface — owned, never inherited. The emitter isolates a
 	// listener throw (routing it to the `error` handler), so it can never escape into a write
 	// or a transaction.
 	readonly #emitter: Emitter<TableEventMap>
@@ -203,7 +203,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	 * conditions.
 	 *
 	 * @remarks
-	 * Unlike {@link count}, `aggregate` operates on STORED rows WITHOUT the
+	 * Unlike {@link count}, `aggregate` operates on stored rows without the
 	 * contract guard {@link records} / {@link scan} apply — a non-conforming
 	 * stored row still contributes to the computed aggregate when it matches
 	 * the conditions, even though it would never appear in `records()`'s
@@ -321,7 +321,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			await this.#ready()
 			await this.#driver.clear(this.#name)
-			// Observe the cleared table — AFTER the driver emptied it, so a swallowed listener
+			// Observe the cleared table — after the driver emptied it, so a swallowed listener
 			// throw can never alter the clear (no value payload — `clear` is a pure signal).
 			this.#emitter.emit('clear')
 		})
@@ -392,7 +392,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Run a single-item operation across each item in order — the batch overloads
 	// loop one item at a time (sequential, so writes never race) rather than
 	// pushing batch logic into the thin driver. `signal` (write batches only) is
-	// checked before EVERY item, so an abort mid-batch stops before the next
+	// checked before every item, so an abort mid-batch stops before the next
 	// item runs — already-applied items stay applied (no rollback).
 	async #each<I, R>(
 		elements: readonly I[],
@@ -435,7 +435,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		const key = this.#resolveKey(validated)
 		if (insert) await this.#driver.insert(this.#name, key, validated, options)
 		else await this.#driver.write(this.#name, key, validated, options)
-		// Observe the written row — AFTER the driver write succeeded; carries the KEY only
+		// Observe the written row — after the driver write succeeded; carries the key only
 		// (set / add / update all emit one `write`, the consumer re-reads if it needs the
 		// value). A swallowed listener throw can't perturb the write (or its transaction).
 		this.#emitter.emit('write', key)
@@ -463,7 +463,7 @@ export class Table<T = Row> implements TableInterface<T> {
 			this.#validate(Object.assign({}, existing, changes)),
 			options,
 		)
-		// Observe the updated row — AFTER the driver write, and only on the path that wrote
+		// Observe the updated row — after the driver write, and only on the path that wrote
 		// (an absent key returned `false` above, emitting nothing).
 		this.#emitter.emit('write', key)
 		return true
@@ -475,7 +475,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	// Delete one row, emitting `remove` only when a row was actually removed (a delete of
-	// an absent key returns `false` and emits nothing) — AFTER the driver delete completes.
+	// an absent key returns `false` and emits nothing) — after the driver delete completes.
 	async #delete(key: Key, options?: OperationOptions): Promise<boolean> {
 		const removed = await this.#driver.delete(this.#name, key, options)
 		if (removed) this.#emitter.emit('remove', key)
@@ -572,7 +572,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	// Coerce *and* validate through the contract in one step: the contract's `parse`
-	// now coerces types (`'36'` → `36`) AND enforces every leaf refinement (`min` /
+	// now coerces types (`'36'` → `36`) and enforces every leaf refinement (`min` /
 	// `max` / `pattern`), so a non-`undefined` result already satisfies the guard
 	// (parse↔guard soundness) — no separate `is` re-check is needed.
 	// `isRecord` is kept solely to narrow the parsed `T` back to a storable `Row`

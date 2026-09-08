@@ -8,7 +8,7 @@ import { INDEXABLE_STORAGE } from './constants.js'
 
 // The IndexedDB driver's pushdown planner. A pure function over the portable
 // `QueryInput`: it decides which index (or the primary key) a read can narrow on
-// and the `IDBKeyRange` to use, so the driver fetches a candidate SUPERSET rather
+// and the `IDBKeyRange` to use, so the driver fetches a candidate superset rather
 // than every row. The core engine then refines that superset to the exact result
 // — so a plan is only ever allowed to over-fetch, never to drop a matching row.
 // Anything it cannot prove range-exact (a non-comparison operator, a non-orderable
@@ -23,14 +23,14 @@ import { INDEXABLE_STORAGE } from './constants.js'
  * Only the comparison operators (`equals`/`above`/`below`/`from`/`to`/`between`)
  * translate to a key range that a typed (string/number) column can back with an
  * IndexedDB store/index read — see {@link selectPlan} for the caveats that
- * decide WHICH of `below`/`to` may drive a SECONDARY-index read versus the
+ * decide which of `below`/`to` may drive a secondary-index read versus the
  * primary store only (a column-type / absent-row concern, not a range-shape
  * one). `starts` is excluded — its prefix range can miss strings past U+FFFF;
  * the membership / negation / pattern / existence operators (`not`/`like`/`glob`/
  * `ends`/`any`/`none`/`absent`/`present`) have no single exact range. The operand
  * guard (`typeof` string/number) rejects a non-scalar value (for example an array, a
  * boolean) that is not a usable key. `between` additionally guards against a
- * REVERSED pair (`first > second`): native `IDBKeyRange.bound` throws a raw
+ * reversed pair (`first > second`): native `IDBKeyRange.bound` throws a raw
  * `DataError` `DOMException` for a lower bound above the upper bound, so a
  * reversed pair returns `undefined` here (falls back to a full scan, which the
  * engine then correctly resolves to an empty result) rather than letting a
@@ -84,7 +84,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
  * store) and {@link IDBKeyRange} to narrow by, falling back to a full scan.
  *
  * @remarks
- * Pushdown is sound ONLY when every condition is `and`-joined: the engine folds
+ * Pushdown is sound only when every condition is `and`-joined: the engine folds
  * conditions left-to-right (`c1 && c2 && … && cn`), so the result is a subset of
  * each — narrowing on any one is then a valid superset. A single `or` breaks that
  * (a row can match through a later condition the range would exclude), so any `or`
@@ -98,21 +98,21 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
  * type (`boolean`/`json`/`blob`), uses a non-comparison operator, or has a
  * non-scalar operand cannot push and is skipped.
  *
- * **`below`/`to` may drive a SECONDARY-index range only when the column has NO
+ * **`below`/`to` may drive a secondary-index range only when the column has no
  * absent/null rows to lose — which this planner cannot verify from the schema
- * alone, so it restricts them to the PRIMARY store, where that is always true.**
+ * alone, so it restricts them to the primary store, where that is always true.**
  * The engine's total order (`compareValues`, see `@src/core`) ranks
- * `undefined` (absent) and `null` BELOW every number/string, so
- * `matchesCondition('below' | 'to', …)` is TRUE for a row whose field is absent
- * or `null` — but a secondary IndexedDB index has NO ENTRY for a row whose
+ * `undefined` (absent) and `null` below every number/string, so
+ * `matchesCondition('below' | 'to', …)` is true for a row whose field is absent
+ * or `null` — but a secondary IndexedDB index has no entry for a row whose
  * indexed field is absent/`null`, so a `below`/`to` range read against that
- * index would SILENTLY DROP those rows (they can never be over-fetched, only
+ * index would silently drop those rows (they can never be over-fetched, only
  * missed — the one shape of lossiness this planner must never produce). The
- * table's PRIMARY key is exempt: a row's primary-key value is always present
+ * table's primary key is exempt: a row's primary-key value is always present
  * and never `null` (it is the row's identity, enforced at write time), so a
  * `below`/`to` range against the primary store can never exclude an
  * absent/null-keyed row because no such row exists. `equals`/`above`/`from`/
- * `between` stay index-eligible on ANY orderable column, primary or secondary:
+ * `between` stay index-eligible on any orderable column, primary or secondary:
  * each is bounded below by a scalar (`equals`/`between`'s lower bound, `above`/
  * `from`'s lower bound), and every scalar strictly out-ranks `undefined`/`null`
  * in the total order, so an absent/null-valued row can never satisfy them — the
@@ -126,7 +126,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
  * metadata.
  *
  * When no condition qualifies the plan is a full scan (`{}`) and the engine
- * does everything. The plan is always a SUPERSET of the
+ * does everything. The plan is always a superset of the
  * matching rows — the only correctness contract — so the driver may safely run
  * the exact engine over it.
  *
@@ -150,7 +150,7 @@ export function selectPlan(
 	available: readonly string[],
 ): QueryPlan {
 	const conditions = input?.conditions ?? []
-	// A single condition's range is a SUPERSET of the result only when the result
+	// A single condition's range is a superset of the result only when the result
 	// implies that condition — which holds iff every condition is `and`-joined (the
 	// fold is `c1 && c2 && … && cn`, so the result is a subset of each). A single
 	// `or` breaks that (a row can match through a later condition the range excludes),
@@ -169,7 +169,7 @@ export function selectPlan(
 		const range = conditionToRange(condition)
 		if (range === undefined) continue
 		if (condition.column === schema.primary) return { range }
-		// `below`/`to` can silently drop an absent/null-valued row from a SECONDARY
+		// `below`/`to` can silently drop an absent/null-valued row from a secondary
 		// index (see @remarks) — only the primary store (handled above) is safe.
 		// Keep scanning: a later condition may still qualify.
 		if (condition.operator === 'below' || condition.operator === 'to') continue
@@ -257,14 +257,14 @@ export function mapMigrationError(error: IndexedDBError): DatabaseError {
  *
  * @remarks
  * Naming a compound index by joining its columns with `_` (`['a', 'b'] →
- * 'a_b'`) collides with a single-column index over a column LITERALLY named
+ * 'a_b'`) collides with a single-column index over a column literally named
  * `'a_b'` — the same name, two different key paths (`'a_b'` vs `['a', 'b']`),
  * which either throws a native `ConstraintError` from a duplicate
  * `createIndex` call at open, or (worse) lets {@link selectPlan}'s name-based
- * lookup match the wrong index. A single-column index keeps the BARE column
+ * lookup match the wrong index. A single-column index keeps the bare column
  * name — {@link selectPlan} matches `available.includes(condition.column)` by
  * that exact name, so a single-column index must stay named after its column
- * verbatim. A compound index instead encodes each column as a LENGTH-PREFIXED
+ * verbatim. A compound index instead encodes each column as a length-prefixed
  * segment (`'2#1:a1:b'`), so the boundary between columns is self-describing
  * and cannot be reconstructed by any other column list — including one
  * containing a column that happens to look like an encoded segment.

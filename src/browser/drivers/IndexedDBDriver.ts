@@ -81,22 +81,22 @@ import { METADATA_STORE } from '../constants.js'
  * {@link Migration} plan natively: IndexedDB schema DDL (creating/dropping a
  * store, creating/dropping an index) is legal only inside a versionchange
  * transaction (`onupgradeneeded`), so `migrate` closes the current connection
- * and opens a FRESH one at `version + 1` with an `upgrade` hook that walks the
+ * and opens a fresh one at `version + 1` with an `upgrade` hook that walks the
  * plan's steps — dropping stores, adding/removing indexes on the raw
  * `IDBTransaction`, and rewriting rows for `column.remove` through a cursor walk
  * (the one step needing to touch existing data; `column.add` is a no-op — this
  * driver stores whatever a row carries, so there is nothing to backfill). A
- * step referencing an unknown table is validated BEFORE the reconnect, so a
+ * step referencing an unknown table is validated before the reconnect, so a
  * `MIGRATION` `DatabaseError` never wastes a version bump.
  *
  * @remarks
- * This unit deliberately OMITS `aggregate` / `transaction`. There is no native
+ * This unit deliberately omits `aggregate` / `transaction`. There is no native
  * `aggregate` (IndexedDB has no native SUM/AVG); the engine over the narrowed
  * `records` covers it. `transaction` is impossible here: the wrapper
  * auto-commits an `IDBTransaction` when control yields outside its request
  * chain, so arbitrary callback awaits cannot remain inside one native
  * transaction. Every atomic multi-operation sequence in this driver
- * (`snapshot`'s rollback) instead runs entirely inside ONE `db.write(...)`
+ * (`snapshot`'s rollback) instead runs entirely inside one `db.write(...)`
  * scope.
  */
 export class IndexedDBDriver implements DriverInterface {
@@ -128,8 +128,8 @@ export class IndexedDBDriver implements DriverInterface {
 			// Reconnect cleanly so the auto-managed bootstrap can ensure the
 			// metadata store exists without being blocked by this driver's own
 			// open handle. The final persisted open is version-pinned below.
-			// Build the new schema into a LOCAL map first — never mutate `#schema`
-			// in place — so a reopen with a REDUCED schema replaces the map
+			// Build the new schema into a local map first — never mutate `#schema`
+			// in place — so a reopen with a reduced schema replaces the map
 			// wholesale instead of retaining ghost tables the caller no longer
 			// declared.
 			const bootstrap = createIndexedDBDatabase({
@@ -410,11 +410,11 @@ export class IndexedDBDriver implements DriverInterface {
 	 *
 	 * @remarks
 	 * IndexedDB schema DDL is legal only inside `onupgradeneeded`, so this closes
-	 * the current connection and opens a FRESH one at `version + 1`, declaring
+	 * the current connection and opens a fresh one at `version + 1`, declaring
 	 * every store known at that point (plus {@link METADATA_STORE}) so nothing is
 	 * lost, and applying `table.remove` / `index.add` / `index.remove` /
 	 * `column.remove` inside `upgrade`. Every step's `table` is validated against
-	 * the driver's own `#schema` BEFORE the reconnect — an unknown-table step
+	 * the driver's own `#schema` before the reconnect — an unknown-table step
 	 * throws `DatabaseError` `MIGRATION` without ever bumping the version.
 	 * `table.add` / `column.add` need no upgrade-time action: `table.add` is
 	 * created by the wrapper's built-in create-missing-stores pass (its
@@ -460,7 +460,7 @@ export class IndexedDBDriver implements DriverInterface {
 			}
 			return
 		}
-		// Project the post-migration shape into a LOCAL copy first — `#schema`
+		// Project the post-migration shape into a local copy first — `#schema`
 		// stays untouched until the upgrade actually commits, so a mid-upgrade
 		// failure never leaves the driver's bookkeeping ahead of the real database.
 		try {
@@ -662,7 +662,7 @@ export class IndexedDBDriver implements DriverInterface {
 		return stores
 	}
 
-	// Reconnect at the CURRENT `#schema` with no version bump (auto-managed
+	// Reconnect at the current `#schema` with no version bump (auto-managed
 	// mode, mirroring `open`) — used to restore a working connection after a
 	// failed `migrate` left the prior connection closed.
 	async #reopen(): Promise<void> {
@@ -705,12 +705,12 @@ export class IndexedDBDriver implements DriverInterface {
 		return schema
 	}
 
-	// Mirror a migration plan's steps onto a LOCAL schema map — the same
+	// Mirror a migration plan's steps onto a local schema map — the same
 	// bookkeeping `open` does for a freshly declared schema — without touching
 	// `#schema`, so a failed migrate never leaves the driver's bookkeeping ahead
 	// of the real database. The caller commits the map into `#schema` only after
 	// the upgrade connects successfully.
-	// Runs INSIDE the wrapper's versionchange transaction (see `migrate`
+	// Runs inside the wrapper's versionchange transaction (see `migrate`
 	// @remarks). `table.add` / `column.add` are no-ops here — see `migrate`
 	// @remarks for why. `column.remove` is the one step touching existing rows:
 	// it walks a live cursor and rewrites each row through the core

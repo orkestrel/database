@@ -105,7 +105,7 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 // The `QueryInput` → parameterized SQL compiler — the native-query payoff. It turns
 // a portable `QueryInput` (the same one the core engine's `applyQuery` folds)
 // into the `WHERE` / `ORDER BY` / `LIMIT` tail of a `SELECT`, with bound `?`
-// parameters in clause order. Its WHERE fold parenthesizes LEFT-TO-RIGHT to match the
+// parameters in clause order. Its WHERE fold parenthesizes left-to-right to match the
 // engine's `matchesQuery` exactly (NOT SQL's AND-over-OR precedence), so a
 // native read and an engine read agree on every query (the parity test). Branches
 // are centralized and public — no operator logic buried in closures.
@@ -118,20 +118,20 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
  *
  * @remarks
  * Every operand is run through `encodeValue`, so a bound value matches the SQL
- * the column side compiles to. A flat column encodes operands with its DECLARED
+ * the column side compiles to. A flat column encodes operands with its declared
  * schema type (a flat `json` column → `JSON.stringify`); a nested `FieldPath`
- * encodes each operand as the NATIVE scalar `json_extract` returns, derived from
+ * encodes each operand as the native scalar `json_extract` returns, derived from
  * the operand's runtime type (per-operand, since `between` / `any` / `none` can
  * mix types). `any` / `none` collapse an empty list to a constant (`0` matches
  * nothing, `1` matches all) with no parameters.
  *
- * The core engine's total order ranks `undefined` (rank 0) BELOW `null`
- * (rank 1) (see `compareValues`), so a MISSING/`NULL` column MATCHES
+ * The core engine's total order ranks `undefined` (rank 0) below `null`
+ * (rank 1) (see `compareValues`), so a missing/`NULL` column matches
  * `below` / `to` / a scalar `not` / `none` — the opposite of raw SQL, where a
  * comparison against `NULL` is `NULL` (excluded). This fragment replicates the
  * engine exactly. Truth table (`value` = the engine's decoded field read; a
- * FLAT column's stored `NULL` decodes to `undefined` per `decodeRow`, so a
- * flat `value` is NEVER a present `null` — only a NESTED path can be
+ * flat column's stored `NULL` decodes to `undefined` per `decodeRow`, so a
+ * flat `value` is never a present `null` — only a nested path can be
  * present-but-`null`):
  *
  * ```text
@@ -157,15 +157,15 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
  * refines every optional or nullable scalar comparison through the core engine.
  * This compiler still emits a total SQL fragment for direct consumers.
  *
- * A NESTED path can be present-but-`null` (a stored JSON `null`), which
- * `json_extract` reads back as SQL `NULL` — indistinguishable from an ABSENT
+ * A nested path can be present-but-`null` (a stored JSON `null`), which
+ * `json_extract` reads back as SQL `NULL` — indistinguishable from an absent
  * path. `json_type(col, path)` disambiguates them (`'null'` for present-null,
  * SQL `NULL` for absent), so nested `equals` / `not` against a `null` operand
  * compile through `json_type` instead of `IS NULL` / `IS NOT NULL`.
  *
  * Every other MATCH-on-null-or-absent row is expressed uniformly (flat and
  * nested alike) as `(<column> <op> ? OR <column> IS NULL)` — for a nested
- * path, `json_extract` already collapses BOTH absent and present-null to SQL
+ * path, `json_extract` already collapses both absent and present-null to SQL
  * `NULL`, so `IS NULL` catches both in one clause; for a flat column there is
  * only the absent case to catch.
  *
@@ -211,7 +211,7 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 					}
 				}
 				// A flat column's decoded value is never a present null, so
-				// `compareValues(value, null)` is nonzero for EVERY row (absent or
+				// `compareValues(value, null)` is nonzero for every row (absent or
 				// scalar) — the engine's `not null` matches unconditionally.
 				return { sql: '1', parameters: [] }
 			}
@@ -249,7 +249,7 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 		case 'starts': {
 			// Case-sensitive, exact compile (replaces the old LIKE-based one, which
 			// was ASCII-only case-INsensitive — a mismatch with the engine's
-			// case-sensitive `String.startsWith`). `substr` counts CODE POINTS, so
+			// case-sensitive `String.startsWith`). `substr` counts code points, so
 			// the length is a code-point count (`Array.from`), not `.length`. An
 			// empty operand matches every text-column value (the engine: every
 			// string starts with '').
@@ -312,7 +312,7 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
  * @remarks
  * The first condition's connector is ignored, per the {@link Condition} types.
  * Every fragment (see {@link compileConditionSQL}'s truth table) replicates the core
- * engine's total order EXACTLY under SQL's three-valued NULL logic, so this
+ * engine's total order exactly under SQL's three-valued NULL logic, so this
  * clause matches `applyQuery` row-for-row over the same table — a native
  * `records` / `count` read never disagrees with a scan-and-filter fallback.
  *
@@ -425,7 +425,7 @@ export function compilePageSQL(limit: number | undefined, offset: number | undef
  * `FieldPath` (a `json_extract` read) encodes each operand as the native scalar
  * the extract returns — derived from the operand's runtime type — so it compares.
  * Every operator maps per the databases guide's operator table, with
- * `starts` / `ends` compiling to a CODE-POINT `substr` slice guarded by
+ * `starts` / `ends` compiling to a code-point `substr` slice guarded by
  * `typeof(<column>) = 'text'` (case-sensitive, matching the engine's
  * `String.prototype.startsWith` / `endsWith`) and an empty `any` / `none` list
  * collapsing to a constant. An `undefined` input (or one with no parts)

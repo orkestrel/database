@@ -1,7 +1,6 @@
 // The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
-// this repo's own `guides/README.md` manifest — one row (Database) spanning the
-// core/browser/server faces as a multi-dir `GuideModule` (`.claude/rules/documentation.md`
-// § Parity — one guide per package). The constants that follow are this package's own.
+// this repo's own `guides/README.md` manifest. The constants that follow are this
+// package's own, as is the executed section that closes the file.
 
 import type { SurfaceSymbol } from '@orkestrel/guide'
 import type { AdmissionInterface, Condition, TableSchema } from '@src/core'

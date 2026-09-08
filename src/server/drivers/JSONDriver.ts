@@ -585,7 +585,7 @@ export class JSONDriver implements DriverInterface {
 	// whose parent is not a directory. The second is absence in the stronger sense —
 	// no file can exist at that name — and hosts disagree on which of the two they
 	// return for it, so reading only ENOENT made the same tree open on one host and
-	// fail closed on another. Every EXISTING unreadable or syntactically invalid file
+	// fail closed on another. Every existing unreadable or syntactically invalid file
 	// still fails closed, which is what this branch is for.
 	async #document(): Promise<unknown> {
 		let raw: string
@@ -777,7 +777,7 @@ export class JSONDriver implements DriverInterface {
 	// mid-flush can no longer truncate or corrupt the previous good file — POSIX
 	// `rename` replaces the destination in one indivisible step, so a reader always
 	// sees either the old file or the fully-written new one, never a partial write.
-	// `#enqueue` serializes calls to this method through `#chain` — each job AWAITS
+	// `#enqueue` serializes calls to this method through `#chain` — each job awaits
 	// its predecessor before draining `#memory` and writing, so the payload always
 	// reflects the latest memory state. Without this, overlapping flushes triggered
 	// by non-awaited concurrent mutations could serialize out of order and persist a

@@ -130,9 +130,9 @@ export function compareValues(left: unknown, right: unknown): number {
  * @remarks
  * Primitives compare by SameValueZero (`NaN` equals itself; `+0` equals `-0`).
  * Arrays compare by index (same length, every element `equalsValue`). Plain
- * records (through `isRecord`) compare by their OWN enumerable keys: same key
- * COUNT and, for every key in `left`, `right` has that key (`Object.hasOwn`)
- * with a `equalsValue` value — so a key present with value `undefined` is NOT
+ * records (through `isRecord`) compare by their own enumerable keys: same key
+ * count and, for every key in `left`, `right` has that key (`Object.hasOwn`)
+ * with a `equalsValue` value — so a key present with value `undefined` is not
  * equal to that key being absent (both differ in `Object.keys` membership).
  * Anything else (functions, class instances, mismatched shapes) falls through
  * to `false`. Container pairs are tracked iteratively, so self-referential and
@@ -217,12 +217,12 @@ export function equalsValue(left: unknown, right: unknown): boolean {
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
  * @remarks
- * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is CATASTROPHIC on a hostile pattern:
+ * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is catastrophic on a hostile pattern:
  * `.*` segments separated by literals, matched against a long non-matching input, blow
  * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it,
  * while a `LIKE` / `GLOB` pattern is a caller-supplied operand this package cannot
- * trust. So this builds NO regex. It runs the classic GREEDY TWO-POINTER wildcard match:
- * the `any` wildcard records its position and, on a later mismatch, backtracks ONLY to
+ * trust. So this builds no regex. It runs the classic greedy two-pointer wildcard match:
+ * the `any` wildcard records its position and, on a later mismatch, backtracks only to
  * that last `any` (letting it absorb one more char) — so the work is O(value × pattern),
  * never the exponential / polynomial backtracking a regex would do. The pattern length
  * is capped at {@link MAX_PATTERN_LENGTH} (a `VALIDATION` {@link DatabaseError} over it),
@@ -230,16 +230,16 @@ export function equalsValue(left: unknown, right: unknown): boolean {
  * pattern.
  *
  * The `any` wildcard matches any run (including empty); `single` matches exactly one
- * char; every other pattern char matches itself LITERALLY (a pattern `.` / `(` / `\` is
+ * char; every other pattern char matches itself literally (a pattern `.` / `(` / `\` is
  * a literal — the regex-metacharacter hazard is gone with the regex). `any` is tested
- * BEFORE a literal match, so a value that literally contains the wildcard char never
- * shadows the wildcard. Case folding is applied to BOTH sides when `fold` is set.
+ * before a literal match, so a value that literally contains the wildcard char never
+ * shadows the wildcard. Case folding is applied to both sides when `fold` is set.
  *
  * @param value - The value to test
  * @param pattern - The wildcard pattern
  * @param any - The any-run wildcard char (`%` for `LIKE`, `*` for `GLOB`)
  * @param single - The single-char wildcard char (`_` for `LIKE`, `?` for `GLOB`)
- * @param fold - Whether to match case-INSENSITIVELY (`LIKE` folds; `GLOB` does not)
+ * @param fold - Whether to match case-insensitively (`LIKE` folds; `GLOB` does not)
  * @returns True if `value` matches `pattern`; false otherwise
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
  */
@@ -261,7 +261,7 @@ export function matchesWildcardPattern(
 	const needle = fold ? pattern.toLowerCase() : pattern
 	let vi = 0
 	let pi = 0
-	// The greedy backtrack point: the pattern index of the LAST `any` wildcard + the value
+	// The greedy backtrack point: the pattern index of the last `any` wildcard + the value
 	// index it was taken at. On a mismatch the walk resumes immediately past it and lets it absorb one more
 	// char (`mark += 1`) — O(value × pattern), never a regex's exponential backtracking.
 	let star = -1
@@ -320,7 +320,7 @@ export function matchesLikePattern(value: string, pattern: string): boolean {
  * @remarks
  * `*` matches any run of characters (including none) and `?` matches exactly one
  * character; every other pattern character matches itself literally, so a
- * character class such as `[a-z]` is NOT interpreted. Runs on
+ * character class such as `[a-z]` is not interpreted. Runs on
  * {@link matchesWildcardPattern}, so the match is linear in the value length and
  * the pattern is capped at {@link MAX_PATTERN_LENGTH}.
  *
@@ -349,7 +349,7 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  * string is one column; an array descends a nested value) — and applies the
  * operator. Range operators (`above` / `below` / `from` / `to` / `between`) use
  * {@link compareValues}, the total order; the equality family (`equals` / `not`
- * / `any` / `none`) uses {@link equalsValue} — STRUCTURAL equality, not the total
+ * / `any` / `none`) uses {@link equalsValue} — structural equality, not the total
  * order's rank-5-collapses-all-objects behavior, so `equals` on an object/array
  * operand only matches a structurally-equal value, never every row holding any
  * object. This is a semantics change from ranking: `equalsValue` is SameValueZero
@@ -774,10 +774,10 @@ export function checkAbort(signal: AbortSignal | undefined): void {
  * plan labels only; versioning drivers persist and reconcile them through
  * {@link DriverMetadata}.
  *
- * A column present in BOTH schemas under the same name but with a different
+ * A column present in both schemas under the same name but with a different
  * `storage`, `optional`, or `nullable` value throws a `MIGRATION`
  * {@link DatabaseError} naming the table, the column, and the from→to
- * difference — a name-only diff would otherwise silently produce NO step for
+ * difference — a name-only diff would otherwise silently produce no step for
  * the drift, and versioned reconciliation would stamp over it. There is no
  * automatic in-place type-change step: the manual path is to add a new column,
  * copy/convert the data at the application layer, then remove the old column —
@@ -1114,14 +1114,14 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * default `id`, `posts` keyed by a non-id `slug`) and, calling `factory()`
  * fresh for each phase so failures stay isolated, verifies: `open`/`close`;
  * `read` of a missing key returns `undefined`; `write`/`read` round-trip
- * with DEEP copy-in/copy-out isolation (mutating the caller's row —
- * including a NESTED field — after `write`, or a row `read` returns, never
+ * with deep copy-in/copy-out isolation (mutating the caller's row —
+ * including a nested field — after `write`, or a row `read` returns, never
  * perturbs stored state) and upsert-overwrite; simultaneous same-key
  * `insert` calls produce exactly one commit and one `CONFLICT`; pre-aborted
  * `write`, `insert`, and `delete` calls leave storage unchanged; `delete`
  * returns `true` then `false`; `keys`/`scan` yield in ascending key order;
  * `clear` empties only its target table; `snapshot`'s rollback thunk
- * restores pre-snapshot state, including a NESTED field mutated in place on
+ * restores pre-snapshot state, including a nested field mutated in place on
  * a read-back row between capture and restore; a scoped
  * `snapshot(['users'])` rolls back only the named table, leaving a
  * concurrent mutation to another table intact; a non-`id` primary key
@@ -1135,12 +1135,12 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * store's `metadata()` is `undefined`, and after
  * `stamp({ version, schema })`, `metadata()` returns the exact stamped value.
  *
- * Each phase runs within a `try`/`catch`: an EXPECTED mismatch yields a
- * finding built from the assertion, while an UNEXPECTED throw (a driver
+ * Each phase runs within a `try`/`catch`: an expected mismatch yields a
+ * finding built from the assertion, while an unexpected throw (a driver
  * crash mid-phase) is caught and yielded as a finding too, naming the phase
  * as `check` and carrying the caught error in `context.error` — a broken
  * driver can never escape the battery as an unhandled rejection. Within a
- * phase, the FIRST violated assertion yields and the phase stops (matching
+ * phase, the first violated assertion yields and the phase stops (matching
  * the historical fail-fast shape at phase granularity); the generator then
  * moves on to the next phase regardless. Because this is a **generator**,
  * consuming only the first yielded value reproduces true fail-fast (later
@@ -1195,7 +1195,7 @@ export async function* scanDriver(
 		}
 	}
 
-	// c. write/read round-trip, copy-in/copy-out isolation (including NESTED
+	// c. write/read round-trip, copy-in/copy-out isolation (including nested
 	// fields, not only top-level ones), upsert-overwrite.
 	writeRead: {
 		try {
@@ -1835,7 +1835,7 @@ export async function* scanDriver(
  *
  * @remarks
  * Consumes only the first value {@link scanDriver} yields: because that
- * generator is lazy, every LATER phase never runs — true fail-fast, not
+ * generator is lazy, every later phase never runs — true fail-fast, not
  * merely "report only the first". The
  * thrown error is byte-compatible with the historical shape: a
  * `CONFORMANCE` {@link DatabaseError} whose `message` is the finding's

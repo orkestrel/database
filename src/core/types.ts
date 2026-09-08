@@ -81,7 +81,7 @@ export type ConditionConnector = 'and' | 'or'
  * `present`, one for most, two for `between`, a list for `any` / `none`.
  * `connector` folds this condition into the accumulated result left-to-right;
  * the first condition's connector seeds the fold and is otherwise ignored.
- * `column` is a {@link FieldPath}: a single string is ONE column (never split on
+ * `column` is a {@link FieldPath}: a single string is one column (never split on
  * `.`), an array descends into a nested (object/`json`) value.
  */
 export interface Condition {
@@ -205,11 +205,11 @@ export interface ConformanceFinding {
  * Pure signals carrying no row data — these are the database-level (not per-row)
  * moments, so a non-generic map stays lean (per-row writes are {@link TableEventMap}).
  * Listener isolation is the emitter's: every event is emitted directly and a
- * listener throw is routed to the emitter's OWN `error` handler (the `error` option), never
+ * listener throw is routed to the emitter's own `error` handler (the `error` option), never
  * onto this domain map and never into the snapshot / commit / rollback flow — so a buggy
- * observer can never reorder, throw into, or corrupt a transaction. Every emit sits AFTER the
+ * observer can never reorder, throw into, or corrupt a transaction. Every emit sits after the
  * relevant transition: `commit` only after the scope succeeds, `rollback` only after the
- * rollback operation completes (it OBSERVES the propagated scope error; that exact reason
+ * rollback operation completes (it observes the propagated scope error; that exact reason
  * still propagates). A rollback failure propagates instead and emits no misleading
  * `rollback` event. Subscribe through `database.emitter.on(...)`.
  *
@@ -239,14 +239,14 @@ export type DatabaseEventMap = {
  * subscribes to, alongside the database-level {@link DatabaseEventMap}.
  *
  * @remarks
- * Events carry the affected KEY only — never the row value — to keep fan-out lean and
+ * Events carry the affected key only — never the row value — to keep fan-out lean and
  * avoid leaking row data through the observation channel; a consumer that needs the
  * value re-reads it by key. Any row put — `set`, `add`, or `update` — emits a single
  * `write` (the consumer re-reads if it needs to know what changed); a delete emits
- * `remove`; emptying the table emits `clear`. Reads / queries / counts are NOT emitted
+ * `remove`; emptying the table emits `clear`. Reads / queries / counts are not emitted
  * (too hot, and a reader does not mutate). Listener isolation is the emitter's:
  * every event is emitted directly and a listener throw is routed to the emitter's `error`
- * handler (the `error` option), never onto this map, and sits AFTER the driver write / delete
+ * handler (the `error` option), never onto this map, and sits after the driver write / delete
  * / clear has completed — so a throwing observer can never corrupt a write or perturb a
  * transaction. Subscribe through `table.emitter.on(...)`. Declared as a `type` alias (
  * `EventMap` is a `type` kind).
@@ -439,7 +439,7 @@ export interface StorageInterface {
  * Declares the storage primitive every backend implements — the whole of the bridge.
  *
  * @remarks
- * The REQUIRED surface is deliberately minimal: keyed read / write / atomic
+ * The required surface is deliberately minimal: keyed read / write / atomic
  * insert / delete, an ordered `scan`, a key listing, and a `snapshot` that
  * backs transactions — the irreducible primitive. There is **no** required
  * query, count, or aggregate here: all of that is one query engine in the core
@@ -596,7 +596,7 @@ export interface DatabaseOptions<T extends TableMap = TableMap> {
 	 * Holds the declared schema version.
 	 *
 	 * @remarks
-	 * Only meaningful when the driver implements BOTH {@link DriverInterface.metadata}
+	 * Only meaningful when the driver implements both {@link DriverInterface.metadata}
 	 * and {@link DriverInterface.stamp} (a versioning driver); unset, or a
 	 * non-versioning driver, leaves `open()` unchanged from today's behavior.
 	 * When set and the driver versions, `open()` reconciles against the driver's
@@ -801,7 +801,7 @@ export interface TableInterface<T = Row> {
 	 * conditions.
 	 *
 	 * @remarks
-	 * Unlike {@link TableInterface.count}, `aggregate` operates on STORED rows
+	 * Unlike {@link TableInterface.count}, `aggregate` operates on stored rows
 	 * without the contract guard that `records()` / `scan()` apply — a
 	 * non-conforming stored row still contributes to the aggregate (or to the
 	 * `count` operation's tally) when it matches the conditions, even though
@@ -818,7 +818,7 @@ export interface TableInterface<T = Row> {
 	 *
 	 * @remarks
 	 * `input`'s `conditions` / `offset` / `limit` are honored lazily as rows
-	 * stream; `order` is intentionally IGNORED — streaming yields driver
+	 * stream; `order` is intentionally ignored — streaming yields driver
 	 * key-order, sorted output is `records()`'s job. Breaking out of the
 	 * iteration early closes the underlying source. The signal (if any) is
 	 * checked before each yield.
@@ -979,7 +979,7 @@ export interface QueryInterface<T = Row> {
 	 * by row.
 	 *
 	 * @remarks
-	 * `order` and its comparators are IGNORED (streaming yields unsorted, as
+	 * `order` and its comparators are ignored (streaming yields unsorted, as
 	 * rows are evaluated one at a time). Same abort semantics as
 	 * {@link TableInterface.scan}: the signal (if any) is checked before each
 	 * yield, and breaking out early closes the underlying source.

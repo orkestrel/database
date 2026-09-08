@@ -36,6 +36,8 @@ table — fully typed, no annotations — with `table(name)`.
 
 ### Create a database
 
+Declares two tables, opens a memory-backed database over them, and runs a keyed write, a keyed read, and a fluent query:
+
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
 import { integerShape, stringShape } from '@orkestrel/contract'
@@ -244,7 +246,7 @@ A `Shape` cell holds the constant's declared type.
 
 ### Types
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
 | Type                       | Kind      | Shape                                                                                                                                                                                                                                                                 | Summary                                                                                                                                                                                                                                                                                                                                                                                                         |
 | -------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -278,7 +280,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `MigrationInput`           | interface | `{ plan, metadata? }`                                                                                                                                                                                                                                                 | Represents one atomic migration request.                                                                                                                                                                                                                                                                                                                                                                        |
 | `StorageInterface`         | interface | `{} plus read, write, insert, delete, keys, scan, clear, records?, aggregate?, stream?, migrate?, metadata?, stamp?`                                                                                                                                                  | Declares the storage operations available only inside a driver's transaction scope.                                                                                                                                                                                                                                                                                                                             |
 | `DriverMetadata`           | interface | `{ version, schema }`                                                                                                                                                                                                                                                 | Represents persisted schema metadata a versioning driver owns as an immutable snapshot.                                                                                                                                                                                                                                                                                                                         |
-| `DriverInterface`          | interface | `{} plus open, close, snapshot, read, write, insert, delete, keys, scan, clear, records?, aggregate?, stream?, migrate?, metadata?, stamp?, transaction?`                                                                                                             | Declares the storage primitive every backend implements — the whole of the bridge.                                                                                                                                                                                                                                                                                                                              |
+| `DriverInterface`          | interface | `StorageInterface plus {} plus open, close, snapshot, transaction?`                                                                                                                                                                                                   | Declares the storage primitive every backend implements — the whole of the bridge.                                                                                                                                                                                                                                                                                                                              |
 | `DatabaseOptions`          | interface | `{ on?, error?, driver, tables, primary?, indexes?, name?, generator?, version? }`                                                                                                                                                                                    | Options for `createDatabase`.                                                                                                                                                                                                                                                                                                                                                                                   |
 | `CompiledSQL`              | interface | `{ sql, parameters }`                                                                                                                                                                                                                                                 | Represents a parameterized SQL fragment or statement plus its bind values. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                                                                                                                      |
 | `SQLiteDriverOptions`      | interface | `{ path?, readonly?, timeout?, references?, pragmas? }`                                                                                                                                                                                                               | Configures `createSQLiteDriver`. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                                                                                                                                                                |
@@ -295,7 +297,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 The public methods of each behavioral interface — one table per type, keyed
 by its backticked name, every call-signature member listed (its `readonly`
 data members, for example `emitter` / `name` / `status` / `primary` / `contract` /
-`value` / `index` / `done`, stay in the Surface rows above — `emitter` is the
+`value` / `index` / `done`, stay in the preceding Surface rows — `emitter` is the
 typed push observation surface, see [Observing](#observing)). The database and
 driver classes in `### Classes` implement their interfaces exactly, so this
 doubles as the per-instance method surface; `DriverIterator` is the internal
@@ -895,6 +897,8 @@ primitive (the observation lives in the core layer above it).
 
 ### Declaring tables in options
 
+Declares two tables with per-column contracts, a non-default primary key, and a secondary index, then reads back each table's resolved primary column:
+
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
 import { integerShape, literalShape, optionalShape, stringShape } from '@orkestrel/contract'
@@ -963,6 +967,8 @@ in-memory engine — both return identical query results, so the choice is purel
 about where the bytes live, never about behavior.
 
 ### Keyed CRUD
+
+Runs every keyed operation — `set`, `add`, `update`, `get`, `resolve`, `has`, `remove`, and `clear` — against one table:
 
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
@@ -1154,6 +1160,8 @@ when it must be atomic.
 
 ### Coercion through the contract
 
+Parses a numeric string against the table's contract, stores the coerced number, and reads it back:
+
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
 import { integerShape, stringShape } from '@orkestrel/contract'
@@ -1180,6 +1188,8 @@ await users.set(normalized)
 ```
 
 ### Fluent queries
+
+Chains conditions, an order, and a limit through the query builder and collects the matching rows:
 
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
@@ -1420,6 +1430,8 @@ backend mutation already dispatched may settle, but no await continuation can
 publish cursor state or restore `value` after close.
 
 ### Transactions
+
+Runs a scoped callback across two tables that commits on success and rolls every table back when the scope throws:
 
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
@@ -1943,6 +1955,8 @@ exported.primary // 'id'
 
 ### Introspection & seeding
 
+Reads a table's contract schema, generates a reproducible seed row, and guards an unknown value against it:
+
 ```ts
 import { createDatabase, createMemoryDriver } from '@orkestrel/database'
 import { stringShape } from '@orkestrel/contract'
@@ -2075,6 +2089,8 @@ equalsValue({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] }) // true — structural, 
 ```
 
 ### Persistence with the JSON driver
+
+Opens a database over the JSON driver and writes one row, persisted to the backing file:
 
 ```ts
 import { createDatabase } from '@orkestrel/database'
@@ -2247,6 +2263,8 @@ matchesQueryExactly(
 
 ### Persistence with the SQLite driver
 
+Opens a database over the SQLite driver, writes one row, and runs a query compiled to native SQL:
+
 ```ts
 import { createDatabase } from '@orkestrel/database'
 import { createSQLiteDriver } from '@orkestrel/database/server'
@@ -2310,6 +2328,8 @@ immediately before the synchronous SQLite call; that call entry is the commit
 point, so there is no post-check that could relabel a completed commit.
 
 ### Persistence with the IndexedDB driver
+
+Feature-detects `indexedDB`, opens a database over the IndexedDB driver, writes one row, and runs a query pushed down to a key range:
 
 ```ts
 import { createDatabase } from '@orkestrel/database'

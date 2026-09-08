@@ -243,10 +243,10 @@ export class SQLiteDriver implements DriverInterface {
 		await this.#clear(table)
 	}
 
-	// A QueryInput whose compiled SQL is PROVABLY identical to the core engine's
+	// A QueryInput whose compiled SQL is provably identical to the core engine's
 	// semantics (see `matchesConditionExactly` / `matchesOrderExactly` /
 	// `matchesQueryExactly`) runs the fast native path; otherwise this driver
-	// fetches a full scan and refines it through the SAME core engine that
+	// fetches a full scan and refines it through the same core engine that
 	// answers every query for `MemoryDriver` and `JSONDriver` — exact → native,
 	// otherwise → refine, never a silent semantics drift between backends.
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
@@ -311,7 +311,7 @@ export class SQLiteDriver implements DriverInterface {
 		return computeAggregate(filterRows(rows, conditions), operation, column)
 	}
 
-	// `order` is intentionally IGNORED (per DriverInterface.stream — streaming
+	// `order` is intentionally ignored (per DriverInterface.stream — streaming
 	// yields unsorted), so the native gate checks only `conditions`; `offset` /
 	// `limit` are always engine-identical under either path.
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {

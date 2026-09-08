@@ -31,7 +31,7 @@ import { isKey } from '../validators.js'
  * @remarks
  * The in-between made concrete: it runs identically in a browser or on a server,
  * so it is the storage behind tests, ephemeral caches, and any code that wants
- * the database API without a persistent backend. Rows are DEEP-copied (through
+ * the database API without a persistent backend. Rows are deep-copied (through
  * `structuredClone`) in and out — at `write`, `read`, `scan`, `stream`, and both
  * snapshot capture and restore — so a caller mutating a nested field of an input
  * row, a returned row, or a row mutated in place between snapshot and rollback
@@ -119,7 +119,7 @@ export class MemoryDriver implements DriverInterface {
 	 * toward `offset` / `limit`. Both are applied lazily as matches are found —
 	 * `offset` matches are skipped without being yielded, and iteration stops the
 	 * instant `limit` yields have been produced, so a large table is never fully
-	 * walked for a small page. `input.order` is IGNORED (the same contract as
+	 * walked for a small page. `input.order` is ignored (the same contract as
 	 * `TableInterface.scan` and `QueryInterface.stream`): streaming yields key
 	 * order, sorted output is `records()`'s job. Rows yield copy-out, and an
 	 * unknown table mirrors `scan`'s empty-yield behavior.

@@ -17,7 +17,7 @@ export const DEFAULT_PRIMARY = 'id'
  * @remarks
  * A `LIKE` / `GLOB` pattern is a caller-supplied operand, so
  * `matchesLikePattern` / `matchesGlobPattern` run patterns this package cannot
- * trust. The matcher is the LINEAR greedy two-pointer wildcard match — never a
+ * trust. The matcher is the linear greedy two-pointer wildcard match — never a
  * backtracking regex (`.*`-segments-separated-by-literals against a long input is the
  * catastrophic shape JS cannot bound without atomic groups), so it is O(value ×
  * pattern). Capping the pattern length bounds that pattern factor, leaving a match
