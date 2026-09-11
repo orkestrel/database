@@ -57,7 +57,7 @@ import {
 	createPolicyScratch,
 	inspectPolicyConfiguration,
 	inspectPolicyWiring,
-	normalizePolicyPath,
+	normalizePolicyFilename,
 } from './setupPolicy.js'
 import { describe, expect, it } from 'vitest'
 
@@ -1750,6 +1750,8 @@ describe('policy plugin', () => {
 	it('loads every configured policy rule through the real binary', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-policy-' })
 		try {
+			// Compare diagnostics from the real directory while the child keeps the scratch cwd.
+			const comparisonRoot = realpathSync.native(scratch.path)
 			scratch.write('.oxlintrc.json', readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
 			scratch.write('configs/policy.ts', readFileSync(resolve(root, 'configs/policy.ts'), 'utf8'))
 			scratch.write(
@@ -1860,7 +1862,7 @@ describe('policy plugin', () => {
 					if (typeof code !== 'string' || typeof filename !== 'string') {
 						throw new Error('Oxlint returned a diagnostic without a rule id and a file')
 					}
-					codes.push(`${code} ${normalizePolicyPath(filename)}`)
+					codes.push(`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`)
 				}
 				reports.push(codes)
 			}
@@ -1871,30 +1873,42 @@ describe('policy plugin', () => {
 				throw new Error('Oxlint returned no fixture reports')
 			}
 			expect(violations.status).toBe(1)
-			for (const reported of [
-				'policy(no-mocking) src/violations/fixture.ts',
-				'policy(no-keyword-privacy) src/violations/fixture.ts',
-				'policy(no-nested-functions) src/violations/fixture.ts',
-				'policy(no-misplaced-type) src/violations/fixture.ts',
-				'policy(no-misplaced-data) src/violations/fixture.ts',
-				'policy(no-misplaced-function) src/violations/fixture.ts',
-				'policy(no-misplaced-class) src/violations/fixture.ts',
-				'policy(no-host-line-endings) src/violations/fixture.ts',
-				'policy(no-hidden-declaration) src/violations/helpers.ts',
-				'policy(no-misnamed-parser) src/violations/parsers.ts',
-				'policy(no-misnamed-factory) src/violations/factories.ts',
-				'policy(no-malformed-constant) src/violations/constants.ts',
-				'policy(no-malformed-domain) src/violations/composables.ts',
-				'policy(no-malformed-domain) app/browser/composables/useTheme.ts',
-				'policy(no-banned-term) src/violations/fixture.ts',
-				'policy(no-malformed-summary) src/violations/fixture.ts',
-				'typescript(parameter-properties) src/violations/fixture.ts',
-				'typescript(explicit-member-accessibility) src/violations/fixture.ts',
+			for (const { code, filename } of [
+				{ code: 'policy(no-mocking)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-keyword-privacy)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-nested-functions)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-misplaced-type)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-misplaced-data)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-misplaced-function)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-misplaced-class)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-host-line-endings)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-hidden-declaration)', filename: 'src/violations/helpers.ts' },
+				{ code: 'policy(no-misnamed-parser)', filename: 'src/violations/parsers.ts' },
+				{ code: 'policy(no-misnamed-factory)', filename: 'src/violations/factories.ts' },
+				{ code: 'policy(no-malformed-constant)', filename: 'src/violations/constants.ts' },
+				{ code: 'policy(no-malformed-domain)', filename: 'src/violations/composables.ts' },
+				{
+					code: 'policy(no-malformed-domain)',
+					filename: 'app/browser/composables/useTheme.ts',
+				},
+				{ code: 'policy(no-banned-term)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-malformed-summary)', filename: 'src/violations/fixture.ts' },
+				{ code: 'typescript(parameter-properties)', filename: 'src/violations/fixture.ts' },
+				{
+					code: 'typescript(explicit-member-accessibility)',
+					filename: 'src/violations/fixture.ts',
+				},
 			]) {
-				expect(violationCodes).toContain(reported)
+				expect(violationCodes).toContain(
+					`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`,
+				)
 			}
-			expect(violationCodes).toContain('eslint(no-debugger) scripts/read.ts')
-			expect(violationCodes).not.toContain('policy(no-host-line-endings) scripts/read.ts')
+			expect(violationCodes).toContain(
+				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
+			)
+			expect(violationCodes).not.toContain(
+				`policy(no-host-line-endings) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
+			)
 			expect(clean.status).toBe(0)
 			expect(cleanCodes).toHaveLength(0)
 		} finally {

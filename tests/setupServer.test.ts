@@ -3,7 +3,7 @@ import type { ESTree } from 'vite'
 import type { ParsedModule } from './setupServer.js'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { TableSchema } from '@src/core'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, posix } from 'node:path'
 import { createJSONDriver, createSQLiteDriver } from '@src/server'
 import { createMemoryDriver } from '@src/core'
 import { describe, expect, it } from 'vitest'
@@ -178,7 +178,7 @@ describe('readModuleStatements', () => {
 			expect(parsed.form).toBe('module')
 			expect(parsed.statements.map((statement) => statement.type)).toEqual(['ExportAllDeclaration'])
 			expect(() => readModuleStatements(join(project.scratch.path, 'src/broken.ts'))).toThrow(
-				/The parser refused .*src\/broken\.ts/,
+				`The parser refused ${join(project.scratch.path, 'src', 'broken.ts')}`,
 			)
 		} finally {
 			project.scratch.destroy()
@@ -456,7 +456,7 @@ describe('readProjectDiagnostics', () => {
 			const reported = readProjectDiagnostics(project.config, [join(root, 'src/broken.ts')], {})
 			const diagnostic = requireValue(reported[0])
 			expect(reported.length).toBe(1)
-			expect(diagnostic.path).toBe(join('src', 'broken.ts'))
+			expect(diagnostic.path).toBe(posix.join('src', 'broken.ts'))
 			expect(diagnostic.range?.start).toEqual({ line: 0, character: 13 })
 			expect(diagnostic.message).toContain("Type 'string' is not assignable to type 'number'.")
 		} finally {

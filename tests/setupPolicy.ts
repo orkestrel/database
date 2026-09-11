@@ -8,7 +8,8 @@ import {
 	writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, matchesGlob } from 'node:path'
+import { basename, dirname, join, matchesGlob, relative as relativePath, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
 /** Names a rule the fleet sweep decides from workspace text and paths. */
@@ -275,6 +276,20 @@ export const POLICY_CATALOG_HEADING = '## Package catalog'
  */
 export function normalizePolicyPath(path: string): string {
 	return path.replaceAll('\\', '/').replace(/\/+/gu, '/')
+}
+
+/**
+ * Normalizes a native path or `file:` URI for workspace-relative policy comparisons.
+ *
+ * @param root - The host path used as the comparison root.
+ * @param filename - The diagnostic filename as a native path or `file:` URI.
+ * @returns The normalized path relative to the resolved comparison root.
+ * @throws Thrown when a `file:` filename is not a valid file URI.
+ */
+export function normalizePolicyFilename(root: string, filename: string): string {
+	const base = resolve(root)
+	const path = filename.startsWith('file:') ? fileURLToPath(filename) : resolve(base, filename)
+	return normalizePolicyPath(relativePath(base, path))
 }
 
 /**
