@@ -1,8 +1,19 @@
 # Emitter
 
-> The foundational observable primitive: a typed, **synchronous** event emitter. Every stateful entity in the codebase — a queue, a database table, an agent — that has lifecycle transitions or observable operations **owns** one `Emitter<TMap>` as a `#emitter` field and exposes it through a `readonly emitter` property; consumers subscribe through `entity.emitter.on(...)`. Composition, never inheritance: an entity threads its event map and an optional error handler into the emitter and otherwise forgets it exists.
->
-> It is deliberately small. There is no scheduler — `emit` fires listeners in the current tick, in registration order. There is no listener cap, no `max`-listeners warning, and no `console` output. `on` returns `void`, not an `Unsubscribe`. What it _does_ carry is the one invariant a fan-out primitive can't omit: a throwing listener is isolated so it can never take down its siblings or the emit loop. Source: [`src/core`](../src/core). Surfaced through the `@src/core` barrel.
+> The foundational observable primitive: a typed, synchronous event emitter that a
+> stateful entity owns as a `#emitter` field and exposes through a `readonly emitter`
+> property, fanning each event out to its listeners in the current tick and isolating a
+> throwing listener from its siblings.
+
+A queue, a database table, an agent — anything with lifecycle transitions or observable
+operations takes one, and its consumers subscribe through `entity.emitter.on(...)`.
+Composition, never inheritance: an entity threads its event map and an optional error
+handler into the emitter and otherwise forgets it exists. It is deliberately small. There
+is no scheduler, no listener cap, no `max`-listeners warning, and no `console` output;
+`emit` fires listeners in registration order, and `on` returns `void`, not an
+`Unsubscribe`. A throwing listener routes to the optional `error` handler instead of being
+rethrown, and with no handler its throw is swallowed silently. Source:
+[`src/core`](../src/core). Surfaced through the `@src/core` barrel.
 
 ## Surface
 
@@ -35,32 +46,34 @@ The reserved `on` option wires initial listeners at construction; the optional `
 
 ### Factories
 
-| API             | Kind     | Summary                                                                 |
-| --------------- | -------- | ----------------------------------------------------------------------- |
-| `createEmitter` | function | Create an `EmitterInterface<TMap>`, optionally with initial `on` hooks. |
+| API             | Kind     | Summary                                                                                                                                                           |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createEmitter` | function | Creates a typed synchronous event emitter and returns it as an `EmitterInterface<TMap>`, wiring the initial `on` hooks and the `error` handler its options carry. |
 
 ### Helpers
 
-| API           | Kind     | Summary                                                          |
-| ------------- | -------- | ---------------------------------------------------------------- |
-| `extractKeys` | function | Extract an object's own enumerable keys, typed as its key union. |
+| API           | Kind     | Summary                                                                      |
+| ------------- | -------- | ---------------------------------------------------------------------------- |
+| `extractKeys` | function | Extracts the own enumerable keys of a mapped object, typed as its key union. |
 
-### Entities
+### Classes
 
-| API       | Kind  | Summary                                                        |
-| --------- | ----- | -------------------------------------------------------------- |
-| `Emitter` | class | The typed synchronous emitter; entities own one as `#emitter`. |
+| API       | Kind  | Summary                                                                                                                                                                                                                                              |
+| --------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Emitter` | class | Implements `EmitterInterface` over one listener `Set` per event, so every public method is precisely typed with no assertion. A stateful entity owns one as a `#emitter` field and exposes it through `readonly emitter`; it never inherits from it. |
 
 ### Types
 
-| Type                  | Kind      | Shape                                                                                                       |
-| --------------------- | --------- | ----------------------------------------------------------------------------------------------------------- |
-| `EventMap`            | type      | `Record<string, readonly unknown[]>` — each event name to its listener argument tuple.                      |
-| `EmitterHandler`      | type      | `(...args: TArgs) => void` — a listener for one event's argument tuple.                                     |
-| `EmitterErrorHandler` | type      | `(error: unknown, event: string) => void` — the emitter's OWN listener-error handler (the `error` option).  |
-| `EmitterHooks`        | type      | `{ [K in keyof TMap]?: EmitterHandler<TMap[K]> }` — initial listeners, the reserved `on` option.            |
-| `EmitterOptions`      | interface | `{ on?: EmitterHooks<TMap>; error?: EmitterErrorHandler }` — options for `createEmitter` / the constructor. |
-| `EmitterInterface`    | interface | `destroyed` data member + `on` / `once` / `off` / `emit` / `count` / `clear` / `destroy`.                   |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
+
+| Type                  | Kind      | Shape                                                           | Summary                                                                                                                                                                                                                                 |
+| --------------------- | --------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EventMap`            | type      | `Record<string, readonly unknown[]>`                            | Maps each event name to the argument tuple its listeners receive.                                                                                                                                                                       |
+| `EmitterHandler`      | type      | `(...args: TArgs) => void`                                      | Represents a listener for one event's argument tuple.                                                                                                                                                                                   |
+| `EmitterErrorHandler` | type      | `(error: unknown, event: string) => void`                       | Represents the emitter's own listener-error handler — the `error` option, invoked when a listener throws during `emit`, with the caught error and the stringified event name.                                                           |
+| `EmitterHooks`        | type      | `{ readonly [K in keyof TMap]?: EmitterHandler<TMap[K]> }`      | Declares the initial event listeners for an emitter — the reserved `on` option: a partial map of event name to its handler, wired at construction.                                                                                      |
+| `EmitterOptions`      | interface | `{ on?, error? }`                                               | Configures `createEmitter` and the `Emitter` constructor.                                                                                                                                                                               |
+| `EmitterInterface`    | interface | `{ destroyed } plus on, once, off, emit, count, clear, destroy` | Represents the contract a consumer of an emitter holds: the `destroyed` reading, the `on` / `once` / `off` registration trio, the synchronous `emit`, and the `count` / `clear` / `destroy` set that reports on and releases listeners. |
 
 The `destroyed` boolean is a `readonly` data member of `EmitterInterface` (a preceding Surface row) — its call-signature methods are documented under [Methods](#methods).
 
@@ -72,15 +85,15 @@ The public methods of `EmitterInterface` — every call-signature member listed 
 
 `on` / `once` / `off` register and unregister listeners; `emit` fires them synchronously; `count` / `clear` are the batch pair (all events, or one); `destroy` is the teardown.
 
-| Method    | Returns  | Behavior                                                                                                      |
-| --------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `on`      | `void`   | Register a listener for an event (no-op after `destroy()`).                                                   |
-| `once`    | `void`   | Register a listener that removes itself after its first call (no-op after `destroy()`).                       |
-| `off`     | `void`   | Remove a listener by its original handler — including one registered through `once`.                          |
-| `emit`    | `void`   | Invoke an event's listeners synchronously, in registration order, isolating throws (no-op after `destroy()`). |
-| `count`   | `number` | The live listener count — for one event, or the total across all events.                                      |
-| `clear`   | `void`   | Drop listeners — for one event, or all of them; the emitter stays usable (`destroyed` unchanged).             |
-| `destroy` | `void`   | Tear down: drop every listener and flip `destroyed` (idempotent).                                             |
+| Method    | Returns  | Summary                                                                                                               |
+| --------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `on`      | `void`   | Registers a listener for an event. Does nothing after `destroy()`.                                                    |
+| `once`    | `void`   | Registers a listener that removes itself after its first call. Does nothing after `destroy()`.                        |
+| `off`     | `void`   | Removes a listener registered for an event by its original handler, including one registered through `once`.          |
+| `emit`    | `void`   | Invokes an event's listeners synchronously, in registration order, isolating a throw. Does nothing after `destroy()`. |
+| `count`   | `number` | Returns the live listener count, for one event or across every event.                                                 |
+| `clear`   | `void`   | Drops registered listeners, for one event or every event, leaving the emitter usable and `destroyed` unchanged.       |
+| `destroy` | `void`   | Tears down the emitter: drops every listener and sets `destroyed` to `true`. Idempotent.                              |
 
 ## Contract
 
@@ -88,7 +101,7 @@ These invariants hold across `src/core` ↔ `emitter.md`:
 
 1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `interface` / `type` row in the `## Surface` tables is a real export of the emitter source, and every export appears as a Surface row — exhaustive, both directions.
 2. **Synchronous, ordered.** `emit` invokes listeners in registration order, in the current tick — no microtask, no scheduler. A listener registered during an `emit` is not invoked for that same `emit` (the listener set is snapshotted before the loop).
-3. **Listener isolation routes errors.** A throwing listener never stops its siblings: every listener runs, and a throw is routed to the emitter's OWN `error` handler (`EmitterOptions.error`, surfaced as `(error, event)`) — `emit` NEVER rethrows. EVERY throwing listener surfaces (not just the first); with no `error` handler, a throw is swallowed silently. The `error` handler runs in its own try/catch, so a throwing handler is swallowed too (anti-recursion).
+3. **Listener isolation routes errors.** A throwing listener never stops its siblings: every listener runs, and a throw is routed to the emitter's OWN `error` handler (`EmitterOptions.error`, surfaced as `(error, event)`) — `emit` NEVER rethrows. EVERY throwing listener surfaces (not only the first); with no `error` handler, a throw is swallowed silently. The `error` handler runs in its own try/catch, so a throwing handler is swallowed too (anti-recursion).
 4. **Composition, not inheritance.** Entities own an `Emitter` as `#emitter` and expose `readonly emitter`; they never extend it. There is no delegation boilerplate, no `Omit` hacks.
 5. **Destroyed → no-op.** After `destroy()`, `on` / `once` / `emit` do nothing and `destroyed` is `true`; `destroy()` is idempotent. `clear()` resets listeners without destroying the emitter (`destroyed` stays `false`).
 6. **`once` / `off` correlate.** A `once` listener is wrapped so it removes itself after firing; `off` called with the original handler removes that wrapper, so callers never juggle the wrapper themselves.
@@ -99,6 +112,8 @@ Deliberately out of scope, to keep the surface small: a listener-count cap or `m
 ## Patterns
 
 ### Standalone emitter
+
+Create an emitter with no owning entity, subscribe, and fire its events:
 
 ```ts
 import { createEmitter } from '@orkestrel/emitter'
@@ -207,7 +222,7 @@ feed.clear() // drop everything; `feed.destroyed` stays false
 
 ## Tests
 
-- [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/core` bijection (value + type exports), the `EmitterInterface` ↔ `Emitter` method bijection, and the executed transcription of the Manage listeners fence.
+- [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/core` bijection (value + type exports), the `EmitterInterface` ↔ `Emitter` method bijection, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Standalone emitter` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline. It also runs the Manage listeners fence and asserts the values its comments claim.
 - [`tests/src/core/Emitter.test.ts`](../tests/src/core/Emitter.test.ts) — `on` / `emit` (typed args, registration order), `once` (fires once, auto-removes), `off` (by original handler, including a `once` wrapper), `count` / `clear` (total and per-event), `destroy` (clears, flips `destroyed`, then no-ops), initial `on` hooks, listener isolation (a throwing listener does not stop siblings; the throw routes to the `error` handler, never rethrown; every throwing listener surfaces; a throwing `error` handler is swallowed), and empty-tuple signals.
 - [`tests/src/core/factories.test.ts`](../tests/src/core/factories.test.ts) — `createEmitter` returns a working `EmitterInterface` and honors initial `on` hooks.
 - [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — `extractKeys` returns the typed own-enumerable-key union, including the empty-object case and an object whose prototype carries an enumerable key.

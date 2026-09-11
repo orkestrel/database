@@ -1,55 +1,57 @@
 # Test
 
-> The test helpers the fleet kept rewriting, published once. They read as families of what a test
-> records, what it waits for, and what it owns, with a pair outside all of them and a browser journey
-> layer beside them.
->
-> **What a test records.** A call recorder, a map of recorders subscribed to an emitter's events, a
-> signal's live abort-listener tally, a numbered resource ledger, a captured throw, a drained async
-> source, a JSON copy, a required value, a decoded JSON Lines stream, and a cookie jar filled from
-> real responses. Each turns what the code under test did into a value you can assert on.
->
-> **What a test waits for.** A real delay, and — each bounded by a budget, an interval, and an abort
-> signal — a named condition, a produced value, a first event delivery, a socket's close, and a
-> directory the host has finally let go. One wait takes no bound at all, because it needs none:
-> `waitForAbort` parks on a signal's own abort. Nothing here replaces the host clock: every bound is
-> a real elapsed interval read with `performance.now()`.
->
-> **What a test owns and must give back.** A temporary directory, a cleanup list, and a loopback
-> server, each carrying `destroy()`. Each one takes something from the host.
->
-> `resolveRoot` and `readInventory` are the pair outside all of them: together they read the
-> real tree a test checks itself against. Neither records anything, neither waits for anything, and
-> neither owns anything to give back.
->
-> `createHostileValues` sits outside them too, on the input side: it is what a test feeds its guards,
-> a corpus whose every member throws on a naive read or violates a naive structural assumption. The
-> host-capability probes are outside them on the environment side, answering what this filesystem
-> does rather than what its platform is called. `invokeUnchecked` and `readProperty` are outside them
-> at the type boundary, where a value nothing declares meets a claim its caller owns, and
-> `flattenHeaders` is outside them on the comparison side, turning any header initializer into one
-> frozen record.
->
-> The journey layer drives a real interface by role and accessible name through the installed Vitest
-> provider, measures what a reader can see of the result, records the scenario and the page's own
-> output as it goes, and generates the capture portfolio from the same journeys. Around it sit the
-> fixture the journey runs against and the readings a styling claim rests on: an element built and
-> mounted, a field driven the way its component listens for, the tokens, colors, and rules the
-> cascade resolved, and a database given back at the end of the test that filled it.
->
-> A helper ships here when it is a reusable test mechanism with a real consumer that no native or
-> declared primitive already covers; [Limits](#limits) states that rule and what it refused. This
-> package holds one implementation of each and ships as a `devDependency`. Nothing here runs in
-> production code. Source: [`src/core`](../src/core), [`src/browser`](../src/browser), and
-> [`src/server`](../src/server).
->
-> It has **zero runtime dependencies**, and no exported type here names an `@orkestrel/*` type. A
-> dependency on `@orkestrel/emitter` would install a second copy of it beside the one a consumer
-> already pins, and the compiler reads two copies as two distinct types. A foreign type in a
-> signature fails the other way, rejecting the consumer's own local value inside the consumer's own
-> repository. The zero-runtime-dependencies contract holds both.
+> The test helpers the `@orkestrel` fleet kept rewriting, published once: families of what a test
+> records, what it waits for, and what it owns, with a pair outside all of them and a browser
+> journey layer beside them.
+
+**What a test records.** A call recorder, a map of recorders subscribed to an emitter's events, a
+signal's live abort-listener tally, a numbered resource ledger, a captured throw, a drained async
+source, a JSON copy, a required value, a decoded JSON Lines stream, and a cookie jar filled from
+real responses. Each turns what the code under test did into a value you can assert on.
+
+**What a test waits for.** A real delay, and — each bounded by a budget, an interval, and an abort
+signal — a named condition, a produced value, a first event delivery, a socket's close, and a
+directory the host has finally let go. One wait takes no bound at all, because it needs none:
+`waitForAbort` parks on a signal's own abort. Nothing here replaces the host clock: every bound is
+a real elapsed interval read with `performance.now()`.
+
+**What a test owns and must give back.** A temporary directory, a cleanup list, and a loopback
+server, each carrying `destroy()`. Each one takes something from the host.
+
+`resolveRoot` and `readInventory` are the pair outside all of them: together they read the
+real tree a test checks itself against. Neither records anything, neither waits for anything, and
+neither owns anything to give back.
+
+`createHostileValues` sits outside them too, on the input side: it is what a test feeds its guards,
+a corpus whose every member throws on a naive read or violates a naive structural assumption. The
+host-capability probes are outside them on the environment side, answering what this filesystem
+does rather than what its platform is called. `invokeUnchecked` and `readProperty` are outside them
+at the type boundary, where a value nothing declares meets a claim its caller owns, and
+`flattenHeaders` is outside them on the comparison side, turning any header initializer into one
+frozen record.
+
+The journey layer drives a real interface by role and accessible name through the installed Vitest
+provider, measures what a reader can see of the result, records the scenario and the page's own
+output as it goes, and generates the capture portfolio from the same journeys. Around it sit the
+fixture the journey runs against and the readings a styling claim rests on: an element built and
+mounted, a field driven the way its component listens for, the tokens, colors, and rules the
+cascade resolved, and a database given back at the end of the test that filled it.
+
+A helper ships here when it is a reusable test mechanism with a real consumer that no native or
+declared primitive already covers; [Limits](#limits) states that rule and what it refused. This
+package holds one implementation of each and ships as a `devDependency`. Nothing here runs in
+production code. Source: [`src/core`](../src/core), [`src/browser`](../src/browser), and
+[`src/server`](../src/server).
+
+It has **zero runtime dependencies**, and no exported type here names an `@orkestrel/*` type. A
+dependency on `@orkestrel/emitter` would install a second copy of it beside the one a consumer
+already pins, and the compiler reads two copies as two distinct types. A foreign type in a
+signature fails the other way, rejecting the consumer's own local value inside the consumer's own
+repository. The zero-runtime-dependencies contract holds both.
 
 ## Install
+
+Add the package as a development dependency; it ships no runtime code.
 
 ```bash
 npm install --save-dev @orkestrel/test
@@ -103,37 +105,45 @@ Imported from `@orkestrel/test`.
 
 #### Types
 
-| Type                       | Kind      | Shape                                                                                                                                                                                                                                                                                    |
-| -------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WaitOptions`              | interface | `{ budget?, interval?, signal? }` — the elapsed-time limit, delay between readings, and abort signal for a bounded wait.                                                                                                                                                                 |
-| `RetryOptions`             | interface | `WaitOptions` plus `{ attempts? }` — the optional producer-call limit for a bounded retry.                                                                                                                                                                                               |
-| `EventSubscriber`          | type      | `(listener) => cleanup \| void` — installs one event listener and may return its cleanup.                                                                                                                                                                                                |
-| `RecorderInterface`        | interface | `{ calls, count, handler }` plus `clear` — the recorded calls of one callback.                                                                                                                                                                                                           |
-| `EventSourceInterface`     | interface | `on` alone — the subscribe half of a typed event source; it carries no data members.                                                                                                                                                                                                     |
-| `RecorderMap`              | type      | `{ readonly [K in TName]: RecorderInterface<TMap[K]> }` — one recorder per requested event name.                                                                                                                                                                                         |
-| `Success`                  | interface | `{ success: true, value }` — the produced arm of one outcome.                                                                                                                                                                                                                            |
-| `Failure`                  | interface | `{ success: false, error }` — the failed arm of one outcome.                                                                                                                                                                                                                             |
-| `Result`                   | type      | `Success<T> \| Failure<E>` — one operation's outcome, discriminated on `success`; `E` defaults to `Error`, where `@orkestrel/contract` publishes the same name defaulting to `unknown`; [Limits](#limits) rules that divergence.                                                         |
-| `SignalInterface`          | interface | `{ controller, signal, count }` — a real abort controller, its instrumented signal, and that signal's live abort-listener tally.                                                                                                                                                         |
-| `SignalRegistration`       | type      | `readonly [listener, installed, capture, cleanup]` — one abort listener an instrumented signal installed, as its tally holds it.                                                                                                                                                         |
-| `ResourceFactoryInterface` | interface | `{ created, destroyed }` plus `create` / `destroy` — numbered resources, with a recorder for the ids created and one for the ids destroyed.                                                                                                                                              |
-| `TeardownInterface`        | interface | `{ count }` plus `add` / `destroy` — the cleanup one test registers as it goes.                                                                                                                                                                                                          |
-| `TeardownHandler`          | type      | `() => void \| Promise<void>` — the work one registered entry performs.                                                                                                                                                                                                                  |
-| `JSONValue`                | type      | `string \| number \| boolean \| null \| readonly JSONValue[] \| { readonly [key: string]: JSONValue }`.                                                                                                                                                                                  |
-| `JSONSafe`                 | type      | `JSONSafe<T>` — `T` with each member JSON preserves kept, and each member it drops or reshapes outside its declared type mapped to `never`: `undefined`, an opaque `object` member, and a symbol-keyed member. `unknown` still passes through, so `Record<string, unknown>` is accepted. |
-| `HeadersSource`            | type      | `NonNullable<ConstructorParameters<typeof Headers>[0]>` — every value the host `Headers` constructor accepts: a record, an entries array, or another `Headers` value.                                                                                                                    |
-| `StateTransition`          | interface | `{ name, from, event, to }` — one row of a statechart table: the state the entity starts in, the event applied to it, and the state that event must leave it in.                                                                                                                         |
-| `StateScenario`            | interface | `{ transition }` plus `arrange` / `act` / `assert` — one row and the three phases that drive it.                                                                                                                                                                                         |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional
+member and `plus` introducing its call-signature members, and a type alias's own type literal with
+a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members
+it adds after.
 
-Each interface's `readonly` data members are the preceding row; its call-signature members are listed
-under [Methods](#methods).
+| Type                       | Kind      | Shape                                                                                                  | Summary                                                                                                                                        |
+| -------------------------- | --------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WaitOptions`              | interface | `{ budget?, interval?, signal? }`                                                                      | Configures a bounded asynchronous wait with an elapsed-time limit, a delay between readings, and an abort signal.                              |
+| `RetryOptions`             | interface | `WaitOptions` plus `{ attempts? }`                                                                     | Configures a bounded retry, adding an optional producer-call limit to a bounded wait's bounds.                                                 |
+| `EventSubscriber`          | type      | `(listener) => cleanup \| void`                                                                        | Subscribes a listener to one event source.                                                                                                     |
+| `RecorderInterface`        | interface | `{ calls, count, handler }` plus `clear`                                                               | Records every call made to its handler.                                                                                                        |
+| `EventSourceInterface`     | interface | `{} plus on`                                                                                           | Subscribes handlers to a typed event source.                                                                                                   |
+| `RecorderMap`              | type      | `{ readonly [K in TName]: RecorderInterface<TMap[K]> }`                                                | Maps event names to recorders for their delivered argument tuples.                                                                             |
+| `Success`                  | interface | `{ success, value }`                                                                                   | Represents one operation that produced a value.                                                                                                |
+| `Failure`                  | interface | `{ success, error }`                                                                                   | Represents one operation that raised a failure instead of producing a value.                                                                   |
+| `Result`                   | type      | `Success<T> \| Failure<E>`                                                                             | Represents the outcome of one operation: the value it produced, or the failure it raised.                                                      |
+| `SignalInterface`          | interface | `{ controller, signal, count }`                                                                        | Holds a real abort signal and controller instrumented with its live abort-listener tally.                                                      |
+| `SignalRegistration`       | type      | `readonly [listener, installed, capture, cleanup]`                                                     | Represents one abort listener an instrumented signal installed, as its tally holds it.                                                         |
+| `ResourceFactoryInterface` | interface | `{ created, destroyed }` plus `create` / `destroy`                                                     | Represents a numbered resource factory with records of every creation and destruction.                                                         |
+| `TeardownInterface`        | interface | `{ count }` plus `add` / `destroy`                                                                     | Represents the cleanup a test adds as it goes and runs once, newest first, when it is done.                                                    |
+| `TeardownHandler`          | type      | `() => void \| Promise<void>`                                                                          | Represents the work one teardown entry performs when the list is destroyed.                                                                    |
+| `JSONValue`                | type      | `string \| number \| boolean \| null \| readonly JSONValue[] \| { readonly [key: string]: JSONValue }` | Covers any value JSON can represent, so a round trip through JSON preserves the type.                                                          |
+| `JSONSafe`                 | type      | `JSONSafe<T>`                                                                                          | Represents the JSON-safe projection of a type: every member JSON preserves, mapped to itself, and every member it does not, mapped to `never`. |
+| `HeadersSource`            | type      | `NonNullable<ConstructorParameters<typeof Headers>[0]>`                                                | Covers any value the host `Headers` constructor accepts.                                                                                       |
+| `StateTransition`          | interface | `{ name, from, event, to }`                                                                            | Represents one row of a statechart table: the entity's state before an event, the event, and the state that event must leave it in.            |
+| `StateScenario`            | interface | `{ transition }` plus `arrange` / `act` / `assert`                                                     | Drives one `StateTransition` through the three phases that prove it.                                                                           |
+
+Each interface's call-signature members are listed under [Methods](#methods). `Result` defaults `E`
+to `Error`, where `@orkestrel/contract` publishes the same name defaulting to `unknown`;
+[Limits](#limits) rules that divergence.
 
 #### Constants
 
-| API                     | Kind  | Signature                                                                                                    | Summary                                                                             |
-| ----------------------- | ----- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `STATECHART_ATTRIBUTES` | const | `Readonly<Record<'status' \| 'passed' \| 'failed' \| 'total' \| 'scenario' \| 'result' \| 'state', string>>` | The `data-statechart-*` attribute name carrying each fact a harness publishes.      |
-| `STATECHART_STATUSES`   | const | `readonly ['pending', 'idle', 'running', 'passed', 'failed']`                                                | Every value the `status` attribute carries, in the order a run passes through them. |
+A `Shape` cell holds the constant's declared type.
+
+| API                     | Kind  | Shape                                                                                                        | Summary                                                                                  |
+| ----------------------- | ----- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `STATECHART_ATTRIBUTES` | const | `Readonly<Record<'status' \| 'passed' \| 'failed' \| 'total' \| 'scenario' \| 'result' \| 'state', string>>` | Names the attributes a statechart harness publishes, keyed by the fact each one carries. |
+| `STATECHART_STATUSES`   | const | `readonly ['pending', 'idle', 'running', 'passed', 'failed']`                                                | Lists every value a statechart harness reports through its `status` attribute.           |
 
 A harness renders the attributes and a gate outside the page polls them, so the names are the whole
 contract between the two. `status`, `passed`, `failed`, and `total` belong on the harness root,
@@ -143,9 +153,11 @@ state. `pending` is what a harness carries before a run has produced a result fo
 
 #### Validators
 
-| API                     | Kind     | Signature                                                                                      | Summary                                                                       |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `isRecorderMapComplete` | function | `<TMap, TName>(value: unknown, events: readonly TName[]) => value is RecorderMap<TMap, TName>` | Whether a value carries a structurally valid recorder for every listed event. |
+In a guard table a `Shape` cell holds the type the guard narrows to.
+
+| API                     | Kind     | Shape                      | Summary                                                            |
+| ----------------------- | -------- | -------------------------- | ------------------------------------------------------------------ |
+| `isRecorderMapComplete` | function | `RecorderMap<TMap, TName>` | Checks whether a value contains a recorder for every listed event. |
 
 `isRecorderMapComplete` takes the events as a second parameter rather than reading them off the
 value, because the listed events are what completeness is measured against. It reads each listed key
@@ -159,28 +171,28 @@ instead of propagating.
 
 #### Helpers
 
-| API                   | Kind     | Signature                                                                             | Summary                                                           |
-| --------------------- | -------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `waitForCondition`    | function | `(description, condition, options?) => Promise<void>`                                 | Reads until a condition holds within a monotonic budget.          |
-| `retryUntil`          | function | `(description, produce, satisfied, options?) => Promise<T>`                           | Produces until a value satisfies a predicate or a bound.          |
-| `waitForEvent`        | function | `(subscribe, description, options?) => Promise<TArgs>`                                | Parks until the first event delivery, timeout, or abort.          |
-| `checkBounds`         | function | `(subject: string, budget: number, interval: number) => void`                         | Refuses a resolved bound that is not finite and non-negative.     |
-| `buildRetryExhausted` | function | `(description, budget, elapsed, last, cause) => Error`                                | The exhaustion error `retryUntil` raises, built unthrown.         |
-| `dropRegistration`    | function | `(registrations: SignalRegistration[], installed) => SignalRegistration \| undefined` | Drops one instrumented abort registration and aborts its cleanup. |
-| `decodeJSONLines`     | function | `(text: string) => readonly unknown[]`                                                | Decodes non-empty JSON Lines in physical-line order.              |
-| `waitForDelay`        | function | `(ms?: number) => Promise<void>`                                                      | Waits for a real host timer; defaults to `0`.                     |
-| `waitForAbort`        | function | `(signal: AbortSignal) => Promise<void>`                                              | Parks on a signal's abort; an aborted signal resolves at once.    |
-| `captureError`        | function | `(thunk: () => unknown) => unknown`                                                   | Runs a synchronous thunk and returns whatever it threw.           |
-| `requireValue`        | function | `<T>(value: T \| null \| undefined, message?: string) => T`                           | Narrows away `null` and `undefined` by throwing.                  |
-| `collect`             | function | `<T>(source: AsyncIterable<T>) => Promise<readonly T[]>`                              | Drains an async iterable into an array, in iteration order.       |
-| `collectStream`       | function | `<T>(stream: ReadableStream<T>) => Promise<readonly T[]>`                             | Drains a readable stream into an array, in read order.            |
-| `roundTripJSON`       | function | `<T>(value: T & JSONSafe<T>) => T`                                                    | Copies a JSON value; throws on a non-finite number.               |
-| `invokeUnchecked`     | function | `<T>(target: unknown, method: unknown, args: readonly unknown[]) => T`                | Calls an unknown method under a return type the caller claims.    |
-| `readProperty`        | function | `<T>(target: unknown, key: PropertyKey) => T`                                         | Reads a property off an unknown value under the same claim.       |
-| `flattenHeaders`      | function | `(init: HeadersSource) => Readonly<Record<string, string>>`                           | Normalizes any header initializer into a frozen plain record.     |
-| `resolveRoot`         | function | `(meta: ImportMeta) => URL`                                                           | The URL one directory above the calling module's own file.        |
-| `executeScenario`     | function | `(scenario, context) => Promise<void>`                                                | Drives one row through arrange, act, and assert.                  |
-| `executeScenarios`    | function | `(scenarios, build) => Promise<void>`                                                 | Drives a table row by row, each row against its own context.      |
+| API                   | Kind     | Signature                                                                             | Summary                                                                                                                                     |
+| --------------------- | -------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waitForCondition`    | function | `(description, condition, options?) => Promise<void>`                                 | Waits until a condition holds within an elapsed-time budget.                                                                                |
+| `retryUntil`          | function | `(description, produce, satisfied, options?) => Promise<T>`                           | Repeats a producer until one produced value satisfies a predicate.                                                                          |
+| `waitForEvent`        | function | `(subscribe, description, options?) => Promise<TArgs>`                                | Waits for the first delivery from an event subscription.                                                                                    |
+| `checkBounds`         | function | `(subject: string, budget: number, interval: number) => void`                         | Checks the resolved bounds one bounded wait runs under.                                                                                     |
+| `buildRetryExhausted` | function | `(description, budget, elapsed, last, cause) => Error`                                | Builds the error `retryUntil` raises when its elapsed-time budget runs out.                                                                 |
+| `dropRegistration`    | function | `(registrations: SignalRegistration[], installed) => SignalRegistration \| undefined` | Drops the registration an instrumented signal installed for one listener.                                                                   |
+| `decodeJSONLines`     | function | `(text: string) => readonly unknown[]`                                                | Decodes newline-delimited JSON values.                                                                                                      |
+| `waitForDelay`        | function | `(ms?: number) => Promise<void>`                                                      | Waits for a host timer to elapse.                                                                                                           |
+| `waitForAbort`        | function | `(signal: AbortSignal) => Promise<void>`                                              | Waits until an abort signal is aborted.                                                                                                     |
+| `captureError`        | function | `(thunk: () => unknown) => unknown`                                                   | Captures the value thrown by a thunk.                                                                                                       |
+| `requireValue`        | function | `<T>(value: T \| null \| undefined, message?: string) => T`                           | Narrows a value away from `null` and `undefined`, throwing when it is absent.                                                               |
+| `collect`             | function | `<T>(source: AsyncIterable<T>) => Promise<readonly T[]>`                              | Collects every value from an async iterable.                                                                                                |
+| `collectStream`       | function | `<T>(stream: ReadableStream<T>) => Promise<readonly T[]>`                             | Collects every value from a readable stream.                                                                                                |
+| `roundTripJSON`       | function | `<T>(value: T & JSONSafe<T>) => T`                                                    | Copies a JSON value through serialization and parsing.                                                                                      |
+| `invokeUnchecked`     | function | `<T>(target: unknown, method: unknown, args: readonly unknown[]) => T`                | Invokes an unknown method through an explicit unchecked result contract.                                                                    |
+| `readProperty`        | function | `<T>(target: unknown, key: PropertyKey) => T`                                         | Reads a property from an unknown object or function.                                                                                        |
+| `flattenHeaders`      | function | `(init: HeadersSource) => Readonly<Record<string, string>>`                           | Normalizes headers into a frozen plain record.                                                                                              |
+| `resolveRoot`         | function | `(meta: ImportMeta) => URL`                                                           | Resolves the parent directory of a calling module, which is the workspace root when called from the conventional `tests/setup.ts` location. |
+| `executeScenario`     | function | `(scenario, context) => Promise<void>`                                                | Drives one statechart scenario through its arrange, act, and assert phases.                                                                 |
+| `executeScenarios`    | function | `(scenarios, build) => Promise<void>`                                                 | Drives a statechart table row by row, each row against a context of its own.                                                                |
 
 `dropRegistration` is the mechanic `createSignal`'s one-shot and scope-abort paths share, exported
 because both of them call it rather than because a consumer was expected to. Reaching it takes a
@@ -189,14 +201,14 @@ because both of them call it rather than because a consumer was expected to. Rea
 
 #### Factories
 
-| API                     | Kind     | Signature                                                                                                 | Summary                                                          |
-| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `createHostileValues`   | function | `() => readonly unknown[]`                                                                                | Fresh hostile values for proving that a guard is total.          |
-| `createRecorder`        | function | `<TArgs extends readonly unknown[]>() => RecorderInterface<TArgs>`                                        | A recorder whose `handler` appends each call, in order.          |
-| `createRecorders`       | function | `<TMap, TName>(source: EventSourceInterface<TMap>, events: readonly TName[]) => RecorderMap<TMap, TName>` | One recorder per named event, each subscribed to the source.     |
-| `createSignal`          | function | `() => SignalInterface`                                                                                   | A real controller whose signal reports its live abort listeners. |
-| `createResourceFactory` | function | `() => ResourceFactoryInterface`                                                                          | Numbered resources with every creation and destruction recorded. |
-| `createTeardown`        | function | `() => TeardownInterface`                                                                                 | A cleanup list that runs newest-first when it is destroyed.      |
+| API                     | Kind     | Signature                                                                                                 | Summary                                                                                  |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `createHostileValues`   | function | `() => readonly unknown[]`                                                                                | Creates values that make common object readers throw or violate their assumptions.       |
+| `createRecorder`        | function | `<TArgs extends readonly unknown[]>() => RecorderInterface<TArgs>`                                        | Creates a recorder for callback arguments.                                               |
+| `createRecorders`       | function | `<TMap, TName>(source: EventSourceInterface<TMap>, events: readonly TName[]) => RecorderMap<TMap, TName>` | Creates event recorders and subscribes them to the source.                               |
+| `createSignal`          | function | `() => SignalInterface`                                                                                   | Creates a real abort controller whose signal reports its live abort listeners.           |
+| `createResourceFactory` | function | `() => ResourceFactoryInterface`                                                                          | Creates a monotonically numbered resource factory with creation and destruction records. |
+| `createTeardown`        | function | `() => TeardownInterface`                                                                                 | Creates a teardown list that runs registered handlers newest-first.                      |
 
 ### Browser
 
@@ -221,104 +233,110 @@ whole-document readers take a value or nothing at all, so they name no target ei
 
 #### Types
 
-| Type                 | Kind      | Shape                                                                                                                                               |
-| -------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Color`              | type      | `readonly [red, green, blue, alpha]` — one rendered color, its channels 0–255 and its alpha 0–1.                                                    |
-| `ElementOptions`     | interface | `{ classes?, text?, attributes? }` — the class list, the text, and the attributes one built element carries.                                        |
-| `FrameOptions`       | interface | `{ path, width, height, element? }` — where one frame is written, the viewport it is shot at, and what it shoots.                                   |
-| `FrameReading`       | interface | `{ width, height, floor }` — one written frame's size in device pixels, and the single color its bottom row paints.                                 |
-| `CaptureVariant`     | interface | `{ name, width, height, apply? }` — one theme-and-viewport pair, and the document change it needs first.                                            |
-| `PortfolioOptions`   | interface | `{ states, variants, variant, directory, enabled? }` — the registry, the matrix, this run's variant, where it writes, and whether it writes at all. |
-| `PortfolioInterface` | interface | `{ variant, placements, paths, files }` plus `place` — one run's registry and what it placed.                                                       |
-| `JournalStep`        | interface | `{ action, trigger, result }` — one scripted step and what the surface did about it.                                                                |
-| `JournalInterface`   | interface | `{ steps, output }` plus `start` / `stop` / `record` — one scenario's steps and the page's own output.                                              |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional
+member and `plus` introducing its call-signature members, and a type alias's own type literal with
+a union's arms escaped as `\|`.
+
+| Type                 | Kind      | Shape                                                | Summary                                                                                                                                         |
+| -------------------- | --------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Color`              | type      | `readonly [red, green, blue, alpha]`                 | Represents one rendered color as straight sRGB channels and its alpha.                                                                          |
+| `ElementOptions`     | interface | `{ classes?, text?, attributes? }`                   | Configures one built element: its class list, its text, and its attributes.                                                                     |
+| `FrameOptions`       | interface | `{ path, width, height, element? }`                  | Configures one captured frame: where it is written, the viewport it is shot at, and what it shoots.                                             |
+| `FrameReading`       | interface | `{ width, height, floor }`                           | Represents one written frame read back from the file a capture produced: its size in device pixels, and the single color its bottom row paints. |
+| `CaptureVariant`     | interface | `{ name, width, height, apply? }`                    | Represents one theme-and-viewport pair a capture run renders, and the document change it needs first.                                           |
+| `PortfolioOptions`   | interface | `{ states, variants, variant, directory, enabled? }` | Configures a capture portfolio: the state registry, the variant matrix, this run's variant, where it writes, and whether it writes at all.      |
+| `PortfolioInterface` | interface | `{ variant, placements, paths, files }` plus `place` | Holds the registry of capture states one run places, and the files it wrote placing them.                                                       |
+| `JournalStep`        | interface | `{ action, trigger, result }`                        | Represents one scripted step a journal recorded, and what the surface did about it.                                                             |
+| `JournalInterface`   | interface | `{ steps, output }` plus `start` / `stop` / `record` | Records one scenario: every step it took and everything the page said while it ran.                                                             |
 
 #### Constants
 
-| API                  | Kind  | Signature                          | Summary                                                                                                                            |
-| -------------------- | ----- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `ACCESSIBLE_ROLES`   | const | `readonly string[]`                | The interactive roles a bare accessible name is searched across.                                                                   |
-| `CANVAS_COLOR`       | const | `Color`                            | Opaque white: the page a browser paints an unstyled document onto.                                                                 |
-| `CAPTURE_PANE`       | const | `string`                           | The attribute marking the runner's tester pane, and the rule sizing it; that rule carries the viewport the release hands back.     |
-| `CAPTURE_STAGINGS`   | const | `number`                           | The restagings one capture takes before it refuses a document whose height never settles.                                          |
-| `CONTENT_ROLES`      | const | `readonly string[]`                | The roles `readName` names from the text a reader can see inside them.                                                             |
-| `FIELD_ROLES`        | const | `Readonly<Record<string, string>>` | The role each `input` type carries; a type it omits exposes none.                                                                  |
-| `FOCUSABLE_SELECTOR` | const | `string`                           | What sequential keyboard navigation can reach, before the removals `describeFocus` applies.                                        |
-| `HEADER_ROLES`       | const | `Readonly<Record<string, string>>` | The role a `th` carries for the `col` or `row` axis its `scope` names.                                                             |
-| `IMPLICIT_ROLES`     | const | `Readonly<Record<string, string>>` | The role each listed tag carries when it declares none. Membership is the contract: a tag it omits is written into no description. |
+A `Shape` cell holds the constant's declared type.
+
+| API                  | Kind  | Shape                              | Summary                                                                                                    |
+| -------------------- | ----- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `ACCESSIBLE_ROLES`   | const | `readonly string[]`                | Names the interactive ARIA roles a bare accessible name is searched across.                                |
+| `CANVAS_COLOR`       | const | `Color`                            | Names the color a browser paints an unstyled document with: opaque white.                                  |
+| `CAPTURE_PANE`       | const | `string`                           | Names the attribute marking the runner's tester pane, and the rule that sizes it, while a frame is staged. |
+| `CAPTURE_STAGINGS`   | const | `number`                           | Bounds the restagings one capture takes before it refuses a document whose height never settles.           |
+| `CONTENT_ROLES`      | const | `readonly string[]`                | Names the roles whose accessible name is the text a reader can see inside them.                            |
+| `FIELD_ROLES`        | const | `Readonly<Record<string, string>>` | Names the role each `input` type carries.                                                                  |
+| `FOCUSABLE_SELECTOR` | const | `string`                           | Names what sequential keyboard navigation can reach, before disabled and unrendered elements go.           |
+| `HEADER_ROLES`       | const | `Readonly<Record<string, string>>` | Names the role a `th` carries for the header axis its `scope` names.                                       |
+| `IMPLICIT_ROLES`     | const | `Readonly<Record<string, string>>` | Names the role each listed tag carries in the accessibility tree when it declares none of its own.         |
 
 #### Helpers
 
-| API                     | Kind     | Signature                                                                                               | Summary                                                                                                                                            |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolveAccessible`     | function | `(name: string) => HTMLElement` / `(role: string, name: string) => HTMLElement`                         | One visible, focus-reachable control, scrolled into view once before reachability is measured.                                                     |
-| `resolveRendered`       | function | `(first: string, second?: string) => HTMLElement`                                                       | The same resolver without the viewport requirement; the acting verbs use it.                                                                       |
-| `computeNamePattern`    | function | `(name: string) => RegExp`                                                                              | The pattern the hidden pass matches a name with, tolerating a decorative glyph at either edge.                                                     |
-| `isOutsideViewport`     | function | `(rectangle: DOMRectReadOnly) => boolean`                                                               | Whether a measured rectangle lies wholly outside the viewport.                                                                                     |
-| `isRendered`            | function | `(element: Element) => boolean`                                                                         | Whether the accessibility tree presents the element at all; no geometry is read, so a zero-size announced control passes.                          |
-| `isReachable`           | function | `(element: Element) => boolean`                                                                         | Whether a person can click the element where it sits; the one reachability filter every acting verb applies.                                       |
-| `clickAccessible`       | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                     | Trusted activation of one resolved control.                                                                                                        |
-| `clickAccessibleWithin` | function | `(region: string, role: string, name: string) => Promise<void>`                                         | Trusted activation inside one named region, matching the control's name loosely.                                                                   |
-| `clickDisclosure`       | function | `(name: string) => Promise<void>`                                                                       | Trusted activation of a native `<summary>`, which carries no role locators accept.                                                                 |
-| `typeAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Focus, select all, delete, then real keystrokes, with the provider's key syntax escaped.                                                           |
-| `fillAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Replaces a value in one operation, for text too long to type.                                                                                      |
-| `traverseAccessible`    | function | `(name: string) => Promise<HTMLElement>`                                                                | Forward Tab alone, until focus lands on the re-resolved target.                                                                                    |
-| `readPerception`        | function | `(name: string) => string`                                                                              | The normalized `innerText` of exactly one visible named region, dialog, table, panel, or alert.                                                    |
-| `readPage`              | function | `() => string`                                                                                          | The normalized `innerText` of the whole page.                                                                                                      |
-| `readFocus`             | function | `() => string \| undefined`                                                                             | The focused HTML element's rendered text (`''` included); `undefined` for a non-HTML focus; the whole page's text when nothing holds focus.        |
-| `readValue`             | function | `(role: string, name: string) => string`                                                                | The value a resolved input, textarea, or select renders.                                                                                           |
-| `readText`              | function | `(element: Element) => string`                                                                          | The element's rendered text with every `aria-hidden` descendant dropped and its whitespace runs collapsed.                                         |
-| `readRole`              | function | `(element: Element) => string \| undefined`                                                             | The declared role, the implicit one, or `undefined` when the element carries none.                                                                 |
-| `readName`              | function | `(element: Element) => string`                                                                          | The accessible name, computed in the order a browser computes it; an empty string when nothing names the element.                                  |
-| `readStates`            | function | `(element: Element) => readonly string[]`                                                               | Every state the element declares, in one fixed order.                                                                                              |
-| `describeTree`          | function | `(element: Element) => string`                                                                          | One indented line per roled element, naming its role, its name, and its states; indentation follows the roles rather than the markup.              |
-| `describeFocus`         | function | `(element: Element) => string`                                                                          | One numbered line per reachable control, a positive `tabindex` first in ascending order and everything else in document order.                     |
-| `waitForFrame`          | function | `() => Promise<void>`                                                                                   | One `requestAnimationFrame`, to settle pending paint work.                                                                                         |
-| `build`                 | function | `<K extends keyof HTMLElementTagNameMap>(tag: K, options?: ElementOptions) => HTMLElementTagNameMap[K]` | One unmounted element of exactly that tag, carrying its classes, text, and attributes.                                                             |
-| `mount`                 | function | `<T extends Element>(element: T) => T`                                                                  | Appends an element to the document and hands the same element back.                                                                                |
-| `render`                | function | `(markup: string) => HTMLDivElement` / `(tag: K, classes: string) => HTMLElementTagNameMap[K]`          | Trusted fixture markup in an attached container, or one attached element of that tag.                                                              |
-| `typeInput`             | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets a field's value and dispatches one bubbling `input` event, a plain `Event` rather than an `InputEvent`.                                       |
-| `commitInput`           | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets a field's value, then dispatches `input` and `change`, in that order.                                                                         |
-| `clearStorage`          | function | `() => void`                                                                                            | Empties local and session storage together, for an `afterEach` hook that runs after a failed test too.                                             |
-| `removeDatabase`        | function | `(name: string) => Promise<void>`                                                                       | Deletes one IndexedDB database; rejects on an error and on a block.                                                                                |
-| `parseColor`            | function | `(value: string) => Color \| undefined`                                                                 | One computed `rgb()`, `rgba()`, or `color(srgb …)` value as straight channels; `undefined` for anything else.                                      |
-| `parseCSSColor`         | function | `(value: string) => Color \| undefined`                                                                 | Any CSS color expression resolved to channels by the real cascade; `undefined` when the CSSOM refuses it.                                          |
-| `matchesColor`          | function | `(first: string \| Color, second: string \| Color) => boolean`                                          | Whether two colors render the same, within half a channel step.                                                                                    |
-| `blendColor`            | function | `(front: Color, back: Color) => Color`                                                                  | One color composited over another, always opaque.                                                                                                  |
-| `measureLuminance`      | function | `(color: Color) => number`                                                                              | One opaque color's WCAG relative luminance, from `0` to `1`.                                                                                       |
-| `measureContrast`       | function | `(front: Color, back: Color) => number`                                                                 | The WCAG 2.x ratio between two opaque colors, from `1` to `21`.                                                                                    |
-| `readLayers`            | function | `(element: Element) => readonly Color[]`                                                                | Every painted layer between the element and its first opaque ancestor, that ancestor last; an unpainted stack is empty.                            |
-| `readBackdrop`          | function | `(element: Element, floor: Color) => Color`                                                             | The opaque color behind an element, every translucent layer composited onto the required floor.                                                    |
-| `readContrast`          | function | `(element: Element, floor?: Color) => number`                                                           | The WCAG 2.x ratio for one element's text; an omitted floor refuses an unpainted stack and a supplied one composites onto it.                      |
-| `readRing`              | function | `(control: Element, worn?: Element) => number \| undefined`                                             | The ratio the painted focus chrome reaches against its backdrop; `undefined` off `:focus-visible` or with no painted chrome.                       |
-| `measureContent`        | function | `() => number`                                                                                          | The row the document's own content ends on, rounded up; the same reading under a pane taller than the document as under a shorter one.             |
-| `stagePane`             | function | `(width: number, height: number) => Promise<void>`                                                      | Sets the viewport and renders the runner's tester pane at that size, unscaled.                                                                     |
-| `releasePane`           | function | `() => Promise<void>`                                                                                   | Hands the staged pane back to the runner's own layout, at the viewport the tester had before staging.                                              |
-| `captureFrame`          | function | `(options: FrameOptions) => Promise<string>`                                                            | Stages, shoots the whole document at that width, reads the file back, and returns the verified absolute path; releases the pane either way.        |
-| `readFrame`             | function | `(path: string) => Promise<FrameReading>`                                                               | One written frame's size in device pixels and the single color its bottom row paints; refuses a path holding no frame.                             |
-| `readCascade`           | function | `() => ReadonlySet<string>`                                                                             | Every class token the stylesheets loaded into this document define.                                                                                |
-| `readClasses`           | function | `(root: ParentNode) => ReadonlySet<string>`                                                             | Every class token the markup under one root carries, the root's own included.                                                                      |
-| `readRules`             | function | `() => readonly CSSRule[]`                                                                              | Every rule the loaded stylesheets hold, level by level, nested grouping rules included; a `@keyframes` rule is collected and its children are not. |
-| `findRule`              | function | `(selector: string) => CSSStyleRule \| undefined`                                                       | The first style rule whose selector text carries a fragment.                                                                                       |
-| `findKeyframes`         | function | `(name: string) => CSSKeyframesRule \| undefined`                                                       | The animation the cascade declares under an exact name.                                                                                            |
-| `readRows`              | function | `(root: ParentNode, selector: string) => readonly string[]`                                             | One line per matched element, built from its text nodes rather than from `textContent`.                                                            |
-| `extractOrphans`        | function | `(root: ParentNode, child: string, parent: string) => readonly string[]`                                | The markup of every element carrying the `child` class with no `parent` class above it.                                                            |
-| `extractStyles`         | function | `(root: ParentNode) => readonly string[]`                                                               | The markup of every element carrying an inline `style` and of every `<style>` element, the root itself included.                                   |
-| `readStyle`             | function | `(element: Element, property: string) => string`                                                        | One resolved CSS property, trimmed, read from the real browser.                                                                                    |
-| `readToken`             | function | `(element: Element, name: string) => string`                                                            | One custom property off an element's resolved style, its dashes optional.                                                                          |
-| `readRootToken`         | function | `(name: string) => string`                                                                              | The same reading taken against the document element.                                                                                               |
-| `readPixels`            | function | `(element: Element, property: string) => number`                                                        | One resolved length as a number of pixels; `0` when it carries none.                                                                               |
-| `expandCaptures`        | function | `(states: readonly string[], variants: readonly CaptureVariant[]) => readonly string[]`                 | The registry times the variants, as `<state>--<variant>.png` names.                                                                                |
+| API                     | Kind     | Signature                                                                                               | Summary                                                                                                                                                                                     |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolveAccessible`     | function | `(name: string) => HTMLElement` / `(role: string, name: string) => HTMLElement`                         | Resolves one visible, focus-reachable interactive element by its exact accessible name. A wholly-off-viewport target is scrolled into view before reachability is measured.                 |
+| `resolveRendered`       | function | `(first: string, second?: string) => HTMLElement`                                                       | Resolves one rendered, focus-reachable interactive element without requiring it to intersect the viewport yet.                                                                              |
+| `computeNamePattern`    | function | `(name: string) => RegExp`                                                                              | Computes the pattern that matches one accessible name a decorative glyph may sit beside.                                                                                                    |
+| `isOutsideViewport`     | function | `(rectangle: DOMRectReadOnly) => boolean`                                                               | Determines whether a rectangle lies wholly outside the browser viewport.                                                                                                                    |
+| `isRendered`            | function | `(element: Element) => boolean`                                                                         | Determines whether the accessibility tree presents one element at all.                                                                                                                      |
+| `isReachable`           | function | `(element: Element) => boolean`                                                                         | Determines whether a person can click one element where it sits.                                                                                                                            |
+| `clickAccessible`       | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                     | Clicks one visible, focus-reachable control by its accessible name through the browser provider.                                                                                            |
+| `clickAccessibleWithin` | function | `(region: string, role: string, name: string) => Promise<void>`                                         | Clicks one human-reachable control by role and accessible-name text inside a named region.                                                                                                  |
+| `clickDisclosure`       | function | `(name: string) => Promise<void>`                                                                       | Opens or closes one native details disclosure by its rendered summary.                                                                                                                      |
+| `typeAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Replaces a named field's value through focus, select-all, deletion, and real keystrokes.                                                                                                    |
+| `fillAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Replaces a named field's value in one operation, for text too long to type key by key.                                                                                                      |
+| `traverseAccessible`    | function | `(name: string) => Promise<HTMLElement>`                                                                | Reaches a named control only through natural forward Tab traversal from the current focus.                                                                                                  |
+| `readPerception`        | function | `(name: string) => string`                                                                              | Reads the normalized visible text of one named region, dialog, table, tab panel, or alert.                                                                                                  |
+| `readPage`              | function | `() => string`                                                                                          | Reads the normalized visible text of the whole page.                                                                                                                                        |
+| `readFocus`             | function | `() => string \| undefined`                                                                             | Reads the rendered text of the element that holds focus.                                                                                                                                    |
+| `readValue`             | function | `(role: string, name: string) => string`                                                                | Reads the value a resolved control renders.                                                                                                                                                 |
+| `readText`              | function | `(element: Element) => string`                                                                          | Reads one element's rendered text the way a name computation reads it.                                                                                                                      |
+| `readRole`              | function | `(element: Element) => string \| undefined`                                                             | Reads the role one element carries in the accessibility tree.                                                                                                                               |
+| `readName`              | function | `(element: Element) => string`                                                                          | Reads the accessible name one element is announced under.                                                                                                                                   |
+| `readStates`            | function | `(element: Element) => readonly string[]`                                                               | Reads the states one element is announced in.                                                                                                                                               |
+| `describeTree`          | function | `(element: Element) => string`                                                                          | Describes the accessible tree one rendered element presents.                                                                                                                                |
+| `describeFocus`         | function | `(element: Element) => string`                                                                          | Describes the order sequential keyboard navigation visits one element's controls in.                                                                                                        |
+| `waitForFrame`          | function | `() => Promise<void>`                                                                                   | Waits for one animation frame to settle pending browser paint work.                                                                                                                         |
+| `build`                 | function | `<K extends keyof HTMLElementTagNameMap>(tag: K, options?: ElementOptions) => HTMLElementTagNameMap[K]` | Builds one unmounted element of a known tag, wearing the classes, text, and attributes asked for.                                                                                           |
+| `mount`                 | function | `<T extends Element>(element: T) => T`                                                                  | Puts one element into the document and hands it straight back.                                                                                                                              |
+| `render`                | function | `(markup: string) => HTMLDivElement` / `(tag: K, classes: string) => HTMLElementTagNameMap[K]`          | Renders one fixture into the document from trusted markup.                                                                                                                                  |
+| `typeInput`             | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets one field's value and announces it the way typing into the field does.                                                                                                                 |
+| `commitInput`           | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets one field's value and commits it, the way typing and then leaving the field does.                                                                                                      |
+| `clearStorage`          | function | `() => void`                                                                                            | Clears both browser storage surfaces.                                                                                                                                                       |
+| `removeDatabase`        | function | `(name: string) => Promise<void>`                                                                       | Deletes one IndexedDB database and reports what the request actually did.                                                                                                                   |
+| `parseColor`            | function | `(value: string) => Color \| undefined`                                                                 | Parses one computed CSS color value into straight sRGB channels.                                                                                                                            |
+| `parseCSSColor`         | function | `(value: string) => Color \| undefined`                                                                 | Resolves any CSS color expression to straight sRGB channels, by asking the browser.                                                                                                         |
+| `matchesColor`          | function | `(first: string \| Color, second: string \| Color) => boolean`                                          | Determines whether two colors render the same, within the rounding a browser does.                                                                                                          |
+| `blendColor`            | function | `(front: Color, back: Color) => Color`                                                                  | Composites one color over another.                                                                                                                                                          |
+| `measureLuminance`      | function | `(color: Color) => number`                                                                              | Measures one opaque color's WCAG relative luminance.                                                                                                                                        |
+| `measureContrast`       | function | `(front: Color, back: Color) => number`                                                                 | Measures the WCAG 2.x contrast ratio between two opaque colors.                                                                                                                             |
+| `readLayers`            | function | `(element: Element) => readonly Color[]`                                                                | Collects the painted layers standing between one element and the surface it sits on.                                                                                                        |
+| `readBackdrop`          | function | `(element: Element, floor: Color) => Color`                                                             | Resolves the opaque color standing behind one element.                                                                                                                                      |
+| `readContrast`          | function | `(element: Element, floor?: Color) => number`                                                           | Measures the WCAG 2.x contrast ratio between an element's computed text and background colors.                                                                                              |
+| `readRing`              | function | `(control: Element, worn?: Element) => number \| undefined`                                             | Measures the contrast the focus chrome painted on one control reaches against its own backdrop.                                                                                             |
+| `measureContent`        | function | `() => number`                                                                                          | Measures the row the document's own content ends on, in document coordinates.                                                                                                               |
+| `stagePane`             | function | `(width: number, height: number) => Promise<void>`                                                      | Sets the tester's viewport and renders the runner's pane at the size that viewport claims.                                                                                                  |
+| `releasePane`           | function | `() => Promise<void>`                                                                                   | Hands the tester pane back to the runner's own layout, at the viewport it had before staging.                                                                                               |
+| `captureFrame`          | function | `(options: FrameOptions) => Promise<string>`                                                            | Shoots one frame at one viewport size and proves the file on disk holds this run's bytes.                                                                                                   |
+| `readFrame`             | function | `(path: string) => Promise<FrameReading>`                                                               | Reads one written frame back and reports its size and the color its bottom row paints.                                                                                                      |
+| `readCascade`           | function | `() => ReadonlySet<string>`                                                                             | Collects every class token the stylesheets loaded into this document actually define.                                                                                                       |
+| `readClasses`           | function | `(root: ParentNode) => ReadonlySet<string>`                                                             | Collects every class token the markup under one root carries.                                                                                                                               |
+| `readRules`             | function | `() => readonly CSSRule[]`                                                                              | Collects every rule the stylesheets loaded into this document hold, nested grouping rules included.                                                                                         |
+| `findRule`              | function | `(selector: string) => CSSStyleRule \| undefined`                                                       | Finds the first style rule in the cascade whose selector carries a fragment.                                                                                                                |
+| `findKeyframes`         | function | `(name: string) => CSSKeyframesRule \| undefined`                                                       | Finds the animation the cascade declares under one name.                                                                                                                                    |
+| `readRows`              | function | `(root: ParentNode, selector: string) => readonly string[]`                                             | Reads the normalized visible text of every element a selector matches, in document order.                                                                                                   |
+| `extractOrphans`        | function | `(root: ParentNode, child: string, parent: string) => readonly string[]`                                | Collects every element carrying a component class rendered outside the container it belongs to.                                                                                             |
+| `extractStyles`         | function | `(root: ParentNode) => readonly string[]`                                                               | Collects the markup of every element carrying a non-empty `style` attribute and of every `<style>` element, in document order, `root` included in both populations when it is an `Element`. |
+| `readStyle`             | function | `(element: Element, property: string) => string`                                                        | Reads one resolved CSS property from a real browser element.                                                                                                                                |
+| `readToken`             | function | `(element: Element, name: string) => string`                                                            | Reads one custom property from an element's resolved style.                                                                                                                                 |
+| `readRootToken`         | function | `(name: string) => string`                                                                              | Reads one custom property from the document element.                                                                                                                                        |
+| `readPixels`            | function | `(element: Element, property: string) => number`                                                        | Reads one resolved CSS length as a number of pixels.                                                                                                                                        |
+| `expandCaptures`        | function | `(states: readonly string[], variants: readonly CaptureVariant[]) => readonly string[]`                 | Expands a capture registry across every variant into the filenames a complete portfolio holds.                                                                                              |
 
 #### Factories
 
-| API                  | Kind     | Signature                                                                                                 | Summary                                                                            |
-| -------------------- | -------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `createPointerEvent` | function | `(name: string, options?: PointerEventInit) => PointerEvent`                                              | One real pointer event carrying a browser's own defaults.                          |
-| `createDragEvent`    | function | `(name: string, options?: DragEventInit) => DragEvent`                                                    | One real drag event carrying a live data transfer.                                 |
-| `createPortfolio`    | function | `(options: PortfolioOptions) => PortfolioInterface`                                                       | The capture registry one run places its screenshots through.                       |
-| `createChannel`      | function | `(name: string, output: string[], forward: (...data: unknown[]) => void) => (...data: unknown[]) => void` | One console channel that records every call it receives and forwards it unchanged. |
-| `createJournal`      | function | `() => JournalInterface`                                                                                  | The record of one scenario's steps and the page's own output.                      |
+| API                  | Kind     | Signature                                                                                                 | Summary                                                                                           |
+| -------------------- | -------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `createPointerEvent` | function | `(name: string, options?: PointerEventInit) => PointerEvent`                                              | Creates one real pointer event, ready to dispatch.                                                |
+| `createDragEvent`    | function | `(name: string, options?: DragEventInit) => DragEvent`                                                    | Creates one real drag event carrying a live data transfer, ready to dispatch.                     |
+| `createPortfolio`    | function | `(options: PortfolioOptions) => PortfolioInterface`                                                       | Creates the capture portfolio one run places its screenshots through.                             |
+| `createChannel`      | function | `(name: string, output: string[], forward: (...data: unknown[]) => void) => (...data: unknown[]) => void` | Creates one console channel that records every call it receives and hands that call on unchanged. |
+| `createJournal`      | function | `() => JournalInterface`                                                                                  | Creates the journal one scenario records its steps and the page's own output into.                |
 
 `resolveAccessible` counts a match as reachable only when every condition holds: it is connected; it
 passes a visibility check honouring opacity and CSS; its box has non-zero width and height; its
@@ -581,47 +599,54 @@ Imported from `@orkestrel/test/server`.
 
 #### Types
 
-| Type                 | Kind      | Shape                                                                                                                                                                                 |
-| -------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ScratchInterface`   | interface | `{ path }` plus `write` / `read` / `has` / `names` / `ensure` / `link` / `remove` / `destroy` — one owned directory.                                                                  |
-| `ScratchIdentity`    | interface | `{ device, inode, birth }` — the three fields that together name one allocation on its host.                                                                                          |
-| `ScratchOptions`     | interface | `{ parent?: string, prefix?: string, files?: Readonly<Record<string, string>> }`.                                                                                                     |
-| `LoopbackInterface`  | interface | `{ url, port }` plus `destroy` — one server on an owned ephemeral loopback port.                                                                                                      |
-| `CookieJarInterface` | interface | `{ header }` plus `read` / `capture` — one name-keyed cookie store filled from real responses.                                                                                        |
-| `InventoryOptions`   | interface | `{ extensions?: readonly string[], exclude?: readonly string[] }`.                                                                                                                    |
-| `UpgradeOptions`     | interface | `WaitOptions` plus `{ path?, protocols? }` — the bounds the wait takes, and the request path and subprotocol tokens one upgrade request offers.                                       |
-| `UpgradeResult`      | type      | `{ claimed: true, protocol }` or `{ claimed: false, status }` — the claimed arm carrying the subprotocol the server selected, and the refused arm carrying the plain answer's status. |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional
+member and `plus` introducing its call-signature members, and a type alias's own type literal with
+a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members
+it adds after.
+
+| Type                 | Kind      | Shape                                                                                         | Summary                                                                                         |
+| -------------------- | --------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `ScratchInterface`   | interface | `{ path }` plus `write` / `read` / `has` / `names` / `ensure` / `link` / `remove` / `destroy` | Holds a temporary directory a test owns, writes into, reads back, and removes when it is done.  |
+| `ScratchIdentity`    | interface | `{ device, inode, birth }`                                                                    | Represents the fields that together identify one allocated directory on its host.               |
+| `ScratchOptions`     | interface | `{ parent?, prefix?, files? }`                                                                | Configures a scratch directory allocation.                                                      |
+| `LoopbackInterface`  | interface | `{ url, port }` plus `destroy`                                                                | Holds a server a test owns, listening on an ephemeral loopback port until the test releases it. |
+| `CookieJarInterface` | interface | `{ header }` plus `read` / `capture`                                                          | Holds a name-keyed cookie store a test drives one origin with, filled from real responses.      |
+| `InventoryOptions`   | interface | `{ extensions?, exclude? }`                                                                   | Configures a source inventory read.                                                             |
+| `UpgradeOptions`     | interface | `WaitOptions` plus `{ path?, protocols? }`                                                    | Configures a client upgrade request.                                                            |
+| `UpgradeResult`      | type      | `{ claimed, protocol } \| { claimed, status }`                                                | Represents what one server did with a client upgrade request.                                   |
 
 #### Constants
 
-| API                           | Kind  | Shape               | Summary                                                                              |
-| ----------------------------- | ----- | ------------------- | ------------------------------------------------------------------------------------ |
-| `REMOVE_TREE_MAX_ATTEMPTS`    | const | `number`            | The attempts `removeTree` makes before rethrowing a retryable removal error.         |
-| `REMOVE_TREE_RETRY_DELAY_MS`  | const | `number`            | The synchronous delay, in milliseconds, `removeTree` waits between attempts.         |
-| `REMOVE_TREE_RETRYABLE_CODES` | const | `readonly string[]` | The removal error codes `removeTree` retries; every other code rethrows immediately. |
+A `Shape` cell holds the constant's declared type.
+
+| API                           | Kind  | Shape               | Summary                                                                            |
+| ----------------------------- | ----- | ------------------- | ---------------------------------------------------------------------------------- |
+| `REMOVE_TREE_MAX_ATTEMPTS`    | const | `number`            | Caps the attempts `removeTree` makes before rethrowing a retryable removal error.  |
+| `REMOVE_TREE_RETRY_DELAY_MS`  | const | `number`            | Names the synchronous delay, in milliseconds, `removeTree` waits between attempts. |
+| `REMOVE_TREE_RETRYABLE_CODES` | const | `readonly string[]` | Names the error codes `removeTree` retries; every other code rethrows immediately. |
 
 #### Helpers
 
-| API                      | Kind     | Signature                                                                                                           | Summary                                                                                 |
-| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `readInventory`          | function | `(root: URL \| string, targets: readonly string[], options?: InventoryOptions) => Readonly<Record<string, string>>` | Named files and walked directories, keyed by root-relative path in sorted order.        |
-| `resolveContained`       | function | `(root: string, target: string) => string \| undefined`                                                             | The absolute target below `root`, or `undefined` when it escapes.                       |
-| `requireContained`       | function | `(root: string, target: string) => string`                                                                          | The same resolution, refusing an escape with the message every scratch member spells.   |
-| `isExcluded`             | function | `(key: string, exclusions: readonly string[]) => boolean`                                                           | Whether an exclusion names the key or one of its ancestors.                             |
-| `readIdentity`           | function | `(status: Stats) => ScratchIdentity`                                                                                | The device, index node, and creation time read off one host status.                     |
-| `matchesIdentity`        | function | `(current: ScratchIdentity, allocation: ScratchIdentity) => boolean`                                                | Whether two identities name the same allocation.                                        |
-| `readErrorCode`          | function | `(error: unknown) => string \| undefined`                                                                           | The string `code` an unknown thrown value carries, or `undefined` when it carries none. |
-| `createLink`             | function | `(path: string, source: string) => void`                                                                            | Create a symbolic link, or a directory junction where the host refuses one.             |
-| `removeTree`             | function | `(path: string) => void`                                                                                            | Remove a directory tree, retrying a briefly-held handle before rethrowing.              |
-| `isRunning`              | function | `(pid: number) => boolean`                                                                                          | Whether a process id names a live process at the moment of the call.                    |
-| `waitForSocketClose`     | function | `(socket: Socket, options?: WaitOptions) => Promise<void>`                                                          | Wait for a socket's `close`, waiting past a peer reset.                                 |
-| `destroyScratch`         | function | `(scratch: ScratchInterface, options?: WaitOptions) => Promise<void>`                                               | Destroy a scratch directory, retrying until the host releases it.                       |
-| `requestUpgrade`         | function | `(port: number, options?: UpgradeOptions) => Promise<UpgradeResult>`                                                | Drives one client upgrade request within a budget and reports what the server did.      |
-| `supportsDirectoryLinks` | function | `() => boolean`                                                                                                     | Whether this host links a directory and reads through the link.                         |
-| `supportsFileLinks`      | function | `() => boolean`                                                                                                     | Whether this host links a file and reads the file through the link.                     |
-| `supportsMode`           | function | `() => boolean`                                                                                                     | Whether POSIX permission bits round-trip through this host's `chmod` and `stat` calls.  |
-| `supportsCase`           | function | `() => boolean`                                                                                                     | Whether names differing only by case are distinct files on this host.                   |
-| `supportsBytes`          | function | `() => boolean`                                                                                                     | Whether a filename carrying a raw non-UTF-8 byte is written and read back.              |
+| API                      | Kind     | Signature                                                                                                           | Summary                                                                                          |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `readInventory`          | function | `(root: URL \| string, targets: readonly string[], options?: InventoryOptions) => Readonly<Record<string, string>>` | Reads files from selected targets below a root directory.                                        |
+| `resolveContained`       | function | `(root: string, target: string) => string \| undefined`                                                             | Resolves a target that stays below a root directory.                                             |
+| `requireContained`       | function | `(root: string, target: string) => string`                                                                          | Resolves a target that stays below a root directory, refusing an escape.                         |
+| `isExcluded`             | function | `(key: string, exclusions: readonly string[]) => boolean`                                                           | Reports whether a root-relative key matches an exclusion.                                        |
+| `readIdentity`           | function | `(status: Stats) => ScratchIdentity`                                                                                | Reads the identity of one allocated directory off a host status.                                 |
+| `matchesIdentity`        | function | `(current: ScratchIdentity, allocation: ScratchIdentity) => boolean`                                                | Reports whether two directory identities name the same allocation.                               |
+| `readErrorCode`          | function | `(error: unknown) => string \| undefined`                                                                           | Reads the `code` an unknown thrown value carries.                                                |
+| `createLink`             | function | `(path: string, source: string) => void`                                                                            | Creates a symbolic link with a directory-junction fallback for hosts that refuse symbolic links. |
+| `removeTree`             | function | `(path: string) => void`                                                                                            | Removes a directory tree, retrying past a transient Windows handle-release race.                 |
+| `isRunning`              | function | `(pid: number) => boolean`                                                                                          | Reports whether a process id names a live process.                                               |
+| `waitForSocketClose`     | function | `(socket: Socket, options?: WaitOptions) => Promise<void>`                                                          | Waits for a socket to close, accepting a peer reset as a forced close.                           |
+| `destroyScratch`         | function | `(scratch: ScratchInterface, options?: WaitOptions) => Promise<void>`                                               | Destroys a scratch directory, retrying until the host releases it.                               |
+| `requestUpgrade`         | function | `(port: number, options?: UpgradeOptions) => Promise<UpgradeResult>`                                                | Drives a real client upgrade request against a loopback port and reports what the server did.    |
+| `supportsDirectoryLinks` | function | `() => boolean`                                                                                                     | Checks whether this host links a directory, by creating one link and reading through it.         |
+| `supportsFileLinks`      | function | `() => boolean`                                                                                                     | Checks whether this host links a file, by creating one link and reading the file through it.     |
+| `supportsMode`           | function | `() => boolean`                                                                                                     | Checks whether POSIX permission bits round-trip through this host's `chmod` and `stat`.          |
+| `supportsCase`           | function | `() => boolean`                                                                                                     | Checks whether this host treats two names differing only by case as distinct files.              |
+| `supportsBytes`          | function | `() => boolean`                                                                                                     | Checks whether this host accepts a filename carrying a raw byte no UTF-8 decoder resolves.       |
 
 `resolveContained` is the one lexical containment check, and `readInventory` and `createScratch`
 both call it. It resolves the target against the root — relative or absolute — and returns
@@ -719,15 +744,15 @@ that needs a refusal probes that refusal itself.
 
 #### Factories
 
-| API               | Kind     | Signature                                        | Summary                                                              |
-| ----------------- | -------- | ------------------------------------------------ | -------------------------------------------------------------------- |
-| `createScratch`   | function | `(options?: ScratchOptions) => ScratchInterface` | Allocates a directory below `parent` the caller owns and destroys.   |
-| `createLoopback`  | function | `(server: Server) => Promise<LoopbackInterface>` | Binds a caller-supplied server to `127.0.0.1` on a host-picked port. |
-| `createCookieJar` | function | `() => CookieJarInterface`                       | Records a real response's cookies and replays them as one header.    |
+| API               | Kind     | Signature                                        | Summary                                                                                     |
+| ----------------- | -------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `createScratch`   | function | `(options?: ScratchOptions) => ScratchInterface` | Allocates an owned temporary directory with contained file operations.                      |
+| `createLoopback`  | function | `(server: Server) => Promise<LoopbackInterface>` | Starts a server on an ephemeral IPv4 loopback port.                                         |
+| `createCookieJar` | function | `() => CookieJarInterface`                       | Creates a cookie jar that records a real response's cookies and replays them as one header. |
 
 A refused `ScratchOptions` key leaves nothing behind, by two different mechanisms. `parent` and
 `prefix` are checked before `mkdtempSync` runs, so a refused value allocates nothing. `files` is
-seeded after the directory exists, so a refused key removes the directory that was just made and
+seeded after the directory exists, so a refused key removes the directory that was recently made and
 rethrows.
 
 `parent` is the existing directory the allocation is created in, and defaults to the host temporary
@@ -736,7 +761,7 @@ starts the generated directory name, and defaults to `orkestrel-test-`; allocati
 contains `/` or `\`, which is what stops a prefix steering the allocation out of its parent. Nothing
 else is refused: a fragment carrying no separator is one path segment, so `release-0..2-` allocates.
 `files` seeds files on allocation, keyed by path below the scratch directory; allocation removes the
-directory it just made and rethrows when a key escapes or the host refuses a write.
+directory it recently made and rethrows when a key escapes or the host refuses a write.
 
 `createLoopback` takes a `node:net` `Server` — `node:http`'s and `node:https`'s both extend it — and
 never constructs one. It listens on port `0` at `127.0.0.1`, waits for the `listening` event, and
@@ -752,77 +777,77 @@ earlier [Surface](#surface) rows.
 
 #### `RecorderInterface`
 
-| Method  | Returns | Behavior                                                                     |
-| ------- | ------- | ---------------------------------------------------------------------------- |
-| `clear` | `void`  | Truncates the recorded calls in place; the recorder stays usable afterwards. |
+| Method  | Returns | Summary                                                    |
+| ------- | ------- | ---------------------------------------------------------- |
+| `clear` | `void`  | Discards the recorded calls and keeps the recorder usable. |
 
 #### `EventSourceInterface`
 
-| Method | Returns | Behavior                                                                                                                                                                             |
-| ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `on`   | `void`  | Subscribes one handler to one event. The interface asks for the subscribe half alone, so a source that also removes handlers, emits, or counts subscriptions satisfies it unchanged. |
+| Method | Returns | Summary                           |
+| ------ | ------- | --------------------------------- |
+| `on`   | `void`  | Subscribes a handler to an event. |
 
 #### `ResourceFactoryInterface`
 
-| Method    | Returns  | Behavior                                                                                                                                                                                                                          |
-| --------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create`  | `number` | Returns the next id and records it. The id is the creation record's length plus one, so it counts allocations rather than live resources: a destroyed id is never reissued, and clearing `created` restarts the numbering at `1`. |
-| `destroy` | `void`   | Records the id it was given and nothing else. It frees nothing, refuses nothing, and accepts an id that was never created, so a suite asserts on the record rather than on a refusal.                                             |
+| Method    | Returns  | Summary                       |
+| --------- | -------- | ----------------------------- |
+| `create`  | `number` | Creates a numbered resource.  |
+| `destroy` | `void`   | Destroys a numbered resource. |
 
 #### `TeardownInterface`
 
-| Method    | Returns         | Behavior                                                                                                                                                                                                                                 |
-| --------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `add`     | `void`          | Registers one handler. Registration order is what `destroy()` reverses, so the newest registration is undone first.                                                                                                                      |
-| `destroy` | `Promise<void>` | Runs every registered handler newest-first, awaiting each before the next, and empties the list. Every handler runs even after an earlier one fails; one failure rethrows by identity and several throw an `AggregateError`. Idempotent. |
+| Method    | Returns         | Summary                                                                                                   |
+| --------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `add`     | `void`          | Registers a handler to run when the list is destroyed.                                                    |
+| `destroy` | `Promise<void>` | Runs every registered handler in reverse registration order, awaiting each in turn, and empties the list. |
 
 #### `StateScenario`
 
-| Method    | Returns                 | Behavior                                                                                                                                                              |
-| --------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `arrange` | `Promise<void> \| void` | Puts the entity into the transition's `from` state, which it receives as its second argument. Awaited before the event is applied.                                    |
-| `act`     | `Promise<void> \| void` | Applies the transition's `event`, which it receives as its second argument, to the arranged entity. Awaited before the assertion.                                     |
-| `assert`  | `Promise<void> \| void` | Checks that the entity reached the transition's `to` state, which it receives as its second argument. Whatever it throws is renamed with the row's name and rethrown. |
+| Method    | Returns                 | Summary                                                     |
+| --------- | ----------------------- | ----------------------------------------------------------- |
+| `arrange` | `Promise<void> \| void` | Puts the entity into the transition's `from` state.         |
+| `act`     | `Promise<void> \| void` | Applies the transition's event to the arranged entity.      |
+| `assert`  | `Promise<void> \| void` | Checks that the entity reached the transition's `to` state. |
 
 #### `LoopbackInterface`
 
-| Method    | Returns         | Behavior                                                                                                                                                                                                                                                                                               |
-| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `destroy` | `Promise<void>` | Drops every live connection on a server that carries `closeAllConnections`, stops listening, and releases the port; a plain `net.Server` has no such method, so it waits for its open sockets to end. Idempotent: the first call's promise is handed to every later one, and a closed server resolves. |
+| Method    | Returns         | Summary                                                                                                             |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `destroy` | `Promise<void>` | Drops every live connection on a server that carries `closeAllConnections`, stops listening, and releases the port. |
 
 #### `CookieJarInterface`
 
-| Method    | Returns               | Behavior                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`    | `string \| undefined` | The stored value for one cookie name, or `undefined` when the jar holds none of that name.                                                                                                                                                                                                                                                                                                     |
-| `capture` | `readonly string[]`   | Applies every `Set-Cookie` field the response carries — storing a new cookie, replacing one of the same name, or deleting one on `Max-Age=0` — and returns those fields unmodified, in the order the response carried them. A field carrying no `name=value` pair is read past and still returned. Selection is by name alone, so `Domain`, `Path`, `Expires`, and `Secure` are read past too. |
+| Method    | Returns               | Summary                                              |
+| --------- | --------------------- | ---------------------------------------------------- |
+| `read`    | `string \| undefined` | Reads one stored cookie value.                       |
+| `capture` | `readonly string[]`   | Applies every `Set-Cookie` field a response carries. |
 
 #### `PortfolioInterface`
 
-| Method  | Returns                        | Behavior                                                                                                                                                                                                                                                                           |
-| ------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `place` | `Promise<string \| undefined>` | Places one registered state: applies the variant, stages the pane at its size, writes and verifies the screenshot, records it, and returns the written path. Takes an optional element to shoot instead of the page. `undefined` and no record at all when the run is not enabled. |
+| Method  | Returns                        | Summary                                                                                                |
+| ------- | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `place` | `Promise<string \| undefined>` | Places one registered state: applies the variant, stages the pane, and writes the verified screenshot. |
 
 #### `JournalInterface`
 
-| Method   | Returns | Behavior                                                                                                                                                            |
-| -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start`  | `void`  | Clears both lists and arms the recording. On an already-started journal it clears and leaves the interception standing, so a restart never wraps its own wrappers.  |
-| `stop`   | `void`  | Hands every intercepted console channel back by identity and drops the failure listeners. The recorded lists survive. Calling it on a stopped journal does nothing. |
-| `record` | `void`  | Appends one frozen step. Does nothing while the journal is stopped, so a step taken before `start` or after `stop` is not recorded.                                 |
+| Method   | Returns | Summary                                                                       |
+| -------- | ------- | ----------------------------------------------------------------------------- |
+| `start`  | `void`  | Starts a fresh recording, dropping whatever the previous scenario left.       |
+| `stop`   | `void`  | Stops recording and hands every intercepted console channel back by identity. |
+| `record` | `void`  | Records one step, when the journal is started.                                |
 
 #### `ScratchInterface`
 
-| Method    | Returns               | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `write`   | `string`              | Writes a file at a path lexically contained by the directory, creating missing parents, and returns that lexical path. Throws on an escaping path, and on a root that is missing, a link, or not a directory.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `read`    | `string \| undefined` | Reads a file, or `undefined` when no file can be read, including through a link whose target is missing and after the allocation is gone. Throws `Scratch path is a directory: <target>` on a directory, and throws on an escaping path and on a root that is a link or not a directory. Reading follows links, so a link the host cannot resolve, such as a cycle, surfaces the host's own error.                                                                                                                                                                                                                                                                                                                                                      |
-| `has`     | `boolean`             | Whether the entry at a contained path is present, without following its final link, so a link whose target is missing still reports `true`. `false` once the allocated directory itself is gone. Throws on an escaping path, and on a root that is a link or not a directory.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `names`   | `readonly string[]`   | The entry names directly inside a lexically contained directory, sorted, without their parent paths — the allocated directory itself when the target is omitted. Throws on an escaping path, on a target that is missing or is not a directory, and on a root that is missing, a link, or not a directory.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `ensure`  | `string`              | Creates a directory at a lexically contained path and every missing parent, and returns that lexical path. It is the one member that produces an empty directory, because `write` always creates a file. Idempotent on a directory that already exists. Throws when the target exists and is not a directory, on an escaping path, and on a root that is missing, a link, or not a directory.                                                                                                                                                                                                                                                                                                                                                           |
-| `link`    | `string`              | Creates a symbolic link at a contained path, creating its missing parents, and returns that lexical path whatever host mechanism created the link. The source is the destination path the link points at; it is not containment-checked, so it may name a destination outside the directory, and its exact stored text is not promised. Throws on an escaping path, on a root that is missing, a link, or not a directory, and when the host refuses the link — `EEXIST` when something already occupies the path. A host that creates no symbolic link falls back to a directory junction and refuses a source that exists and is not a directory; [Hosts that create no symbolic link](#hosts-that-create-no-symbolic-link) states that path in full. |
-| `remove`  | `void`                | Removes the entry at a lexically contained path: a file, an empty directory, or a directory and its whole subtree. A missing target is a no-op rather than an error, so a caller removing something it created conditionally does not guard first. It acts at the final segment rather than through it, so removing a link removes the link and leaves its destination standing. Throws on an escaping path, on a target naming the allocation itself — lexically, or through an intermediate symbolic link — and on a root that is missing, a link, or not a directory.                                                                                                                                                                                |
-| `destroy` | `void`                | Removes the directory this call allocated, and only that: it removes the entry at the allocated path while `matchesIdentity` holds against the allocation, and removes nothing when it does not. Idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Method    | Returns               | Summary                                                                               |
+| --------- | --------------------- | ------------------------------------------------------------------------------------- |
+| `write`   | `string`              | Writes a file, creating each parent directory that does not exist.                    |
+| `read`    | `string \| undefined` | Reads a file.                                                                         |
+| `has`     | `boolean`             | Reports whether a path exists without following its final symbolic link.              |
+| `names`   | `readonly string[]`   | Lists the names directly inside a directory in sorted order.                          |
+| `ensure`  | `string`              | Creates a directory and every missing parent.                                         |
+| `link`    | `string`              | Creates a symbolic link at a contained path, creating its missing parent directories. |
+| `remove`  | `void`                | Removes a file, an empty directory, or a directory and its descendants.               |
+| `destroy` | `void`                | Removes the allocated directory and everything in it when its identity still matches. |
 
 An empty target names the allocation root. `ensure('')` returns the root path, `has('')` reports
 `true`, and `names('')` lists the root. `write('', …)` surfaces the host's `EISDIR` and `link('', …)`
@@ -1566,6 +1591,8 @@ captureError(() => {
 
 ### Narrow without `!` or `as`
 
+`requireValue` passes a falsy value through unchanged and throws only on `null` or `undefined`.
+
 ```ts
 import { requireValue } from '@orkestrel/test'
 
@@ -1628,6 +1655,9 @@ matches. `HeadersSource` is that accepted input, derived from the constructor ra
 a library, so it resolves the same in every project this package compiles under.
 
 ### Drain an async source
+
+`collect` and `collectStream` drain an async iterable and a readable stream into arrays, in yield
+order.
 
 ```ts
 import { collect, collectStream } from '@orkestrel/test'
@@ -1726,6 +1756,9 @@ controller ends a whole file's waits. A budget of `0` still permits the immediat
 a bound that is not finite and non-negative is refused before anything is read.
 
 ### Copy a JSON value
+
+This demonstration builds an interface-typed value, copies it through JSON serialization, and
+shows the guard `roundTripJSON` raises on a non-finite member.
 
 ```ts
 import { captureError, roundTripJSON } from '@orkestrel/test'
@@ -1963,6 +1996,9 @@ readInventory(root, ['src/core/index.ts'], { extensions: ['.ts'], exclude: ['src
 
 ### Own a temporary directory
 
+This demonstration builds a scratch directory seeded with a file, writes and reads inside it,
+refuses an escaping write, and nests one allocation inside another.
+
 ```ts
 import { createScratch } from '@orkestrel/test/server'
 
@@ -2024,7 +2060,7 @@ outside.destroy()
 ```
 
 `destroy()` is synchronous, and it already outlasts the short `EPERM` a Windows host reports for a
-directory a just-exited child held as its working directory: `removeTree` retries that removal ten
+directory a recently exited child held as its working directory: `removeTree` retries that removal ten
 times 100 milliseconds apart, which bounds the blocking wait at roughly a second. Nothing extra is
 needed for a child the test has already reaped.
 
@@ -2077,6 +2113,9 @@ it('runs its cleanup newest-first', async () => {
 ```
 
 ### Answer a real request on a loopback port
+
+This demonstration starts a real server on an ephemeral loopback port, fetches from it, and closes
+it idempotently.
 
 ```ts
 import { createServer } from 'node:http'
@@ -2814,7 +2853,7 @@ Each entry names the contracts its file proves. The test names carry the cases.
   quietly, and its frame ends on the fixture's background rather than on the runner's page in the
   row `scrollHeight` rounded away. A full-height panel capped by a media query reflows against the
   taller pane, and its frame covers what the reflow added. A panel holding half the pane over a
-  fixed 900-row block converges on 1800 without ever reaching it by restaging at the height just
+  fixed 900-row block converges on 1800 without ever reaching it by restaging at the height last
   read — 1322, then 1561 — and its frame lands on 1800, which is the fixed point written out rather
   than read back from the capture that staged it. The same panel uncapped grows with every pane and
   reaches the refusal, whose written-out restaging bound reddens when the source's bound moves and
@@ -2911,15 +2950,18 @@ Each entry names the contracts its file proves. The test names carry the cases.
   carrying no `name=value` pair read past and still returned.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — the doc ↔ source bijection contract: the
   `## Surface` ↔ source bijection, the barrel ↔ source bijection, the behavioral-interface ↔
-  `## Methods` bijection and each group's
-  members, the fence imports, and link resolution for this guide. Beside them it runs the fences
-  themselves and asserts what their comments claim: the recorder's truncating `clear()`, the recorder
-  map keyed by the events a real source emits, the signal tally through every exit it has, the
-  resource numbering, the unchecked boundary's uncallable-method and non-object-target refusals, the
-  header flattening, the wait family's opposite throw directions with the exhaustion message and its
-  `cause`, the statechart table walked against a real disclosure with the failing row's name opening
-  the message and the assertion kept as the `cause`, the cookie jar driven against a real origin, and
-  the HTTP upgrade's refused arm, claimed arm, and budget.
+  `## Methods` bijection and each group's members, the fence imports, and link resolution for this
+  guide. It also runs the equality gate: every `Summary` cell against the description paragraph of
+  the declaration it documents, the titled `Own a temporary directory` fence against the `@example`
+  block of that title (pinned so the titled pair cannot be retired silently), and the README pitch
+  against this guide's tagline. Beside them it runs the fences themselves and asserts what their
+  comments claim: the recorder's truncating `clear()`, the recorder map keyed by the events a real
+  source emits, the signal tally through every exit it has, the resource numbering, the unchecked
+  boundary's uncallable-method and non-object-target refusals, the header flattening, the wait
+  family's opposite throw directions with the exhaustion message and its `cause`, the statechart
+  table walked against a real disclosure with the failing row's name opening the message and the
+  assertion kept as the `cause`, the cookie jar driven against a real origin, and the HTTP upgrade's
+  refused arm, claimed arm, and budget.
 
 ## See also
 
