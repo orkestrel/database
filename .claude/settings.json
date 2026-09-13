@@ -977,7 +977,7 @@
 					},
 					{
 						"type": "command",
-						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/ollama.sh",
+						"command": "if [ \"${CLAUDE_CODE_REMOTE:-}\" = \"true\" ]; then \"$CLAUDE_PROJECT_DIR\"/scripts/ollama.sh; fi",
 						"timeout": 600
 					},
 					{
