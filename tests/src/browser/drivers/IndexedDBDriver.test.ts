@@ -13,7 +13,7 @@ import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildCondition, tableSchemas } from '../../../setup.js'
-import { deleteDatabase, putIndexedDBValue, uniqueName } from '../../../setupBrowser.js'
+import { deleteDatabase, putIndexedDBValue, mintDatabase } from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
 // Chromium — the storage primitives the core database layer builds on,
@@ -35,7 +35,7 @@ beforeEach(async () => {
 
 describe('IndexedDBDriver — abort while the shared lazy open is blocked', () => {
 	it('rejects promptly and never dispatches the row mutation after readiness later settles', async () => {
-		const blockedName = uniqueName('database-idbdriver-blocked')
+		const blockedName = mintDatabase('database-idbdriver-blocked')
 		const blocker = createIndexedDBDatabase({ name: blockedName, version: 1, stores: {} })
 		await blocker.connect()
 		const changed = Promise.withResolvers<void>()
@@ -74,7 +74,7 @@ afterEach(async () => {
 describe('driver conformance — IndexedDBDriver', () => {
 	it('conforms to DriverInterface', async () => {
 		await expect(
-			conformDriver(() => createIndexedDBDriver(uniqueName('database-idbdriver-conform'))),
+			conformDriver(() => createIndexedDBDriver(mintDatabase('database-idbdriver-conform'))),
 		).resolves.toBeUndefined()
 	})
 })
@@ -422,7 +422,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 
 describe('IndexedDBDriver — Database integration', () => {
 	it('shares imported schema, guards before paging, binds raw keys, and reopens the union', async () => {
-		const composed = uniqueName('database-idb-composed')
+		const composed = mintDatabase('database-idb-composed')
 		await deleteDatabase(composed)
 		const firstDriver = createIndexedDBDriver(composed)
 		const first = createDatabase({
@@ -520,7 +520,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	}).table('people')
 
 	beforeEach(async () => {
-		dbName = uniqueName('database-idb-pushdown')
+		dbName = mintDatabase('database-idb-pushdown')
 		await deleteDatabase(dbName)
 		const db = createDatabase({
 			driver: createIndexedDBDriver(dbName),
@@ -637,7 +637,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	})
 
 	it('a nested FieldPath condition full-scans (never treated as a flat key)', async () => {
-		dbName = uniqueName('database-idb-nested')
+		dbName = mintDatabase('database-idb-nested')
 		await deleteDatabase(dbName)
 		const db = createDatabase({
 			driver: createIndexedDBDriver(dbName),
@@ -698,7 +698,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			},
 		},
 	])('distinguishes absence from $label and preserves the durable record', async ({ value }) => {
-		const corruptName = uniqueName('database-idb-corrupt-metadata')
+		const corruptName = mintDatabase('database-idb-corrupt-metadata')
 		await deleteDatabase(corruptName)
 		const seeded = createIndexedDBDatabase({
 			name: corruptName,
@@ -745,7 +745,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('closes a failed bootstrap and retries the same driver after external repair', async () => {
-		const repairName = uniqueName('database-idb-repair-metadata')
+		const repairName = mintDatabase('database-idb-repair-metadata')
 		await deleteDatabase(repairName)
 		const seeded = createIndexedDBDatabase({
 			name: repairName,
@@ -877,7 +877,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('reconciles a real Database table removal and preserves a same-version reopen', async () => {
-		const versioned = uniqueName('database-idb-version-remove')
+		const versioned = mintDatabase('database-idb-version-remove')
 		await deleteDatabase(versioned)
 		const users = { id: stringShape(), name: stringShape() }
 		const audit = { id: stringShape(), message: stringShape() }
@@ -952,7 +952,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('reconciles a real Database table addition while preserving deployed rows', async () => {
-		const versioned = uniqueName('database-idb-version-add')
+		const versioned = mintDatabase('database-idb-version-add')
 		await deleteDatabase(versioned)
 		const users = { id: stringShape(), name: stringShape() }
 		const posts = { id: stringShape(), title: stringShape() }
@@ -1448,7 +1448,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('recovers its pre-migration schema after a real duplicate-index upgrade failure', async () => {
-		const dual = uniqueName('database-idb-dual-recovery')
+		const dual = mintDatabase('database-idb-dual-recovery')
 		await deleteDatabase(dual)
 		const physical = createIndexedDBDatabase({
 			name: dual,
@@ -1538,7 +1538,7 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 	let repro: DriverInterface = createIndexedDBDriver('unused')
 
 	beforeEach(async () => {
-		dbName = uniqueName('database-idb-repro')
+		dbName = mintDatabase('database-idb-repro')
 		await deleteDatabase(dbName)
 		repro = createIndexedDBDriver(dbName)
 		await repro.open([SCHEMA])
@@ -1611,7 +1611,7 @@ describe('IndexedDBDriver — reversed between bounds', () => {
 	let reversed: DriverInterface = createIndexedDBDriver('unused')
 
 	beforeEach(async () => {
-		dbName = uniqueName('database-idb-reversed')
+		dbName = mintDatabase('database-idb-reversed')
 		await deleteDatabase(dbName)
 		reversed = createIndexedDBDriver(dbName)
 		await reversed.open([SCHEMA])
@@ -1938,7 +1938,7 @@ describe('IndexedDBDriver — error taxonomy mapping (integration)', () => {
 
 describe('IndexedDBDriver — reserved __metadata__ table name guard', () => {
 	it('open() throws a VALIDATION DatabaseError when a declared table is named __metadata__', async () => {
-		const guarded = createIndexedDBDriver(uniqueName('database-idb-metadata-guard'))
+		const guarded = createIndexedDBDriver(mintDatabase('database-idb-metadata-guard'))
 		let caught: unknown
 		try {
 			await guarded.open([
@@ -1974,7 +1974,7 @@ describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compoun
 	let collision: DriverInterface = createIndexedDBDriver('unused')
 
 	beforeEach(async () => {
-		dbName = uniqueName('database-idb-collision')
+		dbName = mintDatabase('database-idb-collision')
 		await deleteDatabase(dbName)
 		collision = createIndexedDBDriver(dbName)
 	})

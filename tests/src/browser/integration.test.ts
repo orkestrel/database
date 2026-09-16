@@ -11,7 +11,7 @@ import {
 } from '@orkestrel/contract'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { collectRankStreamIds } from '../../setup.js'
-import { deleteDatabase, uniqueName } from '../../setupBrowser.js'
+import { deleteDatabase, mintDatabase } from '../../setupBrowser.js'
 
 // Cross-backend PARITY suite — the enduring regression net proving the
 // IndexedDB driver (narrow-then-refine over `src/browser`, real Chromium) returns
@@ -763,7 +763,7 @@ describe('cross-backend parity — MemoryDriver vs IndexedDBDriver', () => {
 	let indexedDB: DatabaseInterface<{ readonly users: typeof USERS }>
 
 	beforeEach(async () => {
-		name = uniqueName('database-idb-parity')
+		name = mintDatabase('database-idb-parity')
 		await deleteDatabase(name)
 		memory = memoryDatabase()
 		indexedDB = indexedDBDatabase(name)

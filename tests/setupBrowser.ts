@@ -18,7 +18,7 @@
  * `src:browser` tests, and re-running `tests/src/browser/integration.test.ts` alone reddened 1 of
  * 72 on a case the whole-project run did not name — a race, not a fixed site. A retry loop is a
  * polling architecture and is refused, so the block is absorbed here instead. Every caller names
- * its database through {@link uniqueName}, so an incomplete delete never reaches the next test.
+ * its database through {@link mintDatabase}, so an incomplete delete never reaches the next test.
  *
  * One block is reproducible rather than raced: after `migrate` throws `MIGRATION`, the driver
  * leaves a connection open. That belongs to `src/browser`, not to this module.
@@ -41,7 +41,7 @@ let databaseCounter = 0
  * @param prefix - A readable name segment (defaults to `database-idb`)
  * @returns A name no earlier call has returned
  */
-export function uniqueName(prefix = 'database-idb'): string {
+export function mintDatabase(prefix = 'database-idb'): string {
 	databaseCounter += 1
 	return `${prefix}-${databaseCounter}`
 }

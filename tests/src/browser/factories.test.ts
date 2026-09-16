@@ -4,7 +4,7 @@ import { createIndexedDBDriver } from '@src/browser'
 import { collect } from '@orkestrel/test'
 import { afterEach, describe, expect, it } from 'vitest'
 import { tableSchemas } from '../../setup.js'
-import { deleteDatabase, uniqueName } from '../../setupBrowser.js'
+import { deleteDatabase, mintDatabase } from '../../setupBrowser.js'
 
 // `createIndexedDBDriver` (`src/browser/factories.ts`) in real Chromium: the
 // factory returns a working `DriverInterface` backed by IndexedDB. The driver's
@@ -22,7 +22,7 @@ afterEach(async () => {
 
 describe('createIndexedDBDriver', () => {
 	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
-		name = uniqueName('database-idbdriver-factory')
+		name = mintDatabase('database-idbdriver-factory')
 		await deleteDatabase(name)
 		const driver = createIndexedDBDriver(name)
 		await driver.open(tableSchemas('items'))
@@ -35,7 +35,7 @@ describe('createIndexedDBDriver', () => {
 	})
 
 	it('drives the core createDatabase stack (a typed-row round-trip over IndexedDB)', async () => {
-		name = uniqueName('database-idbdriver-stack')
+		name = mintDatabase('database-idbdriver-stack')
 		await deleteDatabase(name)
 		const db = createDatabase({
 			driver: createIndexedDBDriver(name),
