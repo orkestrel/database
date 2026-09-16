@@ -93,7 +93,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.17",
 		"@orkestrel/emitter": "^0.0.10",
-		"@orkestrel/indexeddb": "^0.0.11",
+		"@orkestrel/indexeddb": "^0.0.12",
 		"@orkestrel/sqlite": "^0.0.12"
 	},
 	"devDependencies": {
