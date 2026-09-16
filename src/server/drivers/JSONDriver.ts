@@ -27,7 +27,7 @@ import {
 	projectMigrationSchema,
 	validatePage,
 } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
+import { isArray, isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { matchesAbsentPath } from '../helpers.js'
@@ -617,7 +617,7 @@ export class JSONDriver implements DriverInterface {
 	): Promise<void> {
 		for (const table of schema) {
 			const rows = tables[table.name]
-			if (!Array.isArray(rows)) {
+			if (!isArray(rows)) {
 				throw new DatabaseError('DRIVER', 'Stored JSON table is invalid', {
 					path: this.#path,
 					table: table.name,

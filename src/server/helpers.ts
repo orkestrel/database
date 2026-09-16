@@ -11,7 +11,16 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
 import { DatabaseError, findColumn } from '@src/core'
-import { cloneJSONValue, isBoolean, isFiniteNumber, isString } from '@orkestrel/contract'
+import {
+	cloneJSONValue,
+	isBigInt,
+	isBoolean,
+	isError,
+	isFiniteNumber,
+	isInteger,
+	isString,
+	isUint8Array,
+} from '@orkestrel/contract'
 import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js'
 
 // The server environment's pure helpers: the SQLite ↔ JS bridge, and the
@@ -55,7 +64,7 @@ import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js
  * ```
  */
 export function matchesAbsentPath(error: unknown): boolean {
-	if (!(error instanceof Error) || !('code' in error)) return false
+	if (!isError(error) || !('code' in error)) return false
 	return error.code === 'ENOENT' || error.code === 'ENOTDIR'
 }
 
@@ -321,7 +330,7 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 	}
 	switch (column.storage) {
 		case 'boolean':
-			return typeof value === 'boolean' ? (value ? 1 : 0) : null
+			return isBoolean(value) ? (value ? 1 : 0) : null
 		case 'json':
 			try {
 				return JSON.stringify(cloneJSONValue(value))
@@ -329,18 +338,13 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 				return null
 			}
 		case 'integer':
-			return typeof value === 'bigint' ||
-				(typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value))
-				? value
-				: null
+			return isBigInt(value) || (isFiniteNumber(value) && isInteger(value)) ? value : null
 		case 'real':
-			return typeof value === 'bigint' || (typeof value === 'number' && Number.isFinite(value))
-				? value
-				: null
+			return isBigInt(value) || isFiniteNumber(value) ? value : null
 		case 'text':
-			return typeof value === 'string' ? value : null
+			return isString(value) ? value : null
 		case 'blob':
-			return value instanceof Uint8Array ? value : null
+			return isUint8Array(value) ? value : null
 	}
 }
 
@@ -370,7 +374,7 @@ export function decodeValue(value: SQLiteValue, column: ColumnSchema): unknown {
 		column.optional &&
 		column.nullable &&
 		(column.storage === 'text' || column.storage === 'json'
-			? value instanceof Uint8Array && value.byteLength === 0
+			? isUint8Array(value) && value.byteLength === 0
 			: value === String(null))
 	) {
 		return null
@@ -381,25 +385,20 @@ export function decodeValue(value: SQLiteValue, column: ColumnSchema): unknown {
 			if (value === 1 || value === 1n) return true
 			return undefined
 		case 'json':
-			if (typeof value !== 'string') return undefined
+			if (!isString(value)) return undefined
 			try {
 				return structuredClone(cloneJSONValue(JSON.parse(value)))
 			} catch {
 				return undefined
 			}
 		case 'integer':
-			return typeof value === 'bigint' ||
-				(typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value))
-				? value
-				: undefined
+			return isBigInt(value) || (isFiniteNumber(value) && isInteger(value)) ? value : undefined
 		case 'real':
-			return typeof value === 'bigint' || (typeof value === 'number' && Number.isFinite(value))
-				? value
-				: undefined
+			return isBigInt(value) || isFiniteNumber(value) ? value : undefined
 		case 'text':
-			return typeof value === 'string' ? value : undefined
+			return isString(value) ? value : undefined
 		case 'blob':
-			return value instanceof Uint8Array ? value : undefined
+			return isUint8Array(value) ? value : undefined
 	}
 }
 

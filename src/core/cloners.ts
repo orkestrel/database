@@ -1,6 +1,6 @@
 import type { DriverMetadata, MigrationInput, TableSchema } from './types.js'
 import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
-import { DatabaseError } from './errors.js'
+import { DatabaseError, isDatabaseError } from './errors.js'
 import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators.js'
 
 /**
@@ -22,7 +22,7 @@ export function cloneDriverMetadata(value: unknown): DriverMetadata {
 			path: 'metadata',
 		})
 	} catch (error) {
-		if (error instanceof DatabaseError) throw error
+		if (isDatabaseError(error)) throw error
 		throw new DatabaseError('VALIDATION', 'Driver metadata is invalid', {
 			path: 'metadata',
 			cause: error,
@@ -49,7 +49,7 @@ export function cloneDriverSchema(value: unknown): readonly TableSchema[] {
 			path: 'schema',
 		})
 	} catch (error) {
-		if (error instanceof DatabaseError) throw error
+		if (isDatabaseError(error)) throw error
 		throw new DatabaseError('VALIDATION', 'Driver schema is invalid', {
 			path: 'schema',
 			cause: error,
@@ -76,7 +76,7 @@ export function cloneMigrationInput(value: unknown): MigrationInput {
 			path: 'migration',
 		})
 	} catch (error) {
-		if (error instanceof DatabaseError) throw error
+		if (isDatabaseError(error)) throw error
 		throw new DatabaseError('VALIDATION', 'Migration input is invalid', {
 			path: 'migration',
 			cause: error,

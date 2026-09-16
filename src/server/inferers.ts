@@ -1,4 +1,5 @@
 import type { ColumnStorage } from '@src/core'
+import { isBigInt, isBoolean, isInteger, isNumber, isObject } from '@orkestrel/contract'
 
 // The server surface's value inferers: the storage type a runtime value must
 // encode as when no declared column governs it.
@@ -25,9 +26,9 @@ import type { ColumnStorage } from '@src/core'
  * ```
  */
 export function inferValueStorage(value: unknown): ColumnStorage {
-	if (typeof value === 'boolean') return 'boolean'
-	if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'real'
-	if (typeof value === 'bigint') return 'integer'
-	if (typeof value === 'object' && value !== null) return 'json'
+	if (isBoolean(value)) return 'boolean'
+	if (isNumber(value)) return isInteger(value) ? 'integer' : 'real'
+	if (isBigInt(value)) return 'integer'
+	if (isObject(value)) return 'json'
 	return 'text'
 }

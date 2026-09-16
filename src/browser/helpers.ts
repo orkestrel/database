@@ -2,6 +2,7 @@ import type { Condition, QueryInput, TableSchema } from '@src/core'
 import type { IndexedDBError } from '@orkestrel/indexeddb'
 import type { StoreDefinition } from '@orkestrel/indexeddb'
 import type { QueryPlan } from './types.js'
+import { isString } from '@orkestrel/contract'
 import { compareValues, DatabaseError, findColumn, isKey } from '@src/core'
 import { rangeAboveKey, rangeBelowKey, rangeFromKey, rangeToKey } from '@orkestrel/indexeddb'
 import { INDEXABLE_STORAGE } from './constants.js'
@@ -161,7 +162,7 @@ export function selectPlan(
 	}
 	for (const condition of conditions) {
 		// An array column is a nested FieldPath into a json value — not a key.
-		if (typeof condition.column !== 'string') continue
+		if (!isString(condition.column)) continue
 		const column = findColumn(condition.column, schema)
 		if (column === undefined || !INDEXABLE_STORAGE.includes(column.storage)) {
 			continue

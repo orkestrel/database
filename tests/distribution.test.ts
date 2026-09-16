@@ -8,6 +8,7 @@ import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
+import { isArray, isObject, isString } from '@orkestrel/contract'
 import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
@@ -184,18 +185,11 @@ interface Stage {
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
+	return isObject(value) && !isArray(value)
 }
 
 function isNames(value: unknown): value is readonly string[] {
-	return Array.isArray(value) && value.every((name) => typeof name === 'string')
-}
-
-// A fallback list, which is what Node reads an array in an exports entry as. The
-// narrowing is what the following walkers need: `Array.isArray` widens an `unknown`
-// member to `any`, and an entry read that way is not read at all.
-function isList(value: unknown): value is readonly unknown[] {
-	return Array.isArray(value)
+	return isArray(value) && value.every((name) => isString(name))
 }
 
 // Whether a string is a valid package target. Node rejects a target outside the
@@ -257,7 +251,7 @@ function resolvePackageTarget(
 	conditions: readonly string[],
 ): TargetResolution | undefined {
 	if (typeof entry === 'string') return { target: entry }
-	if (isList(entry)) {
+	if (isArray(entry)) {
 		for (const member of entry) {
 			const resolved = resolvePackageTarget(member, conditions)
 			if (resolved !== undefined && isPackageTarget(resolved.target)) return resolved
@@ -312,7 +306,7 @@ function resolveDeclaration(
 	installed: string,
 ): string | undefined {
 	if (typeof entry === 'string') return targetToDeclaration(entry, installed)
-	if (isList(entry)) {
+	if (isArray(entry)) {
 		for (const member of entry) {
 			const resolved = resolveDeclaration(member, conditions, installed)
 			if (resolved !== undefined) return resolved
@@ -388,7 +382,7 @@ function declaresCommonJS(entry: unknown, installed: string): boolean {
 // Node rejects during package-target validation, because no reader can take them.
 function collectTargets(entry: unknown): readonly string[] {
 	if (typeof entry === 'string') return [entry]
-	if (isList(entry)) return entry.flatMap(collectTargets).filter(isPackageTarget)
+	if (isArray(entry)) return entry.flatMap(collectTargets).filter(isPackageTarget)
 	if (!isRecord(entry)) return []
 	return Object.values(entry).flatMap((nested) => collectTargets(nested))
 }

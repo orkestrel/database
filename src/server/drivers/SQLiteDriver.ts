@@ -11,6 +11,7 @@ import type {
 	StorageInterface,
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
+import { isArray, isBigInt, isError, isInteger, isNumber, isString } from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import type { SQLiteDriverOptions } from '../types.js'
 import {
@@ -618,7 +619,7 @@ export class SQLiteDriver implements DriverInterface {
 			const keys: Key[] = []
 			for (const row of rows) {
 				const value = row[schema.primary]
-				if (typeof value === 'string' || typeof value === 'number') keys.push(value)
+				if (isString(value) || isNumber(value)) keys.push(value)
 			}
 			return keys
 		})
@@ -826,8 +827,7 @@ export class SQLiteDriver implements DriverInterface {
 				)
 				const stored =
 					entry !== undefined &&
-					((typeof entry.cid === 'number' && Number.isInteger(entry.cid) && entry.cid >= 0) ||
-						(typeof entry.cid === 'bigint' && entry.cid >= 0n))
+					((isInteger(entry.cid) && entry.cid >= 0) || (isBigInt(entry.cid) && entry.cid >= 0n))
 				if (
 					entry === undefined ||
 					entry.name !== column ||
@@ -857,13 +857,13 @@ export class SQLiteDriver implements DriverInterface {
 		if (row === undefined) return undefined
 		const version = row.version
 		const text = row.schema
-		if (typeof text !== 'string') {
+		if (!isString(text)) {
 			throw new DatabaseError('DRIVER', 'Stored SQLite metadata schema is invalid', {
 				table: METADATA_TABLE,
 				aspect: 'metadata',
 			})
 		}
-		if (typeof version !== 'number' && typeof version !== 'bigint') {
+		if (!isNumber(version) && !isBigInt(version)) {
 			throw new DatabaseError('DRIVER', 'Stored SQLite metadata version is invalid', {
 				table: METADATA_TABLE,
 				aspect: 'metadata',
@@ -879,7 +879,7 @@ export class SQLiteDriver implements DriverInterface {
 				cause: error,
 			})
 		}
-		if (!Array.isArray(parsed)) {
+		if (!isArray(parsed)) {
 			throw new DatabaseError('DRIVER', 'Stored SQLite metadata schema is invalid', {
 				table: METADATA_TABLE,
 				aspect: 'metadata',
@@ -1062,7 +1062,7 @@ export class SQLiteDriver implements DriverInterface {
 		try {
 			return operation()
 		} catch (error) {
-			if (error instanceof DatabaseError) throw error
+			if (isDatabaseError(error)) throw error
 			if (isSQLiteError(error)) {
 				if (error.code === 'CONSTRAINT') {
 					throw new DatabaseError('CONFLICT', error.message, { cause: error, code: error.code })
@@ -1079,7 +1079,7 @@ export class SQLiteDriver implements DriverInterface {
 				}
 				throw new DatabaseError('DRIVER', error.message, { cause: error, code: error.code })
 			}
-			throw new DatabaseError('DRIVER', error instanceof Error ? error.message : String(error), {
+			throw new DatabaseError('DRIVER', isError(error) ? error.message : String(error), {
 				cause: error,
 			})
 		}

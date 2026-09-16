@@ -19,6 +19,12 @@ import type {
 } from './types.js'
 import {
 	compileGuard,
+	isArray,
+	isBoolean,
+	isError,
+	isFiniteNumber,
+	isInteger,
+	isNumber,
 	isRecord,
 	isString,
 	objectShape,
@@ -57,17 +63,17 @@ import { isKey } from './validators.js'
  */
 export function validatePage(input?: QueryInput): void {
 	const limit = input?.limit
-	if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+	if (limit !== undefined && (!isInteger(limit) || limit < 0)) {
 		throw new DatabaseError('VALIDATION', 'Query limit must be a nonnegative integer', {
 			field: 'limit',
-			value: Number.isFinite(limit) ? limit : String(limit),
+			value: isFiniteNumber(limit) ? limit : String(limit),
 		})
 	}
 	const offset = input?.offset
-	if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
+	if (offset !== undefined && (!isInteger(offset) || offset < 0)) {
 		throw new DatabaseError('VALIDATION', 'Query offset must be a nonnegative integer', {
 			field: 'offset',
-			value: Number.isFinite(offset) ? offset : String(offset),
+			value: isFiniteNumber(offset) ? offset : String(offset),
 		})
 	}
 }
@@ -98,25 +104,25 @@ export function compareValues(left: unknown, right: unknown): number {
 			? 0
 			: value === null
 				? 1
-				: typeof value === 'boolean'
+				: isBoolean(value)
 					? 2
-					: typeof value === 'number'
+					: isNumber(value)
 						? 3
-						: typeof value === 'string'
+						: isString(value)
 							? 4
 							: 5,
 	)
 	if (leftRank !== rightRank) return leftRank < rightRank ? -1 : 1
-	if (typeof left === 'number' && typeof right === 'number') {
+	if (isNumber(left) && isNumber(right)) {
 		if (Number.isNaN(left) || Number.isNaN(right)) {
 			return Number.isNaN(left) ? (Number.isNaN(right) ? 0 : 1) : -1
 		}
 		return left < right ? -1 : left > right ? 1 : 0
 	}
-	if (typeof left === 'string' && typeof right === 'string') {
+	if (isString(left) && isString(right)) {
 		return left < right ? -1 : left > right ? 1 : 0
 	}
-	if (typeof left === 'boolean' && typeof right === 'boolean') {
+	if (isBoolean(left) && isBoolean(right)) {
 		return left === right ? 0 : left ? 1 : -1
 	}
 	return 0
@@ -158,7 +164,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 			const pair = pending.pop()
 			if (pair === undefined) continue
 			const [currentLeft, currentRight] = pair
-			if (typeof currentLeft === 'number' && typeof currentRight === 'number') {
+			if (isNumber(currentLeft) && isNumber(currentRight)) {
 				if (
 					(Number.isNaN(currentLeft) && Number.isNaN(currentRight)) ||
 					currentLeft === currentRight
@@ -169,8 +175,8 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 			}
 			if (currentLeft === currentRight) continue
 
-			const leftArray = Array.isArray(currentLeft)
-			const rightArray = Array.isArray(currentRight)
+			const leftArray = isArray(currentLeft)
+			const rightArray = isArray(currentRight)
 			const leftRecord = isRecord(currentLeft)
 			const rightRecord = isRecord(currentRight)
 			if (leftArray !== rightArray || leftRecord !== rightRecord) return false
@@ -614,9 +620,9 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 		case 'boolean':
 			return 'boolean'
 		case 'literal': {
-			if (shape.values.every((value) => typeof value === 'boolean')) return 'boolean'
-			if (shape.values.every((value) => typeof value === 'number')) {
-				return shape.values.every((value) => Number.isInteger(value)) ? 'integer' : 'real'
+			if (shape.values.every((value) => isBoolean(value))) return 'boolean'
+			if (shape.values.every((value) => isNumber(value))) {
+				return shape.values.every((value) => isInteger(value)) ? 'integer' : 'real'
 			}
 			return 'text'
 		}
@@ -812,7 +818,7 @@ export function planMigration(
 	from = 0,
 	to = 1,
 ): Migration {
-	if (!Number.isFinite(from) || !Number.isFinite(to)) {
+	if (!isFiniteNumber(from) || !isFiniteNumber(to)) {
 		throw new DatabaseError('MIGRATION', 'Migration versions must be finite', { from, to })
 	}
 	let beforeSchema: readonly TableSchema[]
@@ -1173,7 +1179,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'open-close',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1194,7 +1200,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'read-missing',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1249,7 +1255,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'write-read',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1287,7 +1293,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'insert-atomic',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1321,7 +1327,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'delete',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1390,7 +1396,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'mutation-abort',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1431,7 +1437,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'order',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1466,7 +1472,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'clear',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1505,7 +1511,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'snapshot',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1542,7 +1548,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'snapshot-nested',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1565,7 +1571,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'non-id-primary',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1593,7 +1599,7 @@ export async function* scanDriver(
 	} catch (error) {
 		yield {
 			check: 'nested-roundtrip',
-			message: error instanceof Error ? error.message : String(error),
+			message: isError(error) ? error.message : String(error),
 			context: { error },
 		}
 	}
@@ -1656,7 +1662,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'migrate',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1702,7 +1708,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'stream',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1749,7 +1755,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'transaction',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1785,7 +1791,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'metadata-stamp',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
@@ -1825,7 +1831,7 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'snapshot-scoped',
-				message: error instanceof Error ? error.message : String(error),
+				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}

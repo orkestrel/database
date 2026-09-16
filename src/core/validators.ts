@@ -7,7 +7,16 @@ import type {
 	MigrationStep,
 	TableSchema,
 } from './types.js'
-import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
+import {
+	arrayOf,
+	cloneJSONRecord,
+	cloneJSONValue,
+	holds,
+	isArray,
+	isBoolean,
+	isFiniteNumber,
+	isString,
+} from '@orkestrel/contract'
 
 /**
  * Checks whether a value is a usable database key.
@@ -16,7 +25,7 @@ import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
  * @returns True if `value` is a string or a finite number; false otherwise
  */
 export function isKey(value: unknown): value is Key {
-	return typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+	return isString(value) || isFiniteNumber(value)
 }
 
 /**
@@ -30,7 +39,7 @@ export function isKey(value: unknown): value is Key {
  * @returns True if `value` is a complete {@link ColumnSchema}; false otherwise
  */
 export function isColumnSchema(value: unknown): value is ColumnSchema {
-	try {
+	return holds(() => {
 		const column = cloneJSONRecord(value)
 		const keys = Object.keys(column)
 		return (
@@ -39,7 +48,7 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
 			keys.includes('storage') &&
 			keys.includes('optional') &&
 			keys.includes('nullable') &&
-			typeof column.name === 'string' &&
+			isString(column.name) &&
 			column.name.length > 0 &&
 			(column.storage === 'text' ||
 				column.storage === 'integer' ||
@@ -47,12 +56,10 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
 				column.storage === 'boolean' ||
 				column.storage === 'json' ||
 				column.storage === 'blob') &&
-			typeof column.optional === 'boolean' &&
-			typeof column.nullable === 'boolean'
+			isBoolean(column.optional) &&
+			isBoolean(column.nullable)
 		)
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -66,7 +73,7 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
  * @returns True if `value` is a complete {@link TableSchema}; false otherwise
  */
 export function isTableSchema(value: unknown): value is TableSchema {
-	try {
+	return holds(() => {
 		const table = cloneJSONRecord(value)
 		const keys = Object.keys(table)
 		if (
@@ -75,13 +82,12 @@ export function isTableSchema(value: unknown): value is TableSchema {
 			!keys.includes('primary') ||
 			!keys.includes('columns') ||
 			!keys.includes('indexes') ||
-			typeof table.name !== 'string' ||
+			!isString(table.name) ||
 			table.name.length === 0 ||
-			typeof table.primary !== 'string' ||
+			!isString(table.primary) ||
 			table.primary.length === 0 ||
-			!Array.isArray(table.columns) ||
-			!Array.isArray(table.indexes) ||
-			!table.columns.every(isColumnSchema)
+			!arrayOf(isColumnSchema)(table.columns) ||
+			!isArray(table.indexes)
 		) {
 			return false
 		}
@@ -91,18 +97,16 @@ export function isTableSchema(value: unknown): value is TableSchema {
 			!names.includes(table.primary) ||
 			!table.indexes.every(
 				(index) =>
-					Array.isArray(index) &&
+					isArray(index) &&
 					index.length > 0 &&
-					index.every((column) => typeof column === 'string' && names.includes(column)),
+					index.every((column) => isString(column) && names.includes(column)),
 			)
 		) {
 			return false
 		}
 		const indexes = table.indexes.map((index) => JSON.stringify(index))
 		return new Set(indexes).size === indexes.length
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -116,14 +120,12 @@ export function isTableSchema(value: unknown): value is TableSchema {
  * @returns True if `value` is a table-schema collection with unique table names; false otherwise
  */
 export function isDriverSchema(value: unknown): value is readonly TableSchema[] {
-	try {
+	return holds(() => {
 		const schema = cloneJSONValue(value)
-		if (!Array.isArray(schema) || !schema.every(isTableSchema)) return false
+		if (!arrayOf(isTableSchema)(schema)) return false
 		const names = schema.map((table) => table.name)
 		return new Set(names).size === names.length
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -137,9 +139,9 @@ export function isDriverSchema(value: unknown): value is readonly TableSchema[] 
  * @returns True if `value` is a complete {@link MigrationStep}; false otherwise
  */
 export function isMigrationStep(value: unknown): value is MigrationStep {
-	try {
+	return holds(() => {
 		const step = cloneJSONRecord(value)
-		if (typeof step.operation !== 'string') return false
+		if (!isString(step.operation)) return false
 		const keys = Object.keys(step)
 		switch (step.operation) {
 			case 'table.add':
@@ -154,7 +156,7 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 					keys.length === 2 &&
 					keys.includes('operation') &&
 					keys.includes('table') &&
-					typeof step.table === 'string' &&
+					isString(step.table) &&
 					step.table.length > 0
 				)
 			case 'column.add':
@@ -163,7 +165,7 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 					keys.includes('operation') &&
 					keys.includes('table') &&
 					keys.includes('column') &&
-					typeof step.table === 'string' &&
+					isString(step.table) &&
 					step.table.length > 0 &&
 					isColumnSchema(step.column)
 				)
@@ -173,9 +175,9 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 					keys.includes('operation') &&
 					keys.includes('table') &&
 					keys.includes('column') &&
-					typeof step.table === 'string' &&
+					isString(step.table) &&
 					step.table.length > 0 &&
-					typeof step.column === 'string' &&
+					isString(step.column) &&
 					step.column.length > 0
 				)
 			case 'index.add':
@@ -185,18 +187,16 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
 					keys.includes('operation') &&
 					keys.includes('table') &&
 					keys.includes('index') &&
-					typeof step.table === 'string' &&
+					isString(step.table) &&
 					step.table.length > 0 &&
-					Array.isArray(step.index) &&
+					isArray(step.index) &&
 					step.index.length > 0 &&
-					step.index.every((column) => typeof column === 'string' && column.length > 0)
+					step.index.every((column) => isString(column) && column.length > 0)
 				)
 			default:
 				return false
 		}
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -210,7 +210,7 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
  * @returns True if `value` is a complete {@link Migration}; false otherwise
  */
 export function isMigration(value: unknown): value is Migration {
-	try {
+	return holds(() => {
 		const migration = cloneJSONRecord(value)
 		const keys = Object.keys(migration)
 		return (
@@ -218,16 +218,12 @@ export function isMigration(value: unknown): value is Migration {
 			keys.includes('from') &&
 			keys.includes('to') &&
 			keys.includes('steps') &&
-			typeof migration.from === 'number' &&
-			Number.isFinite(migration.from) &&
-			typeof migration.to === 'number' &&
-			Number.isFinite(migration.to) &&
-			Array.isArray(migration.steps) &&
+			isFiniteNumber(migration.from) &&
+			isFiniteNumber(migration.to) &&
+			isArray(migration.steps) &&
 			migration.steps.every(isMigrationStep)
 		)
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -243,20 +239,17 @@ export function isMigration(value: unknown): value is Migration {
  * @returns True if `value` is complete {@link DriverMetadata}; false otherwise
  */
 export function isDriverMetadata(value: unknown): value is DriverMetadata {
-	try {
+	return holds(() => {
 		const metadata = cloneJSONRecord(value)
 		const keys = Object.keys(metadata)
 		return (
 			keys.length === 2 &&
 			keys.includes('version') &&
 			keys.includes('schema') &&
-			typeof metadata.version === 'number' &&
-			Number.isFinite(metadata.version) &&
+			isFiniteNumber(metadata.version) &&
 			isDriverSchema(metadata.schema)
 		)
-	} catch {
-		return false
-	}
+	})
 }
 
 /**
@@ -270,7 +263,7 @@ export function isDriverMetadata(value: unknown): value is DriverMetadata {
  * @returns True if `value` is a complete {@link MigrationInput}; false otherwise
  */
 export function isMigrationInput(value: unknown): value is MigrationInput {
-	try {
+	return holds(() => {
 		const input = cloneJSONRecord(value)
 		const keys = Object.keys(input)
 		return (
@@ -280,7 +273,5 @@ export function isMigrationInput(value: unknown): value is MigrationInput {
 			isMigration(input.plan) &&
 			(input.metadata === undefined || isDriverMetadata(input.metadata))
 		)
-	} catch {
-		return false
-	}
+	})
 }

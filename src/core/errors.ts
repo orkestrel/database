@@ -1,4 +1,5 @@
 import type { DatabaseErrorCode } from './types.js'
+import { isInstance } from '@orkestrel/contract'
 
 // Invalid operations and programmer errors `throw`, always a
 // `DatabaseError` carrying a machine-readable `code` so a `catch` branches on
@@ -53,5 +54,5 @@ export class DatabaseError extends Error {
  * ```
  */
 export function isDatabaseError(value: unknown): value is DatabaseError {
-	return value instanceof DatabaseError
+	return isInstance(value, DatabaseError)
 }
