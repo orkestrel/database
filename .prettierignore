@@ -12,3 +12,6 @@ demo/showcase.html
 
 # Fetched-bytes mirrors keep their upstream bytes and stay out of the formatter.
 tests/mirrors/
+
+# The vendored host inventory: `npm run build` regenerates it (`stageInventory`), so its bytes are the generator's, not the formatter's.
+host.json

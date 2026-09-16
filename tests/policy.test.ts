@@ -1,10 +1,14 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { POLICY_BANNED_TERMS, POLICY_JUDGED_TERMS } from '../configs/policy.js'
 import {
 	BRIDGE_POLICY_CONTROLS,
 	createPolicyScratch,
+	createPolicyCatalog,
+	createPolicySurfaceFixture,
+	createPolicySurfaceGuide,
+	writePolicySurfaceHost,
 	createSkillMetadata,
 	inspectPolicyControl,
 	inspectPolicyFilenamePaths,
@@ -21,6 +25,8 @@ import {
 	matchesSkillTrigger,
 	parseSkillFrontmatter,
 	POLICY_CATALOG_FILE,
+	POLICY_SURFACE_HOST,
+	POLICY_SURFACE_CATALOG,
 	POLICY_CONTROLS,
 	POLICY_MIRROR_PATTERN,
 	POLICY_SUPPRESSION_DIRECTIVE,
@@ -50,6 +56,276 @@ import {
 	stemToPolicyCandidates,
 	testToPolicyStem,
 } from './setupPolicy.js'
+
+describe('surface policy controls', () => {
+	it('accepts a quoted relative barrel target containing a space', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('src/core/index.ts', 'export * from "./shared helpers.js"\n')
+			scratch.write('src/core/shared helpers.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/shared helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('refuses a target catalog row absent from the installed guides', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write(POLICY_CATALOG_FILE, createPolicyCatalog(['other', 'sample', 'uncovered']))
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: `${POLICY_SURFACE_HOST}/guides/uncovered.md`,
+					message: 'surface evidence missing: catalog package uncovered has no hosted guide',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('reads a scaffold checkout instead of an installed scaffold copy', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('package.json', '{"name":"@orkestrel/scaffold"}\n')
+			scratch.write(POLICY_CATALOG_FILE, createPolicyCatalog(['scaffold', 'other']))
+			scratch.write('guides/scaffold.md', createPolicySurfaceGuide([]))
+			scratch.write('guides/other.md', createPolicySurfaceGuide(['readCheckout']))
+			scratch.write('src/core/index.ts', "export * from './helpers.js'\n")
+			scratch.write('src/core/helpers.ts', 'export function readCheckout() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readCheckout (other)',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('rejects a planted barrel name owned by another hosted guide', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('src/core/index.ts', "export * from './helpers.js'\n")
+			scratch.write(
+				'src/core/helpers.ts',
+				'/** Reads the shared value. */\nexport function readShared() {}\n',
+			)
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 2,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('rejects a setup export even when its own hosted guide claims it', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/guides/sample.md`,
+				createPolicySurfaceGuide(['readShared']),
+			)
+			scratch.write('tests/setupServer.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'tests/setupServer.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('grandfathers a barrel name only through its own hosted guide', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('guides/sample.md', createPolicySurfaceGuide(['readShared']))
+			scratch.write('src/core/index.ts', "export * from './helpers.js'\n")
+			scratch.write('src/core/helpers.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/guides/sample.md`,
+				createPolicySurfaceGuide(['readShared']),
+			)
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('excludes vendored setup exports while inspecting target setup exports', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('tests/setupPolicy.ts', 'export function readShared() {}\n')
+			scratch.write('tests/setupServer.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'tests/setupServer.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+			rmSync(join(scratch.path, 'tests/setupServer.ts'), { recursive: true, force: true })
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('refuses a barrel statement outside the relative star-export population', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write(
+				'src/core/index.ts',
+				"// Incomplete barrel\nexport { readShared } from './helpers.js'\n",
+			)
+			scratch.write('src/core/helpers.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/index.ts',
+					line: 2,
+					message:
+						'surface population incomplete: barrel requires a relative .js star export on one line',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('refuses missing hosted evidence and incomplete checkout guide coverage', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			rmSync(join(scratch.path, POLICY_SURFACE_HOST), { recursive: true, force: true })
+			scratch.write(POLICY_CATALOG_FILE, createPolicyCatalog(['other', 'sample']))
+			scratch.write('guides/sample.md', createPolicySurfaceGuide([]))
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'guides/other.md',
+					message: 'surface evidence missing: catalog package other has no hosted guide',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('reads the scaffold checkout guides when no installed host exists', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			rmSync(join(scratch.path, POLICY_SURFACE_HOST), { recursive: true, force: true })
+			scratch.write('package.json', '{"name":"@orkestrel/scaffold"}\n')
+			scratch.write(POLICY_CATALOG_FILE, createPolicyCatalog(['other', 'scaffold']))
+			scratch.write('guides/scaffold.md', createPolicySurfaceGuide([]))
+			scratch.write('guides/other.md', createPolicySurfaceGuide(['readShared']))
+			scratch.write('src/core/index.ts', "export * from './helpers.js'\n")
+			scratch.write('src/core/helpers.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
+			scratch.write('guides/scaffold.md', createPolicySurfaceGuide(['readShared']))
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('orders surface diagnostics by normalized path, line, name, and owner', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/${POLICY_SURFACE_CATALOG}`,
+				createPolicyCatalog(['zebra', 'other', 'sample']),
+			)
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/guides/zebra.md`,
+				createPolicySurfaceGuide(['readShared']),
+			)
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/guides/other.md`,
+				createPolicySurfaceGuide(['readLater', 'readShared']),
+			)
+			scratch.write(
+				'tests/setupServer.ts',
+				'export function readLater() {}\r\nexport function readShared() {}\r\n',
+			)
+			scratch.write(
+				'src/core/index.ts',
+				"export * from './helpers.js'\nexport * from './helpers.js'\n",
+			)
+			scratch.write('src/core/helpers.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+				{
+					rule: 'surface',
+					path: 'src/core/helpers.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (zebra)',
+				},
+				{
+					rule: 'surface',
+					path: 'tests/setupServer.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readLater (other)',
+				},
+				{
+					rule: 'surface',
+					path: 'tests/setupServer.ts',
+					line: 2,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+				{
+					rule: 'surface',
+					path: 'tests/setupServer.ts',
+					line: 2,
+					message: 'surface name belongs to one package: readShared (zebra)',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
 
 describe('policy scratch', () => {
 	it('contains every write within its root', () => {
@@ -468,7 +744,7 @@ describe('denylist currency', () => {
 })
 
 describe('repository policy', () => {
-	it('enforces the mirror, suppression, skill, bridge, and portability laws over the real workspace', () => {
+	it('enforces the workspace policy laws including surface ownership', () => {
 		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
 	})
 
@@ -479,6 +755,7 @@ describe('repository policy', () => {
 	it('accepts a target holding the pointer pair and no canon tree', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-pointer-' })
 		try {
+			writePolicySurfaceHost(scratch)
 			scratch.write(
 				'AGENTS.md',
 				'# AGENTS.md\n\nRead `node_modules/@orkestrel/scaffold/dist/host/AGENTS.md` for the canon.\n',

@@ -1,4 +1,12 @@
 import {
+	createGuide,
+	extractSourceLines,
+	hasCanonicalSegments,
+	resolveLink,
+} from '@orkestrel/guide'
+import { HOST_PATHS } from '@orkestrel/scaffold'
+import {
+	existsSync,
 	globSync,
 	mkdirSync,
 	mkdtempSync,
@@ -10,7 +18,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, matchesGlob, relative as relativePath, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isArray, isObject } from '@orkestrel/contract'
+import { parseSync } from 'vite'
 import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
 /** Names a rule the fleet sweep decides from workspace text and paths. */
@@ -21,6 +29,7 @@ export type PolicyRule =
 	| 'prose'
 	| 'rules'
 	| 'skill'
+	| 'surface'
 	| 'suppression'
 
 /** Describes one workspace file a physical control writes. */
@@ -35,6 +44,107 @@ export interface PolicyViolation {
 	readonly path: string
 	readonly line?: number
 	readonly message: string
+}
+
+/** Describes one reachable declaration and its physical source location. */
+export interface PolicySurfaceDeclaration {
+	readonly name: string
+	readonly path: string
+	readonly line: number
+}
+
+/** Groups reachable declarations with refusals of incomplete barrel evidence. */
+export interface PolicySurfacePopulation {
+	readonly declarations: readonly PolicySurfaceDeclaration[]
+	readonly violations: readonly PolicyViolation[]
+}
+
+/** Reports one file's reachable declarations, or the violation reading it raised. */
+export interface PolicyDeclarationRead {
+	readonly declarations: readonly PolicySurfaceDeclaration[]
+	readonly violation?: PolicyViolation
+}
+
+/** Names the installed host root containing the fleet's reference guides. */
+export const POLICY_SURFACE_HOST = 'node_modules/@orkestrel/scaffold/dist/host'
+
+/** Names the staged catalog's storage path beneath the installed host. */
+export const POLICY_SURFACE_CATALOG = 'claude/agents/orkestrel.md'
+
+/** Supplies export forms that must participate in the fleet comparison. */
+export const POLICY_SURFACE_EXPORT_CASES = Object.freeze([
+	{ label: 'namespace', text: 'export namespace waitForCondition { export const value = 1 }' },
+	{ label: 'const declarators', text: 'export const other = 0, waitForCondition = 1' },
+	{ label: 'let declarators', text: 'export let other = 0, waitForCondition = 1' },
+	{ label: 'enum', text: 'export enum waitForCondition { Ready }' },
+	{ label: 'class', text: ' export class waitForCondition {}' },
+	{ label: 'interface', text: ' export interface waitForCondition {}' },
+	{ label: 'type', text: ' export type waitForCondition = string' },
+	{ label: 'function', text: ' export function waitForCondition() {}' },
+	{
+		label: 'function overload',
+		text:
+			'export function waitForCondition(value: string): void\n' +
+			'export function waitForCondition(value: number): void\n' +
+			'export function waitForCondition() {}',
+	},
+	{ label: 're-export list', text: "export { other as waitForCondition } from './helpers.js'" },
+	{ label: 'local export list', text: 'const other = 1; export { other as waitForCondition }' },
+])
+
+/** Matches the complete physical barrel rows the parser accepts. */
+export const POLICY_SURFACE_BARREL_PATTERN =
+	/^\s*export\s+\*\s+from\s+(?:'(\.\.?\/[^']+\.js)'|"(\.\.?\/[^"]+\.js)")\s*;?\s*$/u
+
+/**
+ * Creates a guide whose surface claims the supplied fixture names.
+ *
+ * @param names - The bare names the guide claims.
+ * @returns The fixture guide text.
+ */
+export function createPolicySurfaceGuide(names: readonly string[]): string {
+	return [
+		'# Fixture',
+		'',
+		'## Surface',
+		'',
+		'| Name | Kind | Summary |',
+		'| ---- | ---- | ------- |',
+		...names.map((name) => `| \`${name}\` | function | Declares a fixture name. |`),
+		'',
+	].join('\n')
+}
+
+/**
+ * Writes a complete hosted reference population for a physical policy control.
+ *
+ * @param scratch - The owned workspace receiving the hosted references.
+ * @returns Nothing.
+ */
+export function writePolicySurfaceHost(scratch: PolicyScratchInterface): void {
+	scratch.write(
+		`${POLICY_SURFACE_HOST}/${POLICY_SURFACE_CATALOG}`,
+		createPolicyCatalog(['other', 'sample']),
+	)
+	scratch.write(`${POLICY_SURFACE_HOST}/guides/other.md`, createPolicySurfaceGuide(['readShared']))
+	scratch.write(`${POLICY_SURFACE_HOST}/guides/sample.md`, createPolicySurfaceGuide([]))
+}
+
+/**
+ * Creates a scratch target with a complete installed guide population.
+ *
+ * @returns The owned scratch workspace.
+ */
+export function createPolicySurfaceFixture(): PolicyScratchInterface {
+	const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-surface-' })
+	try {
+		writePolicySurfaceHost(scratch)
+		scratch.write('package.json', '{"name":"@orkestrel/sample"}\n')
+		return scratch
+	} catch (error) {
+		scratch.destroy()
+		throw error
+	}
 }
 
 /** Describes one physical negative control, including the population boundary it attacks. */
@@ -298,7 +408,7 @@ export function normalizePolicyFilename(root: string, filename: string): string 
  * primitive.
  */
 export function isPolicyRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return isObject(value) && !isArray(value)
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -1411,13 +1521,15 @@ export function readPolicyPackage(root: string): string | undefined {
  * there rather than failing.
  *
  * @param root - The workspace root to read.
+ * @param path - The catalog's path within that root. Default: the target catalog path.
  * @returns Each catalog row's package short name, its scope removed, in table order.
  */
-export function readPolicyCatalog(root: string): readonly string[] {
-	if (!isPolicyFile(root, POLICY_CATALOG_FILE)) return []
-	const lines = readFileSync(join(root, POLICY_CATALOG_FILE), 'utf8')
-		.replaceAll('\r\n', '\n')
-		.split('\n')
+export function readPolicyCatalog(
+	root: string,
+	path: string = POLICY_CATALOG_FILE,
+): readonly string[] {
+	if (!isPolicyFile(root, path)) return []
+	const lines = readFileSync(join(root, path), 'utf8').replaceAll('\r\n', '\n').split('\n')
 	const heading = lines.indexOf(POLICY_CATALOG_HEADING)
 	if (heading === -1) return []
 	const names: string[] = []
@@ -1567,10 +1679,334 @@ export function inspectPolicyPortability(root: string): readonly PolicyViolation
 }
 
 /**
+ * Locates parsed exports at their physical declaration lines.
+ *
+ * @param path - The declaring workspace-relative path.
+ * @param text - The declaration source text.
+ * @param root - The workspace root used to resolve relative star exports, when supplied.
+ * @param ancestors - The source paths already visited along this star-export branch.
+ * @returns The exported names with normalized paths and declaration lines.
+ * @throws An `Error` when syntax, an export form, or a star target cannot be read.
+ */
+export function readPolicyDeclarations(
+	path: string,
+	text: string,
+	root?: string,
+	ancestors: readonly string[] = [],
+): readonly PolicySurfaceDeclaration[] {
+	path = normalizePolicyPath(path)
+	if (ancestors.includes(path)) return []
+	const source = parseSync(path, text)
+	if (source.errors.length > 0) throw new Error(`export syntax is unreadable at ${path}`)
+	const declarations: PolicySurfaceDeclaration[] = []
+	for (const statement of source.program.body) {
+		const line = text.slice(0, statement.start).split(/\r\n|\n/u).length
+		if (statement.type === 'ExportAllDeclaration') {
+			if (statement.exported !== null) {
+				const name =
+					statement.exported.type === 'Identifier'
+						? statement.exported.name
+						: statement.exported.value
+				if (name === 'default') throw new Error(`default export is unsupported at ${path}:${line}`)
+				declarations.push({ name, path, line })
+				continue
+			}
+			const target = statement.source.value
+			const resolved = resolveLink(
+				path,
+				target.endsWith('.js') ? `${target.slice(0, -3)}.ts` : target,
+			)
+			if (
+				root === undefined ||
+				!target.startsWith('.') ||
+				!hasCanonicalSegments(resolved) ||
+				!isPolicyFile(root, resolved)
+			) {
+				throw new Error(`star export target is unreadable at ${path}:${line}: ${target}`)
+			}
+			declarations.push(
+				...readPolicyDeclarations(resolved, readFileSync(join(root, resolved), 'utf8'), root, [
+					...ancestors,
+					path,
+				]),
+			)
+			continue
+		}
+		if (statement.type === 'ExportNamedDeclaration') {
+			for (const specifier of statement.specifiers) {
+				const name =
+					specifier.exported.type === 'Identifier'
+						? specifier.exported.name
+						: specifier.exported.value
+				if (name === 'default') throw new Error(`default export is unsupported at ${path}:${line}`)
+				declarations.push({
+					name,
+					path,
+					line: text.slice(0, specifier.start).split(/\r\n|\n/u).length,
+				})
+			}
+			const declaration = statement.declaration
+			if (declaration === null) continue
+			if (declaration.type === 'VariableDeclaration') {
+				for (const variable of declaration.declarations) {
+					if (variable.id.type !== 'Identifier')
+						throw new Error(`export binding is unsupported at ${path}:${line}`)
+					declarations.push({
+						name: variable.id.name,
+						path,
+						line: text.slice(0, variable.id.start).split(/\r\n|\n/u).length,
+					})
+				}
+				continue
+			}
+			if (
+				declaration.type === 'FunctionDeclaration' ||
+				declaration.type === 'TSDeclareFunction' ||
+				declaration.type === 'ClassDeclaration' ||
+				declaration.type === 'TSInterfaceDeclaration' ||
+				declaration.type === 'TSTypeAliasDeclaration' ||
+				declaration.type === 'TSEnumDeclaration' ||
+				declaration.type === 'TSModuleDeclaration'
+			) {
+				if (declaration.id?.type !== 'Identifier')
+					throw new Error(`export name is unreadable at ${path}:${line}`)
+				declarations.push({ name: declaration.id.name, path, line })
+				continue
+			}
+			throw new Error(`export declaration is unsupported at ${path}:${line}: ${declaration.type}`)
+		}
+		if (
+			statement.type === 'ExportDefaultDeclaration' ||
+			statement.type === 'TSExportAssignment' ||
+			statement.type === 'TSNamespaceExportDeclaration'
+		) {
+			throw new Error(`export statement is unsupported at ${path}:${line}: ${statement.type}`)
+		}
+	}
+	return declarations
+}
+
+/**
+ * Reads one file's declarations, or converts the reader's throw into a surface violation.
+ *
+ * @param root - The workspace root used to resolve relative star exports.
+ * @param path - The workspace-relative path being read.
+ * @param text - The declaration source text.
+ * @returns The read declarations, or the violation the reader raised.
+ */
+export function collectPolicyDeclarations(
+	root: string,
+	path: string,
+	text: string,
+): PolicyDeclarationRead {
+	try {
+		return { declarations: readPolicyDeclarations(path, text, root) }
+	} catch (error) {
+		return {
+			declarations: [],
+			violation: createPolicyViolation(
+				'surface',
+				path,
+				`surface population incomplete: ${error instanceof Error ? error.message : String(error)}`,
+			),
+		}
+	}
+}
+
+/**
+ * Reads reachable source declarations and refuses unread barrel statements or targets.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns The parsed declarations and incomplete-population violations.
+ */
+export function readPolicySurface(root: string): PolicySurfacePopulation {
+	const files: Record<string, string> = {}
+	for (const path of globSync('src/**/*.ts', { cwd: root }).map(normalizePolicyPath).sort()) {
+		files[path] = readFileSync(join(root, path), 'utf8')
+	}
+	const barrels = Object.keys(files).filter((path) => path.endsWith('/index.ts'))
+	const targets = new Set<string>()
+	const violations: PolicyViolation[] = []
+	for (const path of barrels) {
+		const text = files[path]
+		if (text === undefined) continue
+		const source = parseSync(path, text)
+		const lines = extractSourceLines(text)
+		if (source.errors.length > 0) {
+			violations.push(
+				createPolicyViolation(
+					'surface',
+					path,
+					'surface population incomplete: barrel syntax is unreadable',
+				),
+			)
+			continue
+		}
+		for (const statement of source.program.body) {
+			const start = text.slice(0, statement.start).split(/\r\n|\n/u).length - 1
+			const end = text.slice(0, statement.end).split(/\r\n|\n/u).length - 1
+			const row = lines[start]?.code.match(POLICY_SURFACE_BARREL_PATTERN)
+			const target = row?.[1] ?? row?.[2]
+			if (
+				statement.type !== 'ExportAllDeclaration' ||
+				statement.exportKind !== 'value' ||
+				statement.exported !== null ||
+				start !== end ||
+				target === undefined
+			) {
+				violations.push(
+					createPolicyViolation(
+						'surface',
+						path,
+						'surface population incomplete: barrel requires a relative .js star export on one line',
+						start + 1,
+					),
+				)
+				continue
+			}
+			const resolved = resolveLink(path, `${target.slice(0, -3)}.ts`)
+			if (
+				!hasCanonicalSegments(resolved) ||
+				!resolved.startsWith('src/') ||
+				files[resolved] === undefined
+			) {
+				violations.push(
+					createPolicyViolation(
+						'surface',
+						path,
+						`surface population incomplete: barrel target is unreadable: ${target}`,
+						start + 1,
+					),
+				)
+				continue
+			}
+			if (!resolved.endsWith('/index.ts')) targets.add(resolved)
+		}
+	}
+	const declarations: PolicySurfaceDeclaration[] = []
+	for (const path of targets) {
+		const text = files[path]
+		if (text === undefined) continue
+		const read = collectPolicyDeclarations(root, path, text)
+		declarations.push(...read.declarations)
+		if (read.violation !== undefined) violations.push(read.violation)
+	}
+	return { declarations, violations }
+}
+
+/**
+ * Inspects source and target-owned setup names against the hosted fleet guides.
+ *
+ * @remarks
+ * Source names claimed by the target's own hosted guide are grandfathered. Setup names have no
+ * grandfather. An absent installed host falls back to checkout guides only with catalog coverage.
+ * Missing comparison evidence and unread barrel statements produce surface violations.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Surface violations sorted by path, declaration line, name, and owner.
+ */
+export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
+	const installed = join(root, POLICY_SURFACE_HOST)
+	const own = readPolicyPackage(root)
+	const hosted = own !== 'scaffold' && existsSync(installed)
+	const host = hosted ? installed : root
+	const catalog = hosted ? POLICY_SURFACE_CATALOG : POLICY_CATALOG_FILE
+	const directory = hosted ? `${POLICY_SURFACE_HOST}/guides` : 'guides'
+	const names = new Set([...readPolicyCatalog(host, catalog), ...readPolicyCatalog(root)])
+	if (!existsSync(join(host, 'guides')) || names.size === 0) {
+		return [
+			createPolicyViolation(
+				'surface',
+				directory,
+				'surface evidence missing: hosted guides and a populated catalog are required',
+			),
+		]
+	}
+	const violations: PolicyViolation[] = []
+	for (const name of names) {
+		if (!isPolicyFile(host, `guides/${name}.md`)) {
+			violations.push(
+				createPolicyViolation(
+					'surface',
+					`${directory}/${name}.md`,
+					`surface evidence missing: catalog package ${name} has no hosted guide`,
+				),
+			)
+		}
+	}
+	const grandfather = new Set<string>()
+	const owners = new Map<string, Set<string>>()
+	for (const path of globSync('guides/*.md', { cwd: host }).map(normalizePolicyPath).sort()) {
+		const owner = basename(path, '.md')
+		if (owner === POLICY_GUIDE_MAP) continue
+		const guide = createGuide(readFileSync(join(host, path), 'utf8'))
+		if (!guide.sections().includes('Surface')) {
+			violations.push(
+				createPolicyViolation(
+					'surface',
+					`${directory}/${owner}.md`,
+					'surface evidence missing: hosted guide has no Surface section',
+				),
+			)
+			continue
+		}
+		for (const symbol of guide.surface()) {
+			if (owner === own) {
+				grandfather.add(symbol.name)
+				continue
+			}
+			const claimed = owners.get(symbol.name) ?? new Set<string>()
+			claimed.add(owner)
+			owners.set(symbol.name, claimed)
+		}
+	}
+	const population = readPolicySurface(root)
+	violations.push(...population.violations)
+	const declarations = population.declarations.filter(
+		(declaration) => !grandfather.has(declaration.name),
+	)
+	for (const path of globSync('tests/setup*.ts', { cwd: root }).map(normalizePolicyPath).sort()) {
+		if (
+			path.endsWith('.test.ts') ||
+			HOST_PATHS.some(
+				(vendored) =>
+					path === normalizePolicyPath(vendored) ||
+					path.startsWith(`${normalizePolicyPath(vendored)}/`),
+			)
+		)
+			continue
+		const read = collectPolicyDeclarations(root, path, readFileSync(join(root, path), 'utf8'))
+		declarations.push(...read.declarations)
+		if (read.violation !== undefined) violations.push(read.violation)
+	}
+	const seen = new Set<string>()
+	for (const declaration of declarations) {
+		for (const owner of owners.get(declaration.name) ?? []) {
+			const key = `${declaration.path}\n${declaration.name}\n${owner}`
+			if (seen.has(key)) continue
+			seen.add(key)
+			violations.push(
+				createPolicyViolation(
+					'surface',
+					declaration.path,
+					`surface name belongs to one package: ${declaration.name} (${owner})`,
+					declaration.line,
+				),
+			)
+		}
+	}
+	return violations.sort((first, second) => {
+		if (first.path !== second.path) return first.path < second.path ? -1 : 1
+		if (first.line !== second.line) return (first.line ?? 0) - (second.line ?? 0)
+		return first.message === second.message ? 0 : first.message < second.message ? -1 : 1
+	})
+}
+
+/**
  * Inspects every policy rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every mirror, suppression, skill, bridge, portability, and prose violation.
+ * @returns Every mirror, suppression, skill, bridge, portability, prose, and surface violation.
  */
 export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[] {
 	return [
@@ -1580,6 +2016,7 @@ export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[]
 		...inspectSkillBridges(root),
 		...inspectPolicyPortability(root),
 		...inspectPolicyProse(root),
+		...inspectPolicySurface(root),
 	]
 }
 
@@ -1595,6 +2032,7 @@ export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[]
 export function inspectPolicyControl(control: PolicyControl): readonly PolicyViolation[] {
 	const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-' })
 	try {
+		writePolicySurfaceHost(scratch)
 		for (const file of control.files) {
 			scratch.write(file.path, file.content)
 		}
