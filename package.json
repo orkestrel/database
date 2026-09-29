@@ -93,15 +93,15 @@
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.18",
-		"@orkestrel/emitter": "^0.0.10",
-		"@orkestrel/indexeddb": "^0.0.12",
-		"@orkestrel/sqlite": "^0.0.12"
+		"@orkestrel/emitter": "^0.0.11",
+		"@orkestrel/indexeddb": "^0.0.13",
+		"@orkestrel/sqlite": "^0.0.13"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.3",
 		"@orkestrel/guide": "^0.0.20",
-		"@orkestrel/probe": "^0.0.17",
-		"@orkestrel/scaffold": "^0.0.78",
+		"@orkestrel/probe": "^0.0.18",
+		"@orkestrel/scaffold": "^0.0.79",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.3",
 		"@vitest/browser-playwright": "^4.1.11",
