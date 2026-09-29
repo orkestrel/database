@@ -91,24 +91,24 @@
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.17",
+		"@orkestrel/contract": "^0.0.18",
 		"@orkestrel/emitter": "^0.0.10",
 		"@orkestrel/indexeddb": "^0.0.12",
 		"@orkestrel/sqlite": "^0.0.12"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.1",
-		"@orkestrel/guide": "^0.0.19",
-		"@orkestrel/probe": "^0.0.15",
-		"@orkestrel/scaffold": "^0.0.70",
-		"@orkestrel/test": "^0.0.15",
-		"@types/node": "^26.5.1",
+		"@microsoft/api-extractor": "^7.59.3",
+		"@orkestrel/guide": "^0.0.20",
+		"@orkestrel/probe": "^0.0.17",
+		"@orkestrel/scaffold": "^0.0.78",
+		"@orkestrel/test": "^0.0.24",
+		"@types/node": "^26.6.3",
 		"@vitest/browser-playwright": "^4.1.11",
-		"oxfmt": "^0.68.0",
-		"oxlint": "^1.83.0",
+		"oxfmt": "^0.71.0",
+		"oxlint": "^1.86.0",
 		"playwright": "^1.63.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.0",
+		"vite": "^8.3.1",
 		"vitest": "^4.1.11"
 	},
 	"engines": {
