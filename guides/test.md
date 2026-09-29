@@ -43,11 +43,13 @@ package holds one implementation of each and ships as a `devDependency`. Nothing
 production code. Source: [`src/core`](../src/core), [`src/browser`](../src/browser), and
 [`src/server`](../src/server).
 
-It has **zero runtime dependencies**, and no exported type here names an `@orkestrel/*` type. A
+This package runtime-depends on `@orkestrel/contract` for the outcome type `retryUntil` reads
+internally and for the guards every environment narrows with. Nothing from it is re-exported, and no
+exported type here names a type from another `@orkestrel` package. A
 dependency on `@orkestrel/emitter` would install a second copy of it beside the one a consumer
 already pins, and the compiler reads two copies as two distinct types. A foreign type in a
 signature fails the other way, rejecting the consumer's own local value inside the consumer's own
-repository. The zero-runtime-dependencies contract holds both.
+repository. Those rules hold both.
 
 ## Install
 
@@ -110,31 +112,30 @@ member and `plus` introducing its call-signature members, and a type alias's own
 a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members
 it adds after.
 
-| Type                       | Kind      | Shape                                                                                                  | Summary                                                                                                                                        |
-| -------------------------- | --------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WaitOptions`              | interface | `{ budget?, interval?, signal? }`                                                                      | Configures a bounded asynchronous wait with an elapsed-time limit, a delay between readings, and an abort signal.                              |
-| `RetryOptions`             | interface | `WaitOptions` plus `{ attempts? }`                                                                     | Configures a bounded retry, adding an optional producer-call limit to a bounded wait's bounds.                                                 |
-| `EventSubscriber`          | type      | `(listener) => cleanup \| void`                                                                        | Subscribes a listener to one event source.                                                                                                     |
-| `RecorderInterface`        | interface | `{ calls, count, handler }` plus `clear`                                                               | Records every call made to its handler.                                                                                                        |
-| `EventSourceInterface`     | interface | `{} plus on`                                                                                           | Subscribes handlers to a typed event source.                                                                                                   |
-| `RecorderMap`              | type      | `{ readonly [K in TName]: RecorderInterface<TMap[K]> }`                                                | Maps event names to recorders for their delivered argument tuples.                                                                             |
-| `Success`                  | interface | `{ success, value }`                                                                                   | Represents one operation that produced a value.                                                                                                |
-| `Failure`                  | interface | `{ success, error }`                                                                                   | Represents one operation that raised a failure instead of producing a value.                                                                   |
-| `Result`                   | type      | `Success<T> \| Failure<E>`                                                                             | Represents the outcome of one operation: the value it produced, or the failure it raised.                                                      |
-| `SignalInterface`          | interface | `{ controller, signal, count }`                                                                        | Holds a real abort signal and controller instrumented with its live abort-listener tally.                                                      |
-| `SignalRegistration`       | type      | `readonly [listener, installed, capture, cleanup]`                                                     | Represents one abort listener an instrumented signal installed, as its tally holds it.                                                         |
-| `ResourceFactoryInterface` | interface | `{ created, destroyed }` plus `create` / `destroy`                                                     | Represents a numbered resource factory with records of every creation and destruction.                                                         |
-| `TeardownInterface`        | interface | `{ count }` plus `add` / `destroy`                                                                     | Represents the cleanup a test adds as it goes and runs once, newest first, when it is done.                                                    |
-| `TeardownHandler`          | type      | `() => void \| Promise<void>`                                                                          | Represents the work one teardown entry performs when the list is destroyed.                                                                    |
-| `JSONValue`                | type      | `string \| number \| boolean \| null \| readonly JSONValue[] \| { readonly [key: string]: JSONValue }` | Covers any value JSON can represent, so a round trip through JSON preserves the type.                                                          |
-| `JSONSafe`                 | type      | `JSONSafe<T>`                                                                                          | Represents the JSON-safe projection of a type: every member JSON preserves, mapped to itself, and every member it does not, mapped to `never`. |
-| `HeadersSource`            | type      | `NonNullable<ConstructorParameters<typeof Headers>[0]>`                                                | Covers any value the host `Headers` constructor accepts.                                                                                       |
-| `StateTransition`          | interface | `{ name, from, event, to }`                                                                            | Represents one row of a statechart table: the entity's state before an event, the event, and the state that event must leave it in.            |
-| `StateScenario`            | interface | `{ transition }` plus `arrange` / `act` / `assert`                                                     | Drives one `StateTransition` through the three phases that prove it.                                                                           |
+| Type                       | Kind      | Shape                                                      | Summary                                                                                                                                        |
+| -------------------------- | --------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WaitOptions`              | interface | `{ budget?, interval?, signal? }`                          | Configures a bounded asynchronous wait with an elapsed-time limit, a delay between readings, and an abort signal.                              |
+| `RetryOptions`             | interface | `WaitOptions` plus `{ attempts? }`                         | Configures a bounded retry, adding an optional producer-call limit to a bounded wait's bounds.                                                 |
+| `TextWaitOptions`          | interface | `WaitOptions` plus `{ exact?, absent? }`                   | Configures a bounded wait over a reading of text.                                                                                              |
+| `EventSubscriber`          | type      | `(listener) => cleanup \| void`                            | Subscribes a listener to one event source.                                                                                                     |
+| `RecorderInterface`        | interface | `{ calls, count, handler }` plus `clear`                   | Records every call made to its handler.                                                                                                        |
+| `EventSourceInterface`     | interface | `{} plus on`                                               | Subscribes handlers to a typed event source.                                                                                                   |
+| `RecorderMap`              | type      | `{ readonly [K in TName]: RecorderInterface<TMap[K]> }`    | Maps event names to recorders for their delivered argument tuples.                                                                             |
+| `SignalInterface`          | interface | `{ controller, signal, count }`                            | Holds a real abort signal and controller instrumented with its live abort-listener tally.                                                      |
+| `SignalRegistration`       | type      | `readonly [listener, installed, capture, cleanup]`         | Represents one abort listener an instrumented signal installed, as its tally holds it.                                                         |
+| `ResourceFactoryInterface` | interface | `{ created, destroyed }` plus `create` / `destroy`         | Represents a numbered resource factory with records of every creation and destruction.                                                         |
+| `TeardownInterface`        | interface | `{ count }` plus `add` / `destroy`                         | Represents the cleanup a test adds as it goes and runs once, newest first, when it is done.                                                    |
+| `TeardownHandler`          | type      | `() => void \| Promise<void>`                              | Represents the work one teardown entry performs when the list is destroyed.                                                                    |
+| `JSONSafe`                 | type      | `JSONSafe<T>`                                              | Represents the JSON-safe projection of a type: every member JSON preserves, mapped to itself, and every member it does not, mapped to `never`. |
+| `HeadersSource`            | type      | `NonNullable<ConstructorParameters<typeof Headers>[0]>`    | Covers any value the host `Headers` constructor accepts.                                                                                       |
+| `JourneyVariant`           | interface | `{ name, width, height }`                                  | Represents one theme-and-viewport pair in the form a project configuration can serialize.                                                      |
+| `StatechartStatus`         | type      | `'pending' \| 'idle' \| 'running' \| 'passed' \| 'failed'` | Names the run state a statechart harness publishes through its status attribute.                                                               |
+| `StateTransition`          | interface | `{ name, from, event, to }`                                | Represents one row of a statechart table: the entity's state before an event, the event, and the state that event must leave it in.            |
+| `StateScenario`            | interface | `{ transition }` plus `arrange` / `act` / `assert`         | Drives one `StateTransition` through the three phases that prove it.                                                                           |
 
-Each interface's call-signature members are listed under [Methods](#methods). `Result` defaults `E`
-to `Error`, where `@orkestrel/contract` publishes the same name defaulting to `unknown`;
-[Limits](#limits) rules that divergence.
+Each interface's call-signature members are listed under [Methods](#methods). `Result`, `Success`,
+and `Failure` come from `@orkestrel/contract` (mirrored at [`contract.md`](contract.md)) and are not
+re-exported; `retryUntil` reads `Result` internally.
 
 #### Constants
 
@@ -148,8 +149,13 @@ A `Shape` cell holds the constant's declared type.
 A harness renders the attributes and a gate outside the page polls them, so the names are the whole
 contract between the two. `status`, `passed`, `failed`, and `total` belong on the harness root,
 `scenario` and `result` on each row, and `state` on the element rendering the entity's current
-state. `pending` is what a harness carries before a run has produced a result for every row, and
-`passed` and `failed` are the pair a gate waits for rather than waiting a fixed duration.
+state. `pending` is what a harness carries while its inventory is incomplete — until every
+declared row has rendered and the root carries the row count — so a gate that reads it has found
+a harness whose rows never mounted. `idle` is a mounted harness with its tally at zero, `running`
+is a run in flight, and `passed` and `failed` are the pair a gate waits for rather than waiting a
+fixed duration. An exceptional exit is terminal too: a harness whose `state` reader throws writes
+`failed` and then rejects the run, so the gate reads a terminal pair while the suite reads the
+throw. `StatechartStatus` is the same set of readings as a named union.
 
 #### Validators
 
@@ -176,8 +182,10 @@ instead of propagating.
 | `waitForCondition`    | function | `(description, condition, options?) => Promise<void>`                                 | Waits until a condition holds within an elapsed-time budget.                                                                                |
 | `retryUntil`          | function | `(description, produce, satisfied, options?) => Promise<T>`                           | Repeats a producer until one produced value satisfies a predicate.                                                                          |
 | `waitForEvent`        | function | `(subscribe, description, options?) => Promise<TArgs>`                                | Waits for the first delivery from an event subscription.                                                                                    |
+| `waitForText`         | function | `(description, read, text, options?) => Promise<string>`                              | Waits until a reading of text carries an expected sentence.                                                                                 |
 | `checkBounds`         | function | `(subject: string, budget: number, interval: number) => void`                         | Checks the resolved bounds one bounded wait runs under.                                                                                     |
 | `buildRetryExhausted` | function | `(description, budget, elapsed, last, cause) => Error`                                | Builds the error `retryUntil` raises when its elapsed-time budget runs out.                                                                 |
+| `buildRefusal`        | function | `(name: string, cause: unknown) => Error`                                             | Builds the error a refused fixture build raises, named for the row it was building for.                                                     |
 | `dropRegistration`    | function | `(registrations: SignalRegistration[], installed) => SignalRegistration \| undefined` | Drops the registration an instrumented signal installed for one listener.                                                                   |
 | `decodeJSONLines`     | function | `(text: string) => readonly unknown[]`                                                | Decodes newline-delimited JSON values.                                                                                                      |
 | `waitForDelay`        | function | `(ms?: number) => Promise<void>`                                                      | Waits for a host timer to elapse.                                                                                                           |
@@ -219,17 +227,21 @@ a journey a description of what a person does rather than of what the markup hap
 
 The fixture builders, the readers, and the field writers do take an element, and none of them is a
 journey verb. `build` creates a node, `mount` attaches one, and `render` does both from
-markup or from a tag and its classes; `clearStorage` takes nothing at all, and `removeDatabase`
-takes a database name. The predicates, the element readers, and the describers name a node the
-caller already has — `isRendered`, `isReachable`, `readText`, `readRole`, `readName`, `readStates`,
-`describeTree`, `describeFocus`, `extractOrphans`, `readRows`, `readStyle`, `readToken`,
-`readPixels`, `readContrast`, `readLayers`, `readBackdrop`, and `readRing` — and each reads that
-node rather than acting on a target it was handed. `captureFrame` and `place` take an element as
-well, and photographing one is a reading too: neither moves focus, dispatches an event, or changes
-what the element renders. `typeInput` and `commitInput` are the exception, and it stays narrow: they
-write into the field they are given, as the synthetic counterpart of `typeAccessible` for a
-component that listens for `input`. The color leaves, the cascade readers, the pane verbs, and the
-whole-document readers take a value or nothing at all, so they name no target either.
+markup or from a tag and its classes; `createHarness` mounts a whole statechart table and hands
+back the root it mounted; `buildContrast`, `buildEscapes`, and `buildCensus` each build
+a detached control the caller appends where it is reading; `clearStorage` takes nothing at all, and
+`removeDatabase` takes a database name. The predicates, the element readers, and the describers name
+a node the caller already has — `isRendered`, `isReachable`, `readHit`, `readText`, `readRole`,
+`readName`, `readStates`, `readCensus`, `describeTree`, `describeFocus`, `extractOrphans`,
+`readRows`, `readStyle`, `readToken`, `readPixels`, `readContrast`, `readLayers`, `readBackdrop`,
+and `readRing` — and each reads that node rather than acting on a target it was handed.
+`waitForAnimations` takes one too, and waiting for a browser to stop painting it changes nothing
+about it. `captureFrame` and `place` take an
+element as well, and photographing one is a reading too: neither moves focus, dispatches an event,
+or changes what the element renders. `typeInput` and `commitInput` are the exception, and it stays
+narrow: they write into the field they are given, as the synthetic counterpart of `typeAccessible`
+for a component that listens for `input`. The color leaves, the cascade readers, the pane verbs,
+and the whole-document readers take a value or nothing at all, so they name no target either.
 
 #### Types
 
@@ -237,17 +249,28 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 member and `plus` introducing its call-signature members, and a type alias's own type literal with
 a union's arms escaped as `\|`.
 
-| Type                 | Kind      | Shape                                                | Summary                                                                                                                                         |
-| -------------------- | --------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Color`              | type      | `readonly [red, green, blue, alpha]`                 | Represents one rendered color as straight sRGB channels and its alpha.                                                                          |
-| `ElementOptions`     | interface | `{ classes?, text?, attributes? }`                   | Configures one built element: its class list, its text, and its attributes.                                                                     |
-| `FrameOptions`       | interface | `{ path, width, height, element? }`                  | Configures one captured frame: where it is written, the viewport it is shot at, and what it shoots.                                             |
-| `FrameReading`       | interface | `{ width, height, floor }`                           | Represents one written frame read back from the file a capture produced: its size in device pixels, and the single color its bottom row paints. |
-| `CaptureVariant`     | interface | `{ name, width, height, apply? }`                    | Represents one theme-and-viewport pair a capture run renders, and the document change it needs first.                                           |
-| `PortfolioOptions`   | interface | `{ states, variants, variant, directory, enabled? }` | Configures a capture portfolio: the state registry, the variant matrix, this run's variant, where it writes, and whether it writes at all.      |
-| `PortfolioInterface` | interface | `{ variant, placements, paths, files }` plus `place` | Holds the registry of capture states one run places, and the files it wrote placing them.                                                       |
-| `JournalStep`        | interface | `{ action, trigger, result }`                        | Represents one scripted step a journal recorded, and what the surface did about it.                                                             |
-| `JournalInterface`   | interface | `{ steps, output }` plus `start` / `stop` / `record` | Records one scenario: every step it took and everything the page said while it ran.                                                             |
+| Type                  | Kind      | Shape                                                                          | Summary                                                                                                                                         |
+| --------------------- | --------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Color`               | type      | `readonly [red, green, blue, alpha]`                                           | Represents one rendered color as straight sRGB channels and its alpha.                                                                          |
+| `ElementOptions`      | interface | `{ classes?, text?, attributes? }`                                             | Configures one built element: its class list, its text, and its attributes.                                                                     |
+| `FrameOptions`        | interface | `{ path, width, height, element? }`                                            | Configures one captured frame: where it is written, the viewport it is shot at, and what it shoots.                                             |
+| `FrameOffset`         | interface | `{ top, left }`                                                                | Represents how far an element frame moves the tester frame from the runner window's origin for the shot, in CSS pixels.                         |
+| `FrameReading`        | interface | `{ width, height, floor }`                                                     | Represents one written frame read back from the file a capture produced: its size in device pixels, and the single color its bottom row paints. |
+| `CaptureVariant`      | interface | `JourneyVariant` plus `{ apply? }`                                             | Adds to a journey variant the document change a capture run applies before resizing.                                                            |
+| `PortfolioOptions`    | interface | `{ states, variants, variant, directory, enabled? }`                           | Configures a capture portfolio: the state registry, the variant matrix, this run's variant, where it writes, and whether it writes at all.      |
+| `PortfolioInterface`  | interface | `{ variant, placements, paths, files }` plus `place`                           | Holds the registry of capture states one run places, and the files it wrote placing them.                                                       |
+| `JournalStep`         | interface | `{ action, trigger, result }`                                                  | Represents one scripted step a journal recorded, and what the surface did about it.                                                             |
+| `JournalInterface`    | interface | `{ steps, output }` plus `start` / `stop` / `record`                           | Records one scenario: every step it took and everything the page said while it ran.                                                             |
+| `StateOptions`        | interface | `WaitOptions` plus `{ absent? }`                                               | Configures a bounded wait over the states a control announces.                                                                                  |
+| `MediaOptions`        | interface | `{ print?, motion?, forced? }`                                                 | Configures the tester's print medium, motion preference, and forced colours.                                                                    |
+| `StorageOptions`      | interface | `{ values?, reads?, writes?, quota? }`                                         | Configures an inert `Storage`: its seed, which operations the host permits, and its quota.                                                      |
+| `WebStorageInterface` | interface | `Storage` plus `{}` plus `permit`                                              | Holds a store the host can withhold and later grant.                                                                                            |
+| `CensusReading`       | interface | `{ elements, tokens, undeclared }`                                             | Reports an authored-class census: the population walked, the tokens found, and the undeclared.                                                  |
+| `ContrastFixture`     | interface | `{ root, refused, accepted }`                                                  | Holds a detached translucent stack whose flat and composited readings disagree across one bar.                                                  |
+| `EscapeFixture`       | interface | `{ root, inline, embedded, permitted }`                                        | Holds detached markup a style-escape reading must find, and the one it must leave alone.                                                        |
+| `CensusFixture`       | interface | `{ root, token, mark }`                                                        | Holds detached markup an authored-class census must report as undeclared.                                                                       |
+| `HarnessOptions`      | interface | `{ scenarios, build, state, pause? }`                                          | Configures the harness that renders one transition table and drives it row by row.                                                              |
+| `HarnessInterface`    | interface | `{ root, status, total, passed, failed, failures }` plus `execute` / `destroy` | Holds a mounted statechart harness, the tally it publishes, and the run it drives.                                                              |
 
 #### Constants
 
@@ -264,69 +287,106 @@ A `Shape` cell holds the constant's declared type.
 | `FOCUSABLE_SELECTOR` | const | `string`                           | Names what sequential keyboard navigation can reach, before disabled and unrendered elements go.           |
 | `HEADER_ROLES`       | const | `Readonly<Record<string, string>>` | Names the role a `th` carries for the header axis its `scope` names.                                       |
 | `IMPLICIT_ROLES`     | const | `Readonly<Record<string, string>>` | Names the role each listed tag carries in the accessibility tree when it declares none of its own.         |
+| `MEDIA_STAGE`        | const | `string`                           | Names the tester root's attribute holding the media readings observed before the first stage.              |
+| `POINTER_HOLD`       | const | `string`                           | Names the tester root's attribute holding the pressed pointer's page coordinates.                          |
 
 #### Helpers
 
-| API                     | Kind     | Signature                                                                                               | Summary                                                                                                                                                                                     |
-| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolveAccessible`     | function | `(name: string) => HTMLElement` / `(role: string, name: string) => HTMLElement`                         | Resolves one visible, focus-reachable interactive element by its exact accessible name. A wholly-off-viewport target is scrolled into view before reachability is measured.                 |
-| `resolveRendered`       | function | `(first: string, second?: string) => HTMLElement`                                                       | Resolves one rendered, focus-reachable interactive element without requiring it to intersect the viewport yet.                                                                              |
-| `computeNamePattern`    | function | `(name: string) => RegExp`                                                                              | Computes the pattern that matches one accessible name a decorative glyph may sit beside.                                                                                                    |
-| `isOutsideViewport`     | function | `(rectangle: DOMRectReadOnly) => boolean`                                                               | Determines whether a rectangle lies wholly outside the browser viewport.                                                                                                                    |
-| `isRendered`            | function | `(element: Element) => boolean`                                                                         | Determines whether the accessibility tree presents one element at all.                                                                                                                      |
-| `isReachable`           | function | `(element: Element) => boolean`                                                                         | Determines whether a person can click one element where it sits.                                                                                                                            |
-| `clickAccessible`       | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                     | Clicks one visible, focus-reachable control by its accessible name through the browser provider.                                                                                            |
-| `clickAccessibleWithin` | function | `(region: string, role: string, name: string) => Promise<void>`                                         | Clicks one human-reachable control by role and accessible-name text inside a named region.                                                                                                  |
-| `clickDisclosure`       | function | `(name: string) => Promise<void>`                                                                       | Opens or closes one native details disclosure by its rendered summary.                                                                                                                      |
-| `typeAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Replaces a named field's value through focus, select-all, deletion, and real keystrokes.                                                                                                    |
-| `fillAccessible`        | function | `(name: string, text: string) => Promise<void>`                                                         | Replaces a named field's value in one operation, for text too long to type key by key.                                                                                                      |
-| `traverseAccessible`    | function | `(name: string) => Promise<HTMLElement>`                                                                | Reaches a named control only through natural forward Tab traversal from the current focus.                                                                                                  |
-| `readPerception`        | function | `(name: string) => string`                                                                              | Reads the normalized visible text of one named region, dialog, table, tab panel, or alert.                                                                                                  |
-| `readPage`              | function | `() => string`                                                                                          | Reads the normalized visible text of the whole page.                                                                                                                                        |
-| `readFocus`             | function | `() => string \| undefined`                                                                             | Reads the rendered text of the element that holds focus.                                                                                                                                    |
-| `readValue`             | function | `(role: string, name: string) => string`                                                                | Reads the value a resolved control renders.                                                                                                                                                 |
-| `readText`              | function | `(element: Element) => string`                                                                          | Reads one element's rendered text the way a name computation reads it.                                                                                                                      |
-| `readRole`              | function | `(element: Element) => string \| undefined`                                                             | Reads the role one element carries in the accessibility tree.                                                                                                                               |
-| `readName`              | function | `(element: Element) => string`                                                                          | Reads the accessible name one element is announced under.                                                                                                                                   |
-| `readStates`            | function | `(element: Element) => readonly string[]`                                                               | Reads the states one element is announced in.                                                                                                                                               |
-| `describeTree`          | function | `(element: Element) => string`                                                                          | Describes the accessible tree one rendered element presents.                                                                                                                                |
-| `describeFocus`         | function | `(element: Element) => string`                                                                          | Describes the order sequential keyboard navigation visits one element's controls in.                                                                                                        |
-| `waitForFrame`          | function | `() => Promise<void>`                                                                                   | Waits for one animation frame to settle pending browser paint work.                                                                                                                         |
-| `build`                 | function | `<K extends keyof HTMLElementTagNameMap>(tag: K, options?: ElementOptions) => HTMLElementTagNameMap[K]` | Builds one unmounted element of a known tag, wearing the classes, text, and attributes asked for.                                                                                           |
-| `mount`                 | function | `<T extends Element>(element: T) => T`                                                                  | Puts one element into the document and hands it straight back.                                                                                                                              |
-| `render`                | function | `(markup: string) => HTMLDivElement` / `(tag: K, classes: string) => HTMLElementTagNameMap[K]`          | Renders one fixture into the document from trusted markup.                                                                                                                                  |
-| `typeInput`             | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets one field's value and announces it the way typing into the field does.                                                                                                                 |
-| `commitInput`           | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                              | Sets one field's value and commits it, the way typing and then leaving the field does.                                                                                                      |
-| `clearStorage`          | function | `() => void`                                                                                            | Clears both browser storage surfaces.                                                                                                                                                       |
-| `removeDatabase`        | function | `(name: string) => Promise<void>`                                                                       | Deletes one IndexedDB database and reports what the request actually did.                                                                                                                   |
-| `parseColor`            | function | `(value: string) => Color \| undefined`                                                                 | Parses one computed CSS color value into straight sRGB channels.                                                                                                                            |
-| `parseCSSColor`         | function | `(value: string) => Color \| undefined`                                                                 | Resolves any CSS color expression to straight sRGB channels, by asking the browser.                                                                                                         |
-| `matchesColor`          | function | `(first: string \| Color, second: string \| Color) => boolean`                                          | Determines whether two colors render the same, within the rounding a browser does.                                                                                                          |
-| `blendColor`            | function | `(front: Color, back: Color) => Color`                                                                  | Composites one color over another.                                                                                                                                                          |
-| `measureLuminance`      | function | `(color: Color) => number`                                                                              | Measures one opaque color's WCAG relative luminance.                                                                                                                                        |
-| `measureContrast`       | function | `(front: Color, back: Color) => number`                                                                 | Measures the WCAG 2.x contrast ratio between two opaque colors.                                                                                                                             |
-| `readLayers`            | function | `(element: Element) => readonly Color[]`                                                                | Collects the painted layers standing between one element and the surface it sits on.                                                                                                        |
-| `readBackdrop`          | function | `(element: Element, floor: Color) => Color`                                                             | Resolves the opaque color standing behind one element.                                                                                                                                      |
-| `readContrast`          | function | `(element: Element, floor?: Color) => number`                                                           | Measures the WCAG 2.x contrast ratio between an element's computed text and background colors.                                                                                              |
-| `readRing`              | function | `(control: Element, worn?: Element) => number \| undefined`                                             | Measures the contrast the focus chrome painted on one control reaches against its own backdrop.                                                                                             |
-| `measureContent`        | function | `() => number`                                                                                          | Measures the row the document's own content ends on, in document coordinates.                                                                                                               |
-| `stagePane`             | function | `(width: number, height: number) => Promise<void>`                                                      | Sets the tester's viewport and renders the runner's pane at the size that viewport claims.                                                                                                  |
-| `releasePane`           | function | `() => Promise<void>`                                                                                   | Hands the tester pane back to the runner's own layout, at the viewport it had before staging.                                                                                               |
-| `captureFrame`          | function | `(options: FrameOptions) => Promise<string>`                                                            | Shoots one frame at one viewport size and proves the file on disk holds this run's bytes.                                                                                                   |
-| `readFrame`             | function | `(path: string) => Promise<FrameReading>`                                                               | Reads one written frame back and reports its size and the color its bottom row paints.                                                                                                      |
-| `readCascade`           | function | `() => ReadonlySet<string>`                                                                             | Collects every class token the stylesheets loaded into this document actually define.                                                                                                       |
-| `readClasses`           | function | `(root: ParentNode) => ReadonlySet<string>`                                                             | Collects every class token the markup under one root carries.                                                                                                                               |
-| `readRules`             | function | `() => readonly CSSRule[]`                                                                              | Collects every rule the stylesheets loaded into this document hold, nested grouping rules included.                                                                                         |
-| `findRule`              | function | `(selector: string) => CSSStyleRule \| undefined`                                                       | Finds the first style rule in the cascade whose selector carries a fragment.                                                                                                                |
-| `findKeyframes`         | function | `(name: string) => CSSKeyframesRule \| undefined`                                                       | Finds the animation the cascade declares under one name.                                                                                                                                    |
-| `readRows`              | function | `(root: ParentNode, selector: string) => readonly string[]`                                             | Reads the normalized visible text of every element a selector matches, in document order.                                                                                                   |
-| `extractOrphans`        | function | `(root: ParentNode, child: string, parent: string) => readonly string[]`                                | Collects every element carrying a component class rendered outside the container it belongs to.                                                                                             |
-| `extractStyles`         | function | `(root: ParentNode) => readonly string[]`                                                               | Collects the markup of every element carrying a non-empty `style` attribute and of every `<style>` element, in document order, `root` included in both populations when it is an `Element`. |
-| `readStyle`             | function | `(element: Element, property: string) => string`                                                        | Reads one resolved CSS property from a real browser element.                                                                                                                                |
-| `readToken`             | function | `(element: Element, name: string) => string`                                                            | Reads one custom property from an element's resolved style.                                                                                                                                 |
-| `readRootToken`         | function | `(name: string) => string`                                                                              | Reads one custom property from the document element.                                                                                                                                        |
-| `readPixels`            | function | `(element: Element, property: string) => number`                                                        | Reads one resolved CSS length as a number of pixels.                                                                                                                                        |
-| `expandCaptures`        | function | `(states: readonly string[], variants: readonly CaptureVariant[]) => readonly string[]`                 | Expands a capture registry across every variant into the filenames a complete portfolio holds.                                                                                              |
+| API                        | Kind     | Signature                                                                                                               | Summary                                                                                                                                                                                                                                                                         |
+| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolveAccessible`        | function | `(name: string) => HTMLElement` / `(role: string, name: string) => HTMLElement`                                         | Resolves one visible, focus-reachable interactive element by its exact accessible name. A wholly-off-viewport target is scrolled into view before reachability is measured.                                                                                                     |
+| `resolveAccessibleWithin`  | function | `(region: string, role: string, name: string) => HTMLElement`                                                           | Resolves one human-reachable control by role and accessible-name text inside a named region.                                                                                                                                                                                    |
+| `resolveRendered`          | function | `(first: string, second?: string) => HTMLElement`                                                                       | Resolves one rendered, focus-reachable interactive element without requiring it to intersect the viewport yet.                                                                                                                                                                  |
+| `computeNamePattern`       | function | `(name: string) => RegExp`                                                                                              | Computes the pattern that matches one accessible name a decorative glyph may sit beside.                                                                                                                                                                                        |
+| `isOutsideViewport`        | function | `(rectangle: DOMRectReadOnly) => boolean`                                                                               | Determines whether a rectangle lies wholly outside the browser viewport.                                                                                                                                                                                                        |
+| `isRendered`               | function | `(element: Element) => boolean`                                                                                         | Determines whether the accessibility tree presents one element at all.                                                                                                                                                                                                          |
+| `isReachable`              | function | `(element: Element) => boolean`                                                                                         | Determines whether a person can click one element where it sits.                                                                                                                                                                                                                |
+| `readHit`                  | function | `(element: Element) => Element \| undefined`                                                                            | Reads the topmost element at one element's bounding-box centre.                                                                                                                                                                                                                 |
+| `clickAccessible`          | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                                     | Clicks one visible, focus-reachable control by its accessible name through the browser provider.                                                                                                                                                                                |
+| `clickAccessibleWithin`    | function | `(region: string, role: string, name: string) => Promise<void>`                                                         | Clicks one human-reachable control by role and accessible-name text inside a named region.                                                                                                                                                                                      |
+| `clickDisclosure`          | function | `(name: string) => Promise<void>`                                                                                       | Opens or closes one native details disclosure by its rendered summary.                                                                                                                                                                                                          |
+| `sendProtocol`             | function | `(method: string, params: Readonly<Record<string, unknown>>) => Promise<void>`                                          | Sends one DevTools protocol command through the browser provider.                                                                                                                                                                                                               |
+| `hoverAccessible`          | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                                     | Hovers one visible, focus-reachable control by its accessible name through the browser provider.                                                                                                                                                                                |
+| `holdAccessible`           | function | `(name: string) => Promise<void>` / `(role: string, name: string) => Promise<void>`                                     | Holds the primary pointer button on one visible, focus-reachable control by its accessible name.                                                                                                                                                                                |
+| `holdAccessibleWithin`     | function | `(region: string, role: string, name: string) => Promise<void>`                                                         | Holds the primary pointer button on one control by role and accessible-name text inside a named region.                                                                                                                                                                         |
+| `driveHold`                | function | `(resolve: () => HTMLElement, name: string) => Promise<void>`                                                           | Holds the primary pointer button on the control a resolver returns, through the browser provider.                                                                                                                                                                               |
+| `releasePointer`           | function | `() => Promise<void>`                                                                                                   | Releases a held pointer and parks it outside the page, clearing hover.                                                                                                                                                                                                          |
+| `typeAccessible`           | function | `(name: string, text: string) => Promise<void>`                                                                         | Replaces a named field's value through focus, select-all, deletion, and real keystrokes.                                                                                                                                                                                        |
+| `fillAccessible`           | function | `(name: string, text: string) => Promise<void>`                                                                         | Replaces a named field's value in one operation, for text too long to type key by key.                                                                                                                                                                                          |
+| `traverseAccessible`       | function | `(name: string) => Promise<HTMLElement>`                                                                                | Reaches a named control only through natural forward Tab traversal from the current focus.                                                                                                                                                                                      |
+| `traverseAccessibleWithin` | function | `(region: string, role: string, name: string) => Promise<HTMLElement>`                                                  | Reaches a control by role and accessible-name text inside a named region, only through natural forward Tab traversal from the current focus.                                                                                                                                    |
+| `driveTraversal`           | function | `(resolve: () => HTMLElement, name: string) => Promise<HTMLElement>`                                                    | Reaches the control a resolver returns, only through natural forward Tab traversal from the current focus.                                                                                                                                                                      |
+| `pressKeys`                | function | `(keys: string) => Promise<void>`                                                                                       | Sends a key sequence to whatever holds focus, and refuses to send it to nothing.                                                                                                                                                                                                |
+| `readPerception`           | function | `(name: string) => string`                                                                                              | Reads the normalized visible text of one named region, dialog, table, tab panel, or alert.                                                                                                                                                                                      |
+| `readPage`                 | function | `() => string`                                                                                                          | Reads the normalized visible text of the whole page.                                                                                                                                                                                                                            |
+| `readFocus`                | function | `() => string \| undefined`                                                                                             | Reads the rendered text of the element that holds focus.                                                                                                                                                                                                                        |
+| `readValue`                | function | `(role: string, name: string) => string`                                                                                | Reads the value a resolved control renders.                                                                                                                                                                                                                                     |
+| `readRefusal`              | function | `(name: string) => string \| undefined` / `(role: string, name: string) => string \| undefined`                         | Reads the refusal one named target answers with, or nothing when it resolves.                                                                                                                                                                                                   |
+| `readText`                 | function | `(element: Element) => string`                                                                                          | Reads one element's rendered text the way a name computation reads it.                                                                                                                                                                                                          |
+| `readRole`                 | function | `(element: Element) => string \| undefined`                                                                             | Reads the role one element carries in the accessibility tree.                                                                                                                                                                                                                   |
+| `readName`                 | function | `(element: Element) => string`                                                                                          | Reads the accessible name one element is announced under.                                                                                                                                                                                                                       |
+| `readStates`               | function | `(element: Element) => readonly string[]`                                                                               | Reads the states one element is announced in.                                                                                                                                                                                                                                   |
+| `describeTree`             | function | `(element: Element) => string`                                                                                          | Describes the accessible tree one rendered element presents.                                                                                                                                                                                                                    |
+| `describeFocus`            | function | `(element: Element) => string`                                                                                          | Describes the order sequential keyboard navigation visits one element's controls in.                                                                                                                                                                                            |
+| `waitForFrame`             | function | `() => Promise<void>`                                                                                                   | Waits for one animation frame to settle pending browser paint work.                                                                                                                                                                                                             |
+| `waitForState`             | function | `(name, state, options?) => Promise<readonly string[]>` / `(role, name, state, options?) => Promise<readonly string[]>` | Waits until one named control announces a state, or stops announcing it.                                                                                                                                                                                                        |
+| `waitForAnimations`        | function | `(element: Element, options?: WaitOptions) => Promise<void>`                                                            | Waits until every finite animation on one element and its subtree has stopped moving.                                                                                                                                                                                           |
+| `build`                    | function | `<K extends keyof HTMLElementTagNameMap>(tag: K, options?: ElementOptions) => HTMLElementTagNameMap[K]`                 | Builds one unmounted element of a known tag, wearing the classes, text, and attributes asked for.                                                                                                                                                                               |
+| `mount`                    | function | `<T extends Element>(element: T) => T`                                                                                  | Puts one element into the document and hands it straight back.                                                                                                                                                                                                                  |
+| `render`                   | function | `(markup: string) => HTMLDivElement` / `(tag: K, classes: string) => HTMLElementTagNameMap[K]`                          | Renders one fixture into the document from trusted markup.                                                                                                                                                                                                                      |
+| `typeInput`                | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                                              | Sets one field's value and announces it the way typing into the field does.                                                                                                                                                                                                     |
+| `commitInput`              | function | `(element: HTMLInputElement \| HTMLTextAreaElement, text: string) => void`                                              | Sets one field's value and commits it, the way typing and then leaving the field does.                                                                                                                                                                                          |
+| `clearStorage`             | function | `() => void`                                                                                                            | Clears both browser storage surfaces.                                                                                                                                                                                                                                           |
+| `removeDatabase`           | function | `(name: string) => Promise<void>`                                                                                       | Deletes one IndexedDB database and reports what the request actually did.                                                                                                                                                                                                       |
+| `convertSRGB`              | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts normalized encoded sRGB channels to the clipped paint scale.                                                                                                                                                                                                           |
+| `convertLinearSRGB`        | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts linear sRGB channels to encoded, clipped paint channels.                                                                                                                                                                                                               |
+| `convertXYZD65`            | function | `(x: number, y: number, z: number, alpha?: number) => Color`                                                            | Converts D65 XYZ coordinates to clipped sRGB paint channels.                                                                                                                                                                                                                    |
+| `convertXYZD50`            | function | `(x: number, y: number, z: number, alpha?: number) => Color`                                                            | Converts D50 XYZ coordinates to clipped sRGB paint channels.                                                                                                                                                                                                                    |
+| `convertOKLab`             | function | `(lightness: number, a: number, b: number, alpha?: number) => Color`                                                    | Converts OKLab coordinates to clipped sRGB paint channels.                                                                                                                                                                                                                      |
+| `convertLab`               | function | `(lightness: number, a: number, b: number, alpha?: number) => Color`                                                    | Converts CIE Lab coordinates relative to D50 to clipped sRGB paint channels.                                                                                                                                                                                                    |
+| `convertDisplayP3`         | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts encoded Display P3 channels to clipped sRGB paint channels.                                                                                                                                                                                                            |
+| `convertA98RGB`            | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts encoded A98 RGB channels to clipped sRGB paint channels.                                                                                                                                                                                                               |
+| `convertProPhotoRGB`       | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts encoded ProPhoto RGB channels to clipped sRGB paint channels.                                                                                                                                                                                                          |
+| `convertRec2020`           | function | `(red: number, green: number, blue: number, alpha?: number) => Color`                                                   | Converts encoded Rec. 2020 channels to clipped sRGB paint channels.                                                                                                                                                                                                             |
+| `parseColor`               | function | `(value: string) => Color \| undefined`                                                                                 | Parses computed CSS Color 4 values into clipped straight sRGB channels.                                                                                                                                                                                                         |
+| `parseCSSColor`            | function | `(value: string) => Color \| undefined`                                                                                 | Resolves any CSS color expression to straight sRGB channels, by asking the browser.                                                                                                                                                                                             |
+| `matchesColor`             | function | `(first: string \| Color, second: string \| Color) => boolean`                                                          | Determines whether two colors render the same, within the rounding a browser does.                                                                                                                                                                                              |
+| `blendColor`               | function | `(front: Color, back: Color) => Color`                                                                                  | Composites one color over another.                                                                                                                                                                                                                                              |
+| `measureLuminance`         | function | `(color: Color) => number`                                                                                              | Measures one opaque color's WCAG relative luminance.                                                                                                                                                                                                                            |
+| `measureContrast`          | function | `(front: Color, back: Color) => number`                                                                                 | Measures the WCAG 2.x contrast ratio between two opaque colors.                                                                                                                                                                                                                 |
+| `readLayers`               | function | `(element: Element) => readonly Color[]`                                                                                | Collects readable background color layers and refuses an unreadable painted layer.                                                                                                                                                                                              |
+| `readBackdrop`             | function | `(element: Element, floor: Color) => Color`                                                                             | Resolves the opaque color standing behind one element.                                                                                                                                                                                                                          |
+| `readContrast`             | function | `(element: Element, floor?: Color) => number`                                                                           | Measures the WCAG 2.x contrast ratio between an element's computed text and background colors.                                                                                                                                                                                  |
+| `readRing`                 | function | `(control: Element, worn?: Element) => number \| undefined`                                                             | Measures the contrast the focus chrome painted on one control reaches against its own backdrop.                                                                                                                                                                                 |
+| `readClipEdge`             | function | `(element: Element) => number \| undefined`                                                                             | Measures the row a clipping element cuts its content off at, in document coordinates.                                                                                                                                                                                           |
+| `readClipMargin`           | function | `(element: Element) => number`                                                                                          | Measures how far past its own box a clipping element lets its content show.                                                                                                                                                                                                     |
+| `clipsOverflow`            | function | `(element: Element) => boolean`                                                                                         | Reports whether an element clips its descendants' overflow.                                                                                                                                                                                                                     |
+| `measureContent`           | function | `() => number`                                                                                                          | Measures the row the document's own content ends on, in document coordinates.                                                                                                                                                                                                   |
+| `stagePane`                | function | `(width: number, height: number) => Promise<void>`                                                                      | Sets the tester's viewport and renders the runner's pane at the size that viewport claims.                                                                                                                                                                                      |
+| `releasePane`              | function | `() => Promise<void>`                                                                                                   | Hands the tester pane back to the runner's own layout, at the viewport it had before staging.                                                                                                                                                                                   |
+| `computeOffset`            | function | `(box: DOMRectReadOnly, width: number, height: number) => FrameOffset`                                                  | Computes how far an element frame moves the tester frame so the element is shot inside the runner's window.                                                                                                                                                                     |
+| `stageMedia`               | function | `(options: MediaOptions) => Promise<void>`                                                                              | Stages the tester's print medium, motion preference, and forced colours through the browser provider.                                                                                                                                                                           |
+| `releaseMedia`             | function | `() => Promise<void>`                                                                                                   | Restores the media readings observed before the first stage as explicit emulation. With nothing staged, clears every override and waits for a stable reading, not a proved engine baseline. Checks the budget between polls, so a frame that never paints is not bounded by it. |
+| `captureFrame`             | function | `(options: FrameOptions) => Promise<string>`                                                                            | Shoots one frame at one viewport size and proves the file on disk holds this run's bytes.                                                                                                                                                                                       |
+| `readFrame`                | function | `(path: string) => Promise<FrameReading>`                                                                               | Reads one written frame back and reports its size and the color its bottom row paints.                                                                                                                                                                                          |
+| `readCascade`              | function | `() => ReadonlySet<string>`                                                                                             | Collects every class token the stylesheets loaded into this document actually define.                                                                                                                                                                                           |
+| `readClasses`              | function | `(root: ParentNode) => ReadonlySet<string>`                                                                             | Collects every class token the markup under one root carries.                                                                                                                                                                                                                   |
+| `readCensus`               | function | `(root: ParentNode) => CensusReading`                                                                                   | Takes the authored-class census of one subtree against the cascade this document loaded.                                                                                                                                                                                        |
+| `readRules`                | function | `() => readonly CSSRule[]`                                                                                              | Collects every rule the stylesheets loaded into this document hold, nested grouping rules included.                                                                                                                                                                             |
+| `findRule`                 | function | `(selector: string) => CSSStyleRule \| undefined`                                                                       | Finds the first style rule in the cascade whose selector carries a fragment.                                                                                                                                                                                                    |
+| `findKeyframes`            | function | `(name: string) => CSSKeyframesRule \| undefined`                                                                       | Finds the animation the cascade declares under one name.                                                                                                                                                                                                                        |
+| `readRows`                 | function | `(root: ParentNode, selector: string) => readonly string[]`                                                             | Reads the normalized visible text of every element a selector matches, in document order.                                                                                                                                                                                       |
+| `extractOrphans`           | function | `(root: ParentNode, child: string, parent: string) => readonly string[]`                                                | Collects every element carrying a component class rendered outside the container it belongs to.                                                                                                                                                                                 |
+| `extractStyles`            | function | `(root: ParentNode) => readonly string[]`                                                                               | Collects the markup of every element carrying a non-empty `style` attribute and of every `<style>` element, in document order, `root` included in both populations when it is an `Element`.                                                                                     |
+| `readStyle`                | function | `(element: Element, property: string, pseudo?: string) => string`                                                       | Reads one resolved CSS property from a real browser element or a named pseudo-element.                                                                                                                                                                                          |
+| `readToken`                | function | `(element: Element, name: string) => string`                                                                            | Reads one custom property from an element's resolved style.                                                                                                                                                                                                                     |
+| `readRootToken`            | function | `(name: string) => string`                                                                                              | Reads one custom property from the document element.                                                                                                                                                                                                                            |
+| `readPixels`               | function | `(element: Element, property: string, pseudo?: string) => number`                                                       | Reads one resolved CSS length as a number of pixels.                                                                                                                                                                                                                            |
+| `expandCaptures`           | function | `(states: readonly string[], variants: readonly CaptureVariant[]) => readonly string[]`                                 | Expands a capture registry across every variant into the filenames a complete portfolio holds.                                                                                                                                                                                  |
+| `buildDenial`              | function | `(operation: string, key?: string) => DOMException`                                                                     | Builds the refusal a host withholding a storage operation raises.                                                                                                                                                                                                               |
+| `buildContrast`            | function | `(bar: number) => ContrastFixture`                                                                                      | Builds a detached translucent stack whose composited and flat contrast readings straddle one bar.                                                                                                                                                                               |
+| `buildEscapes`             | function | `(permitted: string) => EscapeFixture`                                                                                  | Builds detached markup carrying one style escape of each kind, plus the sheet a project allows.                                                                                                                                                                                 |
+| `buildCensus`              | function | `() => CensusFixture`                                                                                                   | Builds detached markup carrying one undeclared class token on HTML and another on SVG.                                                                                                                                                                                          |
 
 #### Factories
 
@@ -337,6 +397,8 @@ A `Shape` cell holds the constant's declared type.
 | `createPortfolio`    | function | `(options: PortfolioOptions) => PortfolioInterface`                                                       | Creates the capture portfolio one run places its screenshots through.                             |
 | `createChannel`      | function | `(name: string, output: string[], forward: (...data: unknown[]) => void) => (...data: unknown[]) => void` | Creates one console channel that records every call it receives and hands that call on unchanged. |
 | `createJournal`      | function | `() => JournalInterface`                                                                                  | Creates the journal one scenario records its steps and the page's own output into.                |
+| `createStorage`      | function | `(options?: StorageOptions) => WebStorageInterface`                                                       | Creates an inert `Storage` a host can withhold, grant, and run out of room in.                    |
+| `createHarness`      | function | `(options: HarnessOptions<TState, TEvent, TContext>) => HarnessInterface`                                 | Creates a mounted statechart harness that renders one transition table and drives it row by row.  |
 
 `resolveAccessible` counts a match as reachable only when every condition holds: it is connected; it
 passes a visibility check honouring opacity and CSS; its box has non-zero width and height; its
@@ -379,13 +441,20 @@ rendered status completes its accessible name: the region supplies the context, 
 has to be recognisable inside it. The loose match reads a computed name that includes the hidden
 subtrees, so a glyph joins the text rather than displacing it and the control is still recognisable
 under the words beside it. That verb owns one refusal for a control it cannot reach, absent or
-hidden, so it needs no second pass to tell the two apart.
+hidden, so it needs no second pass to tell the two apart. `resolveAccessibleWithin` is that
+resolution on its own, and `holdAccessibleWithin` and `traverseAccessibleWithin` drive the control it
+resolves the way `holdAccessible` and `traverseAccessible` drive a document-wide one, so a twin of
+the same name in another region is left alone.
 
 `traverseAccessible` charges a step only when focus actually lands on an element, ends when focus
 revisits one — that is a complete cycle of the tab order — and re-resolves the target by name on
 every step, because a framework may replace the node between resolution and focus arrival. Its hard
 cap is three times the page's candidate count plus ten, including disabled controls and elements
 with `tabindex="-1"`, so a page whose focus never settles fails instead of hanging.
+`driveTraversal` is that loop over any resolver, and `driveHold` is the one pointer drive every hold
+verb shares, releasing the pointer before refusing when the frame wait or the pressed-state read
+fails, as well as when the press misses; each verb supplies its resolver and the name its refusals
+voice.
 
 `build` and `mount` are the halves of a fixture, and `render` is the pair spelled as one call.
 `build` creates the element and applies its class list, its text, and its attributes, and leaves it
@@ -417,6 +486,16 @@ reached the code that opens one. A block is a rejection rather than a wait: `blo
 another connection is still open, and a suite that swallowed it would leave the next test reading
 the previous test's records through a database that reports itself deleted. The connection holding
 it open is the caller's to close, and [Voices](#voices) carries the message each refusal spells.
+
+The paint parser reads computed `rgb()`, `rgba()`, `oklab()`, `oklch()`, `lab()`,
+`lch()`, and `color()` values. Its predefined spaces are `srgb`, `srgb-linear`,
+`display-p3`, `a98-rgb`, `prophoto-rgb`, `rec2020`, `xyz`, `xyz-d50`, and
+`xyz-d65`. Signed channels, percentage lightness, degree hues, scientific notation, and
+`none` components resolve to straight sRGB. The exported conversion helpers apply the
+[CSS Color 4 matrices and white-point adaptation](https://www.w3.org/TR/css-color-4/#color-conversion-code).
+The Rec. 2020 decoder follows Chromium's piecewise transfer curve. Encoded sRGB channels are
+clipped to 0–255 after conversion; this reader does not perform perceptual gamut mapping.
+Alpha is clipped to 0–1.
 
 `parseCSSColor` is the live half of the pair `parseColor` opens. `parseColor` reads text and speaks
 only the computed syntaxes a cascade hands back; `parseCSSColor` stages a probe element, hands the
@@ -450,6 +529,12 @@ layers blend to identical channels over black and over white alike, because the 
 share falls below the last bit a channel carries, so comparing two composited readings admits the
 stack the refusal exists for.
 
+An unreadable painted background layer throws an error naming its element and computed value.
+Non-finite calculations such as `color(srgb calc(infinity) 0 0)` are deliberately unreadable.
+A layer with an explicit zero alpha paints nothing and is skipped, including an unreadable one.
+Background images remain outside this color reader. The refusal propagates through `readBackdrop`,
+`readContrast`, and the focused-control reading in `readRing`, even with a supplied floor.
+
 `readBackdrop` composites that stack and takes its floor as an argument rather than reaching for
 `CANVAS_COLOR` itself, so a measurement over a surface the canvas never shows through names the
 color it actually sits on. When no layer paints it hands that floor straight back.
@@ -460,7 +545,8 @@ the browser painted once it landed: the `outline` the cascade declares, and the 
 `outline-style: auto` ring, and a focus style that only changes the control's own fill all report
 `undefined` — in each case no measurement taken here would be about focus. `worn` names the element
 the chrome is painted onto when that is not the element holding focus, which is the hidden-input
-control whose visible label wears every pixel of its chrome.
+control whose visible label wears every pixel of its chrome. Modern colors, including an
+`oklch()` box-shadow, return the ring’s contrast ratio against its backdrop.
 
 `readRules` is the one walk over the shipped cascade, and `readCascade`, `findRule`, and
 `findKeyframes` all read through it. It collects each sheet's own rules in sheet order and then
@@ -523,7 +609,7 @@ command and compares it with the shot itself, which is what separates this run's
 earlier run left behind. It releases the pane in a `finally`, so a refusal at any stage hands the
 tester back before it propagates.
 
-The frame covers the whole document at the width it was given, whatever height it was given. The
+A page frame covers the whole document at the width it was given, whatever height it was given. The
 provider shoots the tester's body in the top-level page's own coordinates, so a document taller than
 the pane paints for the pane's height and the rows under it are the runner's page: the frame reads
 as the surface down to the fold and as bare canvas after it. `captureFrame` therefore lays the
@@ -537,9 +623,18 @@ reads back as the document's own height. A capture that staged a pane taller tha
 not descend from a reading like that — the box, `body.scrollHeight`, `body.offsetHeight`, and
 `documentElement.scrollHeight` each answer with the pane. `measureContent` walks the elements inside
 the body instead, taking the largest bottom edge in document coordinates plus that element's own
-bottom margin, and adds the body's and the root's bottom padding and margin under them. It rounds
-up, which is what covers a body ending part way through a row: a box ending on a fraction under a
-half is a row the integer scroll height drops, and that row comes out as the runner's page.
+bottom margin, and adds the body's and the root's bottom padding and margin under them. An
+ancestor that clips its overflow (the `clipsOverflow` helper: an `overflow-y` value other than the
+`visible` keyword, or a paint containment) caps a descendant's edge at that ancestor's clip edge,
+which the `readClipEdge` helper reads. An `overflow-y` value of the `hidden` keyword, the `auto`
+keyword, or the `scroll` keyword clips at the padding box, whatever the ancestor's
+`overflow-clip-margin` value selects. The `clip` keyword and a paint containment over a `visible`
+overflow clip at the box that value selects, the padding box by default, expanded by the length the
+`readClipMargin` helper reads. So a viewport-height specimen
+inside a bounded frame ends, for the reading, where the frame ends rather than stretching the
+document with every pane. It rounds up, which is what covers a body ending part way through a row: a
+box ending on a fraction under a half is a row the integer scroll height drops, and that row comes
+out as the runner's page.
 
 The edge is read again after every staging, because a rule bound to the viewport height — a `vh`
 length, a fixed footer, a full-height panel — lays the document out taller against the taller pane,
@@ -562,13 +657,40 @@ written at a height that is already wrong. That bound is 4: a document holding h
 fixed block settles in two restagings, one whose growth is capped part way settles in three, and
 the fourth is headroom.
 
+An element frame no taller than the declared height is shot in the declared pane, so its viewport
+lengths resolve against the declared viewport whether the element sits above the fold, below it, or
+fixed: a `50vh` element under a 900-row block reads back 422 rows in an 844-row pane. The re-reading
+takes the element's own height, so the pane grows only for an element taller than the declared
+height, and then to that element's height, which is what its viewport lengths resolve against.
+Where the element's box lies outside the pane, the document is scrolled by the nearest distance that
+would bring it inside, and the box is read again. A fixed element past the pane can take a scroll
+that does not move it, and that scroll is handed back with the rest. The document is not scrolled for
+an element already inside the pane.
+
+The provider paints an element that fits the runner's window only where that window shows it. Where
+such an element lies past the window, the `captureFrame` function offsets the calling tester frame up
+or left only as far as brings the element inside, and composites the frame so a fixed element that
+starts past the window's height is not culled. The `computeOffset` function computes that move. The
+offset is written on that frame's own `style` attribute, outranks the placement the `stagePane`
+function makes, and is removed as soon as the screenshot settles. An element inside the window, or
+too large for it, is not offset.
+
+The capture sends no pointer input. The staging lifts the tester to the window's origin, a scroll
+brings an element outside the pane into it, and an offset brings an element past the window inside;
+each moves content under a pointer resting on the page. A pointer the case placed on the element,
+with the pane already staged at the frame's size, keeps its hover in the frame where the element lies
+inside both the pane and the runner window, because the capture then moves nothing. No hover is
+promised after the pane is released.
+
 `readFrame` reads a written frame back: its size in device pixels, and the single color its bottom
 row paints. The reading comes off the file through the browser's own image decoding rather than off
 the document that produced it, which is what makes it evidence about the capture rather than a
 second look at the style that fed it — a clipped frame reports the runner's white canvas as its
 floor while every style in the document still resolves to the document's own background. Pass the
 absolute path `captureFrame` returned: the runner's `readFile` command resolves a relative path
-against its own root rather than against the calling test file.
+against its own root rather than against the calling test file. A file that opens with a PNG header
+and still does not decode is refused with the width and height that header declares, in device
+pixels; a file with no PNG header is refused without a size.
 
 `createPortfolio` refuses an unregistered variant name at creation, so a run cannot write a filename
 naming a combination it did not render. A portfolio left un-`enabled` is the ordinary run: `place`
@@ -836,6 +958,36 @@ earlier [Surface](#surface) rows.
 | `stop`   | `void`  | Stops recording and hands every intercepted console channel back by identity. |
 | `record` | `void`  | Records one step, when the journal is started.                                |
 
+#### `WebStorageInterface`
+
+| Method   | Returns | Summary                                                                      |
+| -------- | ------- | ---------------------------------------------------------------------------- |
+| `permit` | `void`  | Grants the reads and the writes the host withheld, and replenishes no quota. |
+
+The rest of the surface is the platform's: `length`, `key`, `getItem`, `setItem`, `removeItem`, and
+`clear` are declared by the host `Storage` interface this one extends. A store created here answers
+through those methods and intercepts no named-property access, so drive a consumer under test
+through `getItem` and `setItem`;
+[Bounds a shipped helper carries](#bounds-a-shipped-helper-carries) states what the property form
+reads instead.
+
+#### `HarnessInterface`
+
+| Method    | Returns         | Summary                                                                  |
+| --------- | --------------- | ------------------------------------------------------------------------ |
+| `execute` | `Promise<void>` | Drives every row in table order, from a fresh tally and a cleared state. |
+| `destroy` | `void`          | Removes the mounted root, and does nothing when it is already removed.   |
+
+`execute` drives the table the harness was constructed with, so a second call re-runs the same rows.
+It clears every rendered `result`, the rendered `state`, and the tally before the first row starts,
+and that reset is readable while the run is in flight: a harness mid-re-run reports nothing passed,
+nothing failed, and no state rather than what the run before it left. Every exit writes a terminal
+status, because the gate polling the markup has no rejection channel to read: a run that completes
+writes `passed` or `failed`, and a run a `state` reader ends writes `failed` and then rejects with
+that reader's value by identity, without counting the row as failed. `destroy` takes the root out of
+the document and leaves the element itself intact, so the tally a finished run published is still
+readable from the object afterwards.
+
 #### `ScratchInterface`
 
 | Method    | Returns               | Summary                                                                               |
@@ -928,43 +1080,72 @@ what the link reaches, not on what it stores.
 Every message `src/browser` throws. Keep them distinct: a journey asserts the one it means, and
 absent, present-but-gated, and ambiguous are different findings about an interface.
 
-| Voice                                                                                 | Thrown by               |
-| ------------------------------------------------------------------------------------- | ----------------------- |
-| `No interactive element has the accessible name "<name>"`                             | `resolveRendered`       |
-| `Interactive target "<name>" is not visible and focus-reachable`                      | `resolveRendered`       |
-| `Interactive target "<name>" is ambiguous across <n> elements`                        | `resolveRendered`       |
-| `Interactive target "<name>" could not be resolved`                                   | `resolveRendered`       |
-| `Interactive target "<name>" is unreachable after scrolling`                          | `resolveAccessible`     |
-| `Interactive target "<name>" is not reachable inside "<region>"`                      | `clickAccessibleWithin` |
-| `Interactive target "<name>" is ambiguous across <n> elements inside "<region>"`      | `clickAccessibleWithin` |
-| `Interactive target "<name>" could not be resolved inside "<region>"`                 | `clickAccessibleWithin` |
-| `Native disclosure "<name>" is not visible and focus-reachable`                       | `clickDisclosure`       |
-| `Native disclosure "<name>" is ambiguous across <n> elements`                         | `clickDisclosure`       |
-| `Native disclosure "<name>" could not be resolved`                                    | `clickDisclosure`       |
-| `Interactive target "<name>" is not reachable through forward Tab traversal: <trail>` | `traverseAccessible`    |
-| `Named region "<name>" is not visible`                                                | `readPerception`        |
-| `Named region "<name>" is ambiguous across <n> elements`                              | `readPerception`        |
-| `Named region "<name>" could not be resolved`                                         | `readPerception`        |
-| `Interactive target "<name>" does not carry a value`                                  | `readValue`             |
-| `Computed foreground color is unavailable`                                            | `readContrast`          |
-| `Computed background color is unavailable`                                            | `readContrast`          |
-| `Tester pane is unavailable for a capture`                                            | `stagePane`             |
-| `Tester pane rendered <w>x<h> for a <w>x<h> viewport`                                 | `stagePane`             |
-| `Capture frame at <path> never settled after <n> restagings: <h> over a <h> pane`     | `captureFrame`          |
-| `Capture frame was written to <path> where <path> was asked for`                      | `captureFrame`          |
-| `Capture frame at <path> is not the one this run shot`                                | `captureFrame`          |
-| `Capture frame at <path> could not be read`                                           | `readFrame`             |
-| `Capture frame at <path> is not an image this browser decodes`                        | `readFrame`             |
-| `Capture frame at <path> cannot be measured without a 2D canvas`                      | `readFrame`             |
-| `Capture variant "<name>" is not registered`                                          | `createPortfolio`       |
-| `Capture state "<state>" is not registered`                                           | `place`                 |
-| `Capture state "<state>" is already placed`                                           | `place`                 |
-| `IndexedDB database "<name>" could not be deleted`                                    | `removeDatabase`        |
-| `IndexedDB database "<name>" is blocked by an open connection`                        | `removeDatabase`        |
+| Voice                                                                                    | Thrown by                 |
+| ---------------------------------------------------------------------------------------- | ------------------------- |
+| `No interactive element has the accessible name "<name>"`                                | `resolveRendered`         |
+| `Interactive target "<name>" is not visible and focus-reachable`                         | `resolveRendered`         |
+| `Interactive target "<name>" is ambiguous across <n> elements`                           | `resolveRendered`         |
+| `Interactive target "<name>" could not be resolved`                                      | `resolveRendered`         |
+| `Interactive target "<name>" is unreachable after scrolling`                             | `resolveAccessible`       |
+| `Interactive target "<name>" is not reachable inside "<region>"`                         | `resolveAccessibleWithin` |
+| `Interactive target "<name>" is ambiguous across <n> elements inside "<region>"`         | `resolveAccessibleWithin` |
+| `Interactive target "<name>" could not be resolved inside "<region>"`                    | `resolveAccessibleWithin` |
+| `Native disclosure "<name>" is not visible and focus-reachable`                          | `clickDisclosure`         |
+| `Native disclosure "<name>" is ambiguous across <n> elements`                            | `clickDisclosure`         |
+| `Native disclosure "<name>" could not be resolved`                                       | `clickDisclosure`         |
+| `Interactive target "<name>" is not reachable through forward Tab traversal: <trail>`    | `driveTraversal`          |
+| `Named region "<name>" is not visible`                                                   | `readPerception`          |
+| `Named region "<name>" is ambiguous across <n> elements`                                 | `readPerception`          |
+| `Named region "<name>" could not be resolved`                                            | `readPerception`          |
+| `Interactive target "<name>" does not carry a value`                                     | `readValue`               |
+| `Computed foreground color is unavailable`                                               | `readContrast`            |
+| `Computed background color is unavailable`                                               | `readContrast`            |
+| `Tester pane is unavailable for a capture`                                               | `stagePane`               |
+| `Tester pane rendered <w>x<h> for a <w>x<h> viewport`                                    | `stagePane`               |
+| `Capture frame at <path> never settled after <n> restagings: <h> over a <h> pane`        | `captureFrame`            |
+| `Capture frame was written to <path> where <path> was asked for`                         | `captureFrame`            |
+| `Capture frame at <path> is not the one this run shot`                                   | `captureFrame`            |
+| `Capture frame at <path> could not be read`                                              | `readFrame`               |
+| `Capture frame at <path> is not an image this browser decodes`                           | `readFrame`               |
+| `Capture frame at <path> is not an image this browser decodes: <w>x<h> device pixels`    | `readFrame`               |
+| `Capture frame at <path> cannot be measured without a 2D canvas`                         | `readFrame`               |
+| `Capture variant "<name>" is not registered`                                             | `createPortfolio`         |
+| `Capture state "<state>" is not registered`                                              | `place`                   |
+| `Capture state "<state>" is already placed`                                              | `place`                   |
+| `IndexedDB database "<name>" could not be deleted`                                       | `removeDatabase`          |
+| `IndexedDB database "<name>" is blocked by an open connection`                           | `removeDatabase`          |
+| `Key sequence "<keys>" was sent with nothing focused`                                    | `pressKeys`               |
+| `Condition "<subject>" did not hold within <n>ms (waited <n>ms) (last states: <states>)` | `waitForState`            |
+| `Animation subject is not connected`                                                     | `waitForAnimations`       |
+| `Animation "<subject>" did not settle within <n>ms (waited <n>ms): <animations>`         | `waitForAnimations`       |
+| `Class census walked no element`                                                         | `readCensus`              |
+| `Contrast control cannot straddle the bar <bar>`                                         | `buildContrast`           |
+| `Access is denied for <operation> "<key>"`                                               | `buildDenial`             |
+| `No room is left for <key>`                                                              | `createStorage`           |
+| `Storage quota must be a non-negative integer`                                           | `createStorage`           |
+| `Statechart harness mounted no transition`                                               | `createHarness`           |
+| `Statechart harness carries no status`                                                   | `status`                  |
+
+Some of those rows are not plain `Error` messages. `buildDenial` returns a `DOMException` named
+`SecurityError`, `createStorage` raises that one from every operation the permission withholds and a
+`DOMException` named `QuotaExceededError` from a write past the quota, and each carries the name a
+denied or full origin carries. Assert on the `name` as well as on the message.
+
+The `waitForState` and `waitForAnimations` rows are the wait family's own voices with a subject
+this layer supplies. `waitForState`
+names the control and the state it was waiting for as its condition's description, and appends the
+states it last read, so an exhausted wait says what the control was announcing instead.
+`waitForAnimations` names the subject through `readRole` and `readName` and lists the animations
+still running. Both validate their bounds through `checkBounds`, which raises
+`Wait budget must be finite and non-negative` for the first and `Animation budget must be finite and
+non-negative` for the second.
 
 Some of them are narrowing rather than findings, and no input reaches them. Each `could not be
 resolved` is one: a preceding length check does not narrow the later lookup under
-`noUncheckedIndexedAccess`, so the branch gives the value its type.
+`noUncheckedIndexedAccess`, so the branch gives the value its type. `Statechart harness carries no
+status` is another: the harness writes that attribute at construction and nothing but the harness
+writes it, so the reading is a member of `STATECHART_STATUSES` unless a caller took the attribute
+off the root it was handed.
 
 The capture guards are the other population no test drives, because each answers for a runner or a
 provider this package does not control. `Tester pane is unavailable for a capture` fires where
@@ -975,9 +1156,27 @@ disk disagrees with the bytes the provider handed back — which a provider that
 never produces, so the suite proves that comparison discriminates with a planted file rather than by
 reaching the refusal. `Capture frame at <path> cannot be measured without a 2D canvas` is narrowing
 of the same kind: a canvas allocated for this reading and asked for no other context type hands one
-back. `readFrame`'s other two refusals are driven, by a path holding no file and by a file holding
-no image, and so is `Capture frame at <path> never settled after <n> restagings`, by a fixture whose
-full-height panel grows with every pane the capture stages.
+back. The remaining refusals of the `readFrame` function are driven, by a path holding no file, by a
+file holding no image, and by a PNG header over no image data, and so is
+`Capture frame at <path> never settled after <n> restagings`, by a fixture whose full-height panel
+grows with every pane the capture stages.
+
+The pointer, pseudo-element, and media helpers add the following voices.
+
+| Voice                                                         | Thrown by      |
+| ------------------------------------------------------------- | -------------- |
+| `Browser provider exposes no DevTools session`                | `sendProtocol` |
+| `Pointer is already held at <x>x<y>`                          | `driveHold`    |
+| `Interactive target "<name>" did not enter the pressed state` | `driveHold`    |
+| `Pseudo-element "<pseudo>" must start with "::"`              | `readStyle`    |
+| `Pseudo-element "<pseudo>" is not one this engine exposes`    | `readStyle`    |
+| `Media emulation was staged with nothing to emulate`          | `stageMedia`   |
+| `Media emulation did not reach the tester: <query>`           | `stageMedia`   |
+| `Media emulation did not clear from the tester`               | `releaseMedia` |
+
+The resolver's absent, gated, ambiguous, and unreachable voices stay unchanged. The DevTools-session
+and media-delivery refusals guard provider failures the managed Chromium suite doesn't induce.
+The suite exercises real delivery rather than substituting a provider that manufactures a failure.
 
 ### Refusals outside the journey layer
 
@@ -1142,9 +1341,17 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
    fixture looking alive. `remove` is written out for the opposite reason: `rmSync` with `force`
    does not throw on a path that is not there, so without the check it would report success against
    a fixture that is gone.
-9. **Zero runtime dependencies, and no foreign type in a signature.** `dependencies` is empty and
-   stays empty. No exported signature names an `@orkestrel/*` type, so no consumer can be handed a
-   two-copies type failure by installing this package.
+9. **One runtime dependency, and no foreign type in a signature.** `dependencies` holds exactly
+   `@orkestrel/contract`: `src/core` reads its `Result` inside `retryUntil` and narrows with its
+   guards, `src/browser` narrows with them too, and `src/server` narrows and parses with them. The
+   [Limits](#limits) row `An outcome triple` records that adoption and why a second copy of the type
+   was refused. `vitest` is a peer dependency rather than a runtime one, so the runner a consumer
+   already installed is the one this package drives. No exported signature names a type from another
+   `@orkestrel` package, so no consumer can be handed a two-copies type failure by installing this
+   package. The browser entry's declarations do name this package's own core types — `CaptureVariant`
+   extends `JourneyVariant`, and `StateOptions` extends `WaitOptions` — and the declaration roll-up
+   writes those as imports from `@orkestrel/test`. That is one package resolving its own root entry
+   rather than a second copy of anything, which is the whole of what the two-copies rule is about.
 10. **`createTeardown` runs newest-first, and every handler runs.** `destroy()` takes the registered
     handlers in reverse registration order and awaits each one before starting the next, so a
     handler that undoes what a later registration depends on runs after it. A handler that throws or
@@ -1156,9 +1363,10 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     joining this one, and `count` read from inside a running handler counts only those late
     registrations. A repeated `destroy()` runs nothing that already ran, which is what makes it
     idempotent. The list registers no Vitest hook itself: the consumer writes
-    `afterEach(() => teardown.destroy())` once, in its own setup. That one line is the price of the
-    zero-dependency contract, because registering the hook here would take a runtime dependency on
-    the test runner and the zero-runtime-dependencies contract forbids one.
+    `afterEach(() => teardown.destroy())` once, in its own setup. That one line is what keeps the
+    runner out of this package's `dependencies`: registering the hook here would take a runtime
+    dependency on the test runner, and `vitest` is a peer dependency precisely so the installation
+    the consumer already made is the one that runs.
 11. **`createLoopback` binds a server the caller made.** The caller constructs its own unstarted
     server and keeps every protocol handler on it; this package supplies the bind and the release
     and nothing else. It listens on port `0` at `127.0.0.1`, so the host assigns the port and the
@@ -1188,24 +1396,29 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     into a description of the markup. `build` creates a node, `mount` attaches one, `render` does
     both, `clearStorage` takes nothing at all, and `removeDatabase` takes a database name. The
     predicates, the element readers, and the describers do take a node —
-    `isRendered`, `isReachable`, `readText`, `readRole`, `readName`, `readStates`, `describeTree`,
-    `describeFocus`, `extractOrphans`, `readRows`, `readStyle`, `readToken`, `readPixels`,
-    `readContrast`, `readLayers`, `readBackdrop`, and `readRing` — and each is a reader of a node
-    the caller already has rather than a verb that acts on a target. `captureFrame` and `place` take
-    one as the subject of a photograph, which is a reading too: neither moves focus, dispatches an
-    event, nor changes what the element renders. `typeInput` and `commitInput` are the one pair that
-    acts on the element it is handed, and the exception is deliberately narrow: they are the
-    synthetic counterpart of `typeAccessible`, for a component that listens for `input` and a test
-    that already holds the field. Drive the field by name wherever the keystrokes are part of what
-    the journey claims. `readRing` is the case that makes the split explicit. It measures the focus
-    chrome a browser painted and never brings the focus about, so a journey reaches the control
-    through `traverseAccessible` or `userEvent.keyboard` from `vitest/browser` and then measures what
-    landed. The whole environment imports `vitest/browser` and DOM globals and nothing else — no
-    `src/core` import, no framework, no `node:*`, and no `import.meta.env`, so whether a run writes
-    captures is the consumer's decision through `PortfolioOptions.enabled` rather than an environment
-    variable this package reads. `vitest` is a peer dependency, so the provider the layer drives is
-    the one the consumer already installed, and the zero-runtime-dependencies contract's empty
-    `dependencies` is untouched.
+    `isRendered`, `isReachable`, `readHit`, `readText`, `readRole`, `readName`, `readStates`,
+    `readCensus`, `describeTree`, `describeFocus`, `extractOrphans`, `readRows`, `readStyle`,
+    `readToken`, `readPixels`, `readContrast`, `readLayers`, `readBackdrop`, and `readRing` — and
+    each is a reader of a node the caller already has rather than a verb that acts on a target.
+    `waitForAnimations` takes one as the subject of a wait, and waiting for a browser to stop
+    painting it changes nothing about it. `buildContrast`, `buildEscapes`, and `buildCensus` return
+    detached nodes for the caller to append and remove, the way `build` does. `captureFrame`
+    and `place` take one as the subject of a photograph, which is a reading too: neither moves
+    focus, dispatches an event, nor changes what the element renders. `typeInput` and `commitInput`
+    are the one pair that acts on the element it is handed, and the exception is deliberately
+    narrow: they are the synthetic counterpart of `typeAccessible`, for a component that listens for
+    `input` and a test that already holds the field. Drive the field by name wherever the keystrokes
+    are part of what the journey claims. `readRing` is the case that makes the split explicit. It
+    measures the focus chrome a browser painted and never brings the focus about, so a journey
+    reaches the control through `traverseAccessible` or `pressKeys` and then measures what landed.
+    The environment imports `vitest/browser`, DOM globals, this package's own core, and the
+    `@orkestrel/contract` guards it narrows with — and no framework, no `node:*`, and no
+    `import.meta.env`, so whether a run writes captures is the consumer's decision through
+    `PortfolioOptions.enabled` rather than an environment variable this package reads. The core
+    import ships as an import rather than as a second copy: the browser build declares `@src/core`
+    external and rewrites it to the core entry beside it, and the declaration roll-up rewrites it to
+    the package name, so a consumer resolves one `waitForCondition` rather than two. `vitest` is a
+    peer dependency, so the provider the layer drives is the one the consumer already installed.
 14. **The wait family polls only where nothing publishes an event.** The no-polling architecture law
     governs a product's idle wakeup: a running system parks on the event or the abort signal that
     fires. A test instrument is the other case. It waits on a fact another process produces — a file
@@ -1214,7 +1427,15 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     budget measured with `performance.now()`. Where an event does exist, `waitForEvent` is the door:
     it parks on the subscription, validates the interval for consistency with the family and never
     uses it, and invokes the cleanup the subscriber returned on timeout, on abort, and on delivery
-    alike. `waitForCondition`, `retryUntil`, and `waitForEvent` each name what they are waiting for,
+    alike. `waitForAnimations` is the browser environment's parking door, on the same terms: it parks
+    on each animation's own `finished` promise and validates the interval for consistency with the
+    family without ever using it. `waitForText` polls, because a reading of text publishes no event,
+    and it refuses two calls no reading could ever satisfy before it takes one: an empty `text` or
+    an empty `absent` with `Text expectation must not be empty`, because every string contains the
+    empty string, and a `text` that carries `absent` with
+    `Text departure must not appear in the text expectation`, because a reading that satisfies the
+    arrival carries the departure too — under `exact` it equals `text` and without it contains
+    `text`. `waitForCondition`, `retryUntil`, and `waitForEvent` each name what they are waiting for,
     and that description is what the timeout message carries — a wait nobody described times out
     saying nothing about what failed. Every bound is validated finite and non-negative before
     anything is read, a budget of `0` still permits the immediate first reading, and an abort rejects
@@ -1243,13 +1464,29 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     element, the `hidden` attribute, a hidden input, and a `display` or `visibility` that takes it
     off the page. `isReachable` reads geometry, and adds connectedness, a visibility check that
     honours opacity, a non-zero box, the sequential focus order, `:disabled` and `aria-disabled`, and
-    the `[inert]` ancestor. A control clipped to a
-    zero-size rectangle is the case that separates them: the accessibility tree still announces it,
-    so `isRendered` accepts it and `isReachable` refuses it. `isReachable` is the one reachability
-    filter the layer applies — `resolveRendered`, `clickAccessibleWithin`, and `clickDisclosure` each
-    narrow their own candidates and then keep the ones it accepts — so a journey meets one rule
-    rather than near-copies of it. Neither asks about the viewport; `resolveAccessible` scrolls a
-    wholly off-viewport target into view and measures that separately with `isOutsideViewport`.
+    the `[inert]` ancestor. It adds one reading the element's own facts cannot carry: an open modal
+    dialog. A shown `[aria-modal="true"]` element that does not contain the subject refuses it,
+    because a pointer, a Tab, and a reader honouring that attribute all stop at the dialog while the
+    covered control stays connected, laid out, and focusable. The dialog is put through `isRendered`,
+    so a drawer parked at `visibility: hidden` excludes nothing, and containment follows the flat
+    tree, so the innermost dialog rules and a host it holds carries its shadow content with it.
+    Applying that inside the predicate is what keeps the resolver, the ambiguity count, the Tab
+    trail, and every acting verb agreeing with the person in front of the dialog, and it is what
+    takes away the name splitting a consumer writes to keep a covered control out of the count. A
+    control clipped to a zero-size rectangle is the case that separates them: the accessibility tree
+    still announces it, so `isRendered` accepts it and `isReachable` refuses it. `isReachable` is the
+    one reachability filter the layer applies — `resolveRendered`, `clickAccessibleWithin`, and
+    `clickDisclosure` each narrow their own candidates and then keep the ones it accepts — so a
+    journey meets one rule rather than near-copies of it. Neither asks about the viewport;
+    `resolveAccessible` scrolls a wholly off-viewport target into view and measures that separately
+    with `isOutsideViewport`.
+    `readHit` reads beside that pair rather than filtering with it. It hit-tests one point — the
+    element's own bounding-box centre — which is how it sees what neither predicate can: a cover
+    over a control they both accept, and a wrapped inline target whose centre falls between its line
+    boxes. No acting verb consults it, because it names a node rather than ruling, and `isReachable`
+    stays the one reachability filter the verbs apply. It is also the reader that needs the pair run
+    first, and [Bounds a shipped helper carries](#bounds-a-shipped-helper-carries) states what it
+    reports for an element that failed them.
 17. **A journal forwards every console call and swallows nothing.** A browser publishes no listener
     for its own output, so `createJournal` stands in front of the console and hands each call on to
     the channel that was there when `start` armed it. A run under a journal therefore prints exactly
@@ -1272,19 +1509,44 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     `Tester pane rendered <w>x<h> for a <w>x<h> viewport` rather than writing a wrong frame. The
     coupling therefore fails loudly, and the version this rule names moves with the fix instead of a
     suite shipping thumbnails nobody inspects. The same layout decides what a frame covers: the
-    provider shoots the tester's body in the top-level page's coordinates, so `captureFrame` stages
-    the pane again at the document's own height wherever the document outruns the declared one, and
-    a frame is neither shorter nor taller than the document it photographs. That height is
+    provider shoots the tester's body in the top-level page's coordinates, so the `captureFrame`
+    function stages the pane again at the document's own height wherever the document outruns the
+    declared one, and a page frame is neither shorter nor taller than the document it photographs.
+    That height is
     `measureContent`, the content's own edge rounded up, rather than the body's box: the box is the
     larger of the content and the pane, so a taller pane stretches it and a capture cannot read its
     way back down. The edge is read again after every staging, because a rule bound to the viewport
     height lays the document out taller against the taller pane, and each staging carries the growth
     the one before it produced so a converging document lands on its fixed point rather than
     creeping toward it. The re-reading is bounded by `CAPTURE_STAGINGS`, and a document still
-    growing at that bound is refused rather than photographed at a stale height. What the capture borrows it gives back —
-    `releasePane` returns the tester to the viewport it held before the staging, so the variant a
-    frame was shot at belongs to that frame alone, and a suite that wants a size of its own calls
-    `page.viewport` rather than this pair.
+    growing at that bound is refused rather than photographed at a stale height. An element frame
+    keeps the declared pane unless its element is taller, and offsets the calling tester frame only
+    as far as brings the element inside the runner's window. What
+    the capture borrows it gives back: the `releasePane` function returns the tester to the viewport
+    it held before the staging, the capture then restores the tester's scroll position, even where
+    the release rejects, and it restores the offset frame's
+    `style` attribute as soon as the screenshot settles. So the variant a frame was shot at belongs
+    to that frame alone, and a suite that wants a size of its own calls the `page.viewport` method
+    rather than this pair.
+19. **The statechart harness is test-side, and the markup is its whole contract.** A page cannot
+    import this package. `@orkestrel/test` is a development dependency, its browser entry imports
+    `vitest/browser` at module scope, and that import throws outside Browser Mode — so an
+    application that reached for `createHarness` would be shipping the runner to production.
+    The harness therefore mounts from the suite, and the only thing that crosses to a gate
+    outside the page is the rendered markup. `STATECHART_ATTRIBUTES` names every attribute on
+    both sides of that boundary, so neither the harness nor the gate spells a `data-statechart-*`
+    string of its own. The markup is framework-free and the harness renders it with `build` and
+    `mount`, so a workspace that installs no view library can still run it. Every reading the
+    object publishes comes off that markup rather than out of a field beside it: `status`,
+    `total`, `passed`, and `failed` read the root's attributes and `failures` reads the name of
+    each row whose rendered `result` reads `failed`, so a test asserting on the object and a gate
+    polling the page cannot report different things. That gate has no rejection channel, so every
+    exit writes a terminal status: a completed run writes `passed` or `failed`, and a run that a
+    `state` reader or a non-`Error` phase throw ends writes `failed` and then rejects with that
+    value by identity, leaving the row it was reading uncounted. A run that rejected while the root
+    still read `running` would strand the gate on a reading the harness never leaves. The gate stays
+    outside this package: the harness carries its own tally, so nothing here reads a harness back,
+    and no page is generated or published to host one.
 
 ### Threat model
 
@@ -1373,14 +1635,41 @@ or when a consumer appears the ruling did not consider.
 | A DOM element builder                                                                            | Ships   | It ships as `build` for the element and `mount` for the attachment, and `render` widened to take a tag and its class list as well as markup. A class list, a text, and an attribute map are what a fixture actually varies, and expressing that variation through markup means assembling a string. Nothing here assembles a tree one call at a time: a fixture with children is still written as markup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | A surface digest — `describeSurface`                                                             | Refused | Its digest format is one workspace's policy about what a summary of a surface contains, and it is assembled from the excluded `extractControls` besides. `describeTree` and `describeFocus` publish the readings a digest is built from instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | A control extractor — `extractControls`                                                          | Refused | Generalized past its one caller it is a wrapper over `querySelectorAll` that adds no boundary, invariant, composition, or narrower contract, which is what the superfluous-wrapper rule refuses.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| A pointer-centre hit reading — `readHit`                                                         | Ships   | It ships as `readHit`. `extractControls` is the bar it has to clear, and it does: the centre computation composes a rectangle reading with a hit test, the `undefined` translation is this package's absence convention for a reader, and "the point is always this element's centre" is a materially narrower contract than `elementFromPoint`. `roughnotes` writes that composition inline in `App.test.ts`, `integration.test.ts`, and the `ContactForm`, `PaymentForm`, and `SubscribeForm` suites, each against the cover and the wrapped target `isReachable` cannot see.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Text resolution by selector — `resolveText`                                                      | Refused | The journey-layer contract is the one it breaks: a journey verb resolves its own target from a role and an accessible name, and one that takes a selector turns a journey into a description of the markup. Taking a node the test already holds is a different thing, which is what the element readers do; `findRule` takes a selector because its subject is the stylesheet rather than a target to act on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | A hand-driven timer — `terminal`, `toolbox`                                                      | Refused | `toolbox` runtime-depends on `terminal`, so the two are one implementation rather than independent demand. The shape is also `@orkestrel/terminal`'s published `TimerHandler`, which a copy here would redeclare unversioned and hand consumers a second incompatible type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | A hand-driven clock — `mcp`, `middleware`                                                        | Refused | `AGENTS.md` bans replacing the host clock outright, so publishing one from the fleet's own test package would sanction across every workspace the substitution those rules refuse. `waitForDelay` waits on a real host timer and `waitForCondition` bounds a real elapsed interval with `performance.now()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | A reserve-then-release port picker                                                               | Refused | It binds a port, closes it, and hands the number to a child that binds it again, and the window between that close and that rebind is a race another process on the host can win. Have the child bind `0` and report back the port it was given; `createLoopback` does exactly that for a server the test owns itself.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | An abort-signal wait — `waitForAbort`                                                            | Ships   | It ships as `waitForAbort`. Every bounded member still takes `WaitOptions.signal` and rejects with the signal's own reason, so a bounded wait needs nothing here; this answers the other case, where the abort is itself the fact the test waits for. It parks on a one-shot listener with no timer and no budget, so a signal that never aborts is the caller's own deadlock rather than a timeout this could name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Abort-signal instrumentation                                                                     | Ships   | It ships as `createSignal`. A recorder handed to `addEventListener('abort', …)` still records what one listener heard; what no recorder can answer is how many listeners stand on the signal at this moment, which is the question a leak asks. The instrumented signal counts its own abort registrations, keyed by the original callback and the capture mode, so a helper that removes what it added proves the removal. A registration leaves the tally on removal, on a one-shot delivery, and when a signal scoping it aborts, which is what makes the reading a live tally rather than an install count.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| An outcome triple — a produced arm, a failed arm, and their union                                | Ships   | It ships as `Success`, `Failure`, and `Result`. The rule governing it permits a local declaration only where no declared dependency already carries one, and this package declares no runtime dependency at all, so it cannot import `@orkestrel/contract`'s. That buys a divergence a consumer holding both packages meets: the two `Success<T>` declarations carry identical members and so do the two `Failure<E>` declarations, while `@orkestrel/test`'s `Result<T, E = Error>` defaults its failure type to `Error` and `@orkestrel/contract`'s `Result<T, E = unknown>` leaves it `unknown`. No signature published here returns one — `retryUntil` reads the type internally — so a workspace holding both packages takes its outcome from `@orkestrel/contract` and reaches for this one only where the value came from this package.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| An outcome triple — a produced arm, a failed arm, and their union                                | Adopted | This package runtime-depends on `@orkestrel/contract` and imports `Result`, `Success`, and `Failure` from it rather than shipping a second copy. No signature published here returns one — `retryUntil` reads the type internally — and the names are not re-exported.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | A statechart transition table and its runner                                                     | Ships   | It ships as `StateTransition` and `StateScenario`, driven by `executeScenario` and `executeScenarios`, with `STATECHART_ATTRIBUTES` and `STATECHART_STATUSES` for the harness a browser workspace renders. `elements` and `veneer` each declare the field-identical pair of interfaces in their own setup file, so the fleet already writes this twice and a third copy drifts the moment one of them adds a phase. The runner ships in its walking form rather than its registering one: a package helper registers no test, so `describe` and `it.each` stay in the workspace and this drives whatever rows it is handed. The row's name is what a failure carries, because a table's rows run under one test name and a bare assertion message never says which row produced it. No published package declares a generic transition record or a closure-walking runner. `@orkestrel/workflow` names a task's behavior with a string and sequences structurally, so it neither takes a scenario's closures nor drives `arrange`, `act`, and `assert` in order, and adopting it would move this package off layer 0 and pull that package's whole runtime graph into every consumer's test install. `STATECHART_STATUSES` names a harness's reported run state rather than a task's derived status, so it does not restate `LifecycleStatus`. `STATECHART_ATTRIBUTES` is the fleet contract the journey skill's statechart reference fixes for every harness and every gate, so it is a mechanism the fleet shares rather than one suite's policy. |
+| A keyboard verb — `pressKeys`                                                                    | Ships   | It ships as `pressKeys`, and the refusal is what keeps it from being a rename of `userEvent.keyboard`. A key sent while the document body holds focus reaches no control, every assertion after it reads the surface the key never touched, and nothing in the provider's verb reports that. The refusal is an invariant rather than a spelling, and the skill stops teaching the provider's verb directly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| A text wait — `waitForText`                                                                      | Ships   | It ships in `src/core` as `waitForText`, because a reading of text is host-independent and the reader is a parameter. `waitForCondition` is the poll underneath it and asks the caller to write the comparison; `retryUntil` repeats a real operation and counts a throw as an attempt, which is the wrong direction for a reading that must stop on a broken region. What this adds over writing the predicate by hand is the pair of bounds a replacement needs: `exact` for a reading that must be the sentence rather than carry it, and `absent` for the sentence the screen is replacing, without which a wait resolves on the frame carrying both. An empty expectation is refused rather than satisfied by every reading.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| An announced-state wait — `waitForState`                                                         | Ships   | It ships as `waitForState`. The fleet's browser suites poll a framework's own class names to decide a menu has finished opening, which reads a stylesheet's vocabulary and goes stale when the framework renames it. This waits on what the control announces, resolves the control afresh on every reading so a re-rendered node is still the subject, and returns the states at resolution so an assertion has them. Where a surface announces nothing, the finding is the surface's: the replacement is an `aria-expanded` on the trigger rather than a helper that reads classes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| An animation wait — `waitForAnimations`                                                          | Ships   | It ships as `waitForAnimations`. The fleet hand-rolled the same loop over `getAnimations` in more than one workspace, and a contrast or color reading taken while paint is moving reports an interpolated frame no state of the interface paints. It parks on each animation's own `finished` promise rather than polling, re-reads after each completion so an animation a finishing one starts is waited on, and excludes an animation declaring infinite iterations — a spinner that runs forever is a finding about the reading rather than a wait to lengthen.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| A refusal reader — `readRefusal`                                                                 | Ships   | It ships as `readRefusal`. `captureError` is the bar it has to clear and it does: this fixes the resolver rather than taking any thunk, translates the `unknown` a capture hands back into `string \| undefined`, and rethrows what is not an `Error` instead of returning it as a message. A journey asserting that a control is gated rather than absent compares the exact sentence, and `roughnotes` writes that same capture inline wherever it asserts on a refusal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| A storage fixture — `createStorage`                                                              | Ships   | It ships as `createStorage`, returning `WebStorageInterface`. A consumer declared a class bounding writes and a class withholding permission, and each is the same inert store under different options. It is a real `Storage` backed by a map of its own, it patches neither browser surface, and `permit` grants what the host withheld. A stalled read was refused with it: `Storage` is synchronous, so a stall is not expressible against the interface a consumer codes to.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| An authored-class census — `readCensus`                                                          | Ships   | It ships as `readCensus`. `readClasses` differenced against `readCascade` is the check, and every workspace writes that difference the same way; what each of them omits is the population, so a walk that read nothing reports the same empty difference as markup whose every class the cascade declares. Reporting `elements` beside `undeclared` and refusing an empty walk is the invariant this adds over the two readings it composes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Control fixture builders — `buildContrast`, `buildEscapes`, `buildCensus`                        | Ships   | Each ships. An instrument is not evidence until its control has failed, and a consumer's contrast, style-escape, and census readings each ran against fixtures that could not fail them: every other fixture painted its own opaque background, so the compositing walk never ran; the escape reading was fed an inline attribute and never a `<style>` element; and the census was fed an HTML token and never the SVG one whose class list is no string. Each builder is parameterized by what the policy owns — the bar, the exempt id — and returns detached nodes, so the caller decides where they are read and nothing is mounted for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| A stalled-read store                                                                             | Refused | A store whose reads hang is not expressible against the interface a consumer codes to: `Storage` is synchronous, so `getItem` either answers or throws and there is no point at which a caller awaits it. A test that needs a hanging read needs an asynchronous surface, which is a different subject from the Web Storage one `createStorage` stands in for.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| A painted-population predicate — `isPainted`                                                     | Refused | The platform already answers it. `element.checkVisibility()` reports what the box tree renders and a non-zero `getBoundingClientRect()` reports what occupies space, and `isRendered` and `isReachable` already compose those two for the questions this layer asks. A third predicate over the same readings adds a name rather than an invariant.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| A statechart harness — `createHarness`                                                           | Ships   | It ships as `createHarness`, with `HarnessOptions` and `HarnessInterface` beside it. The attribute contract is one every consumer would otherwise implement identically, which is the same admission that shipped the journey layer: `STATECHART_ATTRIBUTES` already published the names, and a workspace writing its own renderer against them writes a slightly different root, a slightly different row, and a gate that reads one workspace's markup and not the next one's. It renders framework-free markup through `build` and `mount`, drives each row through the `executeScenario` this package already publishes, and carries on past a failing row so one run reports on the whole table.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| A separate gate reader — `readHarness`                                                           | Refused | The object already carries the tally. `createHarness` returns `status`, `total`, `passed`, `failed`, and `failures`, every one of them read off the rendered markup, so a second helper that parsed the same attributes back out would be a wrapper over `getAttribute` adding no boundary, invariant, or translation. A gate running outside this package is outside its environment too — it polls a page from a process that never imports a module importing `vitest/browser` — so what it needs is the attribute names, and `STATECHART_ATTRIBUTES` is what publishes them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| A generated or published harness page                                                            | Refused | Which transitions a surface owes, where that page is deep-linked, and whether it ships to anyone are product decisions, and framework code stops before them. A page hosting a harness would also have to import this package, which rule 19 rules out: the browser entry imports `vitest/browser` at module scope. The mechanism ships and the page does not.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| A framework-class disclosure settle                                                              | Refused | A helper that waits for a named element to carry one class and not two others encodes one framework's transition vocabulary, which is that framework's policy rather than a mechanism. `waitForState` waits on what the control announces and `waitForAnimations` waits on the paint itself, and between them they answer the question the class poll was asked. A surface announcing nothing is the finding.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+The journey additions have these candidate rulings.
+
+| Candidate                       | Ruling  | Why                                                                                                                                                                                                                                                                                                           |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A hover verb                    | Ships   | `hoverAccessible` adds exact role/name resolution and the journey's reachability boundary to the provider's hover primitive.                                                                                                                                                                                  |
+| A pointer hold                  | Ships   | `holdAccessible` composes resolution, tester-scale mapping, a trusted press, and a pressed-state read-back through `driveHold`; `holdAccessibleWithin` resolves inside a named region and drives the same hold. `releasePointer` releases the hold and clears hover. Veneer's Button consumes the held paint. |
+| A pseudo-element style read     | Ships   | The third argument of `readStyle` and `readPixels` selects another subject of the same CSSOM reading. A separate reader would duplicate that operation.                                                                                                                                                       |
+| A medium emulation              | Ships   | `stageMedia` bounds the axes through `MediaOptions`, reads back `print: true`, either `motion` value, and either `forced` value, and pairs with `releaseMedia` for teardown. A `print: false` stage is sent and followed by a frame wait without a read-back.                                                 |
+| A DevTools command door         | Ships   | `sendProtocol` centralizes the unchecked provider boundary shared by pointer and media operations. The scale control consumes it directly.                                                                                                                                                                    |
+| A general media-feature map     | Refused | The consumer needs print, motion, and forced colours. A free-form map adds an unbounded contract without a consumer.                                                                                                                                                                                          |
+| A scoped hold taking a callback | Refused | The layer already uses stage-and-release pairs. An `afterEach` hook owns release after a failed test without a second lifecycle form.                                                                                                                                                                         |
 
 `ScratchInterface`'s own members were ruled the same way, and coherence rather than demand decided
 them. `ensure` ships because it is the one member that produces an empty directory — `write` always
@@ -1404,6 +1693,50 @@ peer, protocol fixture, and domain builder stays in the package that owns it.
 A shipped helper can still decline the question it looks like it answers. Each bound here belongs to
 the helper rather than to the host, and each names what to reach for instead.
 
+- **`holdAccessible` maps through the tester iframe's painted scale and reads `:active` back.** It
+  presses the control's centre and releases before refusing a missed press. If that release also
+  rejects, the missed-press refusal carries it as its cause. That path can't be driven from inert
+  input against a conforming engine, because the marker is built from the coordinates the press
+  used; it is covered by review. The measured layout is a single accessible, uniformly scaled tester
+  iframe. A covered centre or unsupported geometry can refuse even when the resolver accepts the
+  target. The verb inherits the resolver's focus reachability conditions.
+- **`releasePointer` parks the pointer outside the page.** It releases at the recorded point first,
+  which can produce a click. It then clears hover by moving to (-1, -1) in the runner page's
+  coordinates, one pixel above and to the left of that page's viewport. The browser hit-tests
+  nothing outside the viewport, so no element takes a `mouseover` event or hover paint from the
+  parked pointer until the next pointer verb. This holds even where a staging, scroll, or offset
+  lays content over the park point. Register it with `afterEach` before a hover
+  or hold. A second release sends no button-up event. Holds must not overlap. A rejected press
+  leaves no marker. A rejected release keeps the marker for a retry and still attempts the park. If
+  that park also rejects, the park's error surfaces with the release rejection attached in the
+  aggregate's errors; the park rejection is its cause.
+- **`stageMedia` overrides the provider page, and `releaseMedia` restores the first stage's
+  readings.** Pin a base with `{ motion: true }` rather than assuming the host prefers motion.
+  `motion: false` stages reduced motion; `print: true` stages print, and `print: false` stages
+  screen; `forced: true` stages active forced colours, and `forced: false` stages none. An omitted
+  print, motion, or forced axis keeps its effective reading, as does `prefers-color-scheme`. Any
+  other emulated feature the provider configured is cleared. An empty `{}`
+  refuses. Each staged query has a 1000 ms read-back budget with a 10 ms poll interval; refusal
+  restores the carried pre-call readings before throwing and can take two budgets. A restoration
+  failure is attached as the refusal's cause. The read-back exhaustion path can't be driven from
+  inert input against a conforming engine; its restoration is covered by review and by the shared
+  payload code, not by a case. The first stage records print, reduced motion, dark colour scheme,
+  and forced colours on the tester root under `MEDIA_STAGE`, as a bit string in that order (`1` for
+  a match, `0` otherwise). Later stages keep that marker. Release restores those readings as
+  explicit emulation rather than removing every override, waits per axis for its recorded value, and
+  removes the marker. A release whose wait exhausts keeps `MEDIA_STAGE` on the tester root, so the
+  next `releaseMedia` retries from the same recorded readings. A release with nothing staged clears
+  every override and compares readings taken strictly after the reset until they are stable.
+  Stability doesn't prove the engine's own baseline. Each release read-back has a 1000 ms budget and
+  waits for a frame per poll, with 10 ms between polls. The budget is checked between polls, so a
+  frame that never paints is not bounded by it. Media scopes must not overlap. The browser project
+  runs files serially.
+- **`readStyle` refuses a pseudo argument rather than ignoring it.** The argument must start with
+  `::` before the engine's selector-support check runs. A supported pseudo-element with no value for
+  the requested property still reads as an empty string. `readPixels` uses the same guard.
+- **`sendProtocol` reaches a Chromium-family provider alone.** It needs the provider's DevTools
+  session, passes the named command and parameters through, and discards the response. Browser
+  termination cannot promise cleanup. Edge observations belong to a separate run.
 - **`parseCSSColor` resolves an undeclared token to the inherited color.** A `var()` naming a custom
   property nothing declares is not a parse failure: the cascade accepts it and computes the
   inherited color, so `parseCSSColor('var(--absent)')` hands back channels rather than `undefined`.
@@ -1422,6 +1755,12 @@ the helper rather than to the host, and each names what to reach for instead.
   key reads `undefined` at runtime under a non-optional type and `isRecorderMapComplete` still reports
   `true`, because it checks the events it was given rather than the type it was keyed by. Pass a
   literal array or a tuple, so the element type is exactly what was listed.
+- **`createStorage` answers through its methods and intercepts no named-property access.** The store
+  is a real `Storage`, and `Storage` declares an index signature, so `store.theme` typechecks with no
+  cast and reads `undefined` while `getItem('theme')` answers. A property write lands on the object
+  rather than in the store, so it consumes no quota, meets no withheld permission, and is invisible
+  to every read. Drive the code under test through `getItem` and `setItem`, which is where the seed,
+  the quota, and the grant are.
 - **`readProperty`'s `TypeError` names the target, never the read.** It refuses a target that is
   neither an object nor a function before it reads anything, and a getter that throws on an accepted
   target hands that throw straight to the caller. Wrap the call in `captureError` where a hostile
@@ -1430,6 +1769,39 @@ the helper rather than to the host, and each names what to reach for instead.
   carrying no leading number — `'auto'`, `'none'`, `''` — reads as `0`, because none of them
   contributes a pixel to what a reader sees, so a caller cannot tell an unparsable value from a
   genuine zero. Read the text with `readStyle` where that distinction is the subject.
+- **`isRendered` and `isReachable` read an ancestor attribute inside the element's own tree.** Each
+  asks `closest` for the `aria-hidden` ancestor and the `[inert]` ancestor, and `closest` never
+  crosses a shadow boundary, so a host carrying either attribute is invisible to a subject inside its
+  shadow root — in an open root and a closed one alike. What the flat tree decides still reaches the
+  subject: a host the document does not lay out takes the element off the page, and both predicates
+  refuse it. Read a `true` for a shadow subject as the element's own answer, and ask the host
+  separately where an ancestor attribute is the subject.
+- **`isReachable` finds an open modal through the `aria-modal` attribute in the element's own
+  document.** Two arrangements carry no such attribute there, and each leaves the page behind it
+  reachable: a native `<dialog>` opened with `showModal`, which a browser makes modal without
+  marking it, and a dialog declared inside a shadow tree, which a document query does not return.
+  Containment itself does cross a boundary, because the subject's host chain is judged beside the
+  subject, so a dialog holding a host holds that host's shadow content too. Read `:modal` or the
+  dialog's own root where a native or shadow-declared dialog is the subject.
+- **`waitForAnimations` waits on the animations a browser reports as running.** A finished animation
+  filling its target stays in the list and is already at rest, a paused one is at rest too and
+  nothing here resumes it, and an animation declaring infinite iterations never finishes. Each is
+  left out, so a wait that resolves is a claim about the paint that was moving rather than about the
+  list being empty. Read `element.getAnimations({ subtree: true })` directly where the membership of
+  that list is the subject.
+- **`readHit` answers for one point, and a node it returns is no proof of a cover.** An element the
+  document does not render measures a zero rectangle at the origin, and a zero-area element measures
+  a point on its own edge, so each is hit-tested like any other point and names whatever paints
+  there — the surrounding container, or the document body for a rectangle collapsed at the origin —
+  while `contains` reads false. A cover painted with `pointer-events: none` is absent from the hit
+  test, so the reading names the element underneath it and the caller reads reachable for a cover a
+  person can see. An element inside a shadow tree retargets in an open root and a closed one alike:
+  the document-level hit test names the host, which the inner element does not contain. Run
+  `isRendered` and `isReachable` first, and ask `element.getRootNode()` for its own
+  `elementFromPoint` where the subject sits in a shadow tree. `undefined` carries the other silence:
+  a centre outside the viewport reads the same as a centre that reaches nothing, and
+  `isOutsideViewport` does not separate them, because it asks whether the whole rectangle misses the
+  viewport while this asks where one point lands.
 
 ## Patterns
 
@@ -1755,6 +2127,39 @@ Every bounded member takes an `AbortSignal` and rejects with the signal's own re
 controller ends a whole file's waits. A budget of `0` still permits the immediate first reading, and
 a bound that is not finite and non-negative is refused before anything is read.
 
+### Wait for a sentence to arrive
+
+A journey waits for what a person reads, and the reading is yours to scope: a whole page, one named
+region, or a value a host-independent test computes. A screen replacing one sentence with another
+passes through a frame carrying both, so name the departing sentence in `absent` and the wait
+resolves on the reading that carries one and not the other.
+
+```ts
+import { waitForText } from '@orkestrel/test'
+
+let painted = 'Signed out'
+setTimeout(() => {
+	painted = 'Signed out Signed in'
+}, 10)
+setTimeout(() => {
+	painted = 'Signed in'
+}, 30)
+
+await waitForText('the session line replaces the prompt', () => painted, 'Signed in', {
+	absent: 'Signed out',
+	budget: 2000,
+}) // 'Signed in' — the reading that satisfied the poll
+
+// Throws Error: Text expectation must not be empty
+await waitForText('anything', () => painted, '')
+```
+
+`waitForCondition` owns the poll, so the bounds, the timeout voice, and the abort reason are that
+helper's, and a reader that throws stops the wait rather than counting as a reading that did not
+satisfy it. Pass `exact` where the reading must be the sentence rather than carry it. Scope the
+reading as narrowly as the claim: a wait over the whole page resolves on the sentence wherever it
+lands, which is rarely what a journey means.
+
 ### Copy a JSON value
 
 This demonstration builds an interface-typed value, copies it through JSON serialization, and
@@ -1855,47 +2260,133 @@ expect(JSON.stringify(serializeSchema(received))).toBe(wire)
 A statechart table is a row per transition, and a row is the transition plus the three phases that
 prove it: `arrange` puts the entity into `from`, `act` applies the `event`, and `assert` reads the
 entity for `to`. `executeScenarios` walks the table and hands each row a context of its own; it
-registers nothing, so `describe` and `it` stay where you write them. In the following fence,
-`Disclosure` is the entity under test, and it is closed until something shows it.
+registers nothing, so `describe` and `it` stay where you write them.
+
+The entity in the following fences is a real one, and the fences are the table this package's own
+browser suite runs. It is a native disclosure with two doors: the summary toggles it, and a Dismiss
+button closes it and does nothing when it is already closed. That second door is what gives the
+table a row whose event leaves the state where it found it, which a lone `<details>` cannot have —
+its one event always flips. Every value these fences claim is pinned in
+`tests/src/browser/factories.test.ts`, because the fences drive a browser and the `guides` project
+runs with the browser disabled.
+
+The phases are module functions the whole table shares, which is the shape a table of any size
+wants: each phase reads its subject from its own parameters rather than from the row it belongs to,
+so one set of three serves every row.
 
 ```ts
 import type { StateScenario } from '@orkestrel/test'
-import { executeScenarios } from '@orkestrel/test'
+import { executeScenarios, requireValue } from '@orkestrel/test'
+import { clickAccessible, clickDisclosure, readStates, render } from '@orkestrel/test/browser'
 import { expect, it } from 'vitest'
 
 type DisclosureState = 'closed' | 'open'
-type DisclosureEvent = 'show' | 'hide'
+type DisclosureEvent = 'toggle' | 'dismiss'
 
 interface DisclosureContext {
-	readonly disclosure: Disclosure
+	readonly summary: HTMLElement
+}
+
+// A journey verb resolves its own target by accessible name, so two mounted disclosures called
+// "Advanced" are an ambiguity rather than a second fixture. Each build takes the previous one out.
+let mounted: HTMLElement | undefined
+
+function buildDisclosure(): DisclosureContext {
+	mounted?.remove()
+	const container = render(
+		'<details><summary>Advanced</summary><p>Every setting.</p></details><button type="button">Dismiss</button>',
+	)
+	const details = requireValue(container.querySelector('details'))
+	requireValue(container.querySelector('button')).addEventListener('click', () => {
+		details.open = false
+	})
+	mounted = container
+	return { summary: requireValue(container.querySelector('summary')) }
+}
+
+function readDisclosure(context: DisclosureContext): DisclosureState {
+	return readStates(context.summary).includes('expanded') ? 'open' : 'closed'
+}
+
+async function arrangeDisclosure(
+	context: DisclosureContext,
+	state: DisclosureState,
+): Promise<void> {
+	if (readDisclosure(context) !== state) await clickDisclosure('Advanced')
+}
+
+// The context is unused because a journey verb finds what a person reads rather than a node this
+// row was handed.
+async function actOnDisclosure(_context: DisclosureContext, event: DisclosureEvent): Promise<void> {
+	if (event === 'toggle') await clickDisclosure('Advanced')
+	else await clickAccessible('Dismiss')
+}
+
+function assertDisclosure(context: DisclosureContext, state: DisclosureState): void {
+	expect(readDisclosure(context)).toBe(state)
 }
 
 const SCENARIOS: ReadonlyArray<StateScenario<DisclosureState, DisclosureEvent, DisclosureContext>> =
 	[
 		{
-			transition: { name: 'closed opens on show', from: 'closed', event: 'show', to: 'open' },
-			arrange(context, state) {
-				if (state === 'open') context.disclosure.show()
+			transition: {
+				name: 'closed opens through the summary',
+				from: 'closed',
+				event: 'toggle',
+				to: 'open',
 			},
-			act(context, event) {
-				if (event === 'show') context.disclosure.show()
-				else context.disclosure.hide()
-			},
-			assert(context, state) {
-				expect(context.disclosure.state).toBe(state)
-			},
+			arrange: arrangeDisclosure,
+			act: actOnDisclosure,
+			assert: assertDisclosure,
 		},
-		// One row per transition. Each row reuses the three phases shown earlier.
+		{
+			transition: {
+				name: 'open closes through the summary',
+				from: 'open',
+				event: 'toggle',
+				to: 'closed',
+			},
+			arrange: arrangeDisclosure,
+			act: actOnDisclosure,
+			assert: assertDisclosure,
+		},
+		{
+			transition: {
+				name: 'open closes through the button',
+				from: 'open',
+				event: 'dismiss',
+				to: 'closed',
+			},
+			arrange: arrangeDisclosure,
+			act: actOnDisclosure,
+			assert: assertDisclosure,
+		},
+		{
+			// The row whose event leaves the state where it found it.
+			transition: {
+				name: 'closed stays closed through the button',
+				from: 'closed',
+				event: 'dismiss',
+				to: 'closed',
+			},
+			arrange: arrangeDisclosure,
+			act: actOnDisclosure,
+			assert: assertDisclosure,
+		},
 	]
 
 it('walks the disclosure statechart', async () => {
-	await executeScenarios(SCENARIOS, () => ({ disclosure: new Disclosure() }))
+	await executeScenarios(SCENARIOS, buildDisclosure)
 })
 ```
 
+Name each row for the door it drove. A table that names only the states reads as if one mechanism
+moved the entity, and the row that matters most here is the one where the button leaves the
+disclosure exactly as it found it — a name saying which control was pressed is what separates that
+row from the toggle rows beside it.
+
 Both unions are the entity's own vocabulary, so a row naming a state or an event the entity does not
-have fails to typecheck rather than at runtime. Each phase reads its subject from its own parameters
-rather than from the row, which is what lets one set of phases serve every row in the table.
+have fails to typecheck rather than at runtime.
 
 The rows run one after another, because a statechart's rows drive one entity and a parallel run
 would have them arranging over each other. The run stops at the first row that fails, and the row's
@@ -1908,18 +2399,27 @@ const MISMATCHED: ReadonlyArray<
 	StateScenario<DisclosureState, DisclosureEvent, DisclosureContext>
 > = [
 	{
-		transition: { name: 'show leaves it closed', from: 'closed', event: 'show', to: 'closed' },
-		// The same three phases. Nothing about the row is malformed; the `to` state is unreachable.
+		// Nothing about the row is malformed and the phases are the table's own; the `to` state is
+		// the part the event cannot reach, so only `assert` can catch it.
+		transition: {
+			name: 'the summary leaves it closed',
+			from: 'closed',
+			event: 'toggle',
+			to: 'closed',
+		},
+		arrange: arrangeDisclosure,
+		act: actOnDisclosure,
+		assert: assertDisclosure,
 	},
 ]
 
-await executeScenarios(MISMATCHED, () => ({ disclosure: new Disclosure() }))
-// Error: show leaves it closed: expected 'open' to be 'closed'
+await executeScenarios(MISMATCHED, buildDisclosure)
+// Error: the summary leaves it closed: expected 'open' to be 'closed'
 
 await executeScenarios(MISMATCHED, () => {
 	throw new Error('no fixture')
 })
-// Error: show leaves it closed: build refused
+// Error: the summary leaves it closed: build refused
 ```
 
 Whatever the phase threw arrives as that error's `cause`, by identity, so an assertion's own detail
@@ -1928,10 +2428,61 @@ survives the renaming. A phase that throws something other than an `Error` is na
 builder's refusal arrives as the `cause` the same way, and the phases of the row it was building for
 never start.
 
+`buildRefusal` builds that refusal sentence, and `createHarness` announces the same one on the row
+it refused, so the runner and the harness name a refused build once rather than twice.
+
+```ts
+import { buildRefusal } from '@orkestrel/test'
+
+buildRefusal('the summary leaves it closed', new Error('no fixture')).message
+// 'the summary leaves it closed: build refused'
+```
+
 Drive one row on its own with `executeScenario`, which takes the context rather than building it.
 
-A harness that renders the same table in a browser publishes its progress through attributes, and
-`STATECHART_ATTRIBUTES` and `STATECHART_STATUSES` are the names a gate polls from outside the page.
+`createHarness` renders that same table in a browser and drives it row by row, publishing its
+progress through the attributes a gate outside the page polls. It takes the table, the builder, and
+one reader that reports the state the entity is in.
+
+```ts
+import { STATECHART_ATTRIBUTES } from '@orkestrel/test'
+import { createHarness } from '@orkestrel/test/browser'
+
+const harness = createHarness({
+	scenarios: SCENARIOS,
+	build: buildDisclosure,
+	state: readDisclosure,
+})
+
+harness.status // 'idle' — mounted, nothing run yet
+harness.total // 4
+
+await harness.execute()
+
+harness.status // 'passed'
+harness.passed // 4
+harness.failed // 0
+harness.failures // []
+
+// The object reads its own markup, so a gate polling the page and a test asserting on the object
+// cannot disagree.
+harness.root.getAttribute(STATECHART_ATTRIBUTES.status) // 'passed'
+harness.root.getAttribute(STATECHART_ATTRIBUTES.total) // '4'
+
+harness.destroy()
+```
+
+The harness writes the attributes onto its own markup: `status`, `passed`, `failed`, and `total` on
+its root, `scenario` and `result` on each row, `state` on the element rendering the entity's current
+state. A `role="status"` announcer narrates each step in a sentence beside them, so the page reads
+as a report rather than as a grid of attributes. A gate reads the root until `status` reads `passed`
+or `failed`, then reads the tally and names each row whose `result` reads `failed`. That reading
+always arrives, because every exit writes it: a run a `state` reader ends writes `failed` before it
+rejects, so the gate is never left polling a `running` the harness does not leave. Neither side
+spells a `data-statechart-*` string of its own, so the two cannot drift apart.
+
+`STATECHART_ATTRIBUTES` and `STATECHART_STATUSES` publish those names and those readings, and
+`StatechartStatus` is the same set of readings as a named union.
 
 ```ts
 import { STATECHART_ATTRIBUTES, STATECHART_STATUSES } from '@orkestrel/test'
@@ -1939,15 +2490,23 @@ import { STATECHART_ATTRIBUTES, STATECHART_STATUSES } from '@orkestrel/test'
 STATECHART_ATTRIBUTES.status // 'data-statechart-status'
 STATECHART_ATTRIBUTES.scenario // 'data-statechart-scenario'
 
-STATECHART_STATUSES[0] // 'pending' — carried until a run has a result for every row
+STATECHART_STATUSES[0] // 'pending' — carried until every declared row has rendered
 STATECHART_STATUSES.includes('running') // true
 ```
 
-The harness writes the attributes onto its own markup: `status`, `passed`, `failed`, and `total` on
-its root, `scenario` and `result` on each row, `state` on the element rendering the entity's current
-state. A gate reads the root until `status` reads `passed` or `failed`, then reads the tally and
-names each row whose `result` reads `failed`. Neither side spells a `data-statechart-*` string of
-its own, so the two cannot drift apart.
+A run walks the tuple in the order it is written. `pending` covers construction, so a gate that
+reads it has found a harness whose rows never mounted; `idle` is a mounted harness with its tally at
+zero; `running` is a run in flight; and `passed` and `failed` are the pair a gate waits for rather
+than waiting a fixed duration. A run that a `state` reader ends writes `failed` and then rejects
+with that reader's value by identity, so the pair covers an exceptional exit as well as a completed
+one, and the row that reader was called for is not counted as failed.
+
+`execute` carries on past a failing row, which is where the harness parts company with
+`executeScenarios`: one run reports on the whole table rather than stopping at the first finding,
+and a builder that refuses fails its own row under `buildRefusal`'s sentence, the one that runner
+raises. What decides whether a row's phases run is whether its builder returned rather than what it
+returned, so a table whose context is `undefined` drives every phase of every row. Call `execute`
+again to re-run the same table from a fresh tally and a cleared state.
 
 ### Read a source inventory
 
@@ -2342,6 +2901,164 @@ await traverseAccessible('Evaluate')
 readPerception('Run') // one visible named region, whitespace collapsed, hidden-but-read text kept
 ```
 
+### Hold a control and read the pressed paint
+
+Register pointer cleanup before a test can fail. This fixture declares `padding-top: 16px` on its
+`Apply` button and `32px` under `:active`. Read the paint while the button is held, then release it.
+
+```ts
+import {
+	holdAccessible,
+	readPixels,
+	releasePointer,
+	resolveAccessible,
+} from '@orkestrel/test/browser'
+import { afterEach } from 'vitest'
+
+afterEach(releasePointer)
+const button = resolveAccessible('button', 'Apply')
+readPixels(button, 'padding-top') // 16
+await holdAccessible('button', 'Apply')
+readPixels(button, 'padding-top') // 32
+await releasePointer()
+readPixels(button, 'padding-top') // 16
+```
+
+Where a twin elsewhere on the page carries the same name, hold the one inside a named region with
+`holdAccessibleWithin('Ledger', 'button', 'Apply')`, which composes `resolveAccessibleWithin` with
+`driveHold`; `traverseAccessibleWithin` composes the same resolver with `driveTraversal`, and each
+refuses before it sends any input.
+
+### Read a pseudo-element's paint
+
+This fixture declares `padding-top: 0` on its `Marked` button and `7px` on its generated `::after`
+pseudo-element. Keep the element reading beside the pseudo reading so dropping the argument fails.
+
+```ts
+import { readPixels, readStyle, resolveAccessible } from '@orkestrel/test/browser'
+
+const button = resolveAccessible('Marked')
+readStyle(button, 'padding-top', '::after') // '7px'
+readPixels(button, 'padding-top', '::after') // 7
+readStyle(button, 'padding-top') // '0px'
+```
+
+### Emulate reduced motion and print
+
+This fixture's `Media` button declares `padding-top: 1px`, `2px` under reduced motion, and `3px`
+under print. Pin the base preference, then read each staged axis. Stage the inverse of the observed
+motion reading before release so the restore comparison can fail. The initial unstaged release
+clears overrides and waits for stable readings. The final release returns the readings observed
+before the first stage, kept as explicit emulation. A further unstaged release clears that emulation.
+
+```ts
+import { readPixels, releaseMedia, resolveAccessible, stageMedia } from '@orkestrel/test/browser'
+import { afterEach } from 'vitest'
+
+afterEach(releaseMedia)
+await releaseMedia()
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
+const button = resolveAccessible('Media')
+await stageMedia({ motion: true })
+readPixels(button, 'padding-top') // 1
+await stageMedia({ motion: false })
+readPixels(button, 'padding-top') // 2
+matchMedia('(prefers-reduced-motion: reduce)').matches // true
+await stageMedia({ motion: reduced })
+matchMedia('(prefers-reduced-motion: reduce)').matches === !reduced // true
+readPixels(button, 'padding-top') === (reduced ? 1 : 2) // true
+await stageMedia({ print: true })
+readPixels(button, 'padding-top') // 3
+matchMedia('print').matches // true
+await releaseMedia()
+matchMedia('print').matches // false
+matchMedia('(prefers-reduced-motion: reduce)').matches === reduced // true
+readPixels(button, 'padding-top') === (reduced ? 2 : 1) // true
+```
+
+### Send a key to what holds focus
+
+Bring focus about through a verb, then send the sequence. A key sent while the document body holds
+focus reaches no control, and every assertion after it reads the surface the key never touched, so
+that case is refused rather than sent.
+
+```ts
+import { pressKeys, traverseAccessible } from '@orkestrel/test/browser'
+
+await traverseAccessible('Evaluate')
+await pressKeys('{Enter}') // the key reaches the control focus landed on
+
+if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+
+// Throws Error: Key sequence "{Escape}" was sent with nothing focused
+await pressKeys('{Escape}')
+```
+
+Escaping is yours, because the sequence is the subject: `{` opens a key name and `[` opens a code
+name. Reach for `typeAccessible` where the text is the subject and the key syntax is in the way.
+
+### Wait for what a control announces
+
+Wait on what a person is told, not on the class names a stylesheet happens to use. `waitForState`
+resolves the control afresh on every reading, so a re-rendered node is still the subject, and
+returns the states it read at resolution.
+
+```ts
+import { clickAccessible, waitForState } from '@orkestrel/test/browser'
+
+await clickAccessible('Pin note')
+await waitForState('Pin note', 'pressed=true') // ['pressed=true']
+
+// The other direction, for a state that has to go away.
+await clickAccessible('Filters')
+await waitForState('button', 'Filters', 'expanded', { absent: true }) // ['collapsed']
+```
+
+Spell the state the way `readStates` reports it. The exhaustion message names the control, the
+state, and the states last read, so a wait that ran out says what the control was announcing
+instead. Where the surface announces nothing, the finding is the surface's: give the trigger its
+`aria-expanded`, `aria-pressed`, or `aria-busy` rather than waiting on a framework's classes.
+
+### Wait for the paint to stop moving
+
+A reading taken while paint is moving reports an interpolated frame no state of the interface
+paints. In the following fence `panel` transitions its `color` over 120ms.
+
+```ts
+import { readContrast, readStyle, waitForAnimations } from '@orkestrel/test/browser'
+
+panel.classList.add('settle-done')
+
+await waitForAnimations(panel, { budget: 2000 })
+
+readStyle(panel, 'color') // 'rgb(0, 0, 0)'
+readContrast(panel) // measured against the settled paint rather than a frame in between
+```
+
+The wait parks on each animation's own `finished` promise and reads the list again after each
+completion, so an animation a finishing one starts is waited on too. An animation declaring infinite
+iterations is left out, which is what lets a page carrying a spinner settle at all. A detached
+element is refused rather than reported settled.
+
+### Read the refusal instead of catching it
+
+Absent, present-but-gated, and ambiguous are different findings about an interface, so assert on the
+sentence rather than on a boolean. `readRefusal` drives the resolver and hands back its message, or
+nothing at all when the target resolves.
+
+```ts
+import { readRefusal } from '@orkestrel/test/browser'
+
+readRefusal('Save changes') // undefined — the control resolves
+readRefusal('Menu') // 'Interactive target "Menu" is not visible and focus-reachable'
+readRefusal('Nowhere') // 'No interactive element has the accessible name "Nowhere"'
+readRefusal('Drafts') // 'Interactive target "Drafts" is ambiguous across 2 elements'
+readRefusal('tab', 'Drafts') // undefined — the role disambiguates it
+```
+
+Compare the whole sentence. A comparison against a fragment of one passes for a refusal about a
+different condition, which is the finding the distinct voices exist to keep apart.
+
 ### Drive a field the component listens to
 
 Drive a field by name wherever the keystrokes are part of what the journey claims. Reach for these
@@ -2537,6 +3254,96 @@ The `extractStyles` reading is named for what it returns rather than `extractEsc
 `escape` term already carries the encoding sense in the `@orkestrel/html` and `@orkestrel/console`
 packages.
 
+### Take an authored-class census
+
+`readClasses` differenced against `readCascade` is the check every workspace writes; what each of
+them omits is the population it walked. `readCensus` reports both, and refuses a walk that read no
+element, because an empty walk reports the same empty difference as markup whose every class the
+cascade declares.
+
+```ts
+import { buildCensus, readCensus } from '@orkestrel/test/browser'
+
+const control = buildCensus()
+screen.append(control.root)
+
+const census = readCensus(screen)
+census.elements // 4 — the screen, the control's root, and the two marked elements
+census.undeclared // [control.mark, control.token] — sorted, the SVG one included
+```
+
+The control is the point of the fixture. One token rides on an HTML element and the other on an SVG
+element, whose `className` is an `SVGAnimatedString` rather than a string, so a census blind to the
+second reports one token where two are carried and reads as a clean screen.
+
+### Control a reading before you trust it
+
+An instrument is not evidence until its control has failed. Each builder returns detached nodes for
+you to append where you are reading and remove afterwards, so nothing is mounted for you.
+
+```ts
+import {
+	buildContrast,
+	buildEscapes,
+	extractStyles,
+	mount,
+	readContrast,
+} from '@orkestrel/test/browser'
+
+const contrast = buildContrast(4.5)
+mount(contrast.root)
+readContrast(contrast.refused) < 4.5 // true
+readContrast(contrast.accepted) >= 4.5 // true
+contrast.root.remove()
+
+const escapes = buildEscapes('project-stylesheet')
+extractStyles(escapes.root).length // 3
+
+// Throws Error: Contrast control cannot straddle the bar 21
+buildContrast(21)
+```
+
+`buildContrast` is translucent over an opaque floor, so the compositing walk and the alpha blend
+`readContrast` exists for are the things under test: a reader taking the nearest declared background
+at full strength answers the opposite pair. The greys are searched rather than written down, so the
+stack follows the bar you asked for, and a bar no stack can straddle is refused rather than returned
+as a control that proves nothing.
+
+`buildEscapes` carries the inline-attribute branch of a style-escape reading and the embedded-element
+branch, plus a `<style>` carrying the id a project exempts, so a reading that passes by refusing
+every `<style>` element fails that exemption instead of clearing it. Its root stays detached, which
+is what keeps an embedded sheet out of the cascade every other reading measures against.
+
+### Withhold a store the way a host does
+
+A browser with site data blocked refuses every operation the permission withholds, and an origin
+with no room left refuses `setItem`. `createStorage` makes both reachable against a real `Storage`
+surface, backed by a map of its own: it patches neither browser surface and dispatches no `storage`
+event.
+
+```ts
+import { buildDenial, createStorage } from '@orkestrel/test/browser'
+
+const storage = createStorage({ values: { theme: 'dark' }, reads: false, quota: 1 })
+
+// Throws DOMException named SecurityError: Access is denied for getItem "theme"
+storage.getItem('theme')
+
+storage.permit() // the grant a person allowing site data performs
+storage.getItem('theme') // 'dark'
+
+storage.setItem('theme', 'light')
+// Throws DOMException named QuotaExceededError: No room is left for scale
+storage.setItem('scale', '2')
+
+buildDenial('length').name // 'SecurityError'
+```
+
+`length`, `key`, and `getItem` are reads; `clear`, `removeItem`, and `setItem` are writes. `quota`
+counts accepted `setItem` calls rather than bytes, because the number of writes is what a journey
+scripts. `removeItem` consumes none of it and `permit` replenishes none of it: room and permission
+are different refusals, and a test that granted the permission still meets the full origin.
+
 ### Remove an IndexedDB database
 
 Close the connections the test opened, then delete. A live connection blocks the deletion, and the
@@ -2664,7 +3471,13 @@ The second pair is what the reading exists for. Every box a document exposes —
 content and the pane, so a caller that has staged too tall a pane reads that pane back and cannot
 descend from it. `measureContent` walks the elements inside the body instead, so it descends. Where
 the document is laid out against the viewport, it moves with the viewport and reports what the
-reflow produced rather than what the pane claimed.
+reflow produced rather than what the pane claimed, except inside a frame that clips its overflow,
+where a viewport-bound child ends at the frame's clip edge. The `clipsOverflow` helper names the
+frames that count, and the `readClipEdge` helper reads each frame's clip edge. An `overflow-y`
+value of the `hidden` keyword, the `auto` keyword, or the `scroll` keyword ends at the padding box.
+The `clip` keyword and a paint containment over a
+`visible` overflow end at the box the frame's `overflow-clip-margin` value selects, the padding box
+by default, expanded by the margin the `readClipMargin` helper reads.
 
 ### Read a written frame back
 
@@ -2733,7 +3546,12 @@ Each entry names the contracts its file proves. The test names carry the cases.
   exhaustion by attempts and by budget, producer throws counted as attempts with the last one kept as
   the cause, a predicate throw propagated unchanged, and an aborted retry. `waitForEvent` takes the
   exact delivered tuple, a timeout and an abort each naming the cleanup they invoked, and a second
-  delivery ignored after settlement. `decodeJSONLines` takes empty input, a trailing newline, CRLF,
+  delivery ignored after settlement. `waitForText` takes a reading that arrives on a later poll, the
+  containing reading its `exact` arm must refuse beside the whole reading that arm accepts, the frame
+  carrying both the arrival and the departure that `absent` waits past, an empty expectation and an
+  empty departure each refused, a reader throw propagated unchanged, the timeout naming the wait and
+  the budget, an abort rejecting with the signal's own reason, and a refused bound raised through the
+  family. `decodeJSONLines` takes empty input, a trailing newline, CRLF,
   line order, primitive lines, and a malformed physical line named with the native `SyntaxError` as
   its cause. `collect` and `collectStream` drain an empty and an ordered source, and the stream's
   reader lock is released afterwards. `roundTripJSON` takes a copy of a flat and a nested
@@ -2781,8 +3599,39 @@ Each entry names the contracts its file proves. The test names carry the cases.
   that stays there, and `isOutsideViewport` takes a rectangle wholly beyond each edge and one
   straddling an edge. `isReachable` takes a plain control and each condition it drops, a control the
   document no longer holds, a focusable SVG against an element from a foreign namespace, and the
-  refused summary that proves it is the one filter the acting verbs apply; `isRendered` takes each
-  removal a browser honours and, as the split from `isReachable`, a zero-size announced control.
+  refused summary that proves it is the one filter the acting verbs apply. It takes the open modal
+  dialog through the readings that fix it: the masthead control the dialog leaves behind against the
+  same name inside it, which resolves and traverses unambiguously; the control a plain dialog, a
+  folded modal, and a blanked modal each leave standing, as the control; the nested dialog and the
+  shadow subject that pin containment on the flat tree; and the native `showModal` dialog and the
+  shadow-declared modal it reports nothing about, which is the bound the guide states. `isRendered`
+  takes each removal a browser honours and, as the split from `isReachable`, a zero-size announced
+  control. Each predicate also takes a subject inside an open and a closed shadow root beside a host
+  that carries its own ancestor attribute — `[inert]` for one and `aria-hidden` for the other — and a
+  host the flat tree does not lay out, which pins where the boundary falls for each.
+  `pressKeys` takes a sequence reaching the control a traversal focused and, as the control, the same
+  sequence refused while the document body holds focus with no keystroke recorded. `waitForState`
+  takes a state a timer flips after the act, a node replaced mid-wait and still resolved by role and
+  name, the reverse direction under `absent`, the exhaustion naming the control and the state and
+  carrying the states last read, the resolver's own refusal propagated rather than spent as a
+  reading, and a refused bound. `waitForAnimations` takes a descendant transition awaited to its end,
+  the exhaustion naming the subject and the animation still running, an infinite-iteration animation
+  excluded while it is still turning, a detached subject refused, and a refused bound; its settled
+  reading is compared against the interpolated one taken mid-transition. `readRefusal` takes the
+  absent, gated, and ambiguous voices beside a target that resolves under a bare name and under a
+  role, and — as the control for the rethrow — a fixture element whose own `tabIndex` getter refuses
+  with a string, handed straight back. `readCensus` takes a population carrying both undeclared
+  tokens, tokens sorted rather than left in document order, a subtree whose every class the cascade
+  declares, and an empty walk refused. `buildDenial` takes the keyed and unkeyed spellings of its
+  `SecurityError`; `buildContrast` takes a composited stack straddling two different bars with the
+  flat reading disagreeing for each foreground, and a bar refused at either end; `buildEscapes` takes
+  both escapes and the exempt sheet reported, the exemption filtered by id, and a root that stays
+  detached; `buildCensus` takes the SVG element whose class list is no string. The barrel takes every
+  published name resolved from the specifier a consumer imports, and a bare `JourneyVariant` accepted
+  wherever a `CaptureVariant` is asked for.
+  `readHit` takes a centre that reaches the element itself, a reachable control under a cover that
+  the reading names instead, a soft-wrapped inline target whose two line rectangles leave the box
+  centre on its list item, and a control fixed outside the viewport, whose centre reaches nothing.
   Each acting verb takes its happy path and every voice it owns, including both
   region-scoped refusals and both native-disclosure ones; `clickAccessibleWithin` also takes a
   glyph-captioned control inside a region a glyph-carrying heading labels, which is the loose match
@@ -2857,10 +3706,32 @@ Each entry names the contracts its file proves. The test names carry the cases.
   read — 1322, then 1561 — and its frame lands on 1800, which is the fixed point written out rather
   than read back from the capture that staged it. The same panel uncapped grows with every pane and
   reaches the refusal, whose written-out restaging bound reddens when the source's bound moves and
-  whose pane and viewport are handed back anyway. `readFrame` takes a written frame's size and
-  floor, read a second way through the cascade's own answer for the same canvas, a bottom row split
-  between two colors reported as no floor at all, a path holding no file, and a file holding no
-  image. `readCascade` takes class tokens collected from plain and grouped rules and only real ones;
+  whose pane and viewport are handed back anyway. An element frame takes a fixed `30vh` panel whose
+  top lies past the runner's window, shot from a scrolled tester, whose frame is 30% of the declared
+  height on the panel's own color with the scroll handed back; an element below both the pane and
+  the window, whole on the document's floor with the scroll handed back; a `50vh` element and a
+  `30vh` element below the fold, at the declared pane rather than a grown one; an element taller
+  than the pane, in a pane of its own height; an element that outgrows every pane, refused with the
+  pane and the scroll handed back; a second tester frame the offset leaves in place; and a frame
+  carrying no `style` attribute, handed back without one. After the `releasePointer` function, an
+  element frame takes no `mouseover` event for an element inside the window, which also takes no `scroll` event;
+  for a flush-left element the scroll brings to the top, one the offset brings to the left edge, and
+  one too large for the window; for an element past both window edges, whose frame has the
+  element's size; for an element touching the origin and one filling the window; across a scroll
+  the staging clamps, with the scroll handed back; and for an `svg` element in the shadow tree of a
+  fixed host and a fixed `svg` element under a containing-block ancestor. A hover placed after
+  staging on an element at the tester's top-left corner stays in the frame. The `computeOffset`
+  function takes an element inside the window, one touching the origin or starting above it, one
+  filling the window, an element past the bottom edge, a fractional bottom edge rounded up, a
+  fractional top and a fractional left each moved only as far as the window start, a box already
+  ending inside a fractional window left where it is, an element past the right edge,
+  one past both edges, and an element too large for the window.
+  The `readFrame` function takes a written
+  frame's size and floor, read a second way through the cascade's own answer for the same canvas, a
+  bottom row split between two colors reported as no floor at all, a path holding no file,
+  a file holding no image and refused without a size, and a PNG header over no image data, refused
+  with the size the header declares. The `readCascade` function takes class tokens collected from
+  plain and grouped rules and only real ones;
   `readRows` takes a row joined from its own text nodes rather than from run-together content, and
   an empty list; `extractOrphans` takes a child class rendered outside its container with a nested
   one left alone, nothing reported when every child sits inside one, and, as the control, an element
@@ -2888,7 +3759,11 @@ Each entry names the contracts its file proves. The test names carry the cases.
   an uncaught error and an unhandled rejection recorded and then ignored after the stop, the
   channels handed back by identity with a second stop proven a no-op against a replacement, a restart
   that clears `steps` and `output` without stacking wrappers, snapshots that stay what they were, and
-  one journal's recording kept out of another's.
+  one journal's recording kept out of another's. `createStorage` takes a seeded store answering every
+  operation, each withheld operation refused in its own voice, both permissions granted at once with
+  the store answering from what it kept, a quota spent on accepted writes alone with `removeItem`
+  consuming none of it, a granted permission replenishing no room, every refused quota value, and —
+  as the control for the inertness claim — a write that leaves `localStorage` exactly as it was.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the `readInventory` and
   wait-family contracts, and each pure leaf against its own inputs. `resolveContained` takes
   contained relative and absolute targets and both spellings of an escape, and `requireContained`
@@ -2960,8 +3835,9 @@ Each entry names the contracts its file proves. The test names carry the cases.
   boundary's uncallable-method and non-object-target refusals, the header flattening, the wait
   family's opposite throw directions with the exhaustion message and its `cause`, the statechart
   table walked against a real disclosure with the failing row's name opening the message and the
-  assertion kept as the `cause`, the cookie jar driven against a real origin, and the HTTP upgrade's
-  refused arm, claimed arm, and budget.
+  assertion kept as the `cause`, the text wait resolving on the reading that carries the arrival
+  without the departure and refusing an empty expectation, the cookie jar driven against a real
+  origin, and the HTTP upgrade's refused arm, claimed arm, and budget.
 
 ## See also
 

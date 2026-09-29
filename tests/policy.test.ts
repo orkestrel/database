@@ -524,7 +524,17 @@ describe('skill family policy', () => {
 		expect(frontmatter?.description).toBe('Use this skill when a continuation contains: a colon.')
 	})
 
-	for (const control of SKILL_POLICY_CONTROLS) {
+	for (const control of SKILL_POLICY_CONTROLS.filter(
+		(candidate) => candidate.violations !== undefined,
+	)) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(inspectPolicyControl(control)).toEqual(control.violations)
+		})
+	}
+
+	for (const control of SKILL_POLICY_CONTROLS.filter(
+		(candidate) => candidate.violations === undefined,
+	)) {
 		it(`${control.label} [membership: ${control.membership}]`, () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
@@ -752,17 +762,13 @@ describe('repository policy', () => {
 	// pointer pair and no `.agents/` directory, no rule map, and no skill bridges.
 	// This vendored suite runs there, and every inspector it routes through has to
 	// stay silent on that shape.
-	it('accepts a target holding the pointer pair and no canon tree', () => {
+	it('accepts a target holding the pointer and no canon tree', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-pointer-' })
 		try {
 			writePolicySurfaceHost(scratch)
 			scratch.write(
 				'AGENTS.md',
 				'# AGENTS.md\n\nRead `node_modules/@orkestrel/scaffold/dist/host/AGENTS.md` for the canon.\n',
-			)
-			scratch.write(
-				'CLAUDE.md',
-				'# Claude Code bridge\n\nRead the `AGENTS.md` file beside this one first.\n',
 			)
 			scratch.write('.claude/settings.json', '{\n\t"permissions": {\n\t\t"allow": []\n\t}\n}\n')
 			scratch.write(

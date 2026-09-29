@@ -9,19 +9,25 @@ does not work. Scaffold makes the shared set data — a vendored data root shipp
 — and gives it verbs: create a workspace from it, report how a workspace differs from it, and
 write the difference back.
 
-That root stages the vendored set and the instruction canon, and a target meets them differently.
-`HOST_PATHS` names the vendored set — the licence, the harness permission file, the
-session-start hooks, the shared policy register, the shared policy
-proof, the shared policy plugin, the shared configuration leaf and its proof, the byte-identical
-root dotfiles, and the guide mirrors a generated workspace starts from, never its own guide — and
-each target carries its own copy of the paths it selects, which the verbs write and compare.
+That root stages the vendored set, the instruction canon, and the fleet's guides, and a target meets
+each of them differently. `HOST_PATHS` names the vendored set — the licence, the harness permission
+file, the session-start hooks, the shared policy register, the shared policy
+proof, the shared policy plugin, the shared configuration leaf and its proof, and the
+byte-identical root dotfiles — and each target carries its own copy of the paths it selects, which
+the verbs write and compare.
 `CANON_PATHS` names the instruction canon — the coding and orchestration contracts, the rules, the
 skills, the templates, the transport contracts, the agent roles, the bench configuration, and the
 MCP registrations — which stays in one place and is published for reading. A target carries the
-`AGENTS.md` and `CLAUDE.md` pointers that name where a reader finds it, and the catalog agent file
-the `catalog` verb rewrites. It carries nothing else at a canon path: a file found at one is a
-superseded copy, and `overwrite` deletes it. Vendored data root states how each set is staged and
-how a pointer resolves.
+`AGENTS.md` pointer that names where a reader finds it, the catalog agent file the `catalog` verb
+rewrites, and the skill pointer set for each package-facing skill `TARGET_SKILL_NAMES` lists: the
+Claude bridge, the Codex sidecar, and a `SKILL.md` pointer that names the canonical skill. It
+carries nothing else at a canon path: a file found at one is a superseded copy, and `overwrite`
+deletes it.
+`REFERENCE_PATHS` names the `guides` directory — a mirror of every published `@orkestrel` guide
+beside this package's own — which is staged for reading at `dist/host/guides/` and claims nothing in
+a target on its own. The `SEED_GUIDE_PATHS` constant names the mirrors the compiler claims, so
+a generated workspace starts with the guides it works from, and never with its own guide. Vendored
+data root states how each set is staged and how a pointer resolves.
 
 Every following code fence is illustrative. [`tests/guides.test.ts`](../tests/guides.test.ts)
 keeps the command reference aligned with the executable and transcribes the pure blueprint-default,
@@ -66,6 +72,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `Ownership`         | type | Names what scaffold claims at an artifact's path.                                                           |
 | `Release`           | type | Represents one declared dependency range measured against a registry release.                               |
 | `ScaffoldErrorCode` | type | Names the coded reasons a scaffold error is raised.                                                         |
+| `SetupRuntime`      | type | Names the runtime a root setup proof requires.                                                              |
 | `Snapshot`          | type | Holds exact lowercase hexadecimal target bytes keyed by artifact-relative path.                             |
 
 #### Interfaces
@@ -130,10 +137,11 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `GROUPS`                          | const | Lists the `Group` values in plan order, frozen.                                                        |
 | `GUIDES_TEST_PATH`                | const | Names the package-owned guide-parity entry used by `test:guides` and to select the `guides` project.   |
 | `HEX_PATTERN`                     | const | Matches exact lowercase hexadecimal bytes: two digits per byte, and empty content is valid.            |
-| `HOST_PATHS`                      | const | Lists the paths a target receives from the vendored data root, frozen.                                 |
 | `HOST_INVENTORY_PATH`             | const | Names the repository-relative path where the committed vendored-file inventory is served.              |
+| `HOST_PATHS`                      | const | Lists the paths a target receives from the vendored data root, frozen.                                 |
 | `INTEGRATION_TEST_PATH`           | const | Names the cross-environment composition proof whose presence makes a workspace `integration`.          |
 | `INVALID_PATH_CHARACTER_PATTERN`  | const | Matches the visible characters a target-relative path and a Markdown path cell both forbid.            |
+| `JOURNEY_CONFIG_PATH`             | const | Names the Vite wrapper whose presence makes a workspace `journey`.                                     |
 | `MANIFEST_PATH`                   | const | Names the manifest path every compiler plan emits with birth ownership.                                |
 | `MAX_ARTIFACT_BYTES`              | const | Caps the bytes accepted for one artifact.                                                              |
 | `MAX_ARTIFACT_HEX_LENGTH`         | const | Caps the length of the hexadecimal string carrying one artifact's bytes.                               |
@@ -155,15 +163,19 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ORCHESTRATION_PATH_PREFIXES`     | const | Lists the path prefixes whose contents instruct or wire an agent, frozen.                              |
 | `ORKESTREL_RANGE_PATTERN`         | const | Matches the exact caret-pinned pre-1.0 range accepted for an `@orkestrel/*` runtime dependency.        |
 | `PRINT_WIDTH`                     | const | Caps the columns one emitted line may occupy, matching `printWidth` in `.oxfmtrc.json`.                |
+| `REFERENCE_PATHS`                 | const | Lists the reference paths staged for offline reading, frozen.                                          |
 | `RELEASE_PROOF_COMMAND`           | const | Names the `prepublishOnly` row that runs the packed-package proof against a real registry.             |
+| `SEED_GUIDE_PATHS`                | const | Lists the guide paths a generated workspace starts with, frozen.                                       |
 | `SERVICE_SCRIPT_PATH`             | const | Names the inventory skeleton a workspace with declared service vendors is given once.                  |
 | `SERVICE_SETUP_PATH`              | const | Names the live-service readiness module whose presence makes a workspace `service`.                    |
 | `SERVICE_TEST_INCLUDE`            | const | Names the include the live-service project covers, which is a directory rather than one proof.         |
 | `SHOWCASE_CONFIG_PATH`            | const | Names the Vite wrapper whose presence makes a workspace `showcase`.                                    |
 | `SHOWCASE_DEV_DEPENDENCIES`       | const | Names the development dependency used only by the optional single-file showcase build.                 |
+| `SKILLS_CONFIG_PATH`              | const | Names the TypeScript wrapper whose presence makes a workspace `skills`.                                |
 | `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | Lists the development dependencies a published browser `src` environment adds.                         |
 | `SRC_MATRIX`                      | const | Holds the build and export settings each published `src` environment contributes, frozen.              |
 | `TAB_WIDTH`                       | const | Sets the columns one tab occupies when the formatter measures a line, matching `tabWidth`.             |
+| `TARGET_SKILL_NAMES`              | const | Lists the package-facing skills a target receives pointers for, frozen and alphabetical.               |
 | `VERSION_PATTERN`                 | const | Matches the exact `major.minor.patch` version syntax a blueprint declares.                             |
 | `WORKSPACE_DEV_ENGINES`           | const | Holds the `devEngines` record every generated manifest carries.                                        |
 | `WORKSPACE_OWNED_PATHS`           | const | Lists the vendored paths whose present bytes belong to each workspace, frozen.                         |
@@ -235,6 +247,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `matchesRange`              | function | Tests whether a declared range already admits a published version.                                  |
 | `nameToGuide`               | function | Derives the guide mirror path a package name answers for.                                           |
 | `planToSummary`             | function | Projects a plan into its tally by artifact origin.                                                  |
+| `renderSkillPointer`        | function | Renders the `SKILL.md` pointer a target carries in place of a canonical skill.                      |
 | `selectGroups`              | function | Selects the groups a compile covers, in plan order.                                                 |
 | `selectHostPaths`           | function | Selects the host paths a named workspace vendors.                                                   |
 | `serializeTypeScriptString` | function | Serializes one string as a single-quoted TypeScript literal.                                        |
@@ -305,11 +318,13 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `Host`                  | interface | Represents a whole vendored host supplied as a value: the membership beside the bytes filling it. |
 | `HostInventory`         | interface | Represents the committed vendored-file inventory as one call's reads are decided against.         |
 | `HostManifest`          | interface | Represents the complete vendored-host inventory.                                                  |
+| `HostStageOptions`      | interface | Configures the committed inventory baseline and staging reports.                                  |
 | `ManifestEntry`         | interface | Represents one file record of the vendored host's manifest.                                       |
 | `MaterializeResult`     | interface | Reports the outcome of one mutation of a target.                                                  |
 | `MaterializerInterface` | interface | Describes the mutation contract: the package's only filesystem writer.                            |
 | `MaterializerOptions`   | interface | Represents the options for the materializer.                                                      |
 | `ReadAllowance`         | interface | Represents the byte allowance one whole upstream call spends across every read it makes.          |
+| `SurfaceCollision`      | interface | Represents a Surface name claimed by distinct package guides.                                     |
 | `TextReadResult`        | interface | Reports the outcome of one bounded read whose body is taken as text.                              |
 | `Worktree`              | interface | Describes what git reports about a target's working tree.                                         |
 | `UpstreamInterface`     | interface | Describes the upstream contract: the package's only network reader, and it never writes.          |
@@ -318,6 +333,15 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `WriteDirectoryResult`  | interface | Reports the final directory anchor of a write transaction and the subset one call created.        |
 | `WriteExpectation`      | interface | Represents one destination snapshot captured before a write and required to survive it.           |
 | `WritePrecondition`     | interface | Describes the narrower caller-observed destination state a write transaction must still match.    |
+
+The inventory contracts carry these data members.
+
+| Member                       | Contract                                                                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `HostManifest.surface`       | Required readonly `SurfaceCollision[]`, sorted by name; each collision has distinct sorted owners and is included in the manifest digest. |
+| `HostStageOptions.inventory` | Optional checkout-relative inventory path. Default: `HOST_INVENTORY_PATH` (`host.json`).                                                  |
+| `HostStageOptions.establish` | Optional boolean. If `true`, an absent inventory establishes the baseline; if `false`, staging refuses it. Default: `false`.              |
+| `HostStageOptions.report`    | Optional callback receiving the baseline location or its absence. Default: no reporting.                                                  |
 
 #### Constants
 
@@ -380,6 +404,7 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `computeDigest`           | function | Computes the SHA-256 digest of text.                                                   |
 | `computeFileDigest`       | function | Computes the SHA-256 digest of one file's exact bytes.                                 |
 | `computeManifestDigest`   | function | Computes the digest of a vendored host's declared membership.                          |
+| `decodeHexText`           | function | Decodes exact bytes stated in hexadecimal as strict UTF-8 text.                        |
 | `filesToHost`             | function | Assembles a whole vendored host from live files and the installed floor.               |
 | `hexToDigest`             | function | Projects exact bytes stated in hexadecimal to their SHA-256 digest.                    |
 | `isExactCaseFile`         | function | Tests whether a path is a physical file with exact on-disk casing.                     |
@@ -389,7 +414,7 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `listCanonPaths`          | function | Lists the canon paths a target holds, filtered to a plan's groups.                     |
 | `listDirectories`         | function | Lists a directory's descendant directories as sorted root-relative paths.              |
 | `listFiles`               | function | Lists a directory's files as sorted root-relative paths.                               |
-| `matchesAnchor`           | function | Tests whether a captured directory is still the same directory.                        |
+| `matchesAnchor`           | function | Tests whether a path still holds the captured directory identity.                      |
 | `matchesExecutablePath`   | function | Tests whether a vendored path is one a target receives executable.                     |
 | `matchesExpectation`      | function | Tests whether a destination still holds what was captured of it.                       |
 | `matchesGitPath`          | function | Tests whether a path addresses a target's own repository metadata.                     |
@@ -407,6 +432,8 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `readHostManifest`        | function | Reads a vendored host's manifest, when it carries one.                                 |
 | `readManifestEntry`       | function | Derives one vendored-host manifest entry from a file in a checkout.                    |
 | `readSnapshot`            | function | Reads a target's current bytes at the paths a plan claims.                             |
+| `readSurfaceBaseline`     | function | Reads the Surface collision baseline from a committed inventory.                       |
+| `readSurfaceCollisions`   | function | Reads bare Surface names claimed by distinct package guides.                           |
 | `resolveContainedPath`    | function | Resolves a root-relative path and refuses one that leaves its root.                    |
 | `resolveRealPath`         | function | Resolves a path through the real filesystem, keeping the part that does not exist yet. |
 | `stageBytes`              | function | Stages the named destinations of a value host into a private root.                     |
@@ -487,8 +514,11 @@ option grants a write.
 
 Every remote surface reads its live source first and falls back, whole, to the copy the installed
 package distributes; each operation reports one baseline word per surface. A surface can select
-`floor` only where the package distributes a copy. The registry's organization membership ships
-nowhere, so `catalog` refuses when that read fails.
+`floor` only where the package distributes a copy. When organization membership is unreachable,
+`catalog` performs a guide-only refresh and preserves the catalog table and dependency ranges.
+It selects declared packages by default and the hosted catalog's names with `--all`, excluding
+the target's own package. The result carries an explanatory `note` and omits `membership`,
+claims no version provenance, and exits `1`.
 
 For `new`, `repair`, `catalog`, and `overwrite`, authoritative absence on a version surface never
 selects `floor`. A registry `404` or a packument with no admitted version stays a `FETCH` refusal,
@@ -498,8 +528,11 @@ refusals, byte-bound refusals, and integrity refusals can select the floor.
 
 The guide surface is the per-row exception to whole-surface fallback, for absence as well as for
 faults. A foreign guide the host could not serve — a failed read, or the `404` a published package
-with a private repository answers with — keeps the target's existing mirror as its floor, while the
-other guide rows can still update. When at least one selected guide keeps its mirror,
+with a private repository answers with — keeps the target's existing mirror as its floor. If the
+target has no copy, the Materializer writes the verified hosted guide from `dist/host/guides`.
+The observed target bytes remain the write precondition. A path unavailable from upstream and the
+host stays unresolved, and its mirror verdict retains the original failure. Other guide rows can
+still update. When at least one selected guide fails to resolve live,
 `provenance.guides` is `floor` for the result; it is `live` only when every selected guide resolved
 live.
 
@@ -563,10 +596,16 @@ files on `main`, the scaffold repository's `host.json` file, and changed vendore
 answers a read and grant no verb write authority that it did not already have.
 
 `new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
-other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
+`new --app browser` command selects the journey axis, creates its birth-owned wrapper, defines
+`appJourney` in the root configuration, and excludes the browser integration suite from
+`app:browser`. Its manifest declares `test:journey` and invokes it after `npm run test:app` in
+`test`. A selection without a browser application emits no journey axis. Creation leaves `setup`
+empty. The other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
 `setup`, `tests/guides.test.ts` for `guides`, `tests/integration.test.ts` for `integration`,
 `tests/conformance.test.ts` for `conformance`, `tests/setupService.ts` for `service`,
-`tests/setupGlobal.ts` for `global`, and `configs/app/vite.showcase.config.ts` for `showcase`;
+`tests/setupGlobal.ts` for `global`, `configs/app/vite.showcase.config.ts` for `showcase`,
+`configs/app/vite.journey.config.ts` for `journey`, and `configs/agents/tsconfig.skills.json` for
+`skills`;
 reading verbs detect each exact-case file and register its fixed machinery. An explicitly supplied
 plan with `vendors` owns and protects the birth-owned `scripts/service.sh` inventory skeleton.
 Reading verbs do not infer its vendor list from edited text and cannot preserve an arbitrary present
@@ -579,15 +618,17 @@ Limits states what makes that one proof generable when the others are not.
 ### Reading a target
 
 `audit`, `repair`, `catalog`, and `overwrite` derive the blueprint from the target itself. The name
-and the declared `@orkestrel/*` packages come from `package.json`. The environment axes come
-from the directories the target actually ships, because a directory is the fact and a declaration
-beside it could disagree. The remaining facts come from exact-case files: `src/bin/main.ts` selects
-`bin`, each root `tests/setup*.test.ts` match selects `setup`, `tests/guides.test.ts` selects
-`guides`, `tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
+and the declared `@orkestrel/*` packages come from `package.json`. The environment axes come from
+the directories the target actually ships, because a directory is the fact and a declaration beside
+it could disagree. The remaining facts come from exact-case files: `src/bin/main.ts` selects `bin`,
+each root `tests/setup*.test.ts` match selects `setup`, `tests/guides.test.ts` selects `guides`,
+`tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
 `conformance`, `tests/setupService.ts` selects `service`, `tests/setupGlobal.ts` selects `global`,
-and `configs/app/vite.showcase.config.ts` selects `showcase`. A containing directory does not select
-the fact by itself. `tests/distribution.test.ts` selects nothing: the published `src` axis the
-target ships already decides the `distribution` project, and the file is planned from that.
+`configs/app/vite.showcase.config.ts` selects `showcase`, `configs/app/vite.journey.config.ts`
+selects `journey`, and `configs/agents/tsconfig.skills.json` selects `skills`. A containing
+directory does not select the fact by itself. `tests/distribution.test.ts` selects nothing: the
+published `src` axis the target ships already decides the `distribution` project, and the file is
+planned from that.
 
 `vendors` is not reconstructed. Its artifact, `scripts/service.sh`, is a birth-owned inventory
 skeleton rather than a working installer, so edited script text is not a trustworthy declaration of
@@ -608,6 +649,12 @@ fresh workspace therefore carries no guides project or script. When a developer 
 writable script region. That region accepts the prior generated Vitest-only value and preserves a
 customized command. The rest of the manifest remains birth-owned.
 
+The `skills` fact follows the same rule. The exact-case `configs/agents/tsconfig.skills.json`
+wrapper selects it; the root configuration then defines and registers the `skills` project over
+`tests/agents/**/*.test.ts`, and the manifest gains `test:skills` in the `test` chain and
+`check:skills` in the `check` chain. The scaffold checkout carries that wrapper because it ships the
+skill scripts under `.agents/skills/*/scripts/` with their mirrored proofs.
+
 The plan-reading verbs compare the Vitest project set named by the target manifest with the
 project set the planned root configuration registers. Every planned proof project must also be
 reachable from the manifest's `test` chain. A target whose manifest does not set `private: true` may
@@ -616,12 +663,33 @@ package before a publish lifecycle script runs, so crediting it would report a d
 one. Generated integration runs from `test`. One shell-token pass reads quoted and unquoted
 `--project value` and `--project=value` forms and follows literal `npm run` calls. A shell expansion
 or malformed quote that prevents a project or script name from being resolved statically produces a
-question instead of licensing a write. The classifier is deliberately bounded to manifest script
-text that names `vitest`; an external wrapper whose name does not identify its runner supplies no
-static Vitest fact to infer.
+question instead of licensing a write. The absent-project and absent-configuration checks read
+only manifest script text that names `vitest`; the configuration check also requires a `test:*`
+script name. An external wrapper whose text does not name `vitest` supplies no static Vitest fact
+to infer for these checks.
+
+The invocation reader also reads literal `-c <path>`, `--config <path>`, and `--config=<path>` values
+in command order. A configuration value containing an unresolved shell expansion makes the whole reading
+`undefined`. The executable keeps this contract in its own modules:
+
+| Declaration           | Summary                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `ScriptInvocations`   | Lists the literal Vitest projects, configuration paths, and npm run scripts a shell command names. |
+| `scriptToInvocations` | Reads the literal Vitest projects, configuration paths, and npm run scripts a shell command names. |
+
+When a `test:*` script whose text names `vitest` names a configuration that the plan does not emit
+and the target does not hold, the non-blocking `projects` question names the script and configuration
+path. Its remedy asks you to add the configuration, or remove the script that names it and its
+invocation from the `test` chain. When the plan emits `test:journey` and no chain from `test` reaches
+`npm run test:journey` through literal `npm run` calls, that question asks you to insert the invocation
+after `npm run test:app`. These advisories belong to `configs`
+and remain report-only during `repair`: the command preserves the `test` chain and an unplanned
+script. A configuration emitted by the plan or present in the target does not raise the absent
+configuration advisory.
 
 `audit` still completes the comparison and reports one non-blocking `projects` question when its
-selection includes `configs`. A scoped audit that excludes `configs` omits that question. For a
+selection includes `configs`. It reports the earliest of the facts it finds; settling that fact and
+re-running surfaces the next. A scoped audit that excludes `configs` omits that question. For a
 literal absent project, its advisory tells the developer to register the project or remove the
 script. For a planned project absent from the gate chains, the advisory reads the manifest after a
 writable script projection. The `scripts` question owns an absent direct `test:<project>` line. The
@@ -748,13 +816,46 @@ deletion.
 `--json` replaces the report with one JSON value on standard output. Warnings and refusals go to
 standard error, so a piped value is never polluted.
 
-| Verb        | Value                                                                                                    |
-| ----------- | -------------------------------------------------------------------------------------------------------- |
-| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed` — plus `provenance`                      |
-| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`      |
-| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance` |
-| `catalog`   | `MaterializeResult` plus `entries`, `mirrors`, `dropped`, `releases`, and `provenance`                   |
-| `overwrite` | The `catalog` value plus `audit` and `note` on a partial run                                             |
+| Verb        | Value                                                                                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed` — plus `provenance`                                                                           |
+| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                           |
+| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                      |
+| `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run |
+| `overwrite` | The `catalog` value plus `audit` and top-level `releases` from its version read; `note` explains a partial run                                                |
+
+The `membership` entity is present only when the catalog read completes. Its `entries` holds the
+package table, `dropped` names packages the preceding table carried that the registry no longer
+lists, and `releases` measures declared fleet ranges against the catalog read. The `overwrite`
+result also retains top-level `releases` from its separate version read, including foreign tools.
+An absent `membership` identifies an incomplete catalog read; `note` explains the cause.
+
+The following JSON excerpt shows the membership evidence in a completed catalog result:
+
+```text
+{
+	"membership": {
+		"entries": [
+			{
+				"name": "@orkestrel/emitter",
+				"lookup": "found",
+				"version": "0.0.6",
+				"dependencies": [],
+				"peers": []
+			}
+		],
+		"dropped": [],
+		"releases": [
+			{
+				"name": "@orkestrel/emitter",
+				"range": "^0.0.5",
+				"lookup": "found",
+				"latest": "0.0.6"
+			}
+		]
+	}
+}
+```
 
 Every failure reports the same envelope instead: `{ "error": { "code": …, "message": … } }`. The
 code is a `ScaffoldErrorCode`, or `USAGE` for a command line that never became a command, or
@@ -818,14 +919,26 @@ because the shape is chosen once and read afterwards: `new` refuses the advisory
 `repair` need the plan to describe and restore a target that already has that shape. A library
 caller creating a workspace holds the same refusal, and the Compile section states it.
 
-`bin`, `setup`, `guides`, `integration`, `conformance`, `service`, `vendors`, `global`, and
-`showcase` are structural facts. Each is set only when the workspace physically ships the directory
+`bin`, `setup`, `guides`, `integration`, `conformance`, `service`, `vendors`, `global`, `showcase`,
+`journey`, and `skills` are structural facts. Reading verbs set each only when the workspace physically ships the directory
 or exact-case file that defines it, never because of the workspace's name and never because a
 sibling fact is set.
 
-`setup` registers every root `tests/setup*.test.ts` proof in one Node project that loads
-`tests/setup.ts`. A nested or wrong-case match does not set the fact. The generated manifest emits
-`test:setup` and invokes it from `test` only while the fact is set.
+The `setup` member is a `readonly SetupRuntime[]`, empty by default. Target inference adds
+`browser` for the exact-case `tests/setupBrowser.test.ts` proof and `node` for every other root
+`tests/setup*.test.ts` match, including `tests/setup.test.ts` and `tests/setupServer.test.ts`.
+A nested or wrong-case match adds no runtime.
+
+The `node` runtime registers the Node `setup` project, which loads `tests/setup.ts` and excludes
+`tests/setupBrowser.test.ts`. The `browser` runtime registers `setup:browser`, which collects
+only that browser proof and loads `tests/setup.ts` and `tests/setupBrowser.ts` through Playwright
+Chromium. The generated manifest emits the selected `test:setup` and `test:setup:browser` scripts
+and invokes them from `test`. Scaffold generates no setup proof for an empty setup seed.
+
+When the `app` axis selects `browser`, the browser setup project also applies the Vue
+single-file-component transform. Your `tests/setupBrowser.ts` module and its paired proof can
+import and render application Vue components. A browser setup proof without `app/browser` keeps
+the non-Vue pipeline; selecting `src/browser` alone adds no Vue plugin or dependency.
 
 A structural fact is read when a verb runs, not when the file appears. Writing
 `tests/integration.test.ts` into a workspace sets the fact, but the root configuration on disk was
@@ -868,6 +981,30 @@ rather than withholding it.
 `showcase` projects only when the browser `app` environment exists. Without that axis the flag adds
 no artifact, configuration, script, or dependency, and the gate reports a non-blocking question on
 that field so the caller who set it learns it emitted nothing.
+
+The library's `journey` flag defaults to `false`; `new` sets it when its `app` selection includes
+`browser`. Reading verbs infer it from the wrapper's presence. The flag requires a browser application. Without that
+application, it emits no journey configuration or script and raises a non-blocking `journey`
+question. With that application, the content-owned root configuration defines
+`appJourney(variant, variants)` and excludes `tests/app/browser/integration.test.ts` from the
+ordinary `app:browser` project.
+
+Edit the variant list in `configs/app/vite.journey.config.ts`. This wrapper is birth-owned:
+scaffold creates it when absent and preserves your edits during `repair`. It imports
+`JourneyVariant` from `@orkestrel/test`, declares `readonly JourneyVariant[]`, and seeds `desktop`
+at 1280 × 800 and `compact` at 390 × 844 without a theme. Rename and extend those variants for
+your application; apply themes through the application's interface in your tests.
+
+The wrapper registers `journey:<name>` for each variant through the root factory. Each project
+collects the browser integration suite alone, sets the variant viewport, and provides `variant`
+as its name, `variants` as the declared list, and `capture` as a boolean. The root configuration
+reads `process.env.CAPTURE === '1'` for that boolean. The generated `test:journey` script runs
+`vitest run --config configs/app/vite.journey.config.ts --no-cache --reporter=dot`, and the generated
+`test` chain runs it after the application projects. With the journey axis off, the ordinary
+browser project retains its integration suite.
+
+The generated browser resolver and gate cover Chromium alone. The emitted `configs/browsers.ts` doc
+block states the condition that reopens engine selection, and is that condition's one home.
 
 `createBlueprint` enforces shape only. Whether the name is a name, the version a version, and the
 axis combination one this package can generate are the gate's laws, and the gate answers them with
@@ -942,24 +1079,26 @@ than a silent no-op.
 A plan selects over the following groups, and a compile that names none covers all of them. Their
 order is the order a plan lists its artifacts in.
 
-| Group           | Holds                                                                      |
-| --------------- | -------------------------------------------------------------------------- |
-| `manifest`      | `package.json`                                                             |
-| `configs`       | The root and per-target build configuration, and the root dotfiles         |
-| `source`        | The selected environment barrels and entries                               |
-| `tests`         | The shared setup modules, the entry tests, and the policy sweep            |
-| `guides`        | The guide index and the vendored guide mirrors                             |
-| `docs`          | `README.md` beside the `AGENTS.md` and `CLAUDE.md` pointers                |
-| `orchestration` | The harness permission file, the bench scripts, and the catalog agent file |
+| Group           | Holds                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------- |
+| `manifest`      | `package.json`                                                                                    |
+| `configs`       | The root and per-target build configuration, and the root dotfiles                                |
+| `source`        | The selected environment barrels and entries                                                      |
+| `tests`         | The shared setup modules, the entry tests, and the policy sweep                                   |
+| `guides`        | The guide index and the vendored guide mirrors                                                    |
+| `docs`          | `README.md` beside the `AGENTS.md` pointer                                                        |
+| `orchestration` | The harness permission file, the bench scripts, the catalog agent file, and the skill pointer set |
 
 The plan claims paths inside the instruction canon deliberately, and each has a reason. The `docs`
-group carries the `AGENTS.md` and `CLAUDE.md` pointers that name where each contract is read,
-planned at those canon destinations as this package's own template content. The `orchestration`
-group carries `CATALOG_AGENT_PATH`, the host-origin artifact at a canon path, because the `catalog`
-verb refuses a target that lacks the file. Every other canon path is staged for reading, so no group
-selection copies a contract into a target, and a copy a target holds at one of them is foreign drift
-in the group `inferGroup` gives it. A scoped audit reads the canon through that same selection, so a
-run excluding a group reports nothing there.
+group carries the `AGENTS.md` pointer that names where each contract is read, planned at those canon
+destinations as this package's own template content. The `orchestration` group carries
+`CATALOG_AGENT_PATH`, a host-origin artifact at a canon path, because the `catalog` verb refuses a
+target that lacks the file. It also carries the skill pointer set, three host-origin artifacts for
+each name in `TARGET_SKILL_NAMES`, so every harness in a target discovers the package-facing skills
+while their bodies, references, and scripts stay in the installed package. Every other canon path is
+staged for reading, so no group selection copies a contract into a target, and a copy a target holds
+at one of them is foreign drift in the group `inferGroup` gives it. A scoped audit reads the canon
+through that same selection, so a run excluding a group reports nothing there.
 
 ## Ownership and drift
 
@@ -998,11 +1137,18 @@ turns each path scaffold owns the bytes of into a content-owned artifact, leavin
 workspace-owned paths and the mirror pointers the preceding rows name. What a verb claims at a
 vendored path is the hydrated ownership, and `HostArtifact` carries the same narrowing on the type.
 
-The `AGENTS.md` and `CLAUDE.md` pointers sit outside that row. Their bytes come from a frozen
-template rather than from the data root, so the pure core face already claims them content-owned and
-hydration leaves them alone. `repair` and `overwrite` restore a missing pointer and replace a drifted
-one, in every face, which is what keeps a target's resolution instructions in agreement with the
-release it installed.
+The `AGENTS.md` pointer sits outside that row. Its bytes come from a frozen template rather than
+from the data root, so the pure core face already claims them content-owned and hydration leaves
+them alone. `repair` and `overwrite` restore a missing pointer and replace a drifted one, in every
+face, which is what keeps a target's resolution instructions in agreement with the release it
+installed.
+
+A skill pointer takes the other route. Its `HostArtifact` sets `pointer`, so hydration reads the
+staged canonical `SKILL.md` and derives the target's bytes with `renderSkillPointer` rather than
+copying them, and the hydrated artifact is computed, content-owned text. `repair` and `overwrite`
+restore a missing pointer and replace a hand-edited one with the derived bytes. A staged canonical
+skill that does not open with a frontmatter block is a broken host, and hydration refuses it with a
+`TARGET` error naming the staged file and the pointer path.
 
 Birth ownership is what makes a generated workspace the consumer's. `materialize` writes a
 birth-owned path into a vacant target. A later `repair` or `overwrite` call treats that path as
@@ -1030,6 +1176,73 @@ package catalog in `.claude/agents/orkestrel.md` registers to another package, b
 fetched bytes rather than prose this workspace wrote, and it reports a top-level guide that is
 neither this package's own, nor `guides/README.md`, nor a catalog row, so an exclusion always
 carries its evidence.
+
+The skill sweep reads named value and type imports from `@orkestrel/*` in every Markdown fence
+in `SKILL.md` and its named references, including fences inside lists and blockquotes. It resolves
+each entry through that package's exports map — the workspace's own manifest for the package the
+workspace publishes, and `node_modules` for every other package — and reads the declaration
+exports with Vite's Oxc parser without loading the runtime entry. A missing binding reports the
+skill file, the specifier, and the exported name. A fence the parser refuses reports a violation
+when its text names an `@orkestrel/` specifier, because error recovery drops the statements after
+the failure; a refused fence naming no such specifier stays outside the sweep. A package outside
+`BASE_DEV_DEPENDENCIES` reports a violation of its own.
+The sweep doesn't read identifiers in prose or table cells, indented code, default imports,
+namespace imports, or imports from other scopes. This proof checks exported names; it doesn't
+check call signatures or runtime behavior.
+The declaration reader follows exact exports-map keys and relative star and named re-exports.
+It reads exported functions, variables, classes, enums, interfaces, types, and local export lists.
+Each refused reading reports its own cause: an entry specifier outside the supported grammar, an
+absent package, an exports key the map lacks or maps through a wildcard, an array, a source alias,
+or a runtime path, a declaration file the package doesn't hold, a syntax error the parser raised, a
+re-exported name the target doesn't declare, and a refused declaration form — a default export, an
+export assignment, an ambient module, a namespace export, a star export alias, or a non-relative
+re-export. A file the branch already visited contributes the names it declares itself, so a named
+re-export through a cycle resolves against those declarations. Local export lists aren't
+typechecked, and ambiguous star exports aren't resolved semantically.
+
+The `surface` rule in `inspectPolicyWorkspace` compares live barrel exports and target-owned root
+`tests/setup*.ts` exports with the hosted guides. It matches bare names case-sensitively across
+environments and declaration kinds. Source names claimed by the target's own hosted guide are
+grandfathered; setup exports have no grandfather, and setup paths selected by `HOST_PATHS` are
+excluded. A scaffold checkout reads its own `guides/` directory and its own catalog; every other
+target reads `node_modules/@orkestrel/scaffold/dist/host/guides/` and the catalog staged beside it.
+The population it compares is what the parser accounts for: each exported declaration — a variable
+declarator, function, class, interface, type alias, enum, or namespace — every name an export list
+or a re-export list names, the alias of a namespace re-export, and the names a relative star export
+reaches through the file that declares them. Every other form is refused rather than passed over.
+Unreadable syntax, a default export, an `export =` assignment, an `export as namespace`
+declaration, a binding that is not an identifier, a barrel statement outside the one-line relative
+`.js` star form, and a star target the sweep cannot resolve to a file it reads each report a
+`surface` violation naming the path and the line.
+A missing guide root, an empty catalog, a catalog row with no hosted guide, and a hosted guide
+carrying no `Surface` section report one the same way, so a reading the sweep could not complete
+never reports clean. A collision reads
+`surface name belongs to one package: NAME (OWNER)` and carries the declaring path and line, sorted
+by path, line, and message. Which package keeps a claimed name is the answer
+`.claude/rules/names.md` § Fleet name ownership gives; the rule carries no allowlist and no
+suppression.
+
+### Policy setup surface
+
+These `tests/setupPolicy.ts` exports implement the `surface` rule: its declarations, its constants,
+its readers, and the fixtures its controls run against. Every other
+export in that module serves another rule of the sweep or every rule of it, and no name in either
+set is reachable through a published specifier.
+
+| Name                            | Kind      | Summary                                                                              |
+| ------------------------------- | --------- | ------------------------------------------------------------------------------------ |
+| `PolicySurfaceDeclaration`      | interface | Describes one reachable declaration and its physical source location.                |
+| `PolicySurfacePopulation`       | interface | Groups reachable declarations with refusals of incomplete barrel evidence.           |
+| `POLICY_SURFACE_BARREL_PATTERN` | const     | Matches the complete physical barrel rows the parser accepts.                        |
+| `POLICY_SURFACE_CATALOG`        | const     | Names the staged catalog's storage path beneath the installed host.                  |
+| `POLICY_SURFACE_EXPORT_CASES`   | const     | Supplies export forms that must participate in the fleet comparison.                 |
+| `POLICY_SURFACE_HOST`           | const     | Names the installed host root containing the fleet's reference guides.               |
+| `createPolicySurfaceFixture`    | function  | Creates a scratch target with a complete installed guide population.                 |
+| `createPolicySurfaceGuide`      | function  | Creates a guide whose surface claims the supplied fixture names.                     |
+| `inspectPolicySurface`          | function  | Inspects source and target-owned setup names against the hosted fleet guides.        |
+| `readPolicyDeclarations`        | function  | Locates parsed exports at their physical declaration lines.                          |
+| `readPolicySurface`             | function  | Reads reachable source declarations and refuses unread barrel statements or targets. |
+| `writePolicySurfaceHost`        | function  | Writes a complete hosted reference population for a physical policy control.         |
 
 `tests/guides.test.ts` invokes the public `GuideCommand` class with this package's inventory policy,
 the Guide reader, and the real Vitest runner. Its anonymous worker callback owns the package
@@ -1130,6 +1343,13 @@ target holds. The refusal is deliberate at `0.0.x` and there is no migration pat
 
 ## Fleet catalog
 
+During `audit`, a present foreign guide whose bytes differ from the hosted guide produces a
+non-blocking question whose `field` is `guides`. Its message names the mirror path and `catalog`
+as the refresh action. The message says
+"differs from the hosted guide": byte inequality establishes no chronology. The question sits
+outside repair findings, so `repair` preserves a present mirror. The target's own guide and its
+guide index are excluded, and the comparison follows the `guides` group selection.
+
 `catalog` rewrites one marker-bounded region in `CATALOG_AGENT_PATH` and nothing else in that file.
 The region holds a table with these columns:
 
@@ -1226,7 +1446,7 @@ committed before a later catalog refusal and records that refusal in `note`.
 | `new`       | Declared versions and the vendored host                          | Writes the distributed version and host floors; exits `0` after creating the workspace                                                                      | Reads no upstream surface, writes the same floors, and exits `0` after creating the workspace               |
 | `audit`     | Declared versions and the vendored host                          | Compares through the distributed floors and exits `1`                                                                                                       | Compares through the floors; exits `0` for an aligned target or `1` for drift                               |
 | `repair`    | Declared versions and the vendored host                          | Repairs from the distributed floors and exits `1`, even when the terminal audit is aligned                                                                  | Repairs from the floors; the terminal audit decides exit `0` or `1`                                         |
-| `catalog`   | Organization membership, its packuments, and the selected guides | Refuses a membership or version failure with `FETCH` and exit `1`; preserves the local mirror of each guide that failed or is absent upstream and exits `1` | Is a usage error; exits `2` and writes nothing                                                              |
+| `catalog`   | Organization membership, its packuments, and the selected guides | Refreshes guides alone on a membership outage; refuses version failure; preserves present mirrors or fills absent mirrors from the verified host; exits `1` | Is a usage error; exits `2` and writes nothing                                                              |
 | `overwrite` | Everything `repair` and `catalog` read                           | Keeps completed repair and deletion work, names each floor or refused catalog step in `note`, and exits `1`                                                 | Repairs, deletes, and writes version floors; skips `catalog`, records that refusal in `note`, and exits `1` |
 
 A fleet row is compared exactly — `^0.1.0` is stale the moment the registry serves `0.1.2` — and
@@ -1250,18 +1470,19 @@ generating a workspace with no network receives.
 ## Vendored data root
 
 The vendored data root is the shared file set, staged into the published package as plain data.
-Staging walks `HOST_PATHS` and `CANON_PATHS`, and a release ships what both name.
+Staging walks `HOST_PATHS`, `CANON_PATHS`, and `REFERENCE_PATHS`, and a release ships what those
+lists name.
 
 `HOST_PATHS` is the vendored set, and a target receives a copy of each path it selects: the
 licence, the harness permission file, the scaffold-owned `scripts` directory, the
 shared policy register, the shared policy proof, the shared policy plugin, the shared configuration
-leaf and its proof, the byte-identical root dotfiles, and the guide mirrors a generated workspace
-starts from. It is a candidate list rather than a plan, because a workspace never mirrors its own
-guide. The session-start hooks inside `scripts` split by job. The bench probe reports whether a
-bench CLI resolves, and the dependency hook installs the lockfile's closure in a remote session.
+leaf and its proof, and the byte-identical root dotfiles. The session-start hooks inside `scripts`
+split by job. The bench probe reports whether a bench CLI resolves, and the dependency hook installs
+the lockfile's closure in a remote session.
 The Ollama hook invokes `scripts/ollama.sh` only when `CLAUDE_CODE_REMOTE=true`; direct invocation
-remains available for live-service setup. What wires a bench stays in the canon, and a session reads
-it at its primary root.
+remains available for live-service setup. Claude Code Cloud is Linux and has bash: SessionStart
+runs that POSIX script and never a Windows wrapper. What wires a bench stays in the canon, and a
+session reads it at its primary root.
 
 `scripts/ollama.sh` defaults to `http://127.0.0.1:11434` and `qwen3.5:2b-q4_K_M`. It requires Node
 for native URL and JSON handling and curl for the HTTP protocol. The script accepts an HTTP or HTTPS
@@ -1274,36 +1495,72 @@ completion.
 
 When an HTTP loopback endpoint is unreachable, the script may start an installed Ollama executable
 in an owned POSIX process group. A failure sends that owned group `TERM`, then sends `KILL` if it
-does not stop within 5 seconds; a reused daemon remains untouched. Direct reuse works from Git Bash on Windows, but local startup there fails because Bash
-cannot safely terminate the Windows process tree. Automatic installation is limited to Linux cloud
-or CI automation. The official installer download follows only HTTPS redirects, must be nonempty,
-and runs within the remaining setup deadline. The installer may require root or `sudo`, and its own
-platform prerequisites remain authoritative. The full setup deadline is 590 seconds, including a
-60-second local startup allowance, within the hook's 600-second timeout.
+does not stop within 5 seconds; a reused daemon remains untouched. Direct reuse works from Git Bash
+on Windows, but local startup there fails because Bash cannot safely terminate the Windows process
+tree. Automatic installation is limited to Linux cloud or CI automation. The official installer
+download follows only HTTPS redirects, must be nonempty, and runs within the remaining setup
+deadline. The installer may require root or `sudo`, and its own platform prerequisites remain
+authoritative. The full setup deadline is 590 seconds, including a 60-second local startup
+allowance, within the hook's 600-second timeout.
+
+Windows test helpers run the HTTP setup protocol in process. For local startup, they resolve a
+regular-file Ollama executable through `@orkestrel/process` and launch it with `serve`, without
+Bash. An absent executable returns exit `127` when the endpoint needs local startup; a reachable
+daemon needs no executable. Windows fixture protocol tests run without an installed executable.
+The native `serve` launch skips when `resolveExecutable` finds no regular-file Ollama. Fixture
+setup uses an isolated PATH so an unready fixture cannot launch the host daemon. Local hooks
+succeed without making requests; remote hooks run setup. Claude Code Cloud continues to invoke
+`scripts/ollama.sh`.
 
 `CANON_PATHS` is the instruction canon, staged for reading instead: the `AGENTS.md` coding contract,
-the `CLAUDE.md` harness bridge, the `.agents/orchestration.md` agent-operation contract, the rules
-under `.claude/rules/` and `.cursor/rules/`, the skills under `.agents/skills/` and `.claude/skills/`,
-the templates under `.agents/templates/`, the transport contracts under `.agents/transports/`, the
-agent roles under `.claude/agents/` and `.codex/agents/`, the `.codex/config.toml` bench
-configuration, and the `.mcp.json` and `.cursor/mcp.json` server registrations. A release stages
-every one of them, and a target receives a copy only where the plan claims the path. At the
-`AGENTS.md` and `CLAUDE.md` destinations it receives the pointers: different content at the same
-paths, planned as this package's own template content. At `CATALOG_AGENT_PATH` it receives the staged
-bytes themselves, because the `catalog` verb refuses a target that lacks the file. Everywhere else in
-the canon a target holds nothing, and a reader reaches the contracts from a scaffold checkout sitting
-beside the repository, or from the `node_modules/@orkestrel/scaffold/dist/host/` root inside the
-installed package, which is what the `AGENTS.md` pointer scaffold plans into a target names.
+the `.claude/AGENTS.md` Claude Code bridge, the `.agents/orchestration.md` agent-operation contract,
+the rules under `.claude/rules/` and `.cursor/rules/`, the skills under `.agents/skills/` and
+`.claude/skills/`, the templates under `.agents/templates/`, the transport contracts under
+`.agents/transports/`, the agent roles under `.claude/agents/` and `.codex/agents/`, the
+`.codex/config.toml` bench configuration, and the `.mcp.json` and `.cursor/mcp.json` server
+registrations. A release stages every one of them, and a target receives a copy only where the plan
+claims the path. At the `AGENTS.md` destination it receives the pointer: different content at the
+same path, planned as this package's own template content. At `CATALOG_AGENT_PATH` it receives the
+staged bytes themselves, because the `catalog` verb refuses a target that lacks the file. For each
+name in `TARGET_SKILL_NAMES` it receives the skill pointer set: the `.claude/skills/<name>/SKILL.md`
+bridge and the `.agents/skills/<name>/agents/openai.yaml` sidecar as staged bytes, and at
+`.agents/skills/<name>/SKILL.md` a pointer that hydration derives from the staged canonical skill. A
+blueprint carrying the `skills` fact ships its own skill canon and receives no pointer set.
+Everywhere else in the canon a target holds nothing, and a reader reaches the contracts from a
+scaffold checkout sitting beside the repository, or from the
+`node_modules/@orkestrel/scaffold/dist/host/` root inside the installed package, which is what the
+`AGENTS.md` pointer scaffold plans into a target names.
 
-`HOST_PATHS` and `CANON_PATHS` are disjoint by prefix in either direction: no member of one equals or
-sits beneath a member of the other. Staging depends on that, because the walk covers the union and a
+`REFERENCE_PATHS` is the fleet's guides, staged for reading like the canon and owned like neither
+of the other lists. It holds the `guides` directory, so a release stages this repository's mirror of
+every published `@orkestrel` guide beside `guides/scaffold.md` itself, each at
+`dist/host/guides/<name>.md` inside the installed package. Reference membership grants a target
+nothing: it is neither an ownership claim the verbs write and compare, nor canon membership
+`isCanonPath` reports. What a target holds at a guide path comes from a claim made elsewhere.
+`blueprintToHostArtifacts` claims the mirrors named by `SEED_GUIDE_PATHS`, which is the
+seed a generated workspace starts from, and `selectHostPaths` drops the workspace's own guide from
+that claim, because that file is the workspace's own product. Every other guide reaches a target
+through `catalog`, which fetches the live file and falls back to the staged copy. Baselines states
+that fallback.
+
+The hosted set is also what the fleet's name-ownership gate reads. `readSurfaceCollisions` reads
+each staged guide's `## Surface` names and reports every bare name distinct guides claim.
+`readSurfaceCollisions` requires `@orkestrel/guide` in the server module's resolution path;
+Scaffold declares it only for development and reports `ScaffoldError('TARGET', …)` when it
+cannot load that module. `stageHost` compares the reading against the baseline during staging.
+Staging and the
+`surface` rule in Ownership and drift therefore answer from one population.
+
+`HOST_PATHS`, `CANON_PATHS`, and `REFERENCE_PATHS` are disjoint by prefix in every direction: no
+member of one equals or sits beneath a member of another. Staging depends on that, because the walk
+covers the union and a
 path it discovers twice claims one storage name twice, which refuses the stage. `isCanonPath` is the
 one reading of canon membership, matching a member and anything beneath a member that is a directory,
 so staging, the live overlay, and the executable's fetch list never disagree about what a path is.
 Membership says where a path's bytes are staged, not whether a plan claims it:
 `blueprintToHostArtifacts` appends `CATALOG_AGENT_PATH` to what `HOST_PATHS` selects rather than
-listing it there, which is what keeps the file planned without putting a canon path in the vendored
-list.
+listing it there, and claims the seed guide mirrors the same way, which is what keeps each file
+planned without putting a canon or reference path in the vendored list.
 
 The `host.json` file at the repository root is the committed live inventory. Each entry carries the
 SHA-256 digest of its file content, and the inventory carries a membership digest over its declared
@@ -1332,12 +1589,12 @@ a commit is a property of the content host. Scaffold neither creates that lag no
 response as fresher than the host served it.
 
 A canon destination costs no request. The fetch list drops every canon destination and `filesToHost`
-keeps the installed floor bytes for each one, claimed or not. The rule covers the destinations a plan
-does claim as well: the `AGENTS.md` and `CLAUDE.md` pointers are written from this package's own
-templates, and the catalog agent file is claimed by presence, so no byte a target holds is taken from
-a fetched canon path. A fill carrying no row for a canon path is complete rather than spoiled, which
-is what lets one `Host` carry live bytes beside floor bytes without mixing baselines within a
-surface.
+keeps the installed floor bytes for each one, claimed or not. The rule covers the destinations a
+plan does claim as well: the `AGENTS.md` pointer is written from this package's own templates, the
+catalog agent file is claimed by presence, and the skill pointer set reads the installed floor
+bytes, so no byte a target holds is taken from a fetched canon path. A fill carrying no row for a
+canon path is complete rather than spoiled, which is what lets one `Host` carry live bytes beside
+floor bytes without mixing baselines within a surface.
 
 `.claude/settings.json` is in that set, and the artifact planned for it is content-owned. `repair`
 and `overwrite` restore its bytes, so an edit made to it inside a target is reverted at the next
@@ -1358,7 +1615,8 @@ Each staged path is copied to a storage name, and every dot that opens a segment
 because npm's own ignore rules would drop a leading-dot entry from the tarball. A dotted file at the
 root moves under `dotfiles/` so it cannot collide with an undotted sibling. `manifest.json` is
 written last and declares the whole membership: one entry per file with a digest computed from the
-staged destination after its copy, the sorted directory inventory, and a SHA-256 digest over both.
+staged destination after its copy, the sorted directory inventory, the sorted `surface` collision
+collection, and a SHA-256 digest over that membership.
 The membership digest detects an edit that did not update the manifest, and the directory inventory
 makes a declared empty directory survive a file walk.
 
@@ -1373,6 +1631,36 @@ one.
 A missing staged path is refused rather than staged around, and the refusal names every missing
 path at once. That is why `guides/scaffold.md` — this file — must exist before `npm run build`
 completes.
+
+The stage reads the guides it discovered and refuses on what it finds there, failing the build that
+produced the fault rather than a consumer's terminal. Every package the catalog table lists must
+have a staged guide, because a row whose guide never shipped is a row the offline floor and the
+`surface` rule cannot answer for. The copied guides must also carry no Surface collision the
+committed inventory does not already record: `stageHost` reads the baseline through
+`readSurfaceBaseline` before the build rewrites the inventory, and refuses a name whose staged
+owner set differs from the inventory — absent from the record, or not a subset of its recorded
+owners — which is what stops a release from widening the set of names more than one package claims.
+A collision the baseline records and the stage no longer produces, or whose staged owners are a
+narrower subset of the recorded set, is accepted, so closing one needs no separate step. `HostStageOptions.inventory` selects the
+checkout-relative inventory path, defaulting to `HOST_INVENTORY_PATH` (`host.json`).
+`HostStageOptions.report` receives the baseline location or its absence; its default reports
+nothing. The `build:host` script passes a sink that writes the report to standard error.
+An absent inventory refuses staging unless `HostStageOptions.establish` is `true`. Use that
+option to bootstrap a fresh checkout deliberately. An inventory whose `surface` is missing,
+malformed, or at odds with its digest is refused even during bootstrap.
+
+`npm run build` is the release path, and it passes neither `HostStageOptions.inventory` nor
+`HostStageOptions.establish`. Its `build:host` step stages
+`dist/host`, and its `build:inventory` step stages a temporary root and writes the manifest that
+run produced to `host.json`; each reads the committed inventory at the default path, refuses an
+absent one, and compares the staged collisions against what that inventory records. Deleting
+`host.json` therefore makes the release refuse rather than record a fresh baseline, and the
+inventory a release writes is what the checkout committed minus the collisions the stage no longer
+produces. `HostStageOptions.inventory` and `HostStageOptions.establish` are the package's own
+routes past that refusal: a caller can stage against another checkout-relative record or establish
+a fresh one, and `computeManifestDigest` makes such a record self-consistent. Neither route changes
+what a release reads until that record is committed as `host.json`, so review reads a widened or
+re-established baseline as a diff of that file.
 
 The `Materializer` reads the root once, at construction, and cross-checks the manifest against the
 files actually stored. It defaults to the root inside the installed package, resolved from the
@@ -1415,7 +1703,8 @@ except the manifest.
   bare specifier, because `vite.config.ts` derives its `alias` record from these entries in order and
   a bare specifier also matches its own subpaths. An `app` environment publishes nothing and maps no
   such entry.
-- One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either axis.
+- One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either
+  environment axis or in its setup runtime list.
   It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
   once into `browserOptions` and passes that to every `playwright()` provider it configures. The
   precedence is `PLAYWRIGHT_EXECUTABLE_PATH`, `PLAYWRIGHT_WS_ENDPOINT`, `PLAYWRIGHT_CHANNEL`, the
@@ -1439,14 +1728,23 @@ except the manifest.
   `configs/browsers.ts` resolution, serves the bundle over a loopback server, and drives it in
   Playwright Chromium.
 - One template artifact each for `README.md` and `guides/README.md`.
-- One template artifact each for `AGENTS.md` and `CLAUDE.md`. They are pointers rather than contracts:
-  `AGENTS.md` names the coding contract, the orchestration contract, the rules, and the skills, and
-  resolves each against a sibling scaffold checkout or the installed package; `CLAUDE.md` names the
-  `AGENTS.md` file beside it and imports nothing, because an `@path` import inlines the imported file
-  into every context that loads it. Scaffold owns their bytes, so a release that moves the wording
-  moves every target's copy at its next `repair`.
+- One template artifact for `AGENTS.md`. It is a pointer rather than a contract:
+  `AGENTS.md` names the coding contract, the orchestration contract, the rules, the skills, and the
+  `.claude/AGENTS.md` Claude Code bridge, and resolves each against a sibling scaffold checkout or
+  the installed package. It imports nothing, because an `@path` import inlines the imported file
+  into every context that loads it. No `CLAUDE.md` is planned: Claude Code reads `AGENTS.md`
+  directly, and a `CLAUDE.md` beside it stops that reading, so the path stays canon with no
+  claimant, a copy a target still holds reports `foreign`, and `overwrite` deletes it. Scaffold
+  owns the pointer's bytes, so a release that moves the wording moves every target's copy at its
+  next `repair`.
 - One host artifact per vendored path the workspace selects. A vendored directory is one planned
   path that expands into the files the data root stores beneath it.
+- Three host artifacts for each name in `TARGET_SKILL_NAMES`, unless the blueprint carries the
+  `skills` fact: the Claude bridge and the Codex sidecar as copies of the staged bytes, and the
+  `SKILL.md` pointer, which carries the canonical frontmatter over a body that names the canonical
+  skill and how to run its scripts from the installed package. A script runs from its built `.js`
+  twin under `node_modules/@orkestrel/scaffold/dist/agents/skills/<skill>/scripts/`, because Node
+  refuses to strip types for a file under `node_modules`.
 
 Every generated manifest declares the toolchain it is gated on. The `engines.node` field carries
 the blueprint's `engines` value, which defaults to the `>=22.18.0` range. The
@@ -1600,6 +1898,7 @@ A transaction owns a private root beside the target on the same volume, so every
 rename rather than a copy. A failure part way through commit restores every destination it already
 promoted and removes every directory it created. No destination ever receives half-written bytes.
 It is not a journal: a process killed between promotions leaves a mixed target.
+Directory anchors capture native bigint device and inode values without numeric rounding.
 The transaction binds each directory's location rather than its lifetime, so an ancestor swapped
 for another path, a file, a symlink, or nothing is refused, and one deleted and recreated in place
 may not be.
@@ -1663,17 +1962,22 @@ tree carrying no uncommitted work. An untracked copy is left standing, and a git
 outside the dirty reading as well, so a target can carry its own file at a canon path through every
 visit. The audit reads canon membership by path, so such a copy stays a `foreign` finding and that
 target exits `1` on every run. `repair` never closes it either: that verb writes the planned paths a
-target is missing or has let drift and deletes nothing, so it restores the `AGENTS.md` and
-`CLAUDE.md` pointers and leaves every other copy where it is. A maintainer who wants a local MCP
-server registration keeps it outside the repository, in the harness's own local or user scope, rather
-than at `.mcp.json`, where the file is drift whoever wrote it.
+target is missing or has let drift and deletes nothing, so it restores the `AGENTS.md` pointer and
+the skill pointer set and leaves every other copy where it is; a `CLAUDE.md` a target still holds is
+a `foreign` finding the same way, and `overwrite` deletes it. A maintainer who wants a local MCP
+server registration keeps it outside the repository, in the harness's own local or user scope,
+rather than at `.mcp.json`, where the file is drift whoever wrote it.
 
-**A target holds no dispatchable role beyond the catalog agent.** The canon is staged for reading, so
-a target receives the `AGENTS.md` and `CLAUDE.md` pointers and `.claude/agents/orkestrel.md`, and
-nothing else a harness reads: no other agent role, no bench configuration, and no MCP registration. A
-harness running in a target loads none of those from `node_modules` either, so a role, a bench, or a
-server that target needs is defined in the harness's own local or user scope — the seam the preceding
-registration entry already names. Fleet targets are not orchestration hosts. A session that
+**A target holds no dispatchable role beyond the catalog agent.** The canon is staged for reading,
+so a target receives the `AGENTS.md` pointer, `.claude/agents/orkestrel.md`, and the skill pointer
+set for each package-facing skill `TARGET_SKILL_NAMES` lists: the Claude bridge, the Codex sidecar,
+and a pointer that names the canonical skill, all content-owned and restored by `repair`. It
+receives no other agent role, no bench configuration, and no MCP registration. A harness running in
+a target loads none of those from `node_modules` either, so a role, a bench, or a server that target
+needs is defined in the harness's own local or user scope — the seam the preceding registration
+entry already names. Fleet targets are not orchestration hosts: `TARGET_SKILL_NAMES` leaves out the
+dispatch, publish, scout, and align skills, which run from a scaffold checkout, and a blueprint
+carrying the `skills` fact ships its own skill canon and receives no pointer set. A session that
 dispatches roles starts on scaffold, where `.agents/orchestration.md` and the role files sit, and
 attaches the target it is working on.
 
@@ -1853,6 +2157,10 @@ you for asking for the generated proof back.
 The generated distribution proof takes its release contract from the outside. The generated
 `prepublishOnly` invokes it as `npm run test:distribution -- --mode release`, and the proof reads
 `import.meta.env.MODE === 'release'` and **fails** on an unreachable registry rather than skipping.
+The project factories the root configuration registers receive the invocation record, and each of
+their projects runs in the invocation's mode. Vitest runs a project whose factory returns no mode in
+Vitest's own `test` mode, where the proof skips. A journey project is such a project: its
+birth-owned wrapper drops the record, so it runs in `test` whatever mode the run names.
 An ordinary local run skips that case, because a developer offline is not a defect; a release run
 does not, because skipping there passes the publish gate without ever proving the artifact installs.
 A workspace that replaces the generated proof takes that contract with it: presence ownership leaves

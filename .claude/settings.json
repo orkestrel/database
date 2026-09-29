@@ -10,7 +10,6 @@
 			"Bash(codex login status)",
 			"Bash(codex exec *)",
 			"Bash(agent.cmd --version)",
-			"Bash(codex mcp-server)",
 			"Bash(agent --version)",
 			"Bash(agent -p *)",
 			"Bash(claude --version)",
@@ -239,8 +238,6 @@
 			"Bash(cmd /c fc *)",
 			"Bash(cmd /c tree)",
 			"Bash(cmd /c tree *)",
-			"mcp__codex__codex",
-			"mcp__codex__codex-reply",
 			"mcp__webstorm__read_file",
 			"mcp__webstorm__search_regex",
 			"mcp__webstorm__search_text",
@@ -989,6 +986,11 @@
 						"type": "command",
 						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/codex.sh",
 						"timeout": 120
+					},
+					{
+						"type": "command",
+						"command": "cd \"$CLAUDE_PROJECT_DIR\" && [ -f .agents/skills/orkestrel-dispatch/scripts/sweep.ts ] && node .agents/skills/orkestrel-dispatch/scripts/sweep.ts --report || true",
+						"timeout": 30
 					}
 				]
 			}

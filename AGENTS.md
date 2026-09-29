@@ -19,9 +19,18 @@ Resolve every one of those paths against scaffold, never against this repository
   `node_modules/@orkestrel/scaffold/dist/host/claude/rules/` directory, and the
   `node_modules/@orkestrel/scaffold/dist/host/agents/skills/` directory.
 
-Every path a scaffold-supplied file names resolves the same way. The files this repository carries
+Every path a scaffold-supplied file names resolves the same way. Run a script such a file names
+through its built twin: replace `node .agents/skills/` with
+`node node_modules/@orkestrel/scaffold/dist/agents/skills/` and the `.ts` extension with `.js`,
+because Node runs no `.ts` file under `node_modules`. The files this repository carries
 — the `.claude/agents/orkestrel.md` catalog file, the `.claude/settings.json` permission file,
-and the bench scripts under `scripts/` — are this repository's own copies and resolve here.
+the bench scripts under `scripts/`, and the skill pointers under `.agents/skills/` and
+`.claude/skills/`, which name the canonical skills and how to run their scripts — are this
+repository's own copies and resolve here.
+
+In Claude Code, also read the Claude bridge: `../scaffold/.claude/AGENTS.md` beside a checkout, or
+`node_modules/@orkestrel/scaffold/dist/host/claude/AGENTS.md` from the installed copy. Keep no
+`CLAUDE.md` in this repository; one stops Claude Code from reading this file.
 
 Edit none of the scaffold-owned files here. The `scaffold repair` command restores them, so a
 change to one is a commit in the scaffold repository followed by a release.

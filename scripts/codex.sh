@@ -11,9 +11,9 @@ if ! command -v codex >/dev/null 2>&1; then
   exit 0
 fi
 
-analyst_model="${CODEX_ANALYST_MODEL:-gpt-5.6-sol}"
+analyst_model="${CODEX_ANALYST_MODEL:-gpt-6-astra}"
 analyst_effort="${CODEX_ANALYST_EFFORT:-high}"
-implementer_model="${CODEX_IMPLEMENTER_MODEL:-gpt-5.6-sol}"
+implementer_model="${CODEX_IMPLEMENTER_MODEL:-gpt-6-astra}"
 implementer_effort="${CODEX_IMPLEMENTER_EFFORT:-high}"
 
 valid_model() {

@@ -365,8 +365,9 @@ export const POLICY_BANNED_TERMS: readonly PolicyTerm[] = Object.freeze([
  * Lists every substitution-table row a reader rules by sense, which no pattern matches.
  *
  * @remarks
- * Each row carries a permitted sense: a date value, a version value, a causal clause, and the name
- * a replication topology takes. The currency check proves each row is registered here.
+ * Each row carries a permitted sense: a date value, a version value, a causal clause, the name a
+ * replication topology takes, and a comparative or spatial relation. The currency check proves each
+ * row is registered here.
  */
 export const POLICY_JUDGED_TERMS: readonly string[] = Object.freeze([
 	'now',
@@ -374,6 +375,8 @@ export const POLICY_JUDGED_TERMS: readonly string[] = Object.freeze([
 	'latest',
 	'once',
 	'since',
+	'above',
+	'below',
 	'master',
 ])
 

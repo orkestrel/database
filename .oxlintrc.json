@@ -83,6 +83,13 @@
 			}
 		},
 		{
+			"files": [".agents/skills/*/scripts/*.ts"],
+			"rules": {
+				"policy/no-nested-functions": "error",
+				"policy/no-host-line-endings": "error"
+			}
+		},
+		{
 			"files": [
 				"src/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
 				"app/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"

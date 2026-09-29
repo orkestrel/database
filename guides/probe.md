@@ -476,7 +476,7 @@ make a claim. A direct `Probe` runs its boot controls at construction. `ProbeSer
 independent of the workspace toolchain and runs those controls when an admitted `prove` call
 constructs the real probe.
 
-- **A Vitest project whose name the test's path infers.** A test under `tmp/probe/` names the
+- **A Vitest project whose name the test's path infers.** A test under `tmp/probes/` names the
   `probe` project, and a test under `tests/src/<environment>/` names `src:<environment>`. Any other
   path infers no project, and the runtime stage throws `origin: 'claimant'`, `code: 'missing'`, and
   the declared path in `context` rather than reporting an issue:
@@ -495,7 +495,7 @@ constructs the real probe.
   for the file it wrote, so a project whose glob matches nothing still serves a claim.
 - **The directory the declared test path names can be created.** The runtime stage writes a real
   file beside the declared test and creates that file's directory first, recursively, so a claim
-  naming a directory the workspace does not hold still runs. A fresh clone holds no `tmp/probe/`,
+  naming a directory the workspace does not hold still runs. A fresh clone holds no `tmp/probes/`,
   because `tmp` is ignored by version control, and a claim declaring a test there creates it. A
   directory the host refuses to create — a file already occupies the path, or its parent denies
   writing — reports an `origin: 'workspace'` issue:
@@ -656,7 +656,7 @@ const claim: Claim = {
 			},
 		],
 		test: {
-			path: 'tmp/probe/greeting.test.ts',
+			path: 'tmp/probes/greeting.test.ts',
 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 	},
@@ -668,7 +668,7 @@ const claim: Claim = {
 			},
 		],
 		test: {
-			path: 'tmp/probe/greeting.test.ts',
+			path: 'tmp/probes/greeting.test.ts',
 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 		stage: 'type',
@@ -678,8 +678,8 @@ const claim: Claim = {
 
 const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
-verdict.digest // 'fcb88a2dee987b8673c1fc7107979470'
-verdict.receipt // 'probe:fcb88a2dee987b8673c1fc7107979470:type:typescript@6.0.3:oxlint@1.83.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
+verdict.digest // 'bdf03e5dfd6bd413ead671c7a2940fcf'
+verdict.receipt // 'probe:bdf03e5dfd6bd413ead671c7a2940fcf:type:typescript@6.0.3:oxlint@1.86.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
 await probe.destroy()
 ```
 
@@ -895,10 +895,10 @@ already supply test code the runtime stage runs.
 for.** Oxlint's language server honours `.gitignore`, and it does so for text supplied from memory
 exactly as it does for a file on disk. The stage reports a clean check, not a skipped one.
 
-This reaches the flagship claim stated earlier: its test lives at `tmp/probe/greeting.test.ts`, and
+This reaches the flagship claim stated earlier: its test lives at `tmp/probes/greeting.test.ts`, and
 `tmp` is ignored in this workspace, so the lint stage inspects the candidate `src/core/factories.ts`
 and reports nothing about the test. Measured on 2026-08-20: the same three-line text carrying an
-unused binding and a `debugger` statement returns 0 issues at `tmp/probe/lint-ignored.test.ts` and 2
+unused binding and a `debugger` statement returns 0 issues at `tmp/probes/lint-ignored.test.ts` and 2
 issues at `tests/src/core/lint-tracked.test.ts`.
 
 `.gitignore` alone causes this: `tmp` appears there and in no other ignore file this workspace
@@ -1000,8 +1000,8 @@ than the probe's — it decides which process reads the stdio, not when the stag
   `error` instead, carrying the arming refusal as the attempt raises it, so a host waiting on `arm`
   reads the refusal rather than an event that never arrives. The attempt is still retained for
   retry, so each attempt surfaces its own `error` and no `prove` reports one refusal twice. The
-  controls run under `tmp/probe/` against the root `tsconfig.json`, which is why the Vitest project,
-  its composition in the root configuration, and a `tmp/probe/` the host lets it create gate the
+  controls run under `tmp/probes/` against the root `tsconfig.json`, which is why the Vitest project,
+  its composition in the root configuration, and a `tmp/probes/` the host lets it create gate the
   boot rather than a claim.
 - **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
   workspace module and invalidates the ones whose contents moved; the type stage refreshes its
@@ -1113,7 +1113,7 @@ than the probe's — it decides which process reads the stdio, not when the stag
   closes the file with the marker `// @orkestrel/probe generated specification <pid>-<uuid>`, and
   the sweep requires that marker to name the same revision the file name does. The boot
   dependencies carry the same marker, so nothing is attributed by its path and nothing under
-  `tmp/probe/` is deleted for sitting there. A file of yours that happens to carry the same name
+  `tmp/probes/` is deleted for sitting there. A file of yours that happens to carry the same name
   shape is left where it is, wherever it sits, and so is a live neighbour's specification.
 - **What the type stage leaves.** Its mirror is one directory under `TYPE_MIRROR`, named for the
   writing host's process id and a fresh UUID, carrying that same marker at `.probe/mirror.txt`.

@@ -257,7 +257,7 @@ export function resolveSystemBrowser(
 }
 
 /**
- * Resolves Playwright provider options for whatever browser this host can actually launch.
+ * Resolves Playwright provider options for Chromium on this host.
  *
  * @param pinned - The executable path for Playwright's pinned Chromium revision, when it has one.
  * @param platform - The Node platform whose standard layouts this call probes.
@@ -276,6 +276,10 @@ export function resolveSystemBrowser(
  * a discovered system channel is verified before it is named. The platform default is unverified
  * as well and exists only as a last resort: Windows takes `msedge`, which ships with the OS and
  * never collides with a foreground Chrome.
+ *
+ * The resolver and the gate cover Chromium alone. Reopen engine selection when another
+ * Playwright engine is installed and launches on the host with a `captureFrame` reading
+ * back at its declared size, or when a journey or style divergence is recorded.
  *
  * @example
  * ```ts

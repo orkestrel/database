@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Debrief Closed Campaign'
+  short_description: 'Fold a closed campaign into portable truth on field evidence'
+  default_prompt: 'Use $orkestrel-debrief to debrief the closed campaign: field passes, findings ledger, fix loops, canon refinement, propagation, disposal.'

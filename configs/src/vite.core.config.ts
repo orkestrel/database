@@ -1,9 +1,9 @@
-import { defineConfig, mergeConfig } from 'vite'
+import { defineConfig } from 'vite'
 import { declarationRollup, environmentBoundary, outputBoundary } from '../helpers.js'
 import { peers, srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
-	mergeConfig(srcCore(), {
+	srcCore({
 		publicDir: false,
 		plugins: [
 			outputBoundary('dist/src/core'),
