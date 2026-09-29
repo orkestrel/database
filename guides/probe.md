@@ -514,9 +514,13 @@ constructs the real probe.
   own dependencies, and reports the resolved versions on `Verdict.toolchain`. A verdict predicts
   the gate only while probe and the gate read one installed copy of each tool.
 
-Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its tools are
-optional peers, resolved from that workspace when a direct probe is constructed or a server admits
-a `prove` call.
+Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its
+`typescript` and `vitest` tools are optional peers; probe resolves them and `oxlint` from that
+workspace when a direct probe is constructed or a server admits a `prove` call. The `oxlint`
+package carries no peer range because npm also resolves the peers of an optional peer: `oxlint`
+declares an optional `vite-plus` peer, `vite-plus` 1.0.0 depends on `vitest` 5, and npm 11.19.0
+refuses that conflict with the `vitest` peer range when it installs probe into an empty project
+(measured 2026-09-29).
 
 ## Registering the server
 

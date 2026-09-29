@@ -683,9 +683,9 @@ path. Its remedy asks you to add the configuration, or remove the script that na
 invocation from the `test` chain. When the plan emits `test:journey` and no chain from `test` reaches
 `npm run test:journey` through literal `npm run` calls, that question asks you to insert the invocation
 after `npm run test:app`. These advisories belong to `configs`
-and remain report-only during `repair`: the command preserves the `test` chain and an unplanned
-script. A configuration emitted by the plan or present in the target does not raise the absent
-configuration advisory.
+and remain report-only during `repair`: the command preserves a `test` chain the package owns and
+an unplanned script. A configuration emitted by the plan or present in the target does not raise
+the absent configuration advisory.
 
 `audit` still completes the comparison and reports one non-blocking `projects` question when its
 selection includes `configs`. It reports the earliest of the facts it finds; settling that fact and
@@ -698,7 +698,8 @@ region still leaves the project ungated. Its remedy reads the manifest on disk r
 projection, so it states what the developer's own file holds: a script the manifest declares leaves
 the gate as the only repair, and a script only the projection supplies is named as missing beside
 the gate. When `configs` is selected, `repair` and `overwrite` refuse
-an unregistered or ungated project before writing. Their refusal names the `configs` group, the
+an unregistered or ungated project before writing, and a project the planned `test` chain they
+write reaches is not ungated. Their refusal names the `configs` group, the
 manifest and planned `vite.config.ts` conflict, and the option to exclude `configs` from `--groups`.
 A selection that excludes `configs` proceeds. An advisory alone does not make an aligned target
 drift.
@@ -706,9 +707,18 @@ drift.
 Scaffold writes one part of the manifest rather than advising on it: the writable script region.
 `repair` and `overwrite` write every direct `test:<project>` script the blueprint computes,
 `test:probe`, and `test:bench`. A publishing workspace also receives `test:distribution`, `prepack`,
-and `prepublishOnly`. The `test`, `check`, `build`, `dev`, `serve`, `show`, `format`, `lint`, `clean`,
-and `copy` gate chains stay maintainer-owned. A declared value is overwritten only when it is already
-the value being written or is a recognized generated predecessor. The overwrite happens in place,
+and `prepublishOnly`. The `test` chain joins the region only as a generated predecessor: when it
+runs fewer steps than the planned chain and every step it runs is a planned step in the planned
+order, `repair` and `overwrite` write the planned chain in its place. That write lands only when
+every step the planned chain adds runs a script the manifest declares or the region writes. The
+`test:src` and `test:app` aggregates sit outside the region, so a chain whose planned form adds an
+aggregate the manifest lacks stays with the package, and the `projects` question keeps its remedy.
+`audit` reports this chain write only through the `projects` question, so a planned step that
+registers no Vitest project, such as `npm run test:guides`, lands on the next `repair` without an
+earlier advisory. A `test` chain running any other step or order stays maintainer-owned, as do the
+`check`, `build`, `dev`, `serve`, `show`, `format`, `lint`, `clean`, and `copy` gate chains. A
+declared value is overwritten only when it is already the value being written or is a recognized
+generated predecessor. The overwrite happens in place,
 so every byte outside the replaced ranges survives. A target's descriptions, keywords, extra
 scripts, and manifest key order survive byte-for-byte. A script the manifest does not declare is
 appended after the last declared script of its own key family, copying that section's indentation:
@@ -935,6 +945,11 @@ only that browser proof and loads `tests/setup.ts` and `tests/setupBrowser.ts` t
 Chromium. The generated manifest emits the selected `test:setup` and `test:setup:browser` scripts
 and invokes them from `test`. Scaffold generates no setup proof for an empty setup seed.
 
+A `global` workspace gives `setup:browser` the `tests/setupGlobal.ts` module as its Vitest global
+setup, as it gives `src:browser` and `integration`. A browser proof cannot start a Node fixture from
+inside the browser, so it reads what that module provides through the Vitest `inject` function.
+The Node `setup` project takes no global setup.
+
 When the `app` axis selects `browser`, the browser setup project also applies the Vue
 single-file-component transform. Your `tests/setupBrowser.ts` module and its paired proof can
 import and render application Vue components. A browser setup proof without `app/browser` keeps
@@ -946,12 +961,15 @@ generated before that file existed and still registers no `integration` project,
 fails with `integration has no project factory or configuration` until a plan-writing verb
 regenerates it.
 
-`repair` closes the direct-script half through the writable manifest region. It still refuses to
-register a project that the maintainer-owned gate chains do not reach.
+`repair` closes the direct-script half through the writable manifest region. Over a generated
+predecessor `test` chain it writes the planned chain too, so it registers the project in one run. It
+still refuses to register a project that a maintainer-owned gate chain does not reach.
 
-When you add a structural proof, write the file and invoke its planned `test:<project>` script from
-a gate chain. Then run `repair`; it appends the direct script, regenerates the root configuration,
-and registers the project. `audit` reports whichever piece is still outstanding at each step.
+When you add a structural proof to a workspace whose `test` chain the package owns, write the file
+and invoke its planned `test:<project>` script from a gate chain. Then run `repair`; it appends the
+direct script, regenerates the root configuration, and registers the project. Over a generated
+predecessor `test` chain, write the file and run `repair`. `audit` reports whichever piece is still
+outstanding at each step.
 
 `distribution` is not a field at all. A published `src` environment is its whole condition, read
 from the `src` axis the blueprint already carries. The proof packs and installs the published
