@@ -1,12 +1,12 @@
 // P1: Every checked population must exist and be non-empty; absence fails instead of passing vacuously.
 // P2: Required items are checked strictly; extra items are ignored before their shape is read.
 
+import type { UserConfig } from 'vite'
 import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
 	globSync,
 	lstatSync,
-	mkdtempSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -16,7 +16,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build, createServer, loadConfigFromFile } from 'vite'
 import { RuleTester } from 'oxlint/plugins-dev'
@@ -36,6 +36,7 @@ import policyPlugin, {
 	MOCKING_RULE,
 	NESTED_RULE,
 	PARSER_RULE,
+	PLUGIN_RULE,
 	POLICY_BANNED_TERMS,
 	POLICY_ENDING_GLOBS,
 	POLICY_JUDGED_TERMS,
@@ -53,8 +54,19 @@ import policyPlugin, {
 	textToPolicyHits,
 } from '../configs/policy.js'
 import configuration, { resolveWorkspacePath } from '../vite.config.js'
+import * as rootConfiguration from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
 import {
+	collectSheets,
+	collectFrameworks,
+	readConfigRecord,
+	readConfigScript,
+	collectFaceWrappers,
+	inspectSheetConfiguration,
+	readSheetPrelude,
+	SHEET_POLICY_BARREL_PATTERN,
+	SHEET_POLICY_ORDER_PATTERN,
+	readImportDiagnostics,
 	createPolicyScratch,
 	inspectPolicyConfiguration,
 	inspectPolicyWiring,
@@ -63,6 +75,373 @@ import {
 import { describe, expect, it } from 'vitest'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+describe('selected faces', () => {
+	it('collects each selected sheet proof from the effective project root and rejects a wrong root', async () => {
+		for (const face of collectSheets(root)) {
+			const proofs = resolve(root, 'tests/src', face)
+			if (!existsSync(proofs)) continue
+			const wrapper = resolve(root, `configs/src/vite.${face}.config.ts`)
+			const loaded = await loadConfigFromFile(
+				{ command: 'serve', mode: 'test' },
+				wrapper,
+				root,
+				'silent',
+			)
+			if (loaded === null) throw new Error(`Unloaded wrapper ${wrapper}`)
+			const project = loaded.config
+			const include = project.test?.include
+			if (include === undefined) throw new Error(`Missing sheet include ${face}`)
+			// Vitest roots a file project at its wrapper directory unless test.root overrides it.
+			const directory = resolve(
+				root,
+				project.test?.root ?? dirname(wrapper),
+				project.test?.dir || '.',
+			)
+			const collected = globSync(include, { cwd: directory }).map((path) =>
+				resolve(directory, path),
+			)
+			const expected = [resolve(proofs, 'index.test.ts')]
+			if (face === 'styles' && existsSync(resolve(proofs, 'themes/index.test.ts')))
+				expected.push(resolve(proofs, 'themes/index.test.ts'))
+			expect(collected).toEqual(expect.arrayContaining(expected))
+			const control = globSync(include, { cwd: dirname(wrapper) }).map((path) =>
+				resolve(dirname(wrapper), path),
+			)
+			expect(control).toEqual([])
+			expect(() => expect(control).toEqual(expect.arrayContaining(expected))).toThrow('expected')
+		}
+	})
+
+	it('enumerates markers independently of wrappers and detects a deleted wrapper', () => {
+		const fixture = createPolicyScratch({ prefix: 'propagation-faces-' })
+		const scratch = fixture.path
+		try {
+			expect(collectSheets(scratch)).toEqual([])
+			expect(collectFrameworks(scratch)).toEqual([])
+			for (const path of [
+				'src/paper/index.scss',
+				'src/paper/sheet.ts',
+				'src/incomplete/index.scss',
+				'src/vue/index.ts',
+				'app/vue/index.ts',
+			]) {
+				mkdirSync(dirname(resolve(scratch, path)), { recursive: true })
+				writeFileSync(resolve(scratch, path), '')
+			}
+			expect(collectSheets(scratch)).toEqual(['paper'])
+			expect(collectFrameworks(scratch)).toEqual(['src/vue', 'app/vue'])
+			for (const path of [
+				'configs/src/vite.paper.config.ts',
+				'configs/src/vite.vue.config.ts',
+				'configs/app/vite.vue.config.ts',
+			]) {
+				mkdirSync(dirname(resolve(scratch, path)), { recursive: true })
+				writeFileSync(resolve(scratch, path), '')
+			}
+			expect(collectFaceWrappers(scratch)).toContain('configs/src/vite.paper.config.ts')
+			rmSync(resolve(scratch, 'configs/src/vite.paper.config.ts'))
+			expect(() => collectFaceWrappers(scratch)).toThrow(
+				'Missing wrapper configs/src/vite.paper.config.ts',
+			)
+			expect(collectSheets(scratch)).toContain('paper')
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('loads each selected sheet and framework wrapper and checks its packaging and browser project', async () => {
+		const manifest = readConfigRecord(
+			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+		)
+		const scripts = readConfigRecord(manifest.scripts)
+		const sheets = collectSheets(root)
+		const frameworks = collectFrameworks(root)
+		const wrappers = collectFaceWrappers(root)
+		const readings: Array<{
+			readonly axis: string
+			readonly face: string
+			readonly wrapper: string
+			readonly project: UserConfig
+		}> = []
+		for (const sheet of sheets) expect(wrappers).toContain(`configs/src/vite.${sheet}.config.ts`)
+		for (const face of frameworks)
+			expect(wrappers).toContain(`configs/${face.replace('/', '/vite.')}.config.ts`)
+		for (const wrapper of wrappers) {
+			const loaded = await loadConfigFromFile(
+				{ command: 'build', mode: 'test' },
+				resolve(root, wrapper),
+				root,
+				'silent',
+			)
+			if (loaded === null) throw new Error(`Unloaded wrapper ${wrapper}`)
+			const match = /^configs\/(src|app)\/vite\.([^.]+)\.config\.ts$/u.exec(wrapper)
+			const axis = match?.[1]
+			const face = match?.[2]
+			if (axis === undefined || face === undefined) throw new Error(`Invalid wrapper ${wrapper}`)
+			const project = loaded.config
+			expect(project.test?.include).toContain(`tests/${axis}/${face}/**/*.test.ts`)
+			expect(project.test?.browser).toMatchObject({
+				enabled: true,
+				instances: expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${axis}:${face} (chromium)` }),
+				]),
+			})
+			expect(project.optimizeDeps?.include).toEqual(
+				expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
+			)
+			expect(
+				Object.getOwnPropertyDescriptor(tsconfig.compilerOptions.paths, `@${axis}/${face}`)?.value,
+			).toEqual([`./${axis}/${face}/index.ts`])
+			readings.push({ axis, face, wrapper, project })
+		}
+		for (const { face, wrapper, project } of readings.filter((reading) =>
+			sheets.includes(reading.face),
+		)) {
+			expect(readFileSync(resolve(root, wrapper), 'utf8')).toContain('sheetProject(')
+			expect(inspectSheetConfiguration(project)).toEqual([])
+			const exports = readConfigRecord(manifest.exports)
+			expect(exports[`./${face}`]).toBe(`./dist/src/${face}/index.css`)
+			expect(exports[`./${face}/scss`]).toBe(`./src/${face}/index.scss`)
+			expect(manifest.files).toContain(`src/${face}/**/*.scss`)
+			expect(manifest.sideEffects).toEqual(expect.arrayContaining(['**/*.css', '**/*.scss']))
+			expect(readConfigScript(scripts, `test:src:${face}`)).toContain(
+				`npm run build:src:${face} &&`,
+			)
+			expect(readConfigScript(scripts, 'build:src')).toContain(`npm run build:src:${face}`)
+		}
+		for (const { project } of readings.filter((reading) =>
+			frameworks.includes(`${reading.axis}/${reading.face}`),
+		)) {
+			expect(project.optimizeDeps?.include).toContain('vue')
+			expect(project.test?.setupFiles).toEqual(
+				expect.arrayContaining(['./tests/setup.ts', './tests/setupBrowser.ts']),
+			)
+		}
+		for (const { wrapper } of readings.filter(
+			(reading) => reading.axis === 'src' && frameworks.includes(`${reading.axis}/${reading.face}`),
+		)) {
+			const text = readFileSync(resolve(root, wrapper), 'utf8')
+			expect(text).toContain('rewriteCoreSpecifier')
+			expect(text).toContain('rewriteBrowserSpecifier')
+		}
+		if (!existsSync(resolve(root, 'src/styles/themes/index.scss'))) return
+		const loaded = await loadConfigFromFile(
+			{ command: 'build', mode: 'test' },
+			resolve(root, 'configs/src/vite.themes.config.ts'),
+			root,
+			'silent',
+		)
+		if (loaded === null) throw new Error('Unloaded themes wrapper')
+		expect(loaded.config.build?.outDir).toBe('dist/src/styles/themes')
+		const barrel = readFileSync(resolve(root, 'src/styles/themes/index.scss'), 'utf8')
+		expect(readSheetPrelude(barrel)).toMatch(SHEET_POLICY_BARREL_PATTERN)
+		expect(
+			readSheetPrelude(readFileSync(resolve(root, 'src/styles/_tokens.scss'), 'utf8')),
+		).toMatch(SHEET_POLICY_ORDER_PATTERN)
+		const target = sheets.includes('styles') ? 'styles' : 'themes'
+		const command = sheets.includes('styles')
+			? 'vite build --config configs/src/vite.styles.config.ts && vite build --config configs/src/vite.themes.config.ts'
+			: 'vite build --config configs/src/vite.themes.config.ts'
+		expect(readConfigScript(scripts, `build:src:${target}`)).toBe(command)
+		expect(readConfigScript(scripts, 'build:src')).toContain(`npm run build:src:${target}`)
+	})
+
+	it('detects missing sheet setup and reversed themes order in configuration data', () => {
+		const project = {
+			test: {
+				setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts', './tests/setupStyles.ts'],
+				isolate: false,
+			},
+		}
+		const script =
+			'vite build --config configs/src/vite.styles.config.ts && vite build --config configs/src/vite.themes.config.ts'
+		expect(inspectSheetConfiguration(project, script)).toEqual([])
+		expect(
+			inspectSheetConfiguration(
+				{ test: { ...project.test, setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'] } },
+				script,
+			),
+		).toContain('./tests/setupStyles.ts')
+		expect(
+			inspectSheetConfiguration(project, script.split(' && ').reverse().join(' && ')),
+		).toContain('themes order')
+	})
+
+	it('resolves showcase and journey modes for every occupied application', async () => {
+		const applications = [
+			'browser',
+			...collectFrameworks(root)
+				.filter((face) => face.startsWith('app/'))
+				.map((face) => face.slice(4)),
+		]
+		const manifest = readConfigRecord(
+			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+		)
+		const scripts = readConfigRecord(manifest.scripts)
+		const factories = readConfigRecord(rootConfiguration)
+		const showcases = ['configs/app/vite.showcase.config.ts'].filter(
+			(path) => existsSync(resolve(root, path)) || existsSync(resolve(root, 'showcase')),
+		)
+		for (const showcase of showcases) {
+			const wrapper = readFileSync(resolve(root, 'configs/app/vite.showcase.config.ts'), 'utf8')
+			expect(wrapper).toContain('defineConfig(({ mode }) => appShowcase(mode))')
+			expect(wrapper).not.toContain('dist/showcase')
+			expect(readFileSync(resolve(root, '.prettierignore'), 'utf8').split(/\r\n|\n/u)).toContain(
+				'showcase/',
+			)
+			for (const application of applications) {
+				const script = 'build:showcase' + (application === 'browser' ? '' : ':' + application)
+				expect(readConfigScript(scripts, script)).toContain('configs/app/vite.showcase.config.ts')
+				for (const chain of manifest.private === true
+					? []
+					: [readConfigScript(scripts, 'prepublishOnly')]) {
+					expect(chain).toContain(`npm run ${script}`)
+					expect(chain.indexOf('npm run build &&')).toBeLessThan(chain.indexOf(`npm run ${script}`))
+				}
+				const loaded = await loadConfigFromFile(
+					{ command: 'build', mode: application },
+					resolve(root, showcase),
+					root,
+					'silent',
+				)
+				if (loaded === null) throw new Error('Unloaded showcase wrapper')
+				const output = loaded.config.build?.outDir
+				if (output === undefined) throw new Error('Missing showcase output')
+				expect(relative(root, output)).toBe('showcase')
+				expect(() =>
+					expect(relative(root, resolve(root, 'dist/showcase'))).toBe('showcase'),
+				).toThrow('expected')
+				expect(loaded.config.build?.emptyOutDir).toBe(false)
+			}
+			expect(scripts.show).toBeUndefined()
+		}
+		if (!existsSync(resolve(root, 'configs/app/vite.journey.config.ts'))) return
+		for (const application of applications) {
+			const loaded = await loadConfigFromFile(
+				{ command: 'serve', mode: application },
+				resolve(root, 'configs/app/vite.journey.config.ts'),
+				root,
+				'silent',
+			)
+			if (
+				loaded === null ||
+				!Array.isArray(loaded.config.test?.projects) ||
+				loaded.config.test.projects.length === 0
+			)
+				throw new Error('Missing journey projects')
+			const variants = new Set<string>()
+			const declared = new Set<string>()
+			for (const factory of loaded.config.test.projects) {
+				if (typeof factory !== 'function') throw new Error('Missing journey factory')
+				const project = readConfigRecord(
+					await Reflect.apply(factory, undefined, [{ command: 'serve', mode: application }]),
+				)
+				const test = readConfigRecord(project.test)
+				expect(test.include).toEqual([`tests/app/${application}/integration.test.ts`])
+				expect(test.exclude).toEqual([])
+				const provide = readConfigRecord(test.provide)
+				if (typeof provide.variant !== 'string' || !Array.isArray(provide.variants))
+					throw new Error('Missing journey variant values')
+				variants.add(provide.variant)
+				for (const value of provide.variants) {
+					const variant = readConfigRecord(value)
+					if (typeof variant.name !== 'string') throw new Error('Unnamed journey variant')
+					declared.add(variant.name)
+				}
+				const selected = provide.variants
+					.map(readConfigRecord)
+					.find((variant) => variant.name === provide.variant)
+				if (selected === undefined) throw new Error('Missing selected variant')
+				expect(readConfigRecord(test.browser).viewport).toEqual({
+					width: selected.width,
+					height: selected.height,
+				})
+				expect(readConfigRecord(test.browser).instances).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							browser: 'chromium',
+							name: `journey:${provide.variant} (chromium)`,
+						}),
+					]),
+				)
+				expect(typeof provide.capture).toBe('boolean')
+				expect(readConfigRecord(project.optimizeDeps).include).toEqual(
+					expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
+				)
+			}
+			expect(variants).toEqual(declared)
+		}
+		const factory = factories.appJourney
+		if (typeof factory !== 'function') throw new Error('Missing application journey')
+		expect(() =>
+			Reflect.apply(factory, undefined, [
+				{ name: 'desktop', width: 1280, height: 800 },
+				[],
+				'absent',
+			]),
+		).toThrow('not declared')
+	})
+
+	it('collects both browser setup proofs and optimizes every selected browser factory', () => {
+		const factories = readConfigRecord(rootConfiguration)
+		const manifest = readConfigRecord(
+			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+		)
+		const dependencies = {
+			...readConfigRecord(manifest.dependencies ?? {}),
+			...readConfigRecord(manifest.devDependencies ?? {}),
+		}
+		for (const name of [
+			'srcBrowser',
+			'appBrowser',
+			'srcVue',
+			'appVue',
+			'setupBrowser',
+			'sheetProject',
+			'integration',
+		]) {
+			const factory = factories[name]
+			if (typeof factory !== 'function') continue
+			const project = readConfigRecord(
+				Reflect.apply(factory, undefined, name === 'sheetProject' ? ['src:styles'] : []),
+			)
+			const test = readConfigRecord(project.test)
+			if (readConfigRecord(test.browser ?? {}).enabled !== true) continue
+			const label = typeof test.name === 'string' ? test.name : readConfigRecord(test.name).label
+			expect(readConfigRecord(test.browser).instances).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${label} (chromium)` }),
+				]),
+			)
+			const include = readConfigRecord(project.optimizeDeps).include
+			expect(include).toEqual(
+				expect.arrayContaining([
+					'@orkestrel/test',
+					'@orkestrel/test/browser',
+					...(dependencies['@orkestrel/contract'] === undefined ? [] : ['@orkestrel/contract']),
+				]),
+			)
+		}
+		for (const proof of ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'].filter((path) =>
+			existsSync(resolve(root, path)),
+		)) {
+			const factory = factories.setupBrowser
+			if (typeof factory !== 'function') throw new Error('Missing browser setup project')
+			expect(
+				readConfigRecord(readConfigRecord(Reflect.apply(factory, undefined, [])).test).include,
+			).toContain(proof)
+			expect(
+				readConfigRecord(readConfigRecord(Reflect.apply(factory, undefined, [])).test).include,
+			).toEqual(expect.arrayContaining(['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts']))
+		}
+		if (typeof factories.setup !== 'function') return
+		expect(
+			readConfigRecord(readConfigRecord(Reflect.apply(factories.setup, undefined, [])).test)
+				.exclude,
+		).toEqual(expect.arrayContaining(['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts']))
+	})
+})
 
 // The `src` axis a declaration roll-up reads, derived from a recognized source environment that is
 // a physical directory rather than from a `src` entry of any shape. A regular file, an empty
@@ -113,8 +492,15 @@ describe('root configuration', () => {
 				if (existsSync(resolve(root, path))) required.set(`@${axis}/${environment}`, path)
 			}
 		}
-		if (required.size === 0) throw new Error('The workspace selects no alias target')
+		for (const face of collectSheets(root)) required.set(`@src/${face}`, `src/${face}/index.ts`)
+		for (const face of collectFrameworks(root)) required.set(`@${face}`, `${face}/index.ts`)
 		const declared = new Map(Object.entries(tsconfig.compilerOptions.paths))
+		expect(required.size > 0 || existsSync(resolve(root, 'src/styles/themes/sheet.ts'))).toBe(true)
+		if (required.size === 0) {
+			if (declared.size !== 0 || Object.keys(aliases).length !== 0)
+				throw new Error('The themes-only workspace declares an unexpected alias')
+			return
+		}
 		const absent = new Map<string, readonly string[]>()
 		expect(() => {
 			for (const key of required.keys()) {
@@ -138,7 +524,7 @@ describe('root configuration', () => {
 			string,
 			{
 				readonly benchmark?: readonly string[]
-				readonly include: string
+				readonly include: string | readonly string[]
 				readonly parallel?: boolean
 				readonly pool?: string
 				readonly setup: readonly string[]
@@ -203,19 +589,33 @@ describe('root configuration', () => {
 			'integration',
 		]) {
 			if (!existsSync(resolve(root, `tests/${label}.test.ts`))) continue
+			const setup = ['./tests/setup.ts']
+			if (label === 'conformance') setup.push('./tests/setupServer.ts')
+			if (
+				label === 'integration' &&
+				(collectSheets(root).length > 0 ||
+					existsSync(resolve(root, 'src/styles/themes/index.scss')))
+			)
+				setup.push('./tests/setupBrowser.ts', './tests/setupStyles.ts')
 			expected.set(label, {
 				include: `tests/${label}.test.ts`,
-				setup: ['./tests/setup.ts'],
+				setup,
 			})
 		}
-		// The setup project is selected by any proof named `setup*.test.ts` directly under
-		// `tests`, so it is the one derived project whose include is a pattern rather than
-		// the proof's own path. Reading it from the same glob the generator reads keeps a
-		// registered project inside this gate instead of beside it.
-		if (globSync('tests/setup*.test.ts', { cwd: root }).length > 0) {
+		const browserProofs = ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts']
+		const setupProofs = globSync('tests/setup*.test.ts', { cwd: root })
+			.map((path) => path.replaceAll('\\', '/'))
+			.filter((path) => /^tests\/setup[^/]*\.test\.ts$/u.test(path))
+		if (setupProofs.some((path) => !browserProofs.includes(path))) {
 			expected.set('setup', {
 				include: 'tests/setup*.test.ts',
 				setup: ['./tests/setup.ts'],
+			})
+		}
+		if (setupProofs.some((path) => browserProofs.includes(path))) {
+			expected.set('setup:browser', {
+				include: browserProofs,
+				setup: ['./tests/setup.ts', './tests/setupBrowser.ts'],
 			})
 		}
 		// The live-service project covers a directory rather than one proof, so its
@@ -269,7 +669,7 @@ describe('root configuration', () => {
 			string,
 			{
 				readonly benchmark?: readonly string[]
-				readonly include: string
+				readonly include: string | readonly string[]
 				readonly parallel?: boolean
 				readonly pool?: string
 				readonly setup: readonly string[]
@@ -323,9 +723,14 @@ describe('root configuration', () => {
 			const effective = include.filter(
 				(path) => typeof path === 'string' && (!Array.isArray(exclude) || !exclude.includes(path)),
 			)
-			if (effective.length !== 1 || typeof effective[0] !== 'string') {
-				throw new Error(`${label} does not resolve to one effective include`)
+			if (
+				effective.length !== (label === 'setup:browser' ? 2 : 1) ||
+				typeof effective[0] !== 'string'
+			) {
+				throw new Error(`${label} does not resolve to its required includes`)
 			}
+			for (const required of label === 'setup' ? browserProofs : [])
+				expect(exclude).toContain(required)
 			if (label === 'probe') {
 				const benchmark: unknown = Object.getOwnPropertyDescriptor(test, 'benchmark')?.value
 				const parallel: unknown = Object.getOwnPropertyDescriptor(test, 'fileParallelism')?.value
@@ -354,13 +759,28 @@ describe('root configuration', () => {
 				})
 				continue
 			}
-			configured.set(label, { include: effective[0], setup: [...new Set(setup)] })
+			configured.set(label, {
+				include: label === 'setup:browser' ? effective : effective[0],
+				setup: [...new Set(setup)],
+			})
 		}
 
 		// Required projects come from present source and test paths. Each factory is selected by name
 		// before its result is read. Extra factories are ignored without validating their result shape.
 		expect(extraLoaded).toBe(false)
 		for (const [label, project] of expected) expect(configured.get(label)).toStrictEqual(project)
+		for (const label of ['setup', 'setup:browser']) {
+			const name = label === 'setup' ? 'setup' : 'setupBrowser'
+			expect(projects.some((entry) => typeof entry === 'function' && entry.name === name)).toBe(
+				expected.has(label),
+			)
+			if (!expected.has(label)) continue
+			const missingSetup = new Map(configured)
+			missingSetup.delete(label)
+			expect(() => expect(missingSetup.get(label)).toStrictEqual(expected.get(label))).toThrow(
+				'expected',
+			)
+		}
 
 		const missing = new Map(configured)
 		expect(missing.delete('probe')).toBe(true)
@@ -378,7 +798,7 @@ describe('root configuration', () => {
 		}).toThrow(/strictly equal/u)
 	})
 
-	it('returns the invocation mode and no other invocation field from every registered project factory', () => {
+	it('loads file projects and returns only the invocation mode from registered project factories', async () => {
 		const projects = configuration.test?.projects
 		if (!Array.isArray(projects)) throw new Error('The root configuration carries no projects')
 		if (projects.length === 0) throw new Error('The root configuration registers no project')
@@ -402,7 +822,32 @@ describe('root configuration', () => {
 		const spreading = Object.defineProperty((record: object) => ({ ...record, test }), 'name', {
 			value: 'spreading',
 		})
-		const entries: readonly unknown[] = [...projects, ignoring, spreading, { test }]
+		const wrappers = projects.filter((entry) => typeof entry === 'string')
+		const sheets = collectSheets(root)
+		const expectedWrappers = sheets.map((face) => `./configs/src/vite.${face}.config.ts`)
+		if (!sheets.includes('styles') && existsSync(resolve(root, 'src/styles/themes/index.scss')))
+			expectedWrappers.push('./configs/src/vite.themes.config.ts')
+		expect([...wrappers].sort()).toEqual(expectedWrappers.sort())
+		for (const wrapper of wrappers) {
+			const loaded = await loadConfigFromFile(
+				{ command: 'serve', mode: invocation.mode },
+				resolve(root, wrapper),
+				root,
+				'silent',
+			)
+			if (loaded === null) throw new Error(`Unloaded file project ${wrapper}`)
+			const face = /^\.\/configs\/src\/vite\.([^.]+)\.config\.ts$/u.exec(wrapper)?.[1]
+			if (face === undefined) throw new Error(`Invalid file project ${wrapper}`)
+			expect(loaded.config.test?.name).toMatchObject({ label: `src:${face}` })
+			expect(loaded.config.test?.include).toEqual([
+				`tests/src/${face === 'themes' ? 'styles/themes' : face}/**/*.test.ts`,
+			])
+			expect(() =>
+				expect({ test: {} }).toMatchObject({ test: { name: { label: `src:${face}` } } }),
+			).toThrow('expected')
+		}
+		const factories = projects.filter((entry) => typeof entry !== 'string')
+		const entries: readonly unknown[] = [...factories, ignoring, spreading, { test }]
 		const readings = entries.map((entry) => {
 			if (typeof entry !== 'function') {
 				return { name: undefined, callable: false, mode: undefined, leaked: [] }
@@ -421,13 +866,13 @@ describe('root configuration', () => {
 			}
 		})
 		const forwarded = { callable: true, mode: 'sentinel-mode', leaked: [] }
-		expect(readings.slice(0, projects.length)).toStrictEqual(
-			projects.map((entry) => ({
+		expect(readings.slice(0, factories.length)).toStrictEqual(
+			factories.map((entry) => ({
 				name: typeof entry === 'function' ? entry.name : undefined,
 				...forwarded,
 			})),
 		)
-		expect(readings.slice(projects.length)).toStrictEqual([
+		expect(readings.slice(factories.length)).toStrictEqual([
 			{ name: 'ignoring', callable: true, mode: undefined, leaked: [] },
 			{
 				name: 'spreading',
@@ -437,7 +882,7 @@ describe('root configuration', () => {
 			},
 			{ name: undefined, callable: false, mode: undefined, leaked: [] },
 		])
-		for (const reading of readings.slice(projects.length)) {
+		for (const reading of readings.slice(factories.length)) {
 			expect({ ...reading, name: undefined }).not.toStrictEqual({ name: undefined, ...forwarded })
 		}
 
@@ -461,6 +906,9 @@ describe('root configuration', () => {
 					required.push(`configs/${axis}/vite.${environment}.config.ts`)
 				}
 			}
+		}
+		for (const face of collectFrameworks(root)) {
+			required.push(`configs/${face.replace('/', '/tsconfig.')}.json`)
 		}
 		if (existsSync(resolve(root, 'src/bin'))) {
 			required.push('configs/src/tsconfig.bin.json', 'configs/src/vite.bin.config.ts')
@@ -558,7 +1006,7 @@ describe('root configuration', () => {
 						environment === 'bin'
 							? 'dist/bin'
 							: environment === 'showcase'
-								? 'dist/showcase'
+								? 'showcase'
 								: `dist/${axis}/${environment}`
 					if (resolve(root, output) !== resolve(root, expected)) {
 						throw new Error(`${wrapper} resolves to the wrong output`)
@@ -567,7 +1015,7 @@ describe('root configuration', () => {
 				}
 
 				const tsconfigMatch =
-					/^configs\/(src|app)\/tsconfig\.(core|browser|server|bin)\.json$/u.exec(wrapper)
+					/^configs\/(src|app)\/tsconfig\.(core|browser|server|bin|vue)\.json$/u.exec(wrapper)
 				if (tsconfigMatch === null) {
 					throw new Error(`${wrapper} is not a required target wrapper`)
 				}
@@ -591,19 +1039,22 @@ describe('root configuration', () => {
 				const expectedLib =
 					environment === 'core'
 						? ['ESNext', 'WebWorker']
-						: environment === 'browser'
+						: environment === 'browser' || environment === 'vue'
 							? ['ESNext', 'DOM', 'DOM.Iterable']
 							: ['ESNext']
 				const expectedTypes =
 					environment === 'core'
 						? []
-						: environment === 'browser'
-							? axis === 'app'
+						: environment === 'browser' || environment === 'vue'
+							? axis === 'app' && environment === 'vue'
 								? ['vite/client', 'vue']
 								: ['vite/client']
 							: ['node']
 				expect(lib).toStrictEqual(expectedLib)
 				expect(types).toStrictEqual(expectedTypes)
+				for (const control of axis === 'app' && environment === 'vue' ? [['vite/client']] : []) {
+					expect(() => expect(control).toStrictEqual(expectedTypes)).toThrow('expected')
+				}
 			}
 			for (const tests of journeys) {
 				const names: string[] = []
@@ -827,7 +1278,8 @@ describe('root configuration', () => {
 			if (typeof stage !== 'function') {
 				throw new Error('The server helper module exports no stageInventory function')
 			}
-			const workspace = mkdtempSync(join(root, 'host-inventory-'))
+			const scratch = createPolicyScratch({ prefix: 'host-inventory-' })
+			const workspace = scratch.path
 			try {
 				const generated = join(workspace, 'host.json')
 				Reflect.apply(stage, undefined, [root, generated])
@@ -877,7 +1329,7 @@ describe('root configuration', () => {
 				}
 				console.info(`host-inventory: entries=${generatedIndex.size}`)
 			} finally {
-				rmSync(workspace, { recursive: true, force: true })
+				scratch.destroy()
 			}
 		} finally {
 			await server.close()
@@ -1005,7 +1457,7 @@ describe('policy plugin', () => {
 				code: 'function createProjector() { return () => 1 }',
 			},
 			{
-				name: 'accepts the sanctioned policy visitor delegation',
+				name: 'accepts callbacks in a returned object literal',
 				code: [
 					'function reportNode(context, node) { context.report({ node }) }',
 					'const RULE = {',
@@ -1022,6 +1474,45 @@ describe('policy plugin', () => {
 			{
 				name: 'accepts class accessors inside a factory',
 				code: 'function createAccessor() { class Accessor { get value() { return 1 } set value(value) { consume(value) } } return Accessor }',
+			},
+			{
+				name: 'accepts the event-map option in a function body',
+				code: `function configure() {
+createSomething({
+	on: {
+		thing: function that() {
+			console.log('that thing')
+		},
+		other: () => {
+			console.log('this other')
+		},
+	},
+})
+}`,
+			},
+			{
+				name: 'accepts an array element in a call argument',
+				code: 'function configure() { return create([() => 1]) }',
+			},
+			{
+				name: 'accepts methods and accessors in admitted object positions',
+				code: 'function configure() { create({ on: { thing() { return 1 } } }); new Factory({ get value() { return 1 }, set value(value) { consume(value) } }); return { read() { return 1 } } }',
+			},
+			{
+				name: 'accepts an object member returned from a function',
+				code: 'function configure() { return { read: function readValue() { return 1 } } }',
+			},
+			{
+				name: 'accepts an object member in a parenthesized arrow body',
+				code: 'const configure = () => ({ read: () => 1 })',
+			},
+			{
+				name: 'accepts a parenthesized member in a constructor argument',
+				code: 'function configure() { return new Factory({ read: (() => 1) }) }',
+			},
+			{
+				name: 'accepts a named function expression argument',
+				code: 'function projectValue() { return read(function readValue() { return 1 }) }',
 			},
 		],
 		invalid: [
@@ -1055,11 +1546,6 @@ describe('policy plugin', () => {
 				errors: [{ messageId: 'nested' }],
 			},
 			{
-				name: 'rejects a named function expression argument',
-				code: 'function projectValue() { return read(function readValue() { return 1 }) }',
-				errors: [{ messageId: 'nested' }],
-			},
-			{
 				name: 'rejects a callback parameter default function',
 				code: 'function projectValue() { return values.map((value = () => 1) => value()) }',
 				errors: [{ messageId: 'nested' }],
@@ -1073,6 +1559,48 @@ describe('policy plugin', () => {
 				name: 'rejects a function assigned inside a class-declaration method',
 				code: 'class Project { read() { const value = () => 1; return value() } }',
 				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects an object literal bound locally before being passed',
+				code: 'function configure() { const options = { on: { thing: () => 1 } }; return create(options) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects an object method bound locally before being passed',
+				code: 'function configure() { const options = { on: { thing() { return 1 } } }; return create(options) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects object accessors bound locally before being passed',
+				code: 'function configure() { const options = { get value() { return 1 }, set value(value) { consume(value) } }; return create(options) }',
+				errors: [{ messageId: 'nested' }, { messageId: 'nested' }],
+			},
+			{
+				name: 'rejects an object member reached through a spread',
+				code: 'function configure() { return create({ ...{ thing: () => 1 } }) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a computed property value',
+				code: 'function configure() { return create({ [key]: () => 1 }) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects a local binding inside a getter in an argument',
+				code: 'function configure() { return create({ get value() { const read = () => 1; return read() } }) }',
+				errors: [{ messageId: 'nested' }],
+			},
+			{
+				name: 'rejects only the local binding inside an admitted member',
+				code: [
+					'function configure() {',
+					'create({ on: { thing: () => {',
+					'const read = () => 1;',
+					'return read()',
+					'} } })',
+					'}',
+				].join('\n'),
+				errors: [{ messageId: 'nested', line: 3, column: 13 }],
 			},
 		],
 	})
@@ -1101,6 +1629,12 @@ describe('policy plugin', () => {
 				name: 'rejects a hidden constant [membership: declarations in a centralized file without an export]',
 				filename: 'src/worker/constants.ts',
 				code: 'const COUNT = 1',
+				errors: [{ messageId: 'hidden' }],
+			},
+			{
+				name: 'rejects a hidden plugin factory [membership: declarations in a centralized file without an export]',
+				filename: 'src/worker/plugins.ts',
+				code: 'function createModalPlugin(): void {}',
 				errors: [{ messageId: 'hidden' }],
 			},
 		],
@@ -1209,6 +1743,11 @@ describe('policy plugin', () => {
 				name: 'accepts a function in a function-kind file',
 				filename: 'src/worker/helpers.ts',
 				code: 'export function buildValue(): void {}',
+			},
+			{
+				name: 'accepts a plugin factory in plugins.ts',
+				filename: 'src/worker/plugins.ts',
+				code: 'export function createModalPlugin(): void {}',
 			},
 			{
 				name: 'accepts a module in a registered function domain',
@@ -1360,6 +1899,18 @@ describe('policy plugin', () => {
 				code: 'export const coerceValue = () => undefined',
 				errors: [{ messageId: 'parser' }],
 			},
+			{
+				name: 'rejects an unprefixed export alias [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'function parseValue(): void {}\nexport { parseValue as coerceValue }',
+				errors: [{ messageId: 'parser' }],
+			},
+			{
+				name: 'rejects an unprefixed exported import alias [membership: parsers.ts functions whose name does not start with parse]',
+				filename: 'app/edge/parsers.ts',
+				code: 'export import coerceValue = Values.parseValue',
+				errors: [{ messageId: 'parser' }],
+			},
 		],
 	})
 
@@ -1388,6 +1939,150 @@ describe('policy plugin', () => {
 				filename: 'app/edge/factories.ts',
 				code: 'export const buildValue = () => undefined',
 				errors: [{ messageId: 'factory' }],
+			},
+			{
+				name: 'rejects an unprefixed export alias [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'function createValue(): void {}\nexport { createValue as buildValue }',
+				errors: [{ messageId: 'factory' }],
+			},
+			{
+				name: 'rejects an unprefixed exported import alias [membership: factories.ts functions whose name does not start with create]',
+				filename: 'app/edge/factories.ts',
+				code: 'export import buildValue = Values.createValue',
+				errors: [{ messageId: 'factory' }],
+			},
+		],
+	})
+
+	tester.run('no-misnamed-plugin', PLUGIN_RULE, {
+		valid: [
+			{
+				name: 'accepts a create-prefixed plugin factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPlugin(): void {}',
+			},
+			{
+				name: 'accepts a create-prefixed plugin collection factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export const createBootstrapPlugins = () => undefined',
+			},
+			{
+				name: 'accepts a plugin-suffixed name outside plugins.ts',
+				filename: 'src/edge/helpers.ts',
+				code: 'export function registerPlugin(): void {}',
+			},
+			{
+				name: 'reads no binding nested inside a plugin factory',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPlugin(): void {\n\tfunction build(): void {}\n\tbuild()\n}',
+			},
+			{
+				name: 'accepts an export specifier in the plugin form',
+				filename: 'src/edge/plugins.ts',
+				code: 'function createModalPlugin(): void {}\nexport { createModalPlugin as createDialogPlugin }',
+			},
+			{
+				name: 'accepts an exported import alias in the plugin form',
+				filename: 'src/edge/plugins.ts',
+				code: 'export import createDialogPlugin = Factories.createModalPlugin',
+			},
+			{
+				name: 'accepts an exported import alias outside plugins.ts',
+				filename: 'src/edge/helpers.ts',
+				code: 'export import registerModal = Factories.createModalPlugin',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a plugin-suffixed name without the create prefix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function registerModalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a lowercase segment before the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createmodalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a name that runs past the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModalPluginHost(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a plugin factory with no entity segment [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a misnamed declared signature [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export declare function registerModal(): void',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an anonymous default function [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export default function (): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an export alias outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'function createModalPlugin(): void {}\nexport { createModalPlugin as registerModal }',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a re-export outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: "export { registerModal } from './modal.js'",
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a star re-export whose names the form cannot read [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: "export * from './modal.js'",
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a register-prefixed plugin factory [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function registerModal(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a create-prefixed name without the plugin suffix [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export const createModal = () => undefined',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a bare plugin-suffixed name [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function modalPlugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects a lowercase entity after create [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createplugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an underscore in the entity segment [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export function createModal_Plugin(): void {}',
+				errors: [{ messageId: 'plugin' }],
+			},
+			{
+				name: 'rejects an exported import alias outside the plugin form [membership: plugins.ts functions whose name is not create…Plugin or create…Plugins]',
+				filename: 'src/edge/plugins.ts',
+				code: 'export import registerModal = Factories.createModalPlugin',
+				errors: [{ messageId: 'plugin' }],
 			},
 		],
 	})
@@ -1874,6 +2569,308 @@ describe('policy plugin', () => {
 		expect(CENTRAL_SOURCE_FILES).toContain('handlers.ts')
 	})
 
+	it('registers plugins as a central function kind', () => {
+		expect(FUNCTION_SOURCE_FILES).toContain('plugins.ts')
+		expect(CENTRAL_SOURCE_FILES).toContain('plugins.ts')
+		expect(DATA_SOURCE_FILES).not.toContain('plugins.ts')
+	})
+
+	it('matches every isolated import pattern with refused and admitted fixtures', () => {
+		const fixture = createPolicyScratch({ prefix: 'propagation-patterns-' })
+		const scratch = fixture.path
+		try {
+			const configured = readConfigRecord(
+				JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8')),
+			)
+			if (!Array.isArray(configured.overrides)) throw new Error('Missing overrides')
+			const overrides: object[] = []
+			const expected = new Map<string, boolean>()
+			for (const [blockIndex, value] of configured.overrides.entries()) {
+				const block = readConfigRecord(value)
+				const rule = readConfigRecord(block.rules)['no-restricted-imports']
+				if (!Array.isArray(rule)) continue
+				const patterns = readConfigRecord(rule[1]).patterns
+				if (!Array.isArray(patterns)) throw new Error('Missing restriction patterns')
+				for (const [patternIndex, patternValue] of patterns.entries()) {
+					const pattern = readConfigRecord(patternValue)
+					const message = pattern.message
+					if (typeof message !== 'string') throw new Error('Missing pattern message')
+					const sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
+						? [
+								['https://host/x', true],
+								['data:text/plain,x', true],
+								['node:fs', false],
+								['n:entry', true],
+								['no:entry', true],
+								['nod:entry', true],
+								['nodea:entry', true],
+								['1bad:entry', false],
+								['./data:entry', false],
+							]
+						: message.includes('noncanonical dot')
+							? [
+									['../core/../server/index.js', true],
+									['../core/./index.js', true],
+									['../core/index.js', false],
+									['./index.js', false],
+									['../../core/index.js', false],
+									['.../../index.js', true],
+									['.name/../index.js', true],
+								]
+							: message.includes('sibling sheet')
+								? [
+										['@src/print', true],
+										['../print/index.js', true],
+										['@src/core', false],
+										['@src/browser', false],
+										['@src/vue', false],
+										['@app/core', false],
+										['@app/browser', false],
+										['@src/corex', true],
+										['@src/', true],
+										['../src/print/index.js', true],
+										['../browser?x', true],
+										['../print.ext/index.js', false],
+										...(Array.isArray(block.files) &&
+										block.files.some(
+											(file: unknown) => typeof file === 'string' && file.startsWith('app/vue/'),
+										)
+											? [['@app/print', true] as const]
+											: []),
+									]
+								: [
+										[
+											message.includes('absolute paths')
+												? '/machine/module.js'
+												: message.includes('normalized traversal')
+													? './../core/index.js'
+													: message.includes('forward slashes')
+														? '..\\core\\index.js'
+														: message.includes('compiler API')
+															? 'typescript'
+															: message.includes('private app')
+																? '@app/core'
+																: message.includes('stylesheets')
+																	? './index.css'
+																	: message.includes('host-independent') ||
+																		  message.includes('Node or server')
+																		? 'node:fs'
+																		: message.includes('Vue extension')
+																			? '@src/vue'
+																			: '@src/browser',
+											true,
+										],
+									]
+					const owner =
+						Array.isArray(block.files) && typeof block.files[0] === 'string'
+							? block.files[0].split('/**')[0]
+							: undefined
+					if (owner === undefined) throw new Error('Missing pattern owner')
+					const paths: string[] = []
+					for (const [index, [source, refusal]] of [
+						...sources,
+						['./index.js', false] as const,
+					].entries()) {
+						const path = `${owner}/pattern${blockIndex}_${patternIndex}_${index}.ts`
+						mkdirSync(dirname(resolve(scratch, path)), { recursive: true })
+						writeFileSync(
+							resolve(scratch, path),
+							'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+						)
+						expected.set(path, refusal)
+						paths.push(path)
+					}
+					overrides.push({
+						files: paths,
+						rules: { 'no-restricted-imports': ['error', { patterns: [pattern] }] },
+					})
+				}
+			}
+			writeFileSync(
+				resolve(scratch, '.oxlintrc.json'),
+				JSON.stringify({ rules: { 'no-debugger': 'error' }, overrides }),
+			)
+			const codes = readImportDiagnostics(scratch, [...expected.keys()])
+			const readings = [...expected].map(([path, refusal]) => ({
+				path,
+				expected: refusal,
+				actual: codes.has('eslint(no-restricted-imports) ' + path),
+			}))
+			expect(readings.filter((reading) => reading.expected !== reading.actual)).toEqual([])
+			writeFileSync(
+				resolve(scratch, '.oxlintrc.json'),
+				JSON.stringify({ rules: { 'no-debugger': 'error', 'no-restricted-imports': 'off' } }),
+			)
+			const disabled = readImportDiagnostics(scratch, [...expected.keys()])
+			expect(() =>
+				expect(
+					[...expected].filter(
+						([path, refusal]) => disabled.has('eslint(no-restricted-imports) ' + path) !== refusal,
+					),
+				).toEqual([]),
+			).toThrow('deeply equal')
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('fences environment and root imports through the real linter and fails with the restriction disabled', () => {
+		const fixture = createPolicyScratch({ prefix: 'propagation-imports-' })
+		const scratch = fixture.path
+		try {
+			mkdirSync(resolve(scratch, 'configs'))
+			writeFileSync(
+				resolve(scratch, 'configs/policy.ts'),
+				readFileSync(resolve(root, 'configs/policy.ts')),
+			)
+			const text = readFileSync(resolve(root, '.oxlintrc.json'), 'utf8')
+			writeFileSync(resolve(scratch, '.oxlintrc.json'), text)
+			const expected = new Map<string, boolean>()
+			for (const owner of [
+				'src/vue',
+				'app/vue',
+				'src/browser',
+				'app/browser',
+				'src/core',
+				'app/core',
+				'src/server',
+				'app/server',
+				'src/bin',
+			]) {
+				const refused = owner.endsWith('/vue')
+					? [
+							'node:fs',
+							'@src/server',
+							'../server/index.js',
+							'@src/print',
+							'../print/index.js',
+							...(owner.startsWith('src/')
+								? ['@app/core', '../../app/core/index.js']
+								: ['@app/server', '@app/print']),
+						]
+					: [
+							'vue',
+							'vue/runtime-dom',
+							'@vue/runtime-core',
+							'@vitejs/plugin-vue',
+							'@src/vue',
+							'@orkestrel/sample/vue',
+							'@app/vue',
+							'../vue/index.js',
+							'../../src/vue/index.js',
+							'../../app/vue/index.js',
+						]
+				const admitted = owner.endsWith('/vue')
+					? [
+							'@src/core',
+							'@src/browser',
+							'../core/index.js',
+							'../browser/index.js',
+							'vue',
+							'@vue/runtime-core',
+							...(owner.startsWith('app/')
+								? ['@app/core', '@app/browser', '@src/vue', '../../src/vue/index.js']
+								: []),
+						]
+					: ['@src/core']
+				for (const [sources, refusal] of [
+					[
+						[
+							...refused,
+							'https://host/x',
+							'data:text/plain,x',
+							'../core/../server/index.js',
+							'../core/./index.js',
+						],
+						true,
+					],
+					[
+						[
+							...admitted,
+							'./index.js',
+							'../core/index.js',
+							...(owner.endsWith('/server') || owner === 'src/bin' ? ['node:fs'] : []),
+						],
+						false,
+					],
+				] as const) {
+					for (const [index, source] of sources.entries()) {
+						const file = owner + '/' + (refusal ? 'refused' : 'admitted') + index + '.ts'
+						mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
+						writeFileSync(
+							resolve(scratch, file),
+							'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+						)
+						expected.set(file, refusal)
+					}
+				}
+			}
+			for (const [file, source, refusal] of [
+				['probe.config.ts', 'typescript', true],
+				['allowed.config.ts', 'node:fs', false],
+				['src/core/compiler.ts', 'typescript', true],
+				['tests/compiler.ts', 'typescript', true],
+				['configs/compiler.ts', 'typescript', true],
+				['scripts/compiler.ts', 'typescript', true],
+			] as const) {
+				mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
+				writeFileSync(
+					resolve(scratch, file),
+					'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+				)
+				expected.set(file, refusal)
+			}
+			const reports: Array<ReadonlySet<string>> = []
+			for (const disabled of [false, true]) {
+				if (disabled) {
+					const parsed: unknown = JSON.parse(text)
+					if (typeof parsed !== 'object' || parsed === null)
+						throw new Error('Missing lint configuration')
+					const overrides: unknown = Object.getOwnPropertyDescriptor(parsed, 'overrides')?.value
+					if (!Array.isArray(overrides)) throw new Error('Missing lint overrides')
+					for (const block of overrides) {
+						if (typeof block !== 'object' || block === null) continue
+						const files: unknown = Object.getOwnPropertyDescriptor(block, 'files')?.value
+						if (
+							!Array.isArray(files) ||
+							!files.some(
+								(file: unknown) => typeof file === 'string' && file.startsWith('src/vue/'),
+							)
+						)
+							continue
+						const rules: unknown = Object.getOwnPropertyDescriptor(block, 'rules')?.value
+						if (typeof rules !== 'object' || rules === null) throw new Error('Missing Vue rules')
+						Reflect.set(rules, 'no-restricted-imports', 'off')
+					}
+					writeFileSync(resolve(scratch, '.oxlintrc.json'), JSON.stringify(parsed))
+				}
+				const codes = readImportDiagnostics(scratch, [...expected.keys()])
+				reports.push(codes)
+			}
+			const [enabled, disabled] = reports
+			if (enabled === undefined || disabled === undefined)
+				throw new Error('Missing boundary readings')
+			const readings = [...expected].map(([path, refusal]) => ({
+				path,
+				expected: refusal,
+				actual: enabled.has('eslint(no-restricted-imports) ' + path),
+			}))
+			expect(readings.filter((reading) => reading.actual !== reading.expected)).toEqual([])
+			const control = [...expected].map(([path, refusal]) => ({
+				path,
+				expected: refusal,
+				actual: disabled.has('eslint(no-restricted-imports) ' + path),
+			}))
+			expect(() =>
+				expect(control.filter((reading) => reading.actual !== reading.expected)).toEqual([]),
+			).toThrow('deeply equal')
+			expect(control).toContainEqual({ path: 'src/vue/refused3.ts', expected: true, actual: false })
+			expect(control).toContainEqual({ path: 'src/vue/refused8.ts', expected: true, actual: false })
+		} finally {
+			fixture.destroy()
+		}
+	})
+
 	it('enables every plugin rule over the population its law names', () => {
 		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
 		const rules: unknown = Object.getOwnPropertyDescriptor(policyPlugin, 'rules')?.value
@@ -1927,6 +2924,7 @@ describe('policy plugin', () => {
 			)
 			scratch.write('src/violations/parsers.ts', 'export function coerceValue(): void {}\n')
 			scratch.write('src/violations/factories.ts', 'export function buildValue(): void {}\n')
+			scratch.write('src/violations/plugins.ts', 'export function registerModal(): void {}\n')
 			scratch.write('src/violations/constants.ts', 'export const values = []\n')
 			scratch.write('src/violations/composables.ts', "export const READY = 'yes'\n")
 			scratch.write('app/browser/composables/useTheme.ts', 'export function useMode(): void {}\n')
@@ -2030,6 +3028,7 @@ describe('policy plugin', () => {
 				{ code: 'policy(no-hidden-declaration)', filename: 'src/violations/helpers.ts' },
 				{ code: 'policy(no-misnamed-parser)', filename: 'src/violations/parsers.ts' },
 				{ code: 'policy(no-misnamed-factory)', filename: 'src/violations/factories.ts' },
+				{ code: 'policy(no-misnamed-plugin)', filename: 'src/violations/plugins.ts' },
 				{ code: 'policy(no-malformed-constant)', filename: 'src/violations/constants.ts' },
 				{ code: 'policy(no-malformed-domain)', filename: 'src/violations/composables.ts' },
 				{
@@ -2063,6 +3062,129 @@ describe('policy plugin', () => {
 })
 
 describe('configuration helpers', () => {
+	it('resolves declared application modes and refuses undeclared modes', () => {
+		const applications = { browser: true, vue: true }
+		for (const mode of [undefined, 'development', 'production', 'test', 'browser']) {
+			expect(configHelpers.resolveApplication(mode, applications)).toBe('browser')
+		}
+		expect(configHelpers.resolveApplication('vue', applications)).toBe('vue')
+		expect(() => configHelpers.resolveApplication('vue', { browser: true })).toThrow(
+			'The application mode "vue" is not declared.',
+		)
+		expect(() => configHelpers.resolveApplication('preview', applications)).toThrow(
+			'The application mode "preview" is not declared.',
+		)
+		expect(() => configHelpers.resolveApplication('toString', applications)).toThrow(
+			'The application mode "toString" is not declared.',
+		)
+	})
+
+	it('hashes page bytes against SHA-256 vectors without its stamp line', () => {
+		expect(configHelpers.computeStamp('')).toBe(
+			'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+		)
+		expect(configHelpers.computeStamp('abc')).toBe(
+			'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+		)
+		expect(configHelpers.computeStamp('<meta name="build-id" content="old" />\nabc')).toBe(
+			configHelpers.computeStamp('abc'),
+		)
+		expect(configHelpers.computeStamp('<meta name="build-id" content="old" />\r\nabc')).toBe(
+			configHelpers.computeStamp('abc'),
+		)
+		expect(configHelpers.computeStamp('abd')).not.toBe(configHelpers.computeStamp('abc'))
+	})
+
+	it('stamps the final page once and refuses repeated or malformed stamp lines', () => {
+		const html = '<html>\n\t<head>\n\t</head>\n</html>\n'
+		const stamped = configHelpers.stampPage(html)
+		expect(stamped.match(/name="build-id"/gu)).toHaveLength(1)
+		expect(stamped).toContain(`content="${configHelpers.computeStamp(stamped)}"`)
+		expect(configHelpers.computeStamp(stamped)).toBe(configHelpers.computeStamp(html))
+		expect(configHelpers.stampPage(stamped)).toBe(stamped)
+		const fixture = createPolicyScratch({ prefix: 'propagation-stamp-' })
+		const scratch = fixture.path
+		try {
+			const path = resolve(scratch, 'page.html')
+			writeFileSync(path, stamped)
+			expect(configHelpers.stampPage(readFileSync(path, 'utf8'))).toBe(stamped)
+			writeFileSync(path, '<meta name="build-id" content="old" />\n' + stamped)
+			expect(() => configHelpers.stampPage(readFileSync(path, 'utf8'))).toThrow(
+				'at most one well-formed build stamp line',
+			)
+		} finally {
+			fixture.destroy()
+		}
+		expect(() =>
+			configHelpers.stampPage('<meta name="build-id" content="old" />\n' + stamped),
+		).toThrow('A showcase page must carry at most one well-formed build stamp line.')
+		expect(() => configHelpers.stampPage('<html><head></head></html>')).toThrow(
+			'A showcase page must close its head on its own line.',
+		)
+		expect(() => configHelpers.stampPage('<meta name="build-id" content="old">\n' + html)).toThrow(
+			'A showcase page must carry at most one well-formed build stamp line.',
+		)
+	})
+
+	it('resolves externals from peers, refused packages, and published siblings', () => {
+		const options = {
+			peers: ['sample-peer'],
+			refused: ['vue', '@vue/'],
+			siblings: ['C:/workspace/src/browser/index.ts'],
+		}
+		for (const id of [
+			'node:fs',
+			'@orkestrel/contract',
+			'sample-peer',
+			'sample-peer/subpath',
+			'C:\\workspace\\src\\browser\\index.ts',
+		]) {
+			expect(configHelpers.resolveExternal(id, options)).toBe(true)
+		}
+		for (const id of [
+			'@src/browser',
+			'@src/core',
+			'@app/vue',
+			'sample-peerish',
+			'./local.js',
+			'vue-tools',
+		]) {
+			expect(configHelpers.resolveExternal(id, options)).toBe(false)
+		}
+		for (const id of ['vue', 'vue/runtime-dom']) {
+			expect(() => configHelpers.resolveExternal(id, options)).toThrow(
+				`The import ${id} is refused`,
+			)
+			expect(() => configHelpers.resolveExternal(id, options)).toThrow('peerDependencies')
+		}
+		expect(configHelpers.resolveExternal('vue', { ...options, peers: ['vue'] })).toBe(true)
+		expect(configHelpers.resolveExternal('vue/runtime-dom', { ...options, peers: ['vue'] })).toBe(
+			true,
+		)
+		expect(() =>
+			configHelpers.resolveExternal('@vue/runtime-core', {
+				...options,
+				peers: ['vue', '@vue/runtime-core'],
+			}),
+		).toThrow('import from vue instead of the @vue/ implementation scope')
+	})
+
+	it('classifies Vue faces as browser owners and browser targets', () => {
+		for (const owner of ['src/vue', 'app/vue']) {
+			expect(configHelpers.environmentPathError(owner, 'src/server/index.ts')).toBeDefined()
+			expect(configHelpers.environmentSourceError(owner, 'node:fs')).toBeDefined()
+			expect(configHelpers.environmentSourceError(owner, '@src/server')).toBeDefined()
+			expect(configHelpers.environmentPathError(owner, 'src/browser/index.ts')).toBeUndefined()
+			expect(configHelpers.environmentSourceError(owner, '@src/browser')).toBeUndefined()
+		}
+		for (const owner of ['src/core', 'app/core', 'src/server', 'app/server']) {
+			expect(configHelpers.environmentPathError(owner, 'src/vue/index.ts')).toBeDefined()
+			expect(configHelpers.environmentPathError(owner, 'app/vue/index.ts')).toBeDefined()
+			expect(configHelpers.environmentSourceError(owner, '@src/vue')).toBeDefined()
+			expect(configHelpers.environmentSourceError(owner, '@app/vue')).toBeDefined()
+		}
+	})
+
 	it('exposes every helper this proof requires', () => {
 		const required = [
 			'ENVIRONMENT_MODULE_BYTES',
@@ -2250,7 +3372,8 @@ describe('configuration helpers', () => {
 		> = ['src/core', 'src/browser', 'src/server', 'app/core', 'app/browser', 'app/server']
 		const owner = environments.find((environment) => existsSync(resolve(root, environment)))
 		if (owner === undefined) throw new Error('The workspace carries no environment plugin target')
-		const workspace = mkdtempSync(join(resolve(root, owner), 'config-build-'))
+		const scratch = createPolicyScratch({ parent: resolve(root, owner), prefix: 'config-build-' })
+		const workspace = scratch.path
 		try {
 			const source = resolve(workspace, 'index.ts')
 			writeFileSync(source, 'export const control = true\n', 'utf8')
@@ -2291,7 +3414,7 @@ describe('configuration helpers', () => {
 			)
 			await expect(Reflect.apply(hook, context, ['@src/core', source])).resolves.toBeNull()
 		} finally {
-			rmSync(workspace, { recursive: true, force: true })
+			scratch.destroy()
 		}
 	})
 
@@ -2413,6 +3536,16 @@ describe('configuration helpers', () => {
 		expect(configHelpers.rewriteCoreSpecifier("from '@src/core'")).toBe(`from '${name}'`)
 		expect(configHelpers.rewriteCoreSpecifier("from '../../core/index.js'")).toBe(`from '${name}'`)
 		expect(configHelpers.rewriteCoreSpecifier("from './sibling.js'")).toBe("from './sibling.js'")
+		expect(configHelpers.rewriteBrowserSpecifier("from '@src/browser'")).toBe(
+			`from '${name}/browser'`,
+		)
+		expect(configHelpers.rewriteBrowserSpecifier("from '../../browser/index.js'")).toBe(
+			`from '${name}/browser'`,
+		)
+		expect(configHelpers.rewriteBrowserSpecifier("from '../browser/index.ts'")).toBe(
+			`from '${name}/browser'`,
+		)
+		expect(configHelpers.rewriteBrowserSpecifier("from './sibling.js'")).toBe("from './sibling.js'")
 
 		// The mechanism the roll-up proof's skip reads: an absent package rejects resolution.
 		expect(() => createRequire(import.meta.url).resolve('@absent/declaration-extractor')).toThrow(
@@ -2459,7 +3592,7 @@ describe('configuration helpers', () => {
 	// The roll-up loads the declaration extractor, which only a workspace publishing source from
 	// `src` installs. Where `require.resolve` rejects that package, this proof does not apply.
 	it.skipIf(extractorPath === undefined)(
-		'rolls one face into a single declaration and rewrites its core specifier',
+		'rolls one face into a single declaration and rewrites its core and browser specifiers',
 		async () => {
 			const scratch = createPolicyScratch({ prefix: 'orkestrel-config-rollup-' })
 			// The hook's temporary declaration emit is proven removed from a host temporary
@@ -2494,7 +3627,10 @@ describe('configuration helpers', () => {
 							noEmit: false,
 							rootDir: './source',
 							outDir: './emit',
-							paths: { '@src/core': ['./source/core/index.ts'] },
+							paths: {
+								'@src/core': ['./source/core/index.ts'],
+								'@src/browser': ['./source/browser/index.ts'],
+							},
 						},
 						include: ['./source/server/**/*.ts'],
 					}),
@@ -2504,8 +3640,12 @@ describe('configuration helpers', () => {
 					'export interface FixtureLabel {\n\treadonly label: string\n}\n',
 				)
 				scratch.write(
+					'source/browser/index.ts',
+					'export interface FixtureView {\n\treadonly visible: boolean\n}\n',
+				)
+				scratch.write(
 					'source/server/index.ts',
-					"import type { FixtureLabel } from '@src/core'\n\nexport interface FixtureRecord {\n\treadonly label: FixtureLabel\n\treadonly count: number\n}\n",
+					"import type { FixtureLabel } from '@src/core'\nimport type { FixtureView } from '@src/browser'\n\nexport interface FixtureRecord {\n\treadonly label: FixtureLabel\n\treadonly view: FixtureView\n\treadonly count: number\n}\n",
 				)
 
 				const name = configHelpers.packageManifestName(configHelpers.WORKSPACE_ROOT)
@@ -2525,7 +3665,13 @@ describe('configuration helpers', () => {
 						plugins: [
 							configHelpers.declarationRollup(
 								face.rewrite
-									? { project, rewrite: configHelpers.rewriteCoreSpecifier }
+									? {
+											project,
+											rewrite: (text) =>
+												configHelpers.rewriteBrowserSpecifier(
+													configHelpers.rewriteCoreSpecifier(text),
+												),
+										}
 									: { project },
 							),
 						],
@@ -2572,10 +3718,13 @@ describe('configuration helpers', () => {
 				expect(rolled).toContain('FixtureRecord')
 				expect(rolled).toContain(`from '${name}'`)
 				expect(rolled).not.toContain('@src/core')
+				expect(rolled).toContain(`from '${name}/browser'`)
+				expect(rolled).not.toContain('@src/browser')
 
 				// The control: the same face without a rewrite ships the specifier the extractor kept.
 				const control = readFileSync(join(workspace, 'kept', 'index.d.ts'), 'utf8')
 				expect(control).toContain('@src/core')
+				expect(control).toContain('@src/browser')
 				expect(control).not.toContain(`from '${name}'`)
 			} finally {
 				for (const [name, value] of inherited) {

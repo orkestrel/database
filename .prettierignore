@@ -5,7 +5,7 @@
 dist/
 
 # Generated single-file application showcase.
-demo/showcase.html
+showcase/
 
 # Campaign records under the orchestration folder are verbatim evidence, not formatted source.
 .orkestrel/
@@ -15,3 +15,6 @@ tests/mirrors/
 
 # The vendored host inventory: `npm run build` regenerates it (`stageInventory`), so its bytes are the generator's, not the formatter's.
 host.json
+
+# A minified generated record (`*.min.*`, such as a compact JSON inventory an instrument writes from an installed package) keeps its compact bytes: nothing in it is authored, and a formatted copy would be a second artifact of the same bytes. Authored source never takes the suffix.
+*.min.*

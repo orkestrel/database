@@ -2,6 +2,7 @@ import type { Plugin, Rolldown } from 'vite'
 import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire, isBuiltin } from 'node:module'
 import { tmpdir } from 'node:os'
 import {
@@ -54,6 +55,69 @@ export function enforceBuildLog(
 export const WORKSPACE_ROOT = realpathSync.native(
 	resolvePath(dirname(fileURLToPath(import.meta.url)), '..'),
 )
+
+/**
+ * Resolves a Vite mode to a declared application.
+ * @param mode - The requested mode; undefined, development, production, and test select browser.
+ * @param applications - The declared application factories.
+ * @returns The selected application name.
+ * @throws Thrown when the selected application is not declared.
+ * @example
+ * ```ts
+ * resolveApplication('test', { browser: true }) // 'browser'
+ * ```
+ */
+export function resolveApplication<Application extends string>(
+	mode: string | undefined,
+	applications: Readonly<Record<Application, unknown>>,
+): Application {
+	const selected =
+		mode === undefined || mode === 'development' || mode === 'production' || mode === 'test'
+			? 'browser'
+			: mode
+	for (const name in applications) {
+		if (Object.hasOwn(applications, name) && name === selected) return name
+	}
+	throw new Error(`The application mode "${selected}" is not declared.`)
+}
+
+/**
+ * Computes the SHA-256 digest of a page with its build stamp line removed.
+ * @param text - The page text, with or without its stamp line.
+ * @returns The lowercase hexadecimal digest.
+ * @example
+ * ```ts
+ * computeStamp('') // 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+ * computeStamp('abc') // 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+ * ```
+ */
+export function computeStamp(text: string): string {
+	return createHash('sha256')
+		.update(text.replace(/^[\t ]*<meta name="build-id" content="[^"\r\n]*" \/>\r?\n/gmu, ''))
+		.digest('hex')
+}
+
+/**
+ * Stamps a final inlined page with its content digest on a separate line.
+ * @param html - The final page with a head closing on its own line.
+ * @returns The page with exactly one build stamp line.
+ * @throws Thrown when a stamp is malformed or repeated, or the head closing line is absent.
+ * @example
+ * ```ts
+ * computeStamp(stampPage('abc\n</head>\n')) === computeStamp('abc\n</head>\n') // true
+ * ```
+ */
+export function stampPage(html: string): string {
+	const stamps = html.match(/<meta\b[^>]*\bname=["']build-id["'][^>]*>/gu) ?? []
+	const lines = html.match(/^[\t ]*<meta name="build-id" content="[^"\r\n]*" \/>\r?\n/gmu) ?? []
+	if (stamps.length > 1 || stamps.length !== lines.length) {
+		throw new Error('A showcase page must carry at most one well-formed build stamp line.')
+	}
+	const text = html.replace(/^[\t ]*<meta name="build-id" content="[^"\r\n]*" \/>\r?\n/gmu, '')
+	const close = /^[\t ]*<\/head>[\t ]*(?:\r?\n|$)/mu.exec(text)
+	if (close === null) throw new Error('A showcase page must close its head on its own line.')
+	return `${text.slice(0, close.index)}\t\t<meta name="build-id" content="${computeStamp(text)}" />\n${text.slice(close.index)}`
+}
 
 export function fileSystemPath(pathname: string): string {
 	if (!pathname.startsWith('/@fs/')) return pathname
@@ -132,7 +196,7 @@ export function isWorkspaceBoundaryModule(id: string): boolean {
 	} catch {
 		return false
 	}
-	const rootRelative = /^\/(?:app|src)\/(?:core|browser|server)\//.test(candidate)
+	const rootRelative = /^\/(?:app|src)\/(?:core|browser|server|vue)\//.test(candidate)
 	const absoluteCandidate = rootRelative
 		? resolvePath(WORKSPACE_ROOT, candidate.slice(1))
 		: isAbsolute(candidate)
@@ -143,7 +207,7 @@ export function isWorkspaceBoundaryModule(id: string): boolean {
 		relativeId !== '..' &&
 		!relativeId.startsWith('../') &&
 		!isAbsolute(relativeId) &&
-		/^(?:app|src)\/(?:core|browser|server)\//.test(relativeId)
+		/^(?:app|src)\/(?:core|browser|server|vue)\//.test(relativeId)
 	)
 }
 
@@ -312,9 +376,62 @@ export function isStylesheetPath(path: string): boolean {
 	return /\.(?:css|less|sass|scss|styl|stylus|pcss|postcss|sss)(?:[?#]|$)/.test(path)
 }
 
+/**
+ * Defines the manifest peers, refused packages, and published sibling entries for a build.
+ * @example Refuse framework imports until a peer is declared
+ * ```ts
+ * const options: ExternalOptions = { peers: [], refused: ['vue', '@vue/'], siblings: [] }
+ * ```
+ */
+export interface ExternalOptions {
+	readonly peers: readonly string[]
+	readonly refused: readonly string[]
+	readonly siblings: readonly string[]
+}
+
+/**
+ * Resolves whether a build leaves a module external under its manifest and face boundaries.
+ * @param id - The module identifier supplied by the bundler.
+ * @param options - The peer names, refused package names or scope prefixes, and sibling entries.
+ * @returns True if the module stays external; false if the build bundles it.
+ * @throws Thrown when an import names a refused scope or a refused package without an admitting peer.
+ * @remarks
+ * A peer admits its own subpaths. A refused scope remains refused even when a package inside it
+ * is a peer. Node builtins and fleet packages retain their published identities. Workspace aliases
+ * resolve before a sibling entry can be recognized.
+ * @example Externalize a declared peer
+ * ```ts
+ * resolveExternal('vue/runtime-dom', { peers: ['vue'], refused: ['vue', '@vue/'], siblings: [] })
+ * // true
+ * ```
+ */
+export function resolveExternal(id: string, options: ExternalOptions): boolean {
+	const peer = options.peers.some((name) => id === name || id.startsWith(`${name}/`))
+	const refused = options.refused.find((name) =>
+		name.endsWith('/') ? id.startsWith(name) : id === name || id.startsWith(`${name}/`),
+	)
+	if (refused?.endsWith('/')) {
+		throw new Error(
+			`[orkestrel-build] The import ${id} is refused; import from ${refused.slice(1, -1)} instead of the ${refused} implementation scope.`,
+		)
+	}
+	if (refused !== undefined && !peer) {
+		throw new Error(
+			`[orkestrel-build] The import ${id} is refused; declare its public package in peerDependencies with peerDependenciesMeta marking it optional.`,
+		)
+	}
+	if (id.startsWith('@src/') || id.startsWith('@app/')) return false
+	return (
+		id.startsWith('node:') ||
+		id.startsWith('@orkestrel/') ||
+		peer ||
+		options.siblings.some((sibling) => sibling.replaceAll('\\', '/') === id.replaceAll('\\', '/'))
+	)
+}
+
 export function environmentPathError(owner: string, target: string): string | undefined {
 	const targetApplication = target.startsWith('app/')
-	const targetBrowser = target.startsWith('app/browser/') || target.startsWith('src/browser/')
+	const targetBrowser = /^(?:app|src)\/(?:browser|vue)\//.test(target)
 	const targetServer = target.startsWith('app/server/') || target.startsWith('src/server/')
 	const stylesheet = isStylesheetPath(target)
 	if (owner.startsWith('src/') && targetApplication) {
@@ -323,7 +440,7 @@ export function environmentPathError(owner: string, target: string): string | un
 	if (owner.endsWith('/core') && (stylesheet || targetBrowser || targetServer)) {
 		return 'Core modules must remain host-independent'
 	}
-	if (owner.endsWith('/browser') && targetServer) {
+	if ((owner.endsWith('/browser') || owner.endsWith('/vue')) && targetServer) {
 		return 'Browser modules cannot depend on Node or server-only modules'
 	}
 	if (owner.endsWith('/server') && (stylesheet || targetBrowser)) {
@@ -346,7 +463,7 @@ export function environmentSourceError(owner: string, source: string): string | 
 		!/^file:/i.test(sourcePath) &&
 		!/^[A-Za-z]:\//.test(sourcePath)
 	const browserPackage =
-		/^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)\/|@(?:app|src)\/browser(?:[/?#]|$)|@orkestrel\/[^/]+\/browser(?:[/?#]|$))/.test(
+		/^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)\/|@(?:app|src)\/(?:browser|vue)(?:[/?#]|$)|@orkestrel\/[^/]+\/(?:browser|vue)(?:[/?#]|$))/.test(
 			normalizedSource,
 		)
 	const serverPackage =
@@ -361,7 +478,7 @@ export function environmentSourceError(owner: string, source: string): string | 
 	if (owner.endsWith('/core') && (builtin || browserPackage || serverPackage || stylesheet)) {
 		return 'Core modules must remain host-independent'
 	}
-	if (owner.endsWith('/browser') && (builtin || serverPackage)) {
+	if ((owner.endsWith('/browser') || owner.endsWith('/vue')) && (builtin || serverPackage)) {
 		return 'Browser modules cannot depend on Node or server-only modules'
 	}
 	if (owner.endsWith('/server') && (browserPackage || stylesheet)) {
@@ -624,6 +741,26 @@ export function rewriteCoreSpecifier(content: string): string {
 }
 
 /**
+ * Rewrites browser specifiers in declarations to the workspace package's browser export.
+ * @param content - The finished declaration roll-up.
+ * @returns The roll-up with browser aliases and relative entry paths replaced.
+ * @throws Thrown when the workspace manifest names no package.
+ * @example Rewrite a browser alias
+ * ```ts
+ * rewriteBrowserSpecifier("from '@src/browser'")
+ * ```
+ */
+export function rewriteBrowserSpecifier(content: string): string {
+	const name = packageManifestName(WORKSPACE_ROOT)
+	if (name === undefined) {
+		throw new Error('[orkestrel-declaration-rollup] The workspace manifest names no package')
+	}
+	return content
+		.replaceAll(/(?:\.\.\/)+browser\/index\.[jt]s/g, `${name}/browser`)
+		.replaceAll('@src/browser', `${name}/browser`)
+}
+
+/**
  * Rolls one published face's declarations into the single file that face ships.
  *
  * @param options - The face's roll-up options.
@@ -843,7 +980,15 @@ export async function environmentAssetSources(
 }
 
 export function environmentBoundary(
-	owner: 'src/core' | 'src/browser' | 'src/server' | 'app/core' | 'app/browser' | 'app/server',
+	owner:
+		| 'src/core'
+		| 'src/browser'
+		| 'src/server'
+		| 'src/vue'
+		| 'app/core'
+		| 'app/browser'
+		| 'app/server'
+		| 'app/vue',
 ): Plugin {
 	const trustedPackageRoots = new Set<string>()
 	let environmentRoot = WORKSPACE_ROOT
@@ -867,7 +1012,10 @@ export function environmentBoundary(
 			if (
 				importerPackageRoot === undefined &&
 				((layer !== 'app' && layer !== 'src') ||
-					(environment !== 'core' && environment !== 'browser' && environment !== 'server'))
+					(environment !== 'core' &&
+						environment !== 'browser' &&
+						environment !== 'server' &&
+						environment !== 'vue'))
 			) {
 				return null
 			}
@@ -1037,7 +1185,7 @@ export function environmentBoundary(
 					if (pathError !== undefined) this.error(pathError)
 				}
 				const environmentModule =
-					target !== undefined && /^(?:app|src)\/(?:core|browser|server)\//.test(target)
+					target !== undefined && /^(?:app|src)\/(?:core|browser|server|vue)\//.test(target)
 				if (!environmentModule && importerPackageRoot === undefined) return null
 				for (const source of await environmentAssetSources(code, id)) {
 					const normalizedSource = source.replaceAll('\\', '/')

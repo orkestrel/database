@@ -4,11 +4,20 @@ import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
-import { enforceBuildLog, environmentBoundary, outputBoundary } from './configs/helpers.js'
+import {
+	enforceBuildLog,
+	environmentBoundary,
+	outputBoundary,
+	resolveExternal,
+} from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
 import { fileURLToPath, URL } from 'node:url'
 
 const browserOptions = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
+
+const optimizeDeps = {
+	include: ['@orkestrel/test', '@orkestrel/test/browser', '@orkestrel/contract'],
+}
 
 export function resolveWorkspacePath(relativePath: string): string {
 	return fileURLToPath(new URL(relativePath, import.meta.url))
@@ -60,15 +69,29 @@ const resolve = {
 // merges it, so an override's arrays elsewhere concatenate with the base's rather than
 // replacing them.
 export function mergeOverride(base: UserConfig, override?: UserConfig): UserConfig {
-	if (override === undefined) return base
-	if ('command' in override && 'mode' in override) {
+	if (override !== undefined && 'command' in override && 'mode' in override) {
 		if (typeof override.mode !== 'string') {
 			throw new Error('The project invocation carries no string mode')
 		}
-		return { ...base, mode: override.mode }
+		override = { mode: override.mode }
 	}
-	const merged: UserConfig = mergeConfig(base, override)
-	if (merged.plugins === undefined) return merged
+	const merged: UserConfig = override === undefined ? { ...base } : mergeConfig(base, override)
+	const name = merged.test?.name
+	const label = typeof name === 'string' ? name : name?.label
+	const browser = merged.test?.browser
+	if (label !== undefined && browser?.instances !== undefined) {
+		merged.test = {
+			...merged.test,
+			browser: {
+				...browser,
+				instances: browser.instances.map((instance) => ({
+					...instance,
+					name: instance.name ?? `${label} (${instance.browser})`,
+				})),
+			},
+		}
+	}
+	if (merged.plugins === undefined || override === undefined) return merged
 	const candidates = override.plugins ?? []
 	const taken = new Set<number>()
 	const selected: PluginOption[] = []
@@ -106,6 +129,17 @@ function isNamedPlugin(plugin: PluginOption): plugin is { name: string } {
 	)
 }
 
+function resolveSourceExternal(id: string): boolean {
+	return (
+		id === '@src/core' ||
+		resolveExternal(id, {
+			peers,
+			refused: [],
+			siblings: [resolveWorkspacePath('src/core/index.ts')],
+		})
+	)
+}
+
 export function srcCore(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -127,9 +161,14 @@ export function srcCore(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+function resolveBrowserFilename(): string {
+	return 'index.js'
+}
+
 export function srcBrowser(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
+		optimizeDeps,
 		publicDir: false,
 		plugins: [outputBoundary('dist/src/browser'), environmentBoundary('src/browser')],
 		build: {
@@ -139,15 +178,12 @@ export function srcBrowser(override?: UserConfig): UserConfig {
 			lib: {
 				entry: resolveWorkspacePath('src/browser/index.ts'),
 				formats: ['es'],
-				fileName: () => 'index.js',
+				fileName: resolveBrowserFilename,
 			},
 			outDir: 'dist/src/browser',
 			rolldownOptions: {
 				onLog: enforceBuildLog,
-				external: (id: string) =>
-					id === '@src/core' ||
-					id.startsWith('@orkestrel/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: resolveSourceExternal,
 				output: { paths: { '@src/core': '../core/index.js' } },
 			},
 		},
@@ -163,9 +199,14 @@ export function srcBrowser(override?: UserConfig): UserConfig {
 				instances: [{ browser: 'chromium', headless: true }],
 			},
 			fileParallelism: false,
+			sequence: { groupOrder: 1 },
 		},
 	}
 	return mergeOverride(project, override)
+}
+
+function resolveServerFilename(format: string): string {
+	return format === 'es' ? 'index.js' : 'index.cjs'
 }
 
 export function srcServer(override?: UserConfig): UserConfig {
@@ -180,18 +221,14 @@ export function srcServer(override?: UserConfig): UserConfig {
 			lib: {
 				entry: resolveWorkspacePath('src/server/index.ts'),
 				formats: ['es', 'cjs'],
-				fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
+				fileName: resolveServerFilename,
 			},
 			outDir: 'dist/src/server',
 			target: 'node22',
 			rolldownOptions: {
 				onLog: enforceBuildLog,
 				platform: 'node',
-				external: (id: string) =>
-					id === '@src/core' ||
-					id.startsWith('node:') ||
-					id.startsWith('@orkestrel/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: resolveSourceExternal,
 				output: [
 					{
 						format: 'es',
@@ -256,8 +293,10 @@ export function setup(override?: UserConfig): UserConfig {
 		test: {
 			name: { label: 'setup', color: 'white' },
 			include: ['tests/setup*.test.ts'],
-			exclude: ['tests/setupBrowser.test.ts'],
+			exclude: ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'],
 			setupFiles: ['./tests/setup.ts'],
+			pool: 'threads',
+			isolate: false,
 			environment: 'node',
 			browser: { enabled: false },
 		},
@@ -268,9 +307,10 @@ export function setup(override?: UserConfig): UserConfig {
 export function setupBrowser(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
+		optimizeDeps,
 		test: {
 			name: { label: 'setup:browser', color: 'blue' },
-			include: ['tests/setupBrowser.test.ts'],
+			include: ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'],
 			setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
 			browser: {
 				enabled: true,
@@ -308,6 +348,7 @@ export function distribution(override?: UserConfig): UserConfig {
 			testTimeout: 120_000,
 			hookTimeout: 120_000,
 			fileParallelism: false,
+			sequence: { groupOrder: 1 },
 		},
 	}
 	return mergeOverride(project, override)
@@ -328,6 +369,7 @@ export function probe(override?: UserConfig): UserConfig {
 			environment: 'node',
 			browser: { enabled: false },
 			fileParallelism: false,
+			sequence: { groupOrder: 1 },
 			pool: 'threads',
 			benchmark: { include: ['tmp/probes/**/*.test.ts', 'tests/**/*.test.ts'] },
 		},

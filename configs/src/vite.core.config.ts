@@ -1,5 +1,10 @@
 import { defineConfig } from 'vite'
-import { declarationRollup, environmentBoundary, outputBoundary } from '../helpers.js'
+import {
+	declarationRollup,
+	environmentBoundary,
+	outputBoundary,
+	resolveExternal,
+} from '../helpers.js'
 import { peers, srcCore, resolveWorkspacePath } from '../../vite.config.ts'
 
 export default defineConfig(
@@ -21,10 +26,7 @@ export default defineConfig(
 			},
 			outDir: 'dist/src/core',
 			rolldownOptions: {
-				external: (id: string) =>
-					id.startsWith('node:') ||
-					id.startsWith('@orkestrel/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: (id: string) => resolveExternal(id, { peers, refused: [], siblings: [] }),
 			},
 		},
 	}),

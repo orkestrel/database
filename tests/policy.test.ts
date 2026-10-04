@@ -28,6 +28,7 @@ import {
 	POLICY_SURFACE_HOST,
 	POLICY_SURFACE_CATALOG,
 	POLICY_CONTROLS,
+	SETUP_POLICY_CONTROLS,
 	POLICY_MIRROR_PATTERN,
 	POLICY_SUPPRESSION_DIRECTIVE,
 	POLICY_TERM_FILE,
@@ -56,6 +57,16 @@ import {
 	stemToPolicyCandidates,
 	testToPolicyStem,
 } from './setupPolicy.js'
+
+describe('root setup mirror controls', () => {
+	for (const control of SETUP_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(
+				inspectPolicyControl(control).filter((violation) => violation.rule === 'mirror'),
+			).toEqual(control.violations)
+		})
+	}
+})
 
 describe('surface policy controls', () => {
 	it('accepts a quoted relative barrel target containing a space', () => {

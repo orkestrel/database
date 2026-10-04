@@ -31,7 +31,8 @@ data root states how each set is staged and how a pointer resolves.
 
 Every following code fence is illustrative. [`tests/guides.test.ts`](../tests/guides.test.ts)
 keeps the command reference aligned with the executable and transcribes the pure blueprint-default,
-compile-refusal, and error-narrowing fences. A trailing comment in another fence is this guide's
+compile-refusal, error-narrowing, extension-parsing, and export-map fences. A trailing comment in
+another fence is this guide's
 claim rather than a measured answer; the driven examples are the ones the shipped declarations
 print. Limits states what that leaves unproven and what covers it instead.
 
@@ -57,6 +58,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | Name                | Kind | Summary                                                                                                     |
 | ------------------- | ---- | ----------------------------------------------------------------------------------------------------------- |
 | `Artifact`          | type | Represents one file in a plan, discriminated by how its content is produced and what scaffold claims of it. |
+| `Axis`              | type | Names the workspace axis an extension occupies.                                                             |
 | `BuildFormat`       | type | Names one module format a published library environment builds.                                             |
 | `CatalogEntry`      | type | Represents one package row of the fleet catalog.                                                            |
 | `CompileStage`      | type | Names the compile phases, in the order they run.                                                            |
@@ -64,7 +66,9 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `HostFile`          | type | Represents one vendored file read from the repository, beside the target bytes it answers for.              |
 | `Drift`             | type | Names how one target path compares to the artifact planned for it.                                          |
 | `Environment`       | type | Names one environment a generated workspace selects on its `src` or `app` axis.                             |
+| `Extension`         | type | Represents an extension discriminated by its surface.                                                       |
 | `Finding`           | type | Represents one drift verdict against a target path.                                                         |
+| `Framework`         | type | Names a supported browser framework.                                                                        |
 | `Group`             | type | Names the artifact group a plan selects over.                                                               |
 | `Lookup`            | type | Names how an upstream lookup resolved: found, missing, unmatched, or failed.                                |
 | `Mirror`            | type | Represents one dependency guide fetched from upstream, beside the local mirror it answers for.              |
@@ -74,6 +78,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ScaffoldErrorCode` | type | Names the coded reasons a scaffold error is raised.                                                         |
 | `SetupRuntime`      | type | Names the runtime a root setup proof requires.                                                              |
 | `Snapshot`          | type | Holds exact lowercase hexadecimal target bytes keyed by artifact-relative path.                             |
+| `Surface`           | type | Names the surface an extension extends.                                                                     |
 
 #### Interfaces
 
@@ -83,6 +88,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ArtifactBase`          | interface | Describes the fields every planned file carries.                                                  |
 | `Audit`                 | interface | Represents the whole comparison of a plan against a target's current content.                     |
 | `Blueprint`             | interface | Represents the closed, JSON-serializable workspace specification.                                 |
+| `BrowserExtension`      | interface | Represents a browser framework and its physically occupied axes.                                  |
 | `CompileFailure`        | interface | Represents the coded reason one compile stage failed.                                             |
 | `CompileRecord`         | interface | Holds the input and output snapshot of one compile stage.                                         |
 | `CompilerInterface`     | interface | Describes the compilation contract: pure, synchronous, and host-independent.                      |
@@ -90,6 +96,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ContentArtifact`       | interface | Represents a text file produced by the template or computed compilation path.                     |
 | `Dependency`            | interface | Represents one runtime `@orkestrel/*` dependency of a generated workspace.                        |
 | `DependencyPinSet`      | interface | Describes the runtime and development sections a range-writing operation may change.              |
+| `FrameworkDefinition`   | interface | Describes the tooling and package boundaries a browser framework contributes.                     |
 | `HostArtifact`          | interface | Represents a file byte-copied from the vendored data root, planned before its bytes are read.     |
 | `HydratedArtifact`      | interface | Represents a vendored file whose exact bytes have been read, so its content can be compared.      |
 | `ManifestDependencySet` | interface | Describes the runtime, development, and peer sections read from an existing package manifest.     |
@@ -101,20 +108,24 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `Question`              | interface | Represents one validation issue raised against a blueprint or a plan.                             |
 | `Scaffolding`           | interface | Represents the replayable outcome of one compile.                                                 |
 | `SrcDefinition`         | interface | Describes the build and export settings one published `src` environment contributes.              |
+| `StylesExtension`       | interface | Represents a named sheet face under `src/<name>`.                                                 |
 | `ViteMachinery`         | interface | Names which host-specific pipelines a generated root Vite configuration carries.                  |
 
 #### Constants
 
 | Name                              | Kind  | Summary                                                                                                |
 | --------------------------------- | ----- | ------------------------------------------------------------------------------------------------------ |
-| `APP_BROWSER_DEV_DEPENDENCIES`    | const | Lists the development dependencies a private Vue browser application adds.                             |
+| `APP_BROWSER_DEV_DEPENDENCIES`    | const | Lists the development dependencies a private browser application adds.                                 |
 | `APP_DEV_DEPENDENCIES`            | const | Names the development dependency every private `app` environment adds.                                 |
 | `APP_MATRIX`                      | const | Holds the configuration and runtime-entry settings each private `app` environment contributes, frozen. |
 | `APP_SERVER_DEV_DEPENDENCIES`     | const | Lists the development dependencies a private server application adds.                                  |
 | `ARTIFACT_TEMPLATES`              | const | Holds formatter-stable template text for source, test, document, guide, and service artifacts.         |
+| `AXES`                            | const | Lists the axes a browser extension may occupy, frozen.                                                 |
 | `BASE_DEV_DEPENDENCIES`           | const | Holds the tooling versions scaffold and every generated workspace share.                               |
 | `BIN_CONFIGS`                     | const | Lists the configuration files a workspace that ships its own executable adds, frozen.                  |
 | `BIN_ENTRY_PATH`                  | const | Names the executable entry whose presence makes a workspace `bin`.                                     |
+| `BROWSE_DEV_DEPENDENCIES`         | const | Names the development dependency a browser or styles surface adds.                                     |
+| `BROWSE_UPSTREAM`                 | const | Lists the packages `@orkestrel/browser` depends on at runtime, directly or transitively, frozen.       |
 | `CANON_PATHS`                     | const | Lists the instruction-canon paths staged for reading rather than for a target, frozen.                 |
 | `CATALOG_AGENT_PATH`              | const | Names the agent file whose marker-bounded package table the catalog verb alone owns.                   |
 | `CATALOG_CLOSING_MARKER`          | const | Names the marker closing the package table inside `CATALOG_AGENT_PATH`.                                |
@@ -133,6 +144,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `EXTRA_RANGE_PATTERN`             | const | Matches the registry-only semver subset accepted for a development extra's range.                      |
 | `FLOOR_RANGE_PATTERN`             | const | Matches the exact `major.minor.patch` floor accepted for a foreign peer's range.                       |
 | `FOREIGN_NAME_PATTERN`            | const | Matches the package name syntax for a dependency this package does not publish.                        |
+| `FRAMEWORKS`                      | const | Lists the supported browser frameworks, frozen.                                                        |
+| `FRAMEWORK_MATRIX`                | const | Describes the tooling and package boundaries of each browser framework, frozen.                        |
 | `GLOBAL_SETUP_PATH`               | const | Names the shared Vitest global-setup module whose presence makes a workspace `global`.                 |
 | `GROUPS`                          | const | Lists the `Group` values in plan order, frozen.                                                        |
 | `GUIDES_TEST_PATH`                | const | Names the package-owned guide-parity entry used by `test:guides` and to select the `guides` project.   |
@@ -165,57 +178,71 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `PRINT_WIDTH`                     | const | Caps the columns one emitted line may occupy, matching `printWidth` in `.oxfmtrc.json`.                |
 | `REFERENCE_PATHS`                 | const | Lists the reference paths staged for offline reading, frozen.                                          |
 | `RELEASE_PROOF_COMMAND`           | const | Names the `prepublishOnly` row that runs the packed-package proof against a real registry.             |
+| `RESERVED_SHEET_NAMES`            | const | Lists the names a styles extension cannot occupy, frozen.                                              |
 | `SEED_GUIDE_PATHS`                | const | Lists the guide paths a generated workspace starts with, frozen.                                       |
 | `SERVICE_SCRIPT_PATH`             | const | Names the inventory skeleton a workspace with declared service vendors is given once.                  |
 | `SERVICE_SETUP_PATH`              | const | Names the live-service readiness module whose presence makes a workspace `service`.                    |
 | `SERVICE_TEST_INCLUDE`            | const | Names the include the live-service project covers, which is a directory rather than one proof.         |
+| `SHEET_ENTRY_NAME`                | const | Names the build entry beside each stylesheet marker.                                                   |
 | `SHOWCASE_CONFIG_PATH`            | const | Names the Vite wrapper whose presence makes a workspace `showcase`.                                    |
 | `SHOWCASE_DEV_DEPENDENCIES`       | const | Names the development dependency used only by the optional single-file showcase build.                 |
+| `SHOWCASE_PAGES_PATH`             | const | Names the physical showcase output directory.                                                          |
 | `SKILLS_CONFIG_PATH`              | const | Names the TypeScript wrapper whose presence makes a workspace `skills`.                                |
 | `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | Lists the development dependencies a published browser `src` environment adds.                         |
 | `SRC_MATRIX`                      | const | Holds the build and export settings each published `src` environment contributes, frozen.              |
+| `STYLES_DEV_DEPENDENCIES`         | const | Lists the development dependencies the styles surface adds, frozen.                                    |
+| `STYLES_ENTRY_PATH`               | const | Names the base stylesheet marker.                                                                      |
+| `SURFACES`                        | const | Lists the surfaces an extension may extend, frozen.                                                    |
 | `TAB_WIDTH`                       | const | Sets the columns one tab occupies when the formatter measures a line, matching `tabWidth`.             |
 | `TARGET_SKILL_NAMES`              | const | Lists the package-facing skills a target receives pointers for, frozen and alphabetical.               |
+| `THEMES_BARREL_PATH`              | const | Names the themes stylesheet marker.                                                                    |
+| `THEMES_ENTRY_PATH`               | const | Names the themes build entry marker.                                                                   |
 | `VERSION_PATTERN`                 | const | Matches the exact `major.minor.patch` version syntax a blueprint declares.                             |
 | `WORKSPACE_DEV_ENGINES`           | const | Holds the `devEngines` record every generated manifest carries.                                        |
 | `WORKSPACE_OWNED_PATHS`           | const | Lists the vendored paths whose present bytes belong to each workspace, frozen.                         |
 
 #### Guards
 
-| Name                | Kind     | Summary                                                                           |
-| ------------------- | -------- | --------------------------------------------------------------------------------- |
-| `isArtifact`        | const    | Narrows a value to an `Artifact`.                                                 |
-| `isAudit`           | const    | Narrows a value to an `Audit`.                                                    |
-| `isBlueprint`       | const    | Narrows a value to a `Blueprint`.                                                 |
-| `isCatalogEntry`    | const    | Narrows a value to a `CatalogEntry`.                                              |
-| `isCollection`      | function | Narrows a value to an array within the limit one public collection accepts.       |
-| `isCompilerHooks`   | const    | Narrows a value to the compiler's initial listener record.                        |
-| `isCompilerOptions` | const    | Narrows a value to `CompilerOptions`.                                             |
-| `isContent`         | const    | Narrows a value to text this package will accept as one artifact's content.       |
-| `isDependency`      | const    | Narrows a value to a `Dependency`.                                                |
-| `isDependencyName`  | const    | Narrows a value to the scoped package name a runtime dependency carries.          |
-| `isEnvironment`     | const    | Narrows a value to one `Environment` a workspace may select.                      |
-| `isFinding`         | const    | Narrows a value to a `Finding`.                                                   |
-| `isGroup`           | const    | Narrows a value to one `Group` a plan selects over.                               |
-| `isGroups`          | const    | Narrows a value to a bounded group selection.                                     |
-| `isHex`             | const    | Narrows a value to exact lowercase hexadecimal bytes within one artifact's limit. |
-| `isManifestScript`  | const    | Narrows a value to a `ManifestScript`.                                            |
-| `isMirror`          | const    | Narrows a value to a `Mirror`.                                                    |
-| `isOverride`        | const    | Narrows a value to an `Override`.                                                 |
-| `isPath`            | function | Narrows a value to a logical target-relative path.                                |
-| `isPlan`            | const    | Narrows a value to a `Plan`.                                                      |
-| `isQuestion`        | const    | Narrows a value to a `Question`.                                                  |
-| `isScaffoldError`   | function | Narrows a caught value to a `ScaffoldError`.                                      |
-| `isSnapshot`        | function | Narrows a value to a `Snapshot`.                                                  |
+| Name                 | Kind     | Summary                                                                           |
+| -------------------- | -------- | --------------------------------------------------------------------------------- |
+| `isArtifact`         | const    | Narrows a value to an `Artifact`.                                                 |
+| `isAudit`            | const    | Narrows a value to an `Audit`.                                                    |
+| `isBlueprint`        | const    | Narrows a value to a `Blueprint`.                                                 |
+| `isBrowserExtension` | const    | Narrows a value to a supported browser framework with distinct occupied axes.     |
+| `isCatalogEntry`     | const    | Narrows a value to a `CatalogEntry`.                                              |
+| `isCollection`       | function | Narrows a value to an array within the limit one public collection accepts.       |
+| `isCompilerHooks`    | const    | Narrows a value to the compiler's initial listener record.                        |
+| `isCompilerOptions`  | const    | Narrows a value to `CompilerOptions`.                                             |
+| `isContent`          | const    | Narrows a value to text this package will accept as one artifact's content.       |
+| `isDependency`       | const    | Narrows a value to a `Dependency`.                                                |
+| `isDependencyName`   | const    | Narrows a value to the scoped package name a runtime dependency carries.          |
+| `isEnvironment`      | const    | Narrows a value to one `Environment` a workspace may select.                      |
+| `isExtension`        | const    | Narrows a value to an extension of a supported surface.                           |
+| `isFinding`          | const    | Narrows a value to a `Finding`.                                                   |
+| `isGroup`            | const    | Narrows a value to one `Group` a plan selects over.                               |
+| `isGroups`           | const    | Narrows a value to a bounded group selection.                                     |
+| `isHex`              | const    | Narrows a value to exact lowercase hexadecimal bytes within one artifact's limit. |
+| `isManifestScript`   | const    | Narrows a value to a `ManifestScript`.                                            |
+| `isMirror`           | const    | Narrows a value to a `Mirror`.                                                    |
+| `isOverride`         | const    | Narrows a value to an `Override`.                                                 |
+| `isPath`             | function | Narrows a value to a logical target-relative path.                                |
+| `isPlan`             | const    | Narrows a value to a `Plan`.                                                      |
+| `isQuestion`         | const    | Narrows a value to a `Question`.                                                  |
+| `isScaffoldError`    | function | Narrows a caught value to a `ScaffoldError`.                                      |
+| `isSheetName`        | function | Narrows a value to a non-reserved sheet face name.                                |
+| `isSnapshot`         | function | Narrows a value to a `Snapshot`.                                                  |
+| `isStylesExtension`  | const    | Narrows a value to a named non-reserved stylesheet face.                          |
+| `isSurface`          | const    | Narrows a value to a surface an extension can extend.                             |
 
 #### Parsers
 
-| Name                   | Kind     | Summary                                          |
-| ---------------------- | -------- | ------------------------------------------------ |
-| `parseBlueprint`       | function | Coerces an untrusted value to a `Blueprint`.     |
-| `parseCompilerOptions` | function | Coerces an untrusted value to `CompilerOptions`. |
-| `parseGroups`          | function | Coerces an untrusted value to a group selection. |
-| `parseSnapshot`        | function | Coerces an untrusted value to a `Snapshot`.      |
+| Name                   | Kind     | Summary                                                                     |
+| ---------------------- | -------- | --------------------------------------------------------------------------- |
+| `parseBlueprint`       | function | Coerces an untrusted value to a `Blueprint`.                                |
+| `parseCompilerOptions` | function | Coerces an untrusted value to `CompilerOptions`.                            |
+| `parseExtension`       | function | Coerces an extension value or a `surface:name` selection into an extension. |
+| `parseGroups`          | function | Coerces an untrusted value to a group selection.                            |
+| `parseSnapshot`        | function | Coerces an untrusted value to a `Snapshot`.                                 |
 
 #### Helpers
 
@@ -262,6 +289,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `blueprintToConfigArtifacts`        | function | Compiles every artifact in the `configs` group.                                                          |
 | `blueprintToDevDependencies`        | function | Projects a blueprint into the development dependencies its manifest declares.                            |
 | `blueprintToDocumentArtifacts`      | function | Compiles the generated workspace's root documentation.                                                   |
+| `blueprintToExports`                | function | Projects published environments and sheets into the manifest export map.                                 |
+| `blueprintToFaces`                  | function | Projects a blueprint into browser extensions restricted to occupied browser axes.                        |
 | `blueprintToGuideArtifacts`         | function | Compiles the generated workspace's guide index.                                                          |
 | `blueprintToHostArtifacts`          | function | Compiles the vendored host artifacts a workspace plans.                                                  |
 | `blueprintToMachinery`              | function | Derives the host-specific machinery a generated root Vite configuration carries.                         |
@@ -269,12 +298,15 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `blueprintToOrchestrationArtifacts` | function | Compiles the blueprint-dependent orchestration artifacts.                                                |
 | `blueprintToQuestions`              | function | Measures a blueprint against every law its own fields decide.                                            |
 | `blueprintToRootTsconfig`           | function | Compiles the root TypeScript configuration for a blueprint.                                              |
+| `blueprintToProjects`               | function | Projects a blueprint into the project labels its root Vitest configuration registers.                    |
 | `blueprintToRootVite`               | function | Compiles the root Vite and Vitest configuration for a blueprint.                                         |
 | `blueprintToScripts`                | function | Projects a blueprint into the scripts its manifest declares.                                             |
+| `blueprintToSheets`                 | function | Projects a blueprint into its validated sheet-face names in stable order.                                |
 | `blueprintToSourceArtifacts`        | function | Compiles every artifact in the `source` group.                                                           |
 | `blueprintToTestArtifacts`          | function | Compiles every artifact in the `tests` group that is not vendored from the host.                         |
 | `blueprintToWritableScripts`        | function | Projects a blueprint into the manifest scripts a region write may replace.                               |
 | `dependenciesToQuestions`           | function | Measures one declared package list against the name and range syntax it accepts.                         |
+| `insertManifestDependencies`        | function | Inserts dependencies a package manifest does not declare into the section each one names.                |
 | `overridesToQuestions`              | function | Measures a blueprint's overrides against the artifacts drafted for it.                                   |
 | `pathToCondition`                   | function | Builds one `exports` condition block for a built environment.                                            |
 | `planToFindings`                    | function | Compares a plan against a target's current content.                                                      |
@@ -508,7 +540,7 @@ option grants a write.
 | `audit`     | Nothing                                                                                    |
 | `repair`    | Each planned path the target is missing or has let drift, and the range and script regions |
 | `catalog`   | The package table, the guide mirrors, and the range region                                 |
-| `overwrite` | Everything `repair` and `catalog` write, plus deletions                                    |
+| `overwrite` | Everything `repair` and `catalog` write, deletions, and missing planned dependencies       |
 
 ### Baselines
 
@@ -549,7 +581,7 @@ a local path.
 ```text
 scaffold <verb> [options]
 
-  scaffold new <name> [--src <list>] [--app <list>] [--bin] [--deps <list>] [--offline] [--from <path>] [--target <path>] [--json]
+  scaffold new <name> [--src <list>] [--app <list>] [--bin] [--styles] [--themes] [--showcase] [--extend <list>] [--deps <list>] [--offline] [--from <path>] [--target <path>] [--json]
       scaffold a workspace
   scaffold audit [--groups <list>] [--offline] [--from <path>] [--target <path>] [--json]
       report how the target compares to its plan, writing nothing
@@ -558,12 +590,16 @@ scaffold <verb> [options]
   scaffold catalog [--all] [--from <path>] [--target <path>] [--json]
       regenerate the package table and refresh the guide mirrors
   scaffold overwrite [--groups <list>] [--dirty] [--offline] [--from <path>] [--target <path>] [--json]
-      do everything repair and catalog do, then delete what the plan does not own and re-declare the dependency ranges
+      do everything repair and catalog do, then delete what the plan does not own, re-declare the dependency ranges, and declare each planned dependency the manifest lacks
 
 options
   --src <list>                   the published library environments to build: core, browser, server
   --app <list>                   the private application environments to build: core, browser, server
   --bin                          scaffold a command-line executable at src/bin/main.ts
+  --styles                       select the base styles surface
+  --themes                       select themes; requires --styles
+  --showcase                     select the showcase; requires --app browser
+  --extend <list>                select surface:name extensions on the selected surfaces
   --deps <list>                  the @orkestrel/* packages the workspace depends on
   --groups <list>                the artifact groups to cover; every group when absent
   --all                          fetch a guide for every package the organization publishes, not the declared ones alone
@@ -599,36 +635,42 @@ answers a read and grant no verb write authority that it did not already have.
 `new --app browser` command selects the journey axis, creates its birth-owned wrapper, defines
 `appJourney` in the root configuration, and excludes the browser integration suite from
 `app:browser`. Its manifest declares `test:journey` and invokes it after `npm run test:app` in
-`test`. A selection without a browser application emits no journey axis. Creation leaves `setup`
-empty. The other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
-`setup`, `tests/guides.test.ts` for `guides`, `tests/integration.test.ts` for `integration`,
+`test`. A selection without a browser application emits no journey axis. `--styles`, `--themes`,
+`--showcase`, and `--extend` select the structural facts and the extensions, and Surfaces and extensions
+states what each emits and what each refuses. Creation leaves `setup` empty, and the remaining
+structural facts take no creation option. Add a root `tests/setup*.test.ts` proof for `setup`,
+`tests/guides.test.ts` for `guides`, `tests/integration.test.ts` for `integration`,
 `tests/conformance.test.ts` for `conformance`, `tests/setupService.ts` for `service`,
-`tests/setupGlobal.ts` for `global`, `configs/app/vite.showcase.config.ts` for `showcase`,
-`configs/app/vite.journey.config.ts` for `journey`, and `configs/agents/tsconfig.skills.json` for
-`skills`;
-reading verbs detect each exact-case file and register its fixed machinery. An explicitly supplied
+`tests/setupGlobal.ts` for `global`, `configs/app/vite.journey.config.ts` for `journey`, and
+`configs/agents/tsconfig.skills.json` for `skills`; reading verbs detect each exact-case file and
+register its fixed machinery. An explicitly supplied
 plan with `vendors` owns and protects the birth-owned `scripts/service.sh` inventory skeleton.
 Reading verbs do not infer its vendor list from edited text and cannot preserve an arbitrary present
 script on that basis.
 
-`distribution` is not on that list. Publishing at least one `src` environment is its whole
-condition, and scaffold writes `tests/distribution.test.ts` itself rather than waiting for you to.
-Limits states what makes that one proof generable when the others are not.
+`distribution` is not on that list. Publishing at least one `src` environment or one sheet face is
+its whole condition, and scaffold writes `tests/distribution.test.ts` itself rather than waiting for
+you to. Limits states what makes that one proof generable when the others are not.
 
 ### Reading a target
 
 `audit`, `repair`, `catalog`, and `overwrite` derive the blueprint from the target itself. The name
 and the declared `@orkestrel/*` packages come from `package.json`. The environment axes come from
 the directories the target actually ships, because a directory is the fact and a declaration beside
-it could disagree. The remaining facts come from exact-case files: `src/bin/main.ts` selects `bin`,
-each root `tests/setup*.test.ts` match selects `setup`, `tests/guides.test.ts` selects `guides`,
-`tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
-`conformance`, `tests/setupService.ts` selects `service`, `tests/setupGlobal.ts` selects `global`,
-`configs/app/vite.showcase.config.ts` selects `showcase`, `configs/app/vite.journey.config.ts`
-selects `journey`, and `configs/agents/tsconfig.skills.json` selects `skills`. A containing
-directory does not select the fact by itself. `tests/distribution.test.ts` selects nothing: the
-published `src` axis the target ships already decides the `distribution` project, and the file is
+it could disagree. The styles surface, its themes target, the showcase, and every extension are
+read from the markers Surfaces and extensions lists. The remaining facts come from exact-case
+files: `src/bin/main.ts` selects `bin`, each root `tests/setup*.test.ts` match selects `setup`,
+`tests/guides.test.ts` selects `guides`, `tests/integration.test.ts` selects `integration`,
+`tests/conformance.test.ts` selects `conformance`, `tests/setupService.ts` selects `service`,
+`tests/setupGlobal.ts` selects `global`, `configs/app/vite.journey.config.ts` selects `journey`,
+and `configs/agents/tsconfig.skills.json` selects `skills`. A containing directory does not select
+any of those facts by itself. `tests/distribution.test.ts` selects nothing: the published `src`
+axis and the sheet faces the target ships already decide the `distribution` project, and the file is
 planned from that.
+
+A target whose `package.json` file names the `@orkestrel/scaffold` package is this package's own
+checkout, the source the vendored host is staged from. The `repair` and `overwrite` verbs refuse it
+with the `TARGET` code before either writes, and the `audit` verb reads it like any other target.
 
 `vendors` is not reconstructed. Its artifact, `scripts/service.sh`, is a birth-owned inventory
 skeleton rather than a working installer, so edited script text is not a trustworthy declaration of
@@ -704,11 +746,19 @@ manifest and planned `vite.config.ts` conflict, and the option to exclude `confi
 A selection that excludes `configs` proceeds. An advisory alone does not make an aligned target
 drift.
 
+A gate chain also reaches a sheet or framework face through `vitest run --config <wrapper>` when
+the wrapper path belongs to that face in the planned configuration; a build invocation does not.
+
 Scaffold writes one part of the manifest rather than advising on it: the writable script region.
 `repair` and `overwrite` write every direct `test:<project>` script the blueprint computes,
 `test:probe`, and `test:bench`. A publishing workspace also receives `test:distribution`, `prepack`,
-and `prepublishOnly`. The `test` chain joins the region only as a generated predecessor: when it
-runs fewer steps than the planned chain and every step it runs is a planned step in the planned
+and `prepublishOnly`. Each sheet face adds its `check:src:<face>` and `build:src:<face>` scripts.
+Each occupied framework face adds `check:<axis>:vue` and `build:<axis>:vue`; the application face also adds `dev:vue`.
+Selected showcase pages add `showcase`, `showcase:<framework>`, `build:showcase`, and `build:showcase:<framework>`; application journeys add `test:journey:<framework>`.
+Its `test:src:<face>` script accepts, as its generated predecessor, the command that ran the project
+without building the face first, and `build:src:styles` accepts the styles-only build as the
+predecessor of the chain that builds themes after it. The `test` chain joins the region only as a
+generated predecessor: when it runs fewer steps than the planned chain and every step it runs is a planned step in the planned
 order, `repair` and `overwrite` write the planned chain in its place. That write lands only when
 every step the planned chain adds runs a script the manifest declares or the region writes. The
 `test:src` and `test:app` aggregates sit outside the region, so a chain whose planned form adds an
@@ -716,7 +766,7 @@ aggregate the manifest lacks stays with the package, and the `projects` question
 `audit` reports this chain write only through the `projects` question, so a planned step that
 registers no Vitest project, such as `npm run test:guides`, lands on the next `repair` without an
 earlier advisory. A `test` chain running any other step or order stays maintainer-owned, as do the
-`check`, `build`, `dev`, `serve`, `show`, `format`, `lint`, `clean`, and `copy` gate chains. A
+`check`, `build`, `dev`, `serve`, `format`, `lint`, `clean`, and `copy` gate chains. A
 declared value is overwritten only when it is already the value being written or is a recognized
 generated predecessor. The overwrite happens in place,
 so every byte outside the replaced ranges survives. A target's descriptions, keywords, extra
@@ -753,33 +803,49 @@ live in either section, and how current a declared range is belongs to the regis
 Dependency floors describes rather than to this question. A present section that is not an object
 produces a question instead of a crash. This question belongs to `configs` and `tests`. `audit`
 reports it only when its selection includes either group, without changing its exit semantics.
-`repair` and `overwrite` refuse before writing a selected `configs` or `tests` group. A selection
-that excludes those groups proceeds, and no verb adds the declaration for you: `package.json` is
-birth-owned, and the range and script regions are the only parts of it a verb rewrites.
+`repair` refuses before writing a selected `configs` or `tests` group, and a selection that
+excludes those groups proceeds: `package.json` is birth-owned, and `repair` rewrites only its range
+and script regions. `overwrite` declares each missing package instead, in the `devDependencies` map
+the plan assigns it, at its planned range, before the first declared key that sorts after it. A
+manifest with no `devDependencies` map gets one: `overwrite` creates it as one top-level key after
+`dependencies`, or last in the manifest object when `dependencies` is absent too, in the indentation
+of the manifest's first key. The declaration lands with the repair, before the catalog step, so a
+partial run keeps it. The JSON result names each declaration in `additions`, and the human report
+prints one `Declared "<name>": "<range>" in devDependencies. Run npm install to install it.` line
+per declaration, because the lockfile does not carry the package until the next install. A
+`devDependencies` value that is not an object, or an entry in that map whose value is not a version
+string, leaves `overwrite` no map to declare in. `overwrite` refuses that manifest before any write,
+whatever `--groups` selects, and names the section or each malformed entry. A malformed section
+refuses `repair` as well.
 
 `audit` reports a further non-blocking question, on the `setup` field.
 
-The `setup` question fires when the target carries a filled root `tests/setup*.ts` module that is
+The `setup` question fires when the target carries a filled, exporting root `tests/setup*.ts` module that is
 neither a proof itself nor one of the vendored modules every target receives, while no proof of the
 same stem covers it. A module counts as filled when its text differs from the seed this blueprint
 plans at that same path.
+The export check matches a line beginning with `export `, as the policy sweep does; a hook-only
+or augmentation-only module with no such line raises no question.
 
 The comparison reads the module and the seed trimmed, so surrounding whitespace decides nothing: a
 trailing newline is not authorship, and a module holding whitespace alone reads as empty rather than
 as filled. It is seed-relative rather than a test for emptiness, because the seeds differ by path:
-`tests/setup.ts` is seeded with the empty string and `tests/setupGlobal.ts` is seeded with a `setup`
-function body. A test for emptiness therefore raises the question against a freshly materialized
+`tests/setup.ts` is seeded with the empty string, `tests/setupGlobal.ts` with a `setup` function
+body, and a journey workspace's `tests/setupBrowser.ts` with a type augmentation and no sibling
+proof. A test for emptiness therefore raises the question against a freshly materialized journey
 workspace. Holding each module to the seed the same blueprint plans at its own path reports what a
 maintainer wrote rather than what scaffold seeded.
 
 That reading carries a release-skew limit. A seeded setup module is birth-owned, so `repair` reports
 it aligned and never rewrites it. A target keeps the seed of the release that materialized it. When
-a release moves a planned seed, scaffold raises the question on every target materialized before it,
+a release moves a planned seed, scaffold raises the question on an exporting module retained from that release,
 against a module scaffold wrote and no maintainer touched. `audit` compares each setup module only
-with the seed the installed release plans, and it retains no earlier seed bytes.
-`tests/setupGlobal.ts` is the module that can meet it, because it is the one seeded with more than
-the empty string. A maintainer meeting that question closes it by writing the proof it asks for, or
-by taking the seed the installed release plans.
+with the seed the installed release plans, and it retains no earlier seed bytes. The limit reaches an
+exporting module seeded with more than the empty string that no proof covers. Scaffold seeds
+`tests/setupGlobal.test.ts` beside `tests/setupGlobal.ts` and `tests/setupStyles.test.ts` beside
+`tests/setupStyles.ts`, so an exporting seeded module whose proof was deleted meets it.
+A maintainer meeting that question closes it by writing the
+proof it asks for, or by taking the seed the installed release plans.
 
 Coverage is read per module: `tests/<name>.ts` is covered by `tests/<name>.test.ts` and by nothing
 else, which is the pairing the vendored policy proof resolves. Writing one proof retires that module
@@ -788,7 +854,18 @@ proof that module wants. The question belongs to the `tests` group, so a scoped 
 `tests` omits it. Scaffold does not write the proof it asks for, and the question never refuses a
 write: a writing verb reports it in the terminal audit it prints, because refusing `repair` over a
 gap no write can close would block every write. Run across a fleet, the question is the list of
-packages carrying a filled setup module that no proof covers.
+packages carrying a filled, exporting setup module that no proof covers.
+
+`audit` reports a non-blocking question on the `tests` field for each planned sheet test the target
+holds that imports by a root-relative specifier. A sheet test is birth-owned, so a target born
+before the template imported the built sheet by a relative path keeps the
+`'/dist/src/<name>/index.css?raw'` import, and the content-owned `.oxlintrc.json` refuses it under
+`--deny-warnings` through `import/no-absolute-path`. The message names the file and each
+root-relative specifier beside the relative one to write: one `../` per directory between the file
+and the workspace root, so `tests/src/styles/index.test.ts` writes
+`'../../../dist/src/styles/index.css?raw'`. Scaffold never rewrites the file. The question belongs to
+the `tests` group, and `repair` and `overwrite` report it in their terminal audit without
+refusing a write.
 
 `audit` reads the instruction canon as findings rather than as a question. Each `CANON_PATHS` member
 the target holds enters the comparison, by file where the member is a directory, and a path the plan
@@ -832,12 +909,14 @@ standard error, so a piped value is never polluted.
 | `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                           |
 | `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                      |
 | `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run |
-| `overwrite` | The `catalog` value plus `audit` and top-level `releases` from its version read; `note` explains a partial run                                                |
+| `overwrite` | The `catalog` value plus `audit`, top-level `releases` from its version read, and `additions`; `note` explains a partial run                                  |
 
 The `membership` entity is present only when the catalog read completes. Its `entries` holds the
 package table, `dropped` names packages the preceding table carried that the registry no longer
 lists, and `releases` measures declared fleet ranges against the catalog read. The `overwrite`
-result also retains top-level `releases` from its separate version read, including foreign tools.
+result also retains top-level `releases` from its separate version read, including foreign tools,
+and `additions`, the `DependencyPinSet` of planned dependencies it declared, empty when the
+manifest lacked none.
 An absent `membership` identifies an incomplete catalog read; `note` explains the cause.
 
 The following JSON excerpt shows the membership evidence in a completed catalog result:
@@ -929,31 +1008,36 @@ because the shape is chosen once and read afterwards: `new` refuses the advisory
 `repair` need the plan to describe and restore a target that already has that shape. A library
 caller creating a workspace holds the same refusal, and the Compile section states it.
 
-`bin`, `setup`, `guides`, `integration`, `conformance`, `service`, `vendors`, `global`, `showcase`,
-`journey`, and `skills` are structural facts. Reading verbs set each only when the workspace physically ships the directory
-or exact-case file that defines it, never because of the workspace's name and never because a
-sibling fact is set.
+`bin`, `setup`, `guides`, `integration`, `conformance`, `service`, `vendors`, `global`, `styles`,
+`themes`, `showcase`, `journey`, and `skills` are structural facts, and `extensions` lists the
+extension faces. Reading verbs set each fact and list each extension only when the workspace
+physically ships the directory or exact-case file that defines it, never because of the workspace's
+name and never because a sibling fact is set.
 
 The `setup` member is a `readonly SetupRuntime[]`, empty by default. Target inference adds
-`browser` for the exact-case `tests/setupBrowser.test.ts` proof and `node` for every other root
-`tests/setup*.test.ts` match, including `tests/setup.test.ts` and `tests/setupServer.test.ts`.
-A nested or wrong-case match adds no runtime.
+`browser` for the exact-case `tests/setupBrowser.test.ts` and `tests/setupStyles.test.ts` proofs and
+`node` for every other root `tests/setup*.test.ts` match, including `tests/setup.test.ts` and
+`tests/setupServer.test.ts`. A nested or wrong-case match adds no runtime.
 
 The `node` runtime registers the Node `setup` project, which loads `tests/setup.ts` and excludes
-`tests/setupBrowser.test.ts`. The `browser` runtime registers `setup:browser`, which collects
-only that browser proof and loads `tests/setup.ts` and `tests/setupBrowser.ts` through Playwright
-Chromium. The generated manifest emits the selected `test:setup` and `test:setup:browser` scripts
-and invokes them from `test`. Scaffold generates no setup proof for an empty setup seed.
+both browser proofs. The `browser` runtime registers `setup:browser`, which collects only the two
+browser proofs and loads `tests/setup.ts` and `tests/setupBrowser.ts` through Playwright Chromium. A
+sheet face registers `setup:browser` as well, because scaffold plans `tests/setupStyles.test.ts`
+beside every sheet face. The generated manifest emits the selected `test:setup` and
+`test:setup:browser` scripts and invokes them from `test`. Scaffold generates no setup proof for an
+empty setup seed.
 
 A `global` workspace gives `setup:browser` the `tests/setupGlobal.ts` module as its Vitest global
 setup, as it gives `src:browser` and `integration`. A browser proof cannot start a Node fixture from
 inside the browser, so it reads what that module provides through the Vitest `inject` function.
 The Node `setup` project takes no global setup.
 
-When the `app` axis selects `browser`, the browser setup project also applies the Vue
-single-file-component transform. Your `tests/setupBrowser.ts` module and its paired proof can
-import and render application Vue components. A browser setup proof without `app/browser` keeps
-the non-Vue pipeline; selecting `src/browser` alone adds no Vue plugin or dependency.
+The browser setup project applies the Vue single-file-component transform only when the workspace
+carries the `vue` browser extension on an axis whose selection includes `browser`, and then adds
+`vue` to its `optimizeDeps.include`, so your `tests/setupBrowser.ts` module and its paired proof
+can import and render the extension's components. A browser application without that
+extension keeps the non-Vue pipeline, and a `src/browser` selection adds no Vue plugin or
+dependency.
 
 A structural fact is read when a verb runs, not when the file appears. Writing
 `tests/integration.test.ts` into a workspace sets the fact, but the root configuration on disk was
@@ -971,8 +1055,9 @@ direct script, regenerates the root configuration, and registers the project. Ov
 predecessor `test` chain, write the file and run `repair`. `audit` reports whichever piece is still
 outstanding at each step.
 
-`distribution` is not a field at all. A published `src` environment is its whole condition, read
-from the `src` axis the blueprint already carries. The proof packs and installs the published
+`distribution` is not a field at all. A published `src` environment or a sheet face is its whole
+condition, read from the `src` axis and the styles surface the blueprint already carries. The proof
+packs and installs the published
 artifact, so a workspace publishing none has nothing for it to read and gets no project, no
 `test:distribution` script, and no gate entry. A workspace publishing any gets the project, the
 script, the `prepublishOnly` entry, and `tests/distribution.test.ts` itself. Limits states why this
@@ -1003,9 +1088,9 @@ that field so the caller who set it learns it emitted nothing.
 The library's `journey` flag defaults to `false`; `new` sets it when its `app` selection includes
 `browser`. Reading verbs infer it from the wrapper's presence. The flag requires a browser application. Without that
 application, it emits no journey configuration or script and raises a non-blocking `journey`
-question. With that application, the content-owned root configuration defines
-`appJourney(variant, variants)` and excludes `tests/app/browser/integration.test.ts` from the
-ordinary `app:browser` project.
+question. With that application, the content-owned root configuration defines the `appJourney`
+factory and excludes `tests/app/browser/integration.test.ts` from the ordinary `app:browser`
+project. Surfaces and extensions states the journey of each further application mode.
 
 Edit the variant list in `configs/app/vite.journey.config.ts`. This wrapper is birth-owned:
 scaffold creates it when absent and preserves your edits during `repair`. It imports
@@ -1014,7 +1099,8 @@ at 1280 × 800 and `compact` at 390 × 844 without a theme. Rename and extend th
 your application; apply themes through the application's interface in your tests.
 
 The wrapper registers `journey:<name>` for each variant through the root factory. Each project
-collects the browser integration suite alone, sets the variant viewport, and provides `variant`
+collects the integration suite of the application the Vite mode selects, sets the variant
+viewport, and provides `variant`
 as its name, `variants` as the declared list, and `capture` as a boolean. The root configuration
 reads `process.env.CAPTURE === '1'` for that boolean. The generated `test:journey` script runs
 `vitest run --config configs/app/vite.journey.config.ts --no-cache --reporter=dot`, and the generated
@@ -1027,6 +1113,278 @@ block states the condition that reopens engine selection, and is that condition'
 `createBlueprint` enforces shape only. Whether the name is a name, the version a version, and the
 axis combination one this package can generate are the gate's laws, and the gate answers them with
 questions. A blueprint the gate will refuse is still constructible, so one law lives in one place.
+
+## Surfaces and extensions
+
+A surface is a part of a workspace that an extension extends, and `Surface` names the two the
+generator plans. The browser surface is the `browser` environment on the `src` and `app` axes,
+together with the journey and the showcase of the browser application. The styles surface is the
+base sheet face at `src/styles`, together with its optional themes target at `src/styles/themes`.
+An extension adds one face to one surface, and `Blueprint.extensions` lists every extension a
+workspace carries:
+
+| Surface   | Extension    | Face                                                         |
+| --------- | ------------ | ------------------------------------------------------------ |
+| `browser` | `vue`        | `src/vue` on the `src` axis, and `app/vue` on the `app` axis |
+| `styles`  | a sheet name | `src/<name>`, a named sheet face beside `src/styles`         |
+
+`BrowserExtension.axes` lists the axes a browser extension physically occupies, so a target holding
+`app/vue` and no `src/vue` carries `axes: ['app']`. `FRAMEWORKS` holds `vue` alone. A
+`StylesExtension` name passes `isSheetName`: it matches `NAME_PATTERN` and is none of the
+`RESERVED_SHEET_NAMES` values, which are `core`, `browser`, `server`, `bin`, `styles`, `themes`, and
+`vue`.
+
+`parseExtension` reads one `surface:name` entry, and `isSurface` decides whether its surface is
+one the generator plans, so `styles:print` parses and `themes:print` does not. Browser text carries
+empty axes, because the creating command supplies the browser axes it selected:
+
+```ts
+import { parseExtension } from '@orkestrel/scaffold'
+
+parseExtension('browser:vue') // { surface: 'browser', name: 'vue', axes: [] }
+parseExtension('styles:print') // { surface: 'styles', name: 'print' }
+parseExtension('styles:themes') // undefined
+parseExtension('browser:react') // undefined
+```
+
+### Select at creation
+
+`new` selects each surface and each extension with its own option, as the following command shows:
+
+```sh
+npx @orkestrel/scaffold new paper --src core,browser --app core,browser --styles --themes --showcase --extend browser:vue,styles:print
+```
+
+Each option selects one part:
+
+- `--styles` selects the styles surface, and `--themes` selects its themes target.
+- `--showcase` selects the showcase of the browser application.
+- `--app browser` selects the journey, and no option selects it alone.
+- `--extend` takes one comma-separated list of `surface:name` entries. A `browser:vue` entry
+  occupies every axis whose selection includes `browser`, so the preceding command plans both
+  `src/vue` and `app/vue`.
+
+`new` refuses each of the following command lines with exit code `2` before it writes a file:
+
+| Command line                                       | Refused because                                      |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| `--themes` without `--styles`                      | the themes target belongs to the styles surface      |
+| `--showcase` without `--app browser`               | the showcase projects the browser application        |
+| `--extend styles:print` without `--styles`         | a named sheet extends the styles surface             |
+| `--extend browser:vue` with no `browser` selection | a browser extension occupies a selected browser axis |
+| `--extend browser:react`                           | `vue` is the one supported framework                 |
+| `--extend styles:themes`                           | `themes` is a reserved sheet name                    |
+| `--extend browser:vue,browser:vue`                 | an entry repeats                                     |
+| `--extend browser:vue --extend styles:print`       | `--extend` takes one list                            |
+| `--surfaces browser`                               | `--surfaces` is not an option                        |
+
+A library caller can declare an extension the workspace does not place. `blueprintToQuestions`
+raises one `extensions` question for each such entry, with the following messages:
+
+- A repeated `surface:name` entry blocks the compile: `styles:print is declared more than once on extensions.`
+- A browser extension with empty `axes` raises the non-blocking `browser:vue occupies no axis.`
+- A browser extension on an axis whose selection lacks `browser` raises the non-blocking `browser:vue occupies app, whose selection lacks browser.`
+- A styles extension without the styles surface raises the non-blocking `styles:print extends a styles surface this workspace does not declare.`
+
+A browser extension that occupies no axis whose selection includes `browser` adds no framework
+dependency and no framework machinery.
+
+### Read the markers
+
+Every reading verb derives the structural facts and the extensions from the tree on each run, and
+no selection is stored anywhere. Each fact and each extension has its own marker:
+
+| Fact or extension  | Marker                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `styles`           | The exact-case `STYLES_ENTRY_PATH` file, `src/styles/index.scss`                            |
+| `themes`           | The exact-case `THEMES_BARREL_PATH` and `THEMES_ENTRY_PATH` files under `src/styles/themes` |
+| `showcase`         | The exact-case `configs/app/vite.showcase.config.ts` wrapper, or a `showcase` directory     |
+| `journey`          | The exact-case `configs/app/vite.journey.config.ts` wrapper                                 |
+| `vue`              | A `src/vue` or `app/vue` directory, and `axes` lists each one present                       |
+| A styles extension | A direct `src/<name>` directory holding the exact-case `index.scss` and `sheet.ts` files    |
+
+A reserved directory name is skipped, so a `src/core` directory holding both sheet files reads as no
+extension. The styles extensions follow the browser extensions, sorted by code unit. A directory
+holding both sheet files under a name `isSheetName` refuses, and two such directories whose names
+differ only by case, refuse the target with a `TARGET` error. A face missing one of its markers
+reads as absent, and Limits states what that costs.
+
+### What the styles surface emits
+
+The styles surface and each styles extension are sheet faces, and every sheet face receives the
+same seed. In the following table, `<face>` is `styles` or the extension's name:
+
+| Path                                                                                | Ownership  |
+| ----------------------------------------------------------------------------------- | ---------- |
+| `src/<face>/index.scss`, `_tokens.scss`, `_mixins.scss`, `sheet.ts`, and `index.ts` | `birth`    |
+| `_index.scss` in each of `src/<face>/elements`, `components`, and `utilities`       | `birth`    |
+| `src/styles/themes/index.scss`, `_default.scss`, and `sheet.ts`                     | `birth`    |
+| `tests/src/<face>/index.test.ts` and `tests/src/styles/themes/index.test.ts`        | `birth`    |
+| `tests/setupStyles.ts` and `tests/setupStyles.test.ts`                              | `birth`    |
+| `configs/src/vite.<face>.config.ts` and `configs/src/tsconfig.<face>.json`          | `content`  |
+| `configs/src/vite.themes.config.ts`                                                 | `content`  |
+| `tests/distribution.test.ts`                                                        | `presence` |
+
+`sheet.ts` imports `./index.scss` and nothing else, and `index.ts` star-exports `./sheet.js`.
+`index.scss` loads `tokens` and then the `elements`, `components`, and `utilities` folder barrels
+with `@use`, and each `_index.scss` folder barrel starts empty. `_tokens.scss` holds the
+`@layer theme, reset, base, elements, components, utilities;` order statement. The themes barrel
+loads `../tokens` and then `_default.scss` with `@use`, so its first emitted rule is the order statement. The
+themes rows plan only with `themes`, and the themes target takes no TypeScript wrapper of its own.
+
+Every sheet face publishes. The manifest exports `./<face>` as the compiled `index.css` and
+`./<face>/scss` as the authored `index.scss`, and themes adds `./styles/themes` and
+`./styles/themes/scss`. `files` packs the SCSS sources and leaves out each face's JavaScript build
+stub, and `sideEffects` names every CSS and SCSS file. A styles-only workspace publishes those
+subpaths and declares no `main`, `module`, or `types` field:
+
+```ts
+import { blueprintToExports, createBlueprint } from '@orkestrel/scaffold'
+
+const exports = blueprintToExports(createBlueprint('paper', { styles: true, themes: true }))
+
+Object.keys(exports) // ['./styles', './styles/scss', './styles/themes', './styles/themes/scss', './package.json']
+```
+
+Each sheet face adds its `check:src:<face>`, `build:src:<face>`, and `test:src:<face>` scripts, and
+`test:src:<face>` builds the face before it runs the face's project. The face's
+`tests/src/<face>/index.test.ts` imports the built `dist/src/<face>/index.css` with `?raw` by a
+path relative to the test file. With themes, `build:src:styles`
+builds the themes target after the base face. The root configuration registers each face's project
+by its wrapper, and the wrapper composes it through the root `sheetProject` factory, which runs it
+in Playwright Chromium with `isolate: false` and loads `tests/setup.ts`, `tests/setupBrowser.ts`,
+and `tests/setupStyles.ts`. The manifest declares `sass` from `STYLES_DEV_DEPENDENCIES` beside the
+Playwright pair, and the root `tsconfig.json` aliases `@src/<face>` to the face's `index.ts`.
+
+### The browser surface
+
+The base browser application is framework-free. A browser application without the `vue` extension
+declares no Vue package and loads no Vue plugin, and its `app/browser/main.ts` seed renders the
+workspace name as a level-1 heading. The `vue` extension adds the `FRAMEWORK_MATRIX.vue`
+development dependencies, `@vitejs/plugin-vue`, `vue`, and `vue-tsc`, while it occupies an axis
+whose selection includes `browser`.
+
+The `vue` extension gives each axis it occupies a face of its own:
+
+- On the `src` axis it adds the published `src/vue` face: a barrel holding one comment line and no
+  export, the `tests/src/vue/index.test.ts` entry proof, the content-owned
+  `configs/src/vite.vue.config.ts` and `configs/src/tsconfig.vue.json` wrappers, the `@src/vue`
+  alias, and the `./vue` ES export. The wrapper's declaration roll-up rewrites the core and browser
+  specifiers to their published subpaths, so the manifest keeps a `./browser` subpath beside a
+  browser root export. `check:src:vue` checks through `tsc`, `build:src:vue` builds the face, and
+  `test:src:vue` runs its project.
+- On the `app` axis it adds the `app/vue` application: an empty `index.ts`, a `main.ts` that mounts
+  `App.vue`, an `App.vue` arrival component that renders the same level-1 heading, `index.html`,
+  the `tests/app/vue/index.test.ts` entry proof, the content-owned `configs/app/vite.vue.config.ts`
+  and `configs/app/tsconfig.vue.json` wrappers, the `@app/vue` alias, `check:app:vue` through
+  `vue-tsc`, `build:app:vue`, `dev:vue`, and `test:app:vue`. While `app/vue` is occupied, the root
+  `check` script typechecks the whole tree through `vue-tsc` in place of `tsc`.
+
+The vendored `.oxlintrc.json` holds each face to the import direction `AGENTS.md` § Project model
+fixes, and the vendored `tests/config.test.ts` drives those directions through Oxlint.
+
+Every published face's build decides its externals through `resolveExternal` from the vendored
+`configs/helpers.ts`. Node builtins, `@orkestrel/*` packages, declared peers with their subpaths,
+and the sibling entries a face names stay external. The helper bundles an `@src/` or `@app/` alias
+even where it names a sibling, so the browser and server builds keep `@src/core` external ahead of
+it and name the core entry as their sibling. The `./vue` build passes `FRAMEWORK_MATRIX.vue.refused`,
+which holds `vue` and the `@vue/` scope, and the helper refuses that build with one of two messages:
+
+- An import inside the refused scope reads `The import @vue/runtime-core is refused; import from vue instead of the @vue/ implementation scope.`
+  for `@vue/runtime-core`, even where the manifest declares that package as a peer.
+- A refused package with no admitting peer reads `The import vue is refused; declare its public package in peerDependencies with peerDependenciesMeta marking it optional.`
+  for `vue`.
+
+Declare `vue` as an optional peer, and the `./vue` build leaves `vue` and its subpaths external.
+
+The showcase builds one page per application mode. The base mode reads `app/browser`, and each
+app-side browser extension adds the mode of its own name. The content-owned
+`configs/app/vite.showcase.config.ts` wrapper passes the Vite mode to the root
+`appShowcase(mode, override?)` factory, which selects the application through `resolveApplication`
+from the vendored `configs/helpers.ts`. No mode, `development`, `production`, and `test` select `browser`, the
+name of a declared application selects that application, and every other mode throws before the
+build starts.
+
+The factory builds into the root `showcase/` directory without emptying it, so one mode's build
+leaves every sibling page in place. It stamps the final inlined page through `stampPage` and names
+the page `showcase/<application>.html`. The manifest declares `showcase` and `build:showcase` for
+the base mode and `showcase:<framework>` and `build:showcase:<framework>` for each extension mode,
+and a publishing workspace rebuilds every page from `prepublishOnly` after `npm run build` and
+before `npm test`. The vendored `.prettierignore` lists `showcase/`, so formatting never rewrites a
+committed page.
+
+`stampPage` writes one `<meta name="build-id" content="DIGEST" />` line before the line that closes
+the head, where `DIGEST` is what `computeStamp` returns for the page without that line: its SHA-256
+digest in lowercase hexadecimal. Stamping a stamped page returns it unchanged. `stampPage` refuses a
+page carrying a repeated or malformed stamp, and a page whose head does not close on its own line.
+
+The journey follows the same modes. The birth-owned `configs/app/vite.journey.config.ts` wrapper
+keeps your variant list and passes the Vite mode to the root `appJourney(variant, variants, mode?)`
+factory, which selects the application through `resolveApplication` as well. Each variant project
+collects `tests/app/<application>/integration.test.ts` alone, sets the variant viewport, and
+provides `variant`, `variants`, and `capture`. The manifest runs `test:journey` for the base
+application and `test:journey:<framework>`, the same command with `--mode <framework>`, for each
+app-side browser extension, after `npm run test:app` in `test`.
+
+Scaffold seeds one birth-owned arrival journey per application at
+`tests/app/<application>/integration.test.ts`. The base journey imports `app/browser/main.ts`, and
+the Vue journey mounts `App.vue`. Each resolves the level-1 heading by its role and the workspace
+name, then proves the Journey, Refusal, and Matrix families the `orkestrel-journey` skill names,
+and proves Capture as well when `CAPTURE=1` sets the `capture` value. The seeded wrapper declares
+two variants, which is what makes the journey owe Matrix. A journey workspace's
+`tests/setupBrowser.ts` seed carries the `ProvidedContext` augmentation that types the three
+provided values.
+
+### Vendored files and their refresh
+
+The configuration a surface reaches is compiled or vendored, and no package-owned file sits beside
+it. `tsconfig.json`, `vite.config.ts`, every wrapper under `configs/src`, and
+`configs/app/vite.showcase.config.ts` are content-owned template artifacts, so `repair` restores a
+deleted one and replaces a stale one. `configs/app/vite.journey.config.ts` is birth-owned and keeps
+your variant list. `configs/helpers.ts`, `.oxlintrc.json`, `.prettierignore`, and
+`tests/config.test.ts` are `HOST_PATHS` members: hydration claims their bytes, so the next
+release's `repair` refreshes them, and `overwrite` adds deletions rather than a forced refresh.
+Ownership and drift states the hydration.
+
+The vendored `tests/config.test.ts` proves those files in each target that holds them. It
+enumerates the sheet faces and the framework faces from the target's tree rather than from the
+emitted wrappers, requires a non-empty population only where a marker exists, loads every selected
+wrapper, and pairs each behaviour with a mutation control in a scratch copy: a deleted wrapper, a
+removed `tests/setupStyles.ts` entry, a reversed themes build order, a disabled Vue import
+restriction, and disabled declaration rewrites each fail it. Scaffold's own release gate adds a
+scratch adopter: `tests/distribution.test.ts` generates the complete selection through the packed
+executable, installs it, runs its checks, builds, projects, journey modes, showcase builds, and CSS
+export consumption, and proves that `repair` restores a deleted wrapper byte for byte and that
+`audit` reports a stale one.
+
+### The migration guard
+
+Vue code belongs to the `vue` extension's faces. `repair` and `overwrite` refuse a target whose
+`app/browser` directory holds a `.vue` file with a `TARGET` error, before either writes, and the
+message names the move:
+`Move Vue components from app/browser to app/vue before regenerating this workspace.` Move the
+components to `app/vue`, then run `repair`. An `audit` that covers every group reports the same
+sentence as a non-blocking `extensions` question and keeps the exit code its findings decide, so an
+otherwise aligned target exits `0`. An `audit` scoped by `--groups` omits the question. Limits
+names the fleet targets that meet the refusal.
+
+### Root setup mirror
+
+Scaffold plans each setup seed that declares an export beside its sibling proof, so the module and
+its proof arrive together under the mirror `.claude/rules/tests.md` states:
+
+- `tests/setupStyles.ts` exports the CSSOM instruments every sheet proof reads and arrives with
+  `tests/setupStyles.test.ts`. The emitted sheet proofs import `adoptSheet` and `readLayerNames`
+  from that module, and the sibling proof drives both against sheets it builds from text.
+- `tests/setupGlobal.ts` exports the Vitest global `setup` function and arrives with
+  `tests/setupGlobal.test.ts`, which imports `setup` and runs in the Node `setup` project that
+  `test:setup` invokes from `test`.
+
+A journey workspace's `tests/setupBrowser.ts` seed declares no top-level export, so it arrives
+without a proof. The vendored policy sweep in `tests/setupPolicy.ts` reads the same mirror in both
+directions: a root `tests/setup<Name>.test.ts` without its `tests/setup<Name>.ts` module fails
+`test:policy`, as does a root module that declares an export with neither its sibling proof nor an
+import from `tests/setup.test.ts`. A module `HOST_PATHS` vendors sits outside that population.
 
 ## Compile
 
@@ -1101,7 +1459,7 @@ order is the order a plan lists its artifacts in.
 | --------------- | ------------------------------------------------------------------------------------------------- |
 | `manifest`      | `package.json`                                                                                    |
 | `configs`       | The root and per-target build configuration, and the root dotfiles                                |
-| `source`        | The selected environment barrels and entries                                                      |
+| `source`        | The selected environment barrels and entries, and each sheet face's seed                          |
 | `tests`         | The shared setup modules, the entry tests, and the policy sweep                                   |
 | `guides`        | The guide index and the vendored guide mirrors                                                    |
 | `docs`          | `README.md` beside the `AGENTS.md` pointer                                                        |
@@ -1174,9 +1532,10 @@ aligned whether it is present or absent, so it neither restores missing bytes no
 bytes.
 
 You own `tests/setup.ts`, the selected `tests/setupBrowser.ts`, `tests/setupServer.ts`,
-`tests/setupService.ts`, and `tests/setupGlobal.ts` modules, each root `tests/setup*.test.ts` proof,
-the selected environment entry tests under `tests/src` and `tests/app`, the
-`tests/src/bin/main.test.ts` file, and the `tests/integration.test.ts` seed. Scaffold writes those
+`tests/setupService.ts`, `tests/setupStyles.ts`, and `tests/setupGlobal.ts` modules, each root
+`tests/setup*.test.ts` proof, the selected environment and sheet-face entry tests under `tests/src`
+and `tests/app`, the `tests/src/bin/main.test.ts` file, and the `tests/integration.test.ts` seed.
+Every sheet face's seed under `src` is yours on the same terms. Scaffold writes those
 planned files only during materialize and leaves later edits or deletions alone. You also own the
 `tests/guides.test.ts`, `tests/conformance.test.ts`, and `tests/service/**/*.test.ts` proof files,
 each of which selects its project by being written. Scaffold content-owns `tests/setupPolicy.ts`,
@@ -1186,7 +1545,10 @@ their bytes drift or the files are missing.
 `tests/policy.test.ts` proves the path- and text-shaped laws, and the vendored oxlint plugin
 `configs/policy.ts` carries the syntax-shaped ones: `policy/no-malformed-summary` reads the doc
 block preceding each export, and `policy/no-banned-term` reads every comment for a term
-`.claude/rules/writing.md` § Substitutions bans unconditionally. The prose sweep in
+`.claude/rules/writing.md` § Substitutions bans unconditionally. `policy/no-nested-functions`
+enforces the nested-function law of `.claude/rules/architecture.md` § Functions and orchestration,
+its callback admission included: an event map passed as an option from inside a function body
+passes the rule, and a function bound to a local name fails it. The prose sweep in
 `tests/setupPolicy.ts` reads every authored Markdown file for the same terms through the
 `POLICY_BANNED_TERMS` denylist the rule and the sweep share, and `tests/policy.test.ts` proves that
 denylist against the table wherever the workspace authors it. The sweep skips a top-level guide the
@@ -1433,7 +1795,9 @@ not install are seeds — `@vitejs/plugin-vue`, `vue`, `vue-tsc`, `vite-plugin-s
 application-server fleet packages — and each carries the newest triple its supported major served
 when it was written.
 [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) names that seeded set, so a
-row entering or leaving the manifest moves a test rather than passing unnoticed.
+row entering or leaving the manifest moves a test rather than passing unnoticed. `sass`, the one row
+of `STYLES_DEV_DEPENDENCIES`, is a seed as well: it carries the `^1.105.1` range the
+`@orkestrel/veneer` checkout declared on 2026-09-30, and that test names it in the seeded set.
 
 A newer major is never crossed for you. `audit` reports one as a non-blocking `dependencies`
 question, and a person decides whether the generated toolchain supports it. Inside the declared
@@ -1703,8 +2067,14 @@ read or write that file.
 
 ## Generated workspace
 
-A workspace's file set is a function of its axes plus its structural facts. Nothing is fixed
-except the manifest.
+The generated factories name unnamed browser instances after merging the caller's override, using
+the merged project label and browser. An override setting the label to `widgets` produces
+`widgets (chromium)`, including for an instance added by the override. Explicit instance names stay
+unchanged. Vue and journey factories discard inherited instance names before applying their own
+labels. Vitest reports the same names when a wrapper runs alone and when the root registers it.
+
+A workspace's file set is a function of its axes, its structural facts, and its extensions.
+Nothing is fixed except the manifest.
 
 - One computed artifact: `package.json`, with the entry points, `exports` map, scripts, and
   development dependencies its selection implies. In publishing workspaces, the emitted `prepack`
@@ -1720,7 +2090,8 @@ except the manifest.
   `dist/`, and `npm run check` would wait on `npm run build`. Every subpath is written before the
   bare specifier, because `vite.config.ts` derives its `alias` record from these entries in order and
   a bare specifier also matches its own subpaths. An `app` environment publishes nothing and maps no
-  such entry.
+  such entry. Browser and Vue scoped configurations exclude Node globals. Browser setup helpers
+  read CDP sessions as `unknown` and guard the members they use.
 - One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either
   environment axis or in its setup runtime list.
   It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
@@ -1739,9 +2110,16 @@ except the manifest.
   integration selection also emits a birth-owned `tests/integration.test.ts` seed that imports each
   selected public barrel and records its initial empty exports for the consumer to replace with an
   observable cross-environment flow.
+- One set of template artifacts per sheet face, and one for the themes target: the birth-owned
+  seed, the content-owned wrappers, and the birth-owned entry proof, beside the birth-owned
+  `tests/setupStyles.ts` module and its proof. Surfaces and extensions lists each path.
+- One set of template artifacts per axis the `vue` extension occupies, and one birth-owned arrival
+  journey per application of a journey workspace. Surfaces and extensions lists each face.
 - One template artifact, `tests/distribution.test.ts`, for a workspace publishing any `src`
-  environment. It is the packed-package proof, and it is claimed by presence rather than birth, so a
-  workspace that replaces it keeps its replacement. A published browser environment adds the
+  environment or sheet face. It is the packed-package proof, and it is claimed by presence rather
+  than birth, so a workspace that replaces it keeps its replacement. The suite stages its consumer
+  during setup; listing the project creates no distribution staging directory. A published browser environment
+  adds the
   real-browser stage to it: the stage bundles the installed package with the workspace's own
   `configs/browsers.ts` resolution, serves the bundle over a loopback server, and drives it in
   Playwright Chromium.
@@ -1962,7 +2340,12 @@ the Surface tables match the core and server barrels in each direction, the meth
 behavioral declarations, relative links resolve, and named imports in TypeScript fences resolve. It
 does not resolve arbitrary backticked prose spans or typecheck a whole fence. The same suite keeps
 the command reference aligned with the executable and executes the transcribed pure examples for
-blueprint defaults, compile refusal, and error-code narrowing. Other trailing comments remain guide
+blueprint defaults, compile refusal, error-code narrowing, extension parsing, and the styles-only
+export map. It also drives the marker, creation, advisory, styles-surface, Vue-face, showcase,
+stamp, journey, setup-seed, external-resolution, and migration-guard claims of Surfaces and
+extensions through the compilers, the vendored `configs/helpers.ts`, scratch trees, and the
+executable. The page stamp is driven on page text, so no showcase build runs there; the scratch
+adopter in `tests/distribution.test.ts` runs the builds. Other trailing comments remain guide
 claims rather than build answers. The verdicts that are measured are the ones a consumer hovers:
 [`tests/distribution.test.ts`](../tests/distribution.test.ts) drives every `@example` the built
 declarations print against the installed package, scores each verdict it can read as a value, and
@@ -2011,10 +2394,18 @@ filename that legally contains a backslash — `weird\..\name` — is therefore 
 segments rather than admitted as one name. That is one separator law with a conservative side, not a
 host-dependent second one.
 
-**Scaffold emits no styles axis.** `SRC_MATRIX` is exactly `core`, `browser`, and `server`, and
-`Blueprint` carries no styles field. A workspace that needs `src/styles/` adds the directory, its
-configuration, and its Vitest project by hand. `.claude/rules/workspace.md` describes styles as an
-environment because the fleet has one; scaffold does not generate it.
+**A face missing one of its markers reads as absent.** Derivation reads a sheet face only from its
+complete marker set: `src/styles/index.scss` for the base face, both themes files for the themes
+target, and both `index.scss` and `sheet.ts` for a styles extension. A face that lost one of them
+reads as no face at all, so the plan carries none of its artifacts, `repair` restores none of them,
+and the regenerated root configuration registers no project for it. Restore the missing marker by
+hand, then run `repair`.
+
+**A fleet target holding Vue code under `app/browser` cannot repair.** On 2026-09-30 the
+`elements`, `mailbox`, `roughnotes`, and `supervisor` checkouts each held `.vue` files under
+`app/browser`, read by a recursive count in each local checkout. The migration guard refuses
+`repair` and `overwrite` in each of them until its components move to `app/vue`, so each moves them
+in its own change before it adopts the release that carries the guard.
 
 **No host path is normalized before it is guarded.** `isFilesystemPath` refuses an empty segment, so
 `packages//router` is off contract. A trailing separator does not produce one: it terminates a
@@ -2033,7 +2424,10 @@ implementation that conforms to it, then export both from the barrel — the ord
 is what separates them, and it is the whole rule. Generating a file is not the same as writing one:
 scaffold also writes `tests/policy.test.ts` and `tests/config.test.ts` into a target, byte for byte
 from the shared file set, and the distribution proof is the one it derives from the workspace it is
-writing into.
+writing into. A seed is not generation either: scaffold writes `tests/setupStyles.test.ts`,
+`tests/setupGlobal.test.ts`, and each arrival journey at creation, as birth-owned template bytes
+that prove the modules and applications it seeds beside them. After creation those files are the
+workspace's, so no verb compares or restores them.
 
 A distribution proof's every assertion derives from the artifact the workspace installs: the
 `exports` map the packed tarball declares, the built declarations beside it, and the module objects
@@ -2041,7 +2435,7 @@ a Node import, a CommonJS require, and a real browser hand back from that instal
 there has to be named, so one generated file measures every publishing workspace, and it stays true
 as that workspace's published surface moves.
 
-A guide, conformance, live-service, or setup proof asserts something scaffold cannot read: the API a
+A guide, conformance, live-service, or authored setup proof asserts something scaffold cannot read: the API a
 guide fence claims, the official runner a conformance check measures against, the service a live
 proof drives, and what a setup module does. That subject is what no generated file can reach, and
 the claim here is about the subject rather than about every property those files have. A structural
@@ -2049,17 +2443,16 @@ property of the same files can be derivable — whether each root `tests/setup*.
 reachable from the root configuration is one — and a file asserting it would still leave the
 module's behavior unmeasured. A generated file there would read as a proof while measuring nothing,
 which is worse than an absent one. So the file a consumer writes is what selects each of those
-projects, and `tests/distribution.test.ts` is the one proof scaffold generates for you.
+projects. Scaffold also seeds proofs for its own setup modules, as Root setup mirror describes.
 
 Registration follows the same split. Scaffold registers `conformance` and `service` when their
 structural facts are set, and registers `distribution` whenever the workspace publishes at least one
-`src` environment. In a publishing workspace, `distribution` and `service` run from `prepublishOnly`
+`src` environment or sheet face. In a publishing workspace, `distribution` and `service` run from `prepublishOnly`
 and `conformance` stays in `test`. In a `private: true` workspace, `distribution` is absent,
-`service` runs from `test`, and there is no `prepublishOnly` at all. One gap the project set cannot
-show, `audit` reports directly: a filled `tests/setup*.ts` module that no `tests/setup*.test.ts`
-proof covers raises the non-blocking `setup` question, which names the modules and the proof to add.
-Scaffold generates nothing there either, because what that proof asserts is those modules' own
-behavior, which only the workspace that wrote them can state.
+`service` runs from `test`, and there is no `prepublishOnly` at all. The `policy` project reports an exporting root setup module that lacks its sibling proof or an import from `tests/setup.test.ts`.
+Separately, a filled, exporting `tests/setup*.ts` module that no `tests/setup*.test.ts`
+proof covers raises the non-blocking `setup` question in `audit`, which names the modules and the proof to add.
+For setup modules the workspace authors, the workspace supplies the behavior proof; the setup modules scaffold seeds arrive with their sibling proofs.
 
 The generated proof partitions the installed `exports` map rather than sampling it. Every published
 subpath lands in exactly one of driven, undeclared, or excluded, and a totality assertion holds that
@@ -2178,7 +2571,8 @@ The generated distribution proof takes its release contract from the outside. Th
 The project factories the root configuration registers receive the invocation record, and each of
 their projects runs in the invocation's mode. Vitest runs a project whose factory returns no mode in
 Vitest's own `test` mode, where the proof skips. A journey project is such a project: its
-birth-owned wrapper drops the record, so it runs in `test` whatever mode the run names.
+birth-owned wrapper reads the run's mode only to select the application, and the factory it hands
+each project takes no record, so the project runs in `test` whatever mode the run names.
 An ordinary local run skips that case, because a developer offline is not a defect; a release run
 does not, because skipping there passes the publish gate without ever proving the artifact installs.
 A workspace that replaces the generated proof takes that contract with it: presence ownership leaves
@@ -2208,6 +2602,8 @@ port, so the run drives nothing external and stays in `test`.
 
 ## Tests
 
+The generated guide index lists each occupied Vue face with its source, tests, and directory entry, and each selected showcase page.
+
 - [`tests/src/core/Compiler.test.ts`](../tests/src/core/Compiler.test.ts) — the compile stages, the
   fail-closed rule, off-contract input, and teardown.
 - [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) — every projection from
@@ -2221,7 +2617,9 @@ port, so the run drives nothing external and stays in `test`.
 - [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — ownership of a snapshot
   taken from a hostile value.
 - [`tests/src/core/templates.test.ts`](../tests/src/core/templates.test.ts) — the frozen template
-  definitions.
+  definitions and generated configurations under live Vitest. The isolated `templates` project runs
+  through `test:templates` in `prepublishOnly`; its compiler and Chromium processes run apart from
+  the `src:core` project.
 - [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) — the seeded rows named
   as a set, the floor form every shared table and this manifest carry, and the emitted TypeScript
   bound.
@@ -2241,13 +2639,18 @@ port, so the run drives nothing external and stays in `test`.
   rendering, and the failure envelope.
 - [`tests/src/bin/main.test.ts`](../tests/src/bin/main.test.ts) — the process entry point.
 - [`tests/policy.test.ts`](../tests/policy.test.ts) — the path- and text-shaped policy laws:
-  mirrors, suppressions, the rule map, filenames, manifest scripts, skills, bridges, and the prose
-  sweep over every authored Markdown file. The syntax-shaped laws are the rules of the vendored
-  oxlint plugin `configs/policy.ts`, proven in `tests/config.test.ts`.
+  mirrors, the root setup mirror, suppressions, the rule map, filenames, manifest scripts, skills,
+  bridges, and the prose sweep over every authored Markdown file. The syntax-shaped laws are the
+  rules of the vendored oxlint plugin `configs/policy.ts`, proven in `tests/config.test.ts`.
 - [`tests/config.test.ts`](../tests/config.test.ts) — the root configuration's aliases, projects,
   and outputs, every plugin rule against a case pair drawn from inside and outside its membership
-  boundary, and the declaration roll-up over a real face.
-- [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide's bijection with the barrels.
+  boundary, the declaration roll-up over a real face, and the sheet and framework faces enumerated
+  from the tree with a mutation control per behaviour.
+- [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the packed package installed and
+  resolved through its public exports, and the scratch adopter that generates, installs, builds,
+  and repairs the complete selection.
+- [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide's bijection with the barrels, its
+  transcribed fences, and the executed behaviour behind its prose claims.
 
 ## See also
 

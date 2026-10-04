@@ -109,6 +109,7 @@
 				"policy/no-malformed-constant": "error",
 				"policy/no-misnamed-parser": "error",
 				"policy/no-misnamed-factory": "error",
+				"policy/no-misnamed-plugin": "error",
 				"policy/no-malformed-domain": "error"
 			}
 		},
@@ -133,15 +134,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/core must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -181,15 +186,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/browser must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -218,6 +227,54 @@
 			}
 		},
 		{
+			"files": ["src/vue/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:@src/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$)|(?:\\.\\./)+(?:src/)?(?:[^/.scbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$))",
+								"message": "Vue faces must not depend on sibling sheet faces"
+							},
+							{
+								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
+								"message": "imports must not use machine-specific absolute paths"
+							},
+							{
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
+								"message": "imports must not use non-Node URL schemes"
+							},
+							{
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
+								"message": "internal import paths must not contain noncanonical dot segments"
+							},
+							{
+								"regex": "^(?:(?:\\./)+\\.\\.(?:/|$)|(?:\\.\\./)+(?:\\./)+)|//",
+								"message": "relative import paths must not contain normalized traversal segments"
+							},
+							{
+								"regex": "\\\\",
+								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
+								"message": "src environments must not depend on private app modules"
+							},
+							{
+								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
+								"message": "src/vue must not depend on Node or server-only modules"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
 			"files": ["src/server/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
 				"no-restricted-imports": [
@@ -225,15 +282,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/server must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -273,15 +334,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "app/core must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -317,15 +382,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "app/browser must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -350,6 +419,50 @@
 			}
 		},
 		{
+			"files": ["app/vue/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:@(?:src|app)/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$)|(?:\\.\\./)+(?:src/|app/)?(?:[^/.sacbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|a|a[^/.p][^/.]*|ap|ap[^/.p][^/.]*|app[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$))",
+								"message": "Vue faces must not depend on sibling sheet faces"
+							},
+							{
+								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
+								"message": "imports must not use machine-specific absolute paths"
+							},
+							{
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
+								"message": "imports must not use non-Node URL schemes"
+							},
+							{
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
+								"message": "internal import paths must not contain noncanonical dot segments"
+							},
+							{
+								"regex": "^(?:(?:\\./)+\\.\\.(?:/|$)|(?:\\.\\./)+(?:\\./)+)|//",
+								"message": "relative import paths must not contain normalized traversal segments"
+							},
+							{
+								"regex": "\\\\",
+								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@app/server(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
+								"message": "app/vue must not depend on Node or server-only modules"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
 			"files": ["app/server/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
 				"no-restricted-imports": [
@@ -357,15 +470,19 @@
 					{
 						"patterns": [
 							{
+								"regex": "^(?:@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "app/server must not depend on Vue extension modules"
+							},
+							{
 								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -405,11 +522,11 @@
 								"message": "imports must not use machine-specific absolute paths"
 							},
 							{
-								"regex": "^(?!node:)[A-Za-z][A-Za-z0-9+.-]*:",
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
 								"message": "imports must not use non-Node URL schemes"
 							},
 							{
-								"regex": "(?:^|/)(?!\\.{1,2}(?:/|$))[^/]+/\\.{1,2}(?:/|$)",
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
 								"message": "internal import paths must not contain noncanonical dot segments"
 							},
 							{
@@ -433,7 +550,7 @@
 								"message": "src/bin must not depend on private app modules"
 							},
 							{
-								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@src/browser(?:[/?#]|$)|@orkestrel/[^/]+/browser(?:[/?#]|$)|(?:\\.\\./)+(?:browser|src/browser|app/browser)(?:[/?#]|$))",
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@src/(?:browser|vue)(?:[/?#]|$)|@orkestrel/[^/]+/(?:browser|vue)(?:[/?#]|$)|(?:\\.\\./)+(?:browser|vue|src/(?:browser|vue)|app/browser)(?:[/?#]|$))",
 								"message": "src/bin must not depend on browser-only modules"
 							}
 						]
@@ -446,7 +563,7 @@
 				"tests/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
 				"configs/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
 				"scripts/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
-				"*.{cjs,cts,js,mjs,mts,ts}"
+				"./*.{cjs,cts,js,mjs,mts,ts}"
 			],
 			"rules": {
 				"no-restricted-imports": [
