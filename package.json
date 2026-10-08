@@ -93,24 +93,24 @@
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.19",
-		"@orkestrel/emitter": "^0.0.11",
+		"@orkestrel/emitter": "^0.0.12",
 		"@orkestrel/indexeddb": "^0.0.14",
 		"@orkestrel/sqlite": "^0.0.14"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.3",
-		"@orkestrel/browser": "^0.0.22",
+		"@microsoft/api-extractor": "^7.59.4",
+		"@orkestrel/browser": "^0.0.27",
 		"@orkestrel/guide": "^0.0.24",
-		"@orkestrel/probe": "^0.0.19",
-		"@orkestrel/scaffold": "^0.0.90",
+		"@orkestrel/probe": "^0.0.22",
+		"@orkestrel/scaffold": "^0.0.95",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.4",
 		"@vitest/browser-playwright": "^4.1.11",
-		"oxfmt": "^0.71.0",
-		"oxlint": "^1.86.0",
-		"playwright": "^1.63.0",
+		"oxfmt": "^0.72.0",
+		"oxlint": "^1.87.0",
+		"playwright": "^1.64.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.2",
+		"vite": "^8.3.3",
 		"vitest": "^4.1.11"
 	},
 	"engines": {
