@@ -272,10 +272,17 @@ export function resolveSystemBrowser(
  * discovery and is returned exactly as given: none of those environment values is checked
  * against the filesystem, because verifying an override would defeat the override. The pinned
  * managed revision outranks anything found on the host because it is deterministic. The installed
- * pinned revision returns empty options so Playwright keeps its own default launch semantics. Only
- * a discovered system channel is verified before it is named. The platform default is unverified
+ * pinned revision returns empty options unless `PLAYWRIGHT_SCROLLBARS=classic` is set. Only a
+ * discovered system channel is verified before it is named. The platform default is unverified
  * as well and exists only as a last resort: Windows takes `msedge`, which ships with the OS and
  * never collides with a foreground Chrome.
+ *
+ * Set `PLAYWRIGHT_SCROLLBARS=classic` only for runs that measure scrollbar compensation, never
+ * for a standing gate. Every Chromium launch in that run omits Playwright's `--hide-scrollbars`
+ * default argument so classic scrollbars can take layout space in every case. An empty or unset
+ * value preserves the launch defaults; any other value throws an `Error`. Pairing `classic`
+ * with `PLAYWRIGHT_WS_ENDPOINT` throws an `Error`, even with an executable override, because the
+ * server owns the launch.
  *
  * The resolver and the gate cover Chromium alone. Reopen engine selection when another
  * Playwright engine is installed and launches on the host with a `captureFrame` reading
@@ -292,24 +299,36 @@ export function resolveBrowser(
 	environment: NodeJS.ProcessEnv,
 	root: string = BUNDLED_BROWSERS_ROOT,
 ): PlaywrightProviderOptions {
-	const executable = environment.PLAYWRIGHT_EXECUTABLE_PATH
-	if (executable !== undefined && executable.length > 0) {
-		return { launchOptions: { executablePath: executable } }
+	const scrollbars = environment.PLAYWRIGHT_SCROLLBARS
+	if (scrollbars !== undefined && scrollbars.length > 0 && scrollbars !== 'classic') {
+		throw new Error('PLAYWRIGHT_SCROLLBARS must be classic or empty')
 	}
 	const endpoint = environment.PLAYWRIGHT_WS_ENDPOINT
+	if (scrollbars === 'classic' && endpoint !== undefined && endpoint.length > 0) {
+		throw new Error('PLAYWRIGHT_SCROLLBARS=classic cannot be used with PLAYWRIGHT_WS_ENDPOINT')
+	}
+	const launch: PlaywrightProviderOptions['launchOptions'] =
+		scrollbars === 'classic' ? { ignoreDefaultArgs: ['--hide-scrollbars'] } : {}
+	const executable = environment.PLAYWRIGHT_EXECUTABLE_PATH
+	if (executable !== undefined && executable.length > 0) {
+		return { launchOptions: { executablePath: executable, ...launch } }
+	}
 	if (endpoint !== undefined && endpoint.length > 0) {
 		return { connectOptions: { wsEndpoint: endpoint } }
 	}
 	const requested = environment.PLAYWRIGHT_CHANNEL
 	if (requested !== undefined && requested.length > 0) {
-		return { launchOptions: { channel: requested } }
+		return { launchOptions: { channel: requested, ...launch } }
 	}
 	const managed = pinned === undefined ? undefined : resolveManagedBrowser(pinned)
 	if (managed !== undefined) {
-		return managed === pinned ? {} : { launchOptions: { executablePath: managed } }
+		if (managed === pinned) return scrollbars === 'classic' ? { launchOptions: launch } : {}
+		return { launchOptions: { executablePath: managed, ...launch } }
 	}
 	const bundled = resolveBundledBrowser(platform, root)
-	if (bundled !== undefined) return { launchOptions: { executablePath: bundled } }
+	if (bundled !== undefined) return { launchOptions: { executablePath: bundled, ...launch } }
 	const fallback = platform === 'win32' ? 'msedge' : 'chrome'
-	return { launchOptions: { channel: resolveSystemBrowser(platform, environment) ?? fallback } }
+	return {
+		launchOptions: { channel: resolveSystemBrowser(platform, environment) ?? fallback, ...launch },
+	}
 }

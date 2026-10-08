@@ -1,9 +1,7 @@
 # Probe
 
-> The claim prover for the `@orkestrel` line: an instrument that runs a claim's case and its
-> negative control through the workspace's own TypeScript, Oxlint, and Vitest, and returns a
-> `Verdict` carrying every issue — and a `receipt` when the case ran clean and the control broke
-> where it said it would.
+> A claim prover that checks a case and its negative control with the workspace’s TypeScript,
+> Oxlint, and Vitest, with eager lint and runtime onset and type warming before proof.
 
 A `Claim`, a `Verdict`, and a `receipt` carry the package. A `Claim` is the question: a case, a
 control that must break, and the TypeScript project both are judged under. A `Verdict` is the
@@ -47,8 +45,8 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `Project`           | interface | `{ path, digest }`                                                              | Names the TypeScript project that judged a verdict's candidate drafts.                |
 | `Verdict`           | interface | `{ id, digest, toolchain, project, reason?, case, control, elapsed, receipt? }` | Carries the full result of one claim: every stage, for both the case and its control. |
 | `ProbeEventMap`     | type      | `{ arm, prove, expire, error }`                                                 | Reports what a probe observes while it serves.                                        |
-| `ProbeOptions`      | interface | `{ on?, error?, workspace?, deadline? }`                                        | Configures a probe.                                                                   |
-| `ProbeInterface`    | interface | `{ emitter, toolchain } plus prove, destroy`                                    | Answers a claim with type, lint, and runtime evidence in one call.                    |
+| `ProbeOptions`      | interface | `{ on?, error?, workspace?, deadline?, warm? }`                                 | Configures a probe.                                                                   |
+| `ProbeInterface`    | interface | `{ emitter, toolchain } plus start, prove, destroy`                             | Answers a claim with type, lint, and runtime evidence in one call.                    |
 | `ProbeErrorCode`    | type      | `'refused' \| 'missing' \| 'malformed' \| 'destroyed' \| 'deadline'`            | Names the condition that ended a probe operation, derived from `PROBE_ERROR_CODES`.   |
 | `ProbeErrorContext` | interface | `{ stage?, path?, project?, name?, deadline?, value? }`                         | Carries the structured detail one probe failure reports beside its message.           |
 | `ProbeErrorOptions` | interface | `{ origin, code, context?, cause? }`                                            | Configures one probe failure at construction.                                         |
@@ -75,6 +73,9 @@ A `Shape` cell holds the constant's declared type.
 | `PROBE_SPECIFICATIONS` | const | `number`                    | Names the specification lifetime the runtime stage replaces its resident Vitest service at, 64 specifications.                                                                                    |
 | `RUNTIME_PLUGIN`       | const | `string`                    | Names the Vite plugin the runtime stage installs into a target workspace's Vitest configuration, `'orkestrel-runtime-overlay'`.                                                                   |
 | `TYPE_MIRROR`          | const | `string`                    | Names the workspace-relative directory the type stage keeps its workspace mirror under, `'tmp/type'`.                                                                                             |
+| `PROBE_RESTARTS`       | const | `number`                    | Bounds consecutive failed warms or idle losses before a stage's floor is spent.                                                                                                                   |
+| `PROBE_WARM`           | const | `number`                    | Bounds the default type warm at 90,000 ms, independently of active inspections.                                                                                                                   |
+| `LINT_TEARDOWN`        | const | `number`                    | Bounds lint teardown at 16,000 ms, including protocol exchanges and process termination.                                                                                                          |
 
 ### Errors
 
@@ -151,9 +152,9 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `Inspection`           | interface | `{ subject, claim }`                                | Carries one queued inspection: the case a stage reads and the claim it belongs to.               |
 | `InspectionOptions`    | interface | `{ signal }`                                        | Carries the bound a caller holds over one stage inspection.                                      |
 | `OverlayInterface`     | interface | `{ revision, paths } plus set, text, covers, clear` | Holds the candidate drafts one inspection substitutes for the files a tool would read from disk. |
-| `StageInterface`       | interface | `{ stage, progress } plus inspect, destroy`         | Inspects one case with the workspace's own tool.                                                 |
+| `StageInterface`       | interface | `{ stage, progress } plus start, inspect, destroy`  | Inspects one case with the workspace's own tool.                                                 |
 | `TypeStageInterface`   | interface | `StageInterface plus inspect, resolve`              | Inspects TypeScript source against a caller-named project and reports what that project is.      |
-| `LintStageInterface`   | interface | `StageInterface plus inspect`                       | Inspects one case under a bound the caller supplies.                                             |
+| `LintStageInterface`   | interface | `StageInterface plus { exit } plus inspect`         | Inspects one case under a bound the caller supplies.                                             |
 | `WorkspaceManifest`    | interface | `{ path, contents }`                                | Carries one parsed package manifest and the path it came from.                                   |
 | `Diagnostic`           | interface | `{ path?, range?, message }`                        | Carries one diagnostic line a compiler run reported, in this package's own coordinates.          |
 | `ProjectConfig`        | interface | `{ compilerOptions, files?, include? }`             | Carries what one TypeScript project resolved to, as the compiler itself printed it.              |
@@ -185,14 +186,14 @@ The classes, each exported from its own file, and the contract each one implemen
 [`RuntimeStage`](../src/server/stages/RuntimeStage.ts) implements `StageInterface`, and
 [`Overlay`](../src/server/Overlay.ts) implements `OverlayInterface`.
 
-| Name           | Kind  | Summary                                                                                                                                                                                                  |
-| -------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                                                                                                                               |
-| `ProbeServer`  | class | Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol stdio transport. |
-| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.                                                                                                           |
-| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                                                                                                                                  |
-| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                                                                                                                            |
-| `Overlay`      | class | Implements `OverlayInterface` over a private map from normalized absolute path to candidate text, minting at construction the `revision` a resident tool caches its answers against.                     |
+| Name           | Kind  | Summary                                                                                                                                                                                                                                                                                                                           |
+| -------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                                                                                                                                                                                                                                                        |
+| `ProbeServer`  | class | Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol stdio transport. Starting creates the probe and awaits its lint and runtime onset; type warming and the boot controls continue behind it. |
+| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.                                                                                                                                                                                                                                    |
+| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                                                                                                                                                                                                                                                           |
+| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                                                                                                                                                                                                                                                     |
+| `Overlay`      | class | Implements `OverlayInterface` over a private map from normalized absolute path to candidate text, minting at construction the `revision` a resident tool caches its answers against.                                                                                                                                              |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -210,6 +211,23 @@ the stage reports that as the `workspace` issue `The workspace configuration ser
 before the runtime overlay` rather than leaving it answered silently. `TypeStage` holds no overlay:
 it writes each draft into its mirror as a real file, so the host's own file-name comparison decides
 what a draft shadows.
+
+### Server errors
+
+The handshake failure factory comes from [errors.ts](../src/server/errors.ts).
+
+| Name                   | Kind     | Signature                         | Summary                                                                            |
+| ---------------------- | -------- | --------------------------------- | ---------------------------------------------------------------------------------- |
+| `createHandshakeError` | function | `(error: ProbeError) => MCPError` | Creates the protocol failure returned when the MCP handshake cannot arm the probe. |
+
+The factory preserves the classified cause on the protocol response.
+
+```ts
+import { createDestroyedError } from '@orkestrel/probe'
+import { createHandshakeError } from '@orkestrel/probe/server'
+
+createHandshakeError(createDestroyedError('probe server')).code // -32000
+```
 
 ### Server helpers
 
@@ -264,35 +282,42 @@ The public call-signature members of each behavioral interface, one table per in
 
 | Method    | Returns            | Summary                                                                     |
 | --------- | ------------------ | --------------------------------------------------------------------------- |
-| `prove`   | `Promise<Verdict>` | Answers one claim with every stage's evidence.                              |
+| `start`   | `Promise<void>`    | Starts every stage's floor and waits for lint and runtime to warm.          |
+| `prove`   | `Promise<Verdict>` | Answers one claim with every stage's evidence after calling `start()`.      |
 | `destroy` | `Promise<void>`    | Tears down every stage and releases the processes and the mirror they hold. |
 
 #### `StageInterface`
 
 | Method    | Returns          | Summary                                                                |
 | --------- | ---------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
 | `inspect` | `Promise<Check>` | Inspects one case.                                                     |
 | `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `RuntimeStage`
 
+The stage implements the preceding `StageInterface` contract.
+
 | Method    | Returns          | Summary                                                                |
 | --------- | ---------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
 | `inspect` | `Promise<Check>` | Inspects one case.                                                     |
 | `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `TypeStageInterface`
 
-| Method    | Returns            | Summary                                                                       |
-| --------- | ------------------ | ----------------------------------------------------------------------------- |
-| `inspect` | `Promise<Check>`   | Inspects one case, against a caller-named project where the caller names one. |
-| `resolve` | `Promise<Project>` | Resolves one project to the path and digest the stage applies for it.         |
-| `destroy` | `Promise<void>`    | Tears down the resident tool or the mirror and releases its resources.        |
+| Method    | Returns            | Summary                                                                                                           |
+| --------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`    | Begins the warm or joins the warm already begun.                                                                  |
+| `inspect` | `Promise<Check>`   | Inspects one case, against a caller-named project where the caller names one.                                     |
+| `resolve` | `Promise<Project>` | Resolves one project to the path and digest the stage applies for it. Calls `start()` before reading the project. |
+| `destroy` | `Promise<void>`    | Tears down the resident tool or the mirror and releases its resources.                                            |
 
 #### `LintStageInterface`
 
 | Method    | Returns          | Summary                                                                |
 | --------- | ---------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
 | `inspect` | `Promise<Check>` | Inspects one case, under the bound the caller supplies.                |
 | `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
 
@@ -309,8 +334,20 @@ The public call-signature members of each behavioral interface, one table per in
 
 | Method    | Returns         | Summary                                                                   |
 | --------- | --------------- | ------------------------------------------------------------------------- |
-| `start`   | `void`          | Serves the probe over this process's standard input and output.           |
+| `start`   | `Promise<void>` | Begins serving and awaits the workspace probe's lint and runtime onset.   |
 | `destroy` | `Promise<void>` | Releases the transport, the process listeners, and the probe behind them. |
+
+The server's onset promise settles after lint and runtime warm; type warming and boot controls
+continue before proof, as [Lifecycle](#lifecycle) documents. Call the onset method before serving
+in-process work.
+
+```ts
+import { Probe } from '@orkestrel/probe/server'
+
+const probe = new Probe({ workspace: process.cwd(), warm: 90_000 })
+await probe.start()
+await probe.destroy()
+```
 
 ## What a probe proves
 
@@ -472,9 +509,9 @@ together — where `instanceof` refuses a failure the other copy raised.
 
 probe borrows the target workspace's own toolchain and configuration, so a workspace missing any of
 these returns a failure the caller cannot diagnose from the verdict alone. Check them before you
-make a claim. A direct `Probe` runs its boot controls at construction. `ProbeServer` leaves discovery
-independent of the workspace toolchain and runs those controls when an admitted `prove` call
-constructs the real probe.
+make a claim. A direct `Probe` starts warming through `start()` or an admitted `prove` call.
+`ProbeServer` starts the probe during server onset; initialization waits for lint and runtime,
+and proof waits for type readiness and the boot controls. See [Lifecycle](#lifecycle) for the tests.
 
 - **A Vitest project whose name the test's path infers.** A test under `tmp/probes/` names the
   `probe` project, and a test under `tests/src/<environment>/` names `src:<environment>`. Any other
@@ -516,7 +553,7 @@ constructs the real probe.
 
 Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its
 `typescript` and `vitest` tools are optional peers; probe resolves them and `oxlint` from that
-workspace when a direct probe is constructed or a server admits a `prove` call. The `oxlint`
+workspace when a direct probe is constructed or a server begins onset. The `oxlint`
 package carries no peer range because npm also resolves the peers of an optional peer: `oxlint`
 declares an optional `vite-plus` peer, `vite-plus` 1.0.0 depends on `vitest` 5, and npm 11.19.0
 refuses that conflict with the `vitest` peer range when it installs probe into an empty project
@@ -543,12 +580,45 @@ Register that entry rather than a global install, an `npx` invocation, or the `n
 shim. The shim is a shell script on POSIX hosts and a batch file on Windows, and spawning the
 JavaScript entry with the current executable is the form that survives both.
 
-Workspace prerequisite failures from an admitted `prove` call return as an `isError: true` tool
-result. The server keeps serving discovery and later calls, and a later admitted call retries failed
-construction or workspace arming. A failure thrown before the entry creates and starts its server is
-caught, written to stderr in the form `[origin] code: message`, and exits with status 1. Probe
-construction happens only after server startup, so no public input is known to reach that pre-start
-catch and its runtime behavior remains unproved.
+In Codex, mark this server as required so a workspace refusal stops session creation and prints
+its cause. The configuration values are:
+
+```text
+[mcp_servers.probe]
+command = "node"
+args = ["node_modules/@orkestrel/probe/dist/bin/main.js"]
+cwd = "/srv/checkout"
+required = true
+```
+
+No `startup_timeout_sec` override is required by the measured onset: M-A after the warm change
+reported veneer at 7.107–7.939 s, scaffold at 3.171–4.051 s, and probe at 1.489–1.744 s, all within
+Codex's 10 s default. Those are runs 1–3 per workspace in `warm2-reading-<workspace>-<run>.json`,
+on LAPTOP-SBG38B5J, Windows, 2026-10-05; see [Cost](#cost) for the samples and host load.
+
+M-E used Codex CLI 0.159.2 and Claude Code 2.1.285 on LAPTOP-SBG38B5J, Windows 11 Home
+10.0.26300 x64, i7-10700, on 2026-10-05, against build `058a946`, with Node 24.21.0 and the tool
+versions in [Cost](#cost). Codex's refusing run with `required = true` exited 1 before an agent
+turn, reporting `required MCP servers failed to initialize: probe` and the unreadable TypeScript
+manifest cause. Its healthy run and metadata follow-up initialized at the default timeout.
+Claude Code connected and discovered `mcp__probe__prove` in both its healthy and refusing runs;
+those runs did not ask Claude to call the tool or display a tool-call refusal.
+
+The measured client commands used `codex exec --ignore-user-config --ephemeral --json` with
+the preceding server values passed through `-c`, and
+`claude -p --mcp-config tmp/onset/claude-CASE.json --strict-mcp-config` with prompts requesting
+tool names only; `CASE` selects the healthy or refusing fixture. These local stdio runs used
+the clients' existing login sessions and requested no tool execution or approval. Records are
+`tmp/onset/client-codex-{healthy,refusing,discovery}.json` and
+`tmp/onset/client-claude-{healthy,refusing}.json`, summarized in `tmp/onset/readings.md`.
+CPU snapshots were 0%, 4%, and 83% for those Codex runs and 1% and 7% for the Claude runs;
+editor services and idle tool servers remained present.
+
+An onset refusal answers `initialize` with JSON-RPC code `-32000`, the classified message, and
+`{ origin, code }` data. The bin prints one `[origin] code: message` line to stderr and retains
+exit status 1 until input ends, including after a later admitted call repairs the workspace;
+discovery remains available. Proof: “refuses initialize, keeps discovery, repairs a blocked
+workbench, and preserves exit one” in [main.test.ts](../tests/src/bin/main.test.ts).
 
 These facts decide whether a hand-written client works, and each fails silently when it is wrong:
 
@@ -566,15 +636,11 @@ These facts decide whether a hand-written client works, and each fails silently 
   `-32022 Unsupported protocol version` and a `data.supported` list; measured on 2026-08-20 that
   list is `2026-07-28`, `2025-11-25`, and `2025-06-18`.
 
-The server answers the handshake era and the current revision together, so a client that sends
-`initialize` without `_meta` is served too. `ProbeServer` snapshots the supplied `ProbeOptions` and
-resolves the default or relative workspace when the server is constructed. It creates and caches a
-real probe only after a structurally valid, contained `prove` call is admitted. Concurrent admitted
-calls share its held construction and the probe it produces. `start()` seizes this process's standard
-input and output: a host that starts the server has given the process to it. `destroy()` gives the
-process back and tears down the probe when a call created it. Teardown entered through a construction
-callback waits for that admitted construction and releases its probe. Destruction before an admitted
-call does not arm the workspace.
+The server answers the handshake era and the current revision together. `ProbeServer` snapshots
+the supplied `ProbeOptions` and resolves the workspace at construction. `start()` attaches the
+transport and begins workspace onset; repeated calls share its setup promise. `destroy()` releases
+the probe and the listeners owned by the server. See [Lifecycle](#lifecycle) for the regression
+tests of onset and teardown.
 
 A handshake-era `tools/call` may carry `_meta.progressToken`, including `0` or an empty string.
 The token does not change the verdict or its receipt. Probe emits no progress reports of its own;
@@ -626,12 +692,9 @@ answer arrived.
 **The `@orkestrel/mcp` stdio client drives claims through this entry.** It spawns the shipped
 `dist/bin/main.js`, negotiates the era itself, lists `prove`, and hands back the record described
 earlier. [`main.test.ts`](../tests/src/bin/main.test.ts) runs that round trip against the built entry
-on the current revision and through the legacy projection. A real Codex 0.153.4 app-server in the
-Scaffold workspace also started this entry and discovered `prove` in 575.8829 ms under its 30-second
-deadline. That reading stopped at discovery: Codex did not call `prove`, and the entry was not read
-from an installed tarball. Treat Codex claim execution and installed-package use as untested. The
-transport facts stated earlier were established against this repository's own hand-written line
-client, and the driven MCP client meets them too.
+on the current revision and through the legacy projection. The M-E client readings described
+earlier establish connection and discovery only; Codex and Claude Code claim execution and
+installed-tarball use were not measured in those runs.
 
 **The advertised schema is wider than the admission rule, at `Draft.path`.** The `prove` tool
 publishes `compileSchema(CLAIM_SHAPE)` and admits a call with `isClaim`, and the two agree on every
@@ -683,7 +746,7 @@ const claim: Claim = {
 const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 verdict.digest // 'bdf03e5dfd6bd413ead671c7a2940fcf'
-verdict.receipt // 'probe:bdf03e5dfd6bd413ead671c7a2940fcf:type:typescript@6.0.3:oxlint@1.86.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
+verdict.receipt // 'probe:bdf03e5dfd6bd413ead671c7a2940fcf:type:typescript@6.0.3:oxlint@1.87.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
 await probe.destroy()
 ```
 
@@ -992,176 +1055,156 @@ never imported.
 
 ## Lifecycle
 
-A probe has no `start`. Warming begins at construction and `prove` awaits it, because the harness
-owns the process: a restart is a new process rather than a second lifecycle, and a second client is
-a second process with its own stages. `ProbeServer` defers that real probe construction until an
-admitted call. `ProbeServer.start` is the transport's verb rather
-than the probe's — it decides which process reads the stdio, not when the stages warm.
+The following contracts name their regression tests; the measured observations and the unproved
+survivor rule are identified separately.
 
-- **Arming.** Construction runs boot controls that mutate an imported dependency and refuse
-  service unless the type and runtime stages report the change. The `arm` event fires after those
-  controls have reported red and the boot's own files are gone. An attempt that rejects fires
-  `error` instead, carrying the arming refusal as the attempt raises it, so a host waiting on `arm`
-  reads the refusal rather than an event that never arrives. The attempt is still retained for
-  retry, so each attempt surfaces its own `error` and no `prove` reports one refusal twice. The
-  controls run under `tmp/probes/` against the root `tsconfig.json`, which is why the Vitest project,
-  its composition in the root configuration, and a `tmp/probes/` the host lets it create gate the
-  boot rather than a claim.
-- **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
-  workspace module and invalidates the ones whose contents moved; the type stage refreshes its
-  mirror of the workspace by content digest, copying a file whose contents moved and removing the
-  copy of a file the workspace deleted. A warm service that skipped this would return a confident
-  wrong answer about freshly edited source.
-- **Configuration is read once per stage, not per claim.** Freshness covers source, and it does not
-  cover the configuration a stage's own tool was built around. The type stage reads
-  `tsc --showConfig` once per project and keys that reading by resolved project path, so a
-  `tsconfig.json` edited after that reading does not change the compiler options the stage applies
-  or the project digest it reports. A project that declares its own `include` still re-expands on
-  every run, because the scratch project each run reads extends the target's own project file; a
-  project that declares neither `include` nor `files` keeps the selection that reading printed.
-  Oxlint's language server and the resident Vitest hold their own configuration the same way. So a
-  receipt is read against the configuration the stage was built around. Destroy the probe and build
-  another after you edit `tsconfig.json`, `.oxlintrc.json`, or `vite.config.ts`.
-- **A failed warm is not permanent.** The runtime stage holds its resident Vitest in a slot it
-  clears when that warm rejects, so the fault reaches the caller as the target tree's own —
-  `origin: 'workspace'`, `code: 'malformed'`, naming `vite.config.ts` in `context` — rather than
-  being masked by an aging resident runner. The next `inspect` finds the slot empty and warms fresh,
-  reading the configuration again, so a workspace repaired after the failed call serves the call
-  that follows it.
-  One call never loops through a second warm of its own, and no failure leaves the stage permanently
-  refusing. This is a recovery path rather than a reload: a warm that succeeded is kept, so the
-  preceding entry's rule about editing `vite.config.ts` stands.
-- **Admission.** One queue per stage admits inspections in arrival order, one at a time. The
-  `deadline` covers active work rather than queue wait. Caller-named project resolution shares that
-  order with type inspections, so a resolve never runs partway through one inspection's own
-  candidate checks.
-- **Expiry.** `ProbeOptions.deadline` is the coordinator's budget for one active stage inspection,
-  and it lives outside the worker because a Vitest `testTimeout` cannot fire while a synchronous
-  loop blocks that worker. An expiry at any stage abandons that stage, replaces it before the next
-  queued inspection begins, and emits `expire` with the claim that expired. A failed boot is
-  replaced the same way: the next claim runs the controls again rather than inheriting a refusal.
-- **The budget covers the warm.** Every stage's inspection awaits that stage's warm, and the type
-  stage's warm builds each declared project's incremental state before the first inspection answers.
-  So a `deadline` under that warm expires arming rather than any claim, and the probe never arms.
-  Size `deadline` above the § Cost reading for the target tree, and leave room for a contended host.
-  No stage holds the host's loop: the compiler, the language server, and the test runner each work
-  in a child process or a worker, so the deadline fires on time and terminates the work it bounds.
-- **Revisions.** Each runtime inspection writes its specification at a fresh path and never reuses
-  one, because a resident runner asked to re-run a path it has already seen reports a false pass.
-  One inspection in every 64 also replaces the resident runner, and that inspection costs more than
-  the other 63 — budget `deadline` against that one rather than the common one. That fresh path
-  never reaches a caller: a test that reads its own filename, through `import.meta.url` or through a
-  frame in a failure it raised, reports the path the claim declared, because the stage rewrites the
-  exact basename it generated back to the declared test's basename in every message it reports.
-- **Teardown.** `destroy()` releases every resident process and is idempotent. It releases the
-  emitter last, and releases it on a teardown that failed too, so a listener registered through
-  `ProbeOptions.on` or through `probe.emitter` receives nothing after teardown settles and
-  `probe.emitter.destroyed` reads true. A refusal a later `prove` raises still reaches the caller
-  that asked for it, and reaches no listener. `ProbeServer.destroy`
-  adds the process itself: it removes the listeners `start` attached — the `data`, `close`, and
-  `error` forwarders on standard input, and the `SIGINT` and `SIGTERM` handlers on the process —
-  and pauses the stream unless `start` found it already flowing, so the
-  event loop drains and the process exits 0 with no explicit exit call. A stream nobody has read yet
-  is neither flowing nor paused, and this server is what sets it flowing, so it is paused. A host
-  already reading its own standard input keeps reading it after the server it embedded is destroyed.
-- **The server removes only what it added.** Every listener `ProbeServer` attaches is held as a
-  field and removed by reference, so a listener a host registers while the server is serving is
-  still attached and still fires afterwards. Nothing is chosen by being absent from a capture,
-  because a capture cannot tell a listener the server added from one the host added later. The
-  transport is what makes that reachable: it reads a stream the server owns rather than this
-  process's standard input, so its own listeners never land on `process.stdin` and the only
-  listeners the server puts there are the `data`, `close`, and `error` forwarders into that stream.
-  The release-time
-  reader count is load-bearing for the same reason — a host that starts reading standard input
-  while the server is serving keeps its reader and keeps the flow, even though `start` found the
-  stream stopped and would otherwise pause it.
-- **Stage teardown is bounded, and each stage is bounded by something different.** Every stage
-  abandons the inspections it holds rather than waiting behind one, and what it then waits for
-  differs per stage. The lint stage holds a bound of its own and sets it on the `@orkestrel/lsp`
-  client it drives: 2 s for each lifecycle exchange the Language Server Protocol leaves to the
-  server — the `initialize` reply that warming waits for and the `shutdown` reply that ending waits
-  for. It does not reach the diagnostics an inspection waits for, which the caller's own signal
-  bounds instead, so a tight teardown bound no longer preempts a claim's budget. The transport's
-  cooperative window is half that 2 s, so a server that answers `shutdown` and then ignores `exit`
-  is signalled and released inside the client's own wait for the close, rather than deadlocking
-  `destroy()`. A server that accepts the connection and answers nothing is released the same way.
-  The type stage holds no bound and needs none for its own tools: it terminates the compiler it
-  spawned — by process tree on Windows, where no cooperative signal reaches a child — waits for the
-  warm it started, and then deletes its mirror. The runtime stage holds no bound either, so a
-  `vitest.close()` that never settles is bounded by the coordinator instead: `Probe.destroy` races
-  each stage's teardown against `ProbeOptions.deadline` and proceeds when the budget expires. What
-  an abandoned tool still holds it holds until this process ends, so that bound buys the signal path
-  rather than the resource — `destroy()` settles for a caller that set a budget it can wait for,
-  instead of hanging behind a stage that will not close.
-- **Termination.** `ProbeServer.start` answers `SIGINT` and `SIGTERM` by destroying the server, and
-  they are the whole set: no evidence names a harness that ends a stdio child any other way, and
-  a configurable set would be a supported way to spell the leak this closes. Another signal arriving
-  during a teardown already running reaches the default disposition and ends the process at once,
-  because teardown releases its handlers before the probe. Measured on 2026-08-20 on the host § Cost
-  names, signal to child exit is 2.2 s to 2.3 s during boot and 50 ms to 59 ms against an armed
-  probe, over 3 runs each. The boot-time figure is the long one because teardown awaits the boot in
-  flight; budget a harness's grace window against it rather than against the warm case.
-- **The listener race.** Every `createVitest` call installs `SIGINT` and `SIGTERM` handlers that end
-  this process about a millisecond after the signal, which is three orders of magnitude inside the
-  teardown the preceding **Termination** entry measures. The runtime stage removes the handlers its
-  own warm installed, as the call
-  returns and before anything is awaited, so no window exists for a signal to arrive in. Without
-  that, a graceful teardown reads as fixed, passes a manual test, and still leaves its files in the
-  consumer's tree.
-- **What a killed host leaves.** A host killed without `destroy` — `SIGKILL`, a power loss, a
-  harness that never signals — can leave a generated specification or a boot dependency behind.
-  Every file this package writes into a target carries `probe-<pid>-<uuid>` between its stem and its
-  extension, and the runtime stage deletes such a file at its next warm when the process id leads a
-  process that is gone **and** the file is one this package can attribute. Attribution is what stops
-  the sweep reaching your tree: a generated specification carries your own test text, so probe
-  closes the file with the marker `// @orkestrel/probe generated specification <pid>-<uuid>`, and
-  the sweep requires that marker to name the same revision the file name does. The boot
-  dependencies carry the same marker, so nothing is attributed by its path and nothing under
-  `tmp/probes/` is deleted for sitting there. A file of yours that happens to carry the same name
-  shape is left where it is, wherever it sits, and so is a live neighbour's specification.
-- **What the type stage leaves.** Its mirror is one directory under `TYPE_MIRROR`, named for the
-  writing host's process id and a fresh UUID, carrying that same marker at `.probe/mirror.txt`.
-  `destroy()` deletes it, and the next stage constructed against that workspace sweeps a mirror
-  whose process id names a host that is gone and whose marker names its own directory. A directory
-  failing any of those reads stays where it is. Nothing the stage writes reaches a path outside
-  `tmp/`, so a target's version-controlled tree never carries a draft.
+- **Onset.** Construction defers warming until `Probe.start()` or an admitted `prove` call;
+  repeated onset calls join the same work (test: “defers construction, joins onset, and refuses
+  start after teardown” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  Server startup constructs the probe before a tool call, and `initialize` waits for lint and
+  runtime while the type warm continues behind it (test: “answers initialize while the type warm
+  is held open without an admitted call” in
+  [ProbeServer.test.ts](../tests/src/server/ProbeServer.test.ts)).
+- **Type readiness.** Every admitted `prove` call waits for type warming and the boot controls
+  before inspection; `ProbeOptions.warm`, defaulting to `PROBE_WARM` at 90,000 ms, bounds type
+  warming separately from `ProbeOptions.deadline` (tests: “waits for a type warm beyond the
+  inspection deadline and then proves” and “bounds a type warm, spends replacements, and recovers
+  for a later prove” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  A failed type warm reaches the next call with its original cause even if an automatic
+  replacement has armed (tests: “retains a failed type warm for the next prove and recovers after
+  replacement”, “reports a failed type warm even when its automatic replacement has armed”, and
+  “consumes a failed type refill at the queued call and serves the next claim”
+  in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+- **Admission.** Each stage has its own pool with one resident stage and exclusive leases, admitting
+  inspections in arrival order; project resolution takes a type-stage lease in that same order
+  (tests: “admits one inspection per stage at a time, in arrival order” and “serializes project
+  resolution against a live type inspection” in
+  [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+- **Creation and replacement.** The pool's creation hook holds a deadline over stage warming:
+  `warm` for type, `deadline` for lint and runtime; a silent lint initialization spends the
+  bounded replacement attempts instead of holding onset indefinitely (tests: “spends silent
+  initializes through the coordinator deadline” and “bounds a type warm, spends replacements,
+  and recovers for a later prove” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  `PROBE_RESTARTS` bounds failed warms and idle losses, and an explicit start restores a spent
+  stage before the next claim (tests: “spends failed warms, unwraps their refusal, and rearms
+  after repair” and “spends the floor on used idle loss and restores it through start without a
+  failed claim” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  This replaces 0.0.20's retry-once arming with pool replacement and a retained type-warm failure
+  for the next caller (tests: “spends failed warms, unwraps their refusal, and rearms after repair”
+  and “reports a failed type warm even when its automatic replacement has armed” in
+  [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+- **Oxlint loss.** An unexpected lint exit starts replacement without a claim, and an exit during
+  inspection preserves the exit diagnosis before a later claim uses the replacement (test:
+  “recovers an idle lint exit and serves after an exit during a claim” in
+  [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  Intentional teardown leaves `LintStageInterface.exit` pending (test: “joins initialize and leaves
+  exit pending after teardown” in [LintStage.test.ts](../tests/src/server/stages/LintStage.test.ts)).
+- **Inspection expiry.** The inspection deadline begins after admission, and expiry replaces the
+  affected stage before later work uses it (tests: “expires only the active inspection, cleans its
+  revision, and serves a queued claim”, “replaces a type stage its deadline destroyed”, and
+  “replaces a lint stage its deadline destroyed” in
+  [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+- **Freshness.** Type and runtime inspections read changed dependency contents again (test:
+  “changes its verdict after an imported dependency changes on disk” in
+  [TypeStage.test.ts](../tests/src/server/stages/TypeStage.test.ts) and
+  [RuntimeStage.test.ts](../tests/src/server/stages/RuntimeStage.test.ts)).
+  A type stage retains a project's resolved configuration for its lifetime (test: “reads one
+  project configuration for the life of the stage” in
+  [TypeStage.test.ts](../tests/src/server/stages/TypeStage.test.ts)); after changing tool
+  configuration, destroy the probe and construct another.
+- **Teardown.** End of input releases the server's lint child, and end of input during setup
+  closes without a refusal on stderr (tests: “answers initialize with a live lint child and
+  releases it at input end” and “closes input during setup without stderr and exits zero” in
+  [main.test.ts](../tests/src/bin/main.test.ts)).
+  Teardown cuts an in-flight warm, releases the emitter, and makes subsequent starts refuse
+  (tests: “cuts a warm on teardown without surfacing an arm refusal”, “destroys idempotently and
+  releases the listeners its host registered”, and “defers construction, joins onset, and refuses
+  start after teardown” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
+  Server teardown removes its own listeners and preserves a host's readers and signal handlers
+  (tests: “returns the process it seized, and settles once”, “keeps a signal listener a host attached
+  while it was serving”, and “keeps delivering to a reader that started reading while it was
+  serving” in [ProbeServer.test.ts](../tests/src/server/ProbeServer.test.ts)).
+  Runtime cleanup that exceeds the coordinator deadline is abandoned (test: “serves a claim after
+  abandoning a runtime cleanup blocked by a FIFO” in
+  [Probe.test.ts](../tests/src/server/Probe.test.ts), skipped on Windows because its fixture requires
+  a POSIX FIFO).
+
+**L-3 survivor rule — unproved at the Probe boundary.** The implemented rule requires server restart
+after a lint child survives its kill: a rejected cleanup of an inserted record leaves that record
+in the pool, while rejected cleanup during a failed warm leaves a stage owned by Probe and blocks
+further lint creation. Both branches specify refusal until restart, even after the child later
+exits. Teardown re-reads each held survivor and reports it through its teardown result; it makes
+no second kill attempt because lint destruction retains its first settlement.
+Lint disposal uses the larger of the probe `deadline` and `LINT_TEARDOWN`, including protocol
+exchanges, transport grace, and kill escalation, so a short inspection deadline cannot abandon
+lint cleanup before its timeout reports a survivor. The silent-initialize fixture at
+`deadline: 500` reads the process table at each spawn and finds no overlapping Oxlint children
+(test: “spends silent initializes through the coordinator deadline” in
+[Probe.test.ts](../tests/src/server/Probe.test.ts)).
+No Probe test drives either surviving-child branch on this host; the U1–U3 run
+`eager-probe4-last.md` on LAPTOP-SBG38B5J, Windows, 2026-10-05 records that gap. The real pool/child
+instruments `eager-probe2-survivor.ts` and `eager-probe3-create-survivor.ts` establish the pool
+boundaries only. A fixture that survives the host kill and produces the transport's timeout is
+still required before a test can falsify the Probe rule.
+
+The M-B recovery run on LAPTOP-SBG38B5J, Windows, 2026-10-05 measured a 3.013 s median from Oxlint
+kill to a successful replacement proof; see [Cost](#cost) for samples and the observation boundary.
+The M-D run on that host and date found no persistent referenced resource in
+`process.getActiveResourcesInfo()` after real Vitest specifications settled: runs 1, 2, and 3
+each returned `[]` at 1 s and 3 s while Vitest remained open. Its retained-worker control returned
+`["MessagePort"]`, and its false assertion failed. This is a measured resource census, not a test
+of every native thread or unreferenced worker; no persistent-handle claim beyond that census is
+proved. M-D CPU snapshots were 16%, 31%, and 9%; editor services and idle tool servers remained
+present.
 
 ## Cost
 
-The following measurements decide whether a harness's timeout is right. They were taken on
-2026-09-06, over this repository as the target workspace, on
-Linux 6.18.44 x64 with 4 processors, Node 22.22.2, TypeScript 6.0.3, Oxlint 1.81.0, and Vitest
-4.1.11, with other work running beside them. Read them as the shape of the cost on comparable
-hardware rather than as a figure another host reproduces.
+The M-A readings after the type-warm change put every measured `initialize` response inside
+Codex's 10 s default startup timeout. These readings used the `e8d4715` build on 2026-10-05 on
+LAPTOP-SBG38B5J, Windows 11 Home 10.0.26300 x64, Intel Core i7-10700 at 2.90 GHz with 16 logical
+processors, Node 24.21.0, TypeScript 6.0.3, Oxlint 1.86.0, and Vitest 4.1.11.
+The instrument was `tmp/onset/warm2-readings.ts`; the run records are
+`warm2-reading-<workspace>-<run>.json`, collected in `warm2-evidence.json` and
+`eager-probe-warm2-last.md`.
 
-| What                                                                           | Measured         |
-| ------------------------------------------------------------------------------ | ---------------- |
-| Boot: spawning `dist/bin/main.js` to the answered `initialize`                 | 497 ms to 561 ms |
-| Admitted valid claim: spawning `dist/bin/main.js` to the answered `tools/call` | 16.2 s to 16.8 s |
-| Warm `prove` over the flagship claim, client round trip                        | 4.2 s to 5.7 s   |
-| Type stage: construction to the `arm` event over this repository               | 12.2 s           |
-| Type stage: the declared projects warmed together, cold                        | 4.6 s            |
-| Type stage: the declared projects warmed together again                        | 2.5 s            |
-| Type stage: warm inspection, the root project and selected scoped project      | 2.0 s            |
-| Type stage: `tsc --showConfig` for a project                                   | 90 ms to 115 ms  |
-| Type stage: warm inspection over the fixture target workspace                  | 0.9 s            |
+Each row reports spawn to the successful `initialize` response in run order.
 
-The type stage runs the workspace's own `tsc` per selected project, so a target's own `check` script
-is the shape of its cost. Warming builds each declared project's incremental state before the first
-inspection answers, and every inspection awaits that warm, so `ProbeOptions.deadline` must clear it:
-over this repository a budget under about 8 s expires arming rather than a claim. The default
-`PROBE_DEADLINE` of 30,000 ms clears it with room for a contended host.
+| Workspace | Run 1   | Run 2   | Run 3   | CPU snapshots, runs 1/2/3 |
+| --------- | ------- | ------- | ------- | ------------------------- |
+| Veneer    | 7.439 s | 7.107 s | 7.939 s | 11% / 6% / 8%             |
+| Scaffold  | 3.171 s | 4.051 s | 3.172 s | 23% / 9% / 28%            |
+| Probe     | 1.495 s | 1.744 s | 1.489 s | 7% / 4% / 3%              |
 
-The measured admitted valid claim is dominated by deferred arming, which runs its real controls
-through the stage sequence before the call answers. The call also carries `prove`, so it lands about
-a warm call after the `arm` event. A client whose timeout is tighter than arming reports a hang that
-is a wait. Handshake and discovery requests require no workspace toolchain; only an admitted
-`tools/call` waits on arming.
+The first type claim over veneer earned a receipt without retry in 3 runs of 3 on that host and
+date; these are the same `warm2-reading-veneer-<run>.json` runs.
 
-`prove` runs the case through every stage and then the control through every stage, in sequence, so
-one call pays the runtime stage's floor twice. One runtime inspection in every 64 also replaces
-the resident Vitest runner and costs more than the other 63, so budget a client timeout against that
-inspection rather than the common one.
+| Run | Call to receipt | Spawn to receipt |
+| --- | --------------- | ---------------- |
+| 1   | 43.389 s        | 50.829 s         |
+| 2   | 45.011 s        | 52.119 s         |
+| 3   | 46.209 s        | 54.148 s         |
+
+Free memory was 96.0–96.4 GB; no other unit was detected, while editor services and idle Probe
+servers remained present. Size a tool-call timeout for the first proof as well as initialization:
+`ProbeOptions.warm` defaults to 90,000 ms and covers type warming; `ProbeOptions.deadline`
+defaults to 30,000 ms and covers each active inspection. Initialization does not wait for type
+readiness or the boot controls; see [Lifecycle](#lifecycle) for the tests of that separation.
+
+M-B measured a real Oxlint child-tree kill to the next successful `prove` call on the same host
+and date, using build `058a946`, the same tool versions, and
+`tmp/onset/recovery.ts` against its recovery workspace. The run records are `recovery-1.json`,
+`recovery-2.json`, and `recovery-3.json`, summarized in `tmp/onset/readings.md`.
+
+| Reading                  | Run 1   | Run 2   | Run 3   | Median  | CPU snapshots, runs 1/2/3 |
+| ------------------------ | ------- | ------- | ------- | ------- | ------------------------- |
+| Kill to successful proof | 2.695 s | 3.013 s | 3.187 s | 3.013 s | 54% / 83% / 74%           |
+
+Each run waited for the server's loss observation before calling `prove`, passed the clean case,
+and detected the false runtime assertion. The interval includes the kill command and proof work,
+so it is an upper bound on replacement readiness, not a direct language-server initialization
+timestamp. An immediate-after-kill call in the preliminary run raced loss observation and failed;
+the samples do not establish success for that race. Editor services, an idle scaffold Probe/Oxlint
+server, and the supervising Codex process remained present; no synthetic load was applied.
 
 ## Tests
 
@@ -1208,6 +1251,9 @@ inspection rather than the common one.
   carry the `prove` tool.
 - [`lsp.md`](lsp.md) — the dependency mirror for `@orkestrel/lsp`, whose client and stdio client
   transport carry the lint stage's conversation with the Oxlint language server.
+- [`pool.md`](pool.md) — the dependency mirror for `@orkestrel/pool`, which owns stage leases
+  and replacement. The catalog refresh carries the published 0.0.15 guide; the release visit must
+  refresh it to 0.0.16 alongside the dependency range.
 - [`tool.md`](tool.md) — the dependency mirror for `@orkestrel/tool`, whose registry holds it.
 - [`contract.md`](contract.md) — the dependency mirror for `@orkestrel/contract`, whose shapes
   compile both the published tool schema and the guards.

@@ -2595,7 +2595,7 @@ createSomething({
 					const pattern = readConfigRecord(patternValue)
 					const message = pattern.message
 					if (typeof message !== 'string') throw new Error('Missing pattern message')
-					const sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
+					let sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
 						? [
 								['https://host/x', true],
 								['data:text/plain,x', true],
@@ -2661,6 +2661,24 @@ createSomething({
 											true,
 										],
 									]
+					if (message.includes('another styles face')) {
+						const face =
+							typeof pattern.regex === 'string'
+								? /@src\/(bootstrap|tailwindcss|styles)\(/u.exec(pattern.regex)?.[1]
+								: undefined
+						if (face === undefined) throw new Error('Missing styles face in restriction pattern')
+						sources = [
+							[`@src/${face}`, true],
+							[`@src/${face}?raw`, true],
+							[`@orkestrel/x/${face}`, true],
+							[`../${face}/index.js`, true],
+							[`../src/${face}/index.js`, true],
+							[`../../src/${face}/index.js`, true],
+							['@src/browser', false],
+							[`@src/${face}x`, false],
+							[`../${face}.ext/index.js`, false],
+						]
+					}
 					const owner =
 						Array.isArray(block.files) && typeof block.files[0] === 'string'
 							? block.files[0].split('/**')[0]
@@ -2730,6 +2748,9 @@ createSomething({
 				'src/vue',
 				'app/vue',
 				'src/browser',
+				'src/bootstrap',
+				'src/tailwindcss',
+				'src/styles',
 				'app/browser',
 				'src/core',
 				'app/core',
@@ -2737,7 +2758,7 @@ createSomething({
 				'app/server',
 				'src/bin',
 			]) {
-				const refused = owner.endsWith('/vue')
+				const refused: Array<string | readonly [string, string]> = owner.endsWith('/vue')
 					? [
 							'node:fs',
 							'@src/server',
@@ -2773,6 +2794,24 @@ createSomething({
 								: []),
 						]
 					: ['@src/core']
+				if (owner === 'src/core') refused.push('@src/browser', './index.css')
+				if (['src/bootstrap', 'src/tailwindcss', 'src/styles'].includes(owner)) {
+					refused.push('node:fs', '@src/server', '../server/index.js', '@app/core')
+					for (const face of ['bootstrap', 'tailwindcss', 'styles']) {
+						if (owner === `src/${face}`) continue
+						refused.push(
+							`@src/${face}`,
+							`@orkestrel/x/${face}`,
+							`../${face}/index.js`,
+							`../src/${face}/index.js`,
+							`../../src/${face}/index.js`,
+							['export * from', `@src/${face}`],
+							['import type * as boundary from', `@src/${face}`],
+						)
+						admitted.push(`@src/${face}x`, `../${face}.ext/index.js`)
+					}
+					admitted.push('@src/browser', './sheet.js', '@orkestrel/contract')
+				}
 				for (const [sources, refusal] of [
 					[
 						[
@@ -2799,7 +2838,11 @@ createSomething({
 						mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
 						writeFileSync(
 							resolve(scratch, file),
-							'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+							typeof source === 'string'
+								? 'import * as boundary from ' +
+										JSON.stringify(source) +
+										'\nvoid boundary\ndebugger\n'
+								: source[0] + ' ' + JSON.stringify(source[1]) + '\ndebugger\n',
 						)
 						expected.set(file, refusal)
 					}

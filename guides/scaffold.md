@@ -2098,8 +2098,13 @@ Nothing is fixed except the manifest.
   once into `browserOptions` and passes that to every `playwright()` provider it configures. The
   precedence is `PLAYWRIGHT_EXECUTABLE_PATH`, `PLAYWRIGHT_WS_ENDPOINT`, `PLAYWRIGHT_CHANNEL`, the
   managed Playwright Chromium, the container's bundled Chromium, a verified system channel, then the
-  platform default. An installed pinned revision returns empty options, so Playwright keeps its own
-  launch defaults. A pinned revision that is not installed falls through to a `chromium` alias or a
+  platform default. Set `PLAYWRIGHT_SCROLLBARS=classic` only for runs that measure scrollbar
+  compensation, never for a standing gate. Every Chromium launch in that run omits Playwright's
+  `--hide-scrollbars` default argument so classic scrollbars can take layout space in every case.
+  An empty or unset value preserves the launch defaults; any other value throws an `Error`.
+  Pairing `classic` with `PLAYWRIGHT_WS_ENDPOINT` throws an `Error`, even with an executable
+  override, because the server owns the launch. An installed pinned revision returns empty options
+  unless `classic` is set. A pinned revision that is not installed falls through to a `chromium` alias or a
   sibling `chromium-*` revision under the same browsers directory, because a managed container ships
   one usable build for many Playwright versions. It is its own file rather than a block in the
   vendored `configs/helpers.ts`, which every workspace receives byte-identical while only a browser

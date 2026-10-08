@@ -227,6 +227,174 @@
 			}
 		},
 		{
+			"files": ["src/bootstrap/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/bootstrap must not depend on Vue extension modules"
+							},
+							{
+								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
+								"message": "imports must not use machine-specific absolute paths"
+							},
+							{
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
+								"message": "imports must not use non-Node URL schemes"
+							},
+							{
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
+								"message": "internal import paths must not contain noncanonical dot segments"
+							},
+							{
+								"regex": "^(?:(?:\\./)+\\.\\.(?:/|$)|(?:\\.\\./)+(?:\\./)+)|//",
+								"message": "relative import paths must not contain normalized traversal segments"
+							},
+							{
+								"regex": "\\\\",
+								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
+								"message": "src environments must not depend on private app modules"
+							},
+							{
+								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
+								"message": "src/bootstrap must not depend on Node or server-only modules"
+							},
+							{
+								"regex": "^(?:@src/tailwindcss(?:[/?#]|$)|@orkestrel/[^/]+/tailwindcss(?:[/?#]|$)|(?:\\.\\./)+(?:tailwindcss|src/tailwindcss)(?:[/?#]|$))",
+								"message": "src/bootstrap must not import another styles face's TypeScript"
+							},
+							{
+								"regex": "^(?:@src/styles(?:[/?#]|$)|@orkestrel/[^/]+/styles(?:[/?#]|$)|(?:\\.\\./)+(?:styles|src/styles)(?:[/?#]|$))",
+								"message": "src/bootstrap must not import another styles face's TypeScript"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["src/tailwindcss/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/tailwindcss must not depend on Vue extension modules"
+							},
+							{
+								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
+								"message": "imports must not use machine-specific absolute paths"
+							},
+							{
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
+								"message": "imports must not use non-Node URL schemes"
+							},
+							{
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
+								"message": "internal import paths must not contain noncanonical dot segments"
+							},
+							{
+								"regex": "^(?:(?:\\./)+\\.\\.(?:/|$)|(?:\\.\\./)+(?:\\./)+)|//",
+								"message": "relative import paths must not contain normalized traversal segments"
+							},
+							{
+								"regex": "\\\\",
+								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
+								"message": "src environments must not depend on private app modules"
+							},
+							{
+								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
+								"message": "src/tailwindcss must not depend on Node or server-only modules"
+							},
+							{
+								"regex": "^(?:@src/bootstrap(?:[/?#]|$)|@orkestrel/[^/]+/bootstrap(?:[/?#]|$)|(?:\\.\\./)+(?:bootstrap|src/bootstrap)(?:[/?#]|$))",
+								"message": "src/tailwindcss must not import another styles face's TypeScript"
+							},
+							{
+								"regex": "^(?:@src/styles(?:[/?#]|$)|@orkestrel/[^/]+/styles(?:[/?#]|$)|(?:\\.\\./)+(?:styles|src/styles)(?:[/?#]|$))",
+								"message": "src/tailwindcss must not import another styles face's TypeScript"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["src/styles/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@(?:src|app)/vue(?:[/?#]|$)|@orkestrel/[^/]+/vue(?:[/?#]|$)|(?:\\.\\./)+(?:vue|src/vue|app/vue)(?:[/?#]|$))",
+								"message": "src/styles must not depend on Vue extension modules"
+							},
+							{
+								"regex": "^(?:/|[A-Za-z]:[\\\\/])",
+								"message": "imports must not use machine-specific absolute paths"
+							},
+							{
+								"regex": "^(?:[A-Za-mo-z][A-Za-z0-9+.-]*|n(?:[A-Za-np-z0-9+.-][A-Za-z0-9+.-]*)?|no(?:[A-Za-ce-z0-9+.-][A-Za-z0-9+.-]*)?|nod(?:[A-Za-df-z0-9+.-][A-Za-z0-9+.-]*)?|node[A-Za-z0-9+.-]+):",
+								"message": "imports must not use non-Node URL schemes"
+							},
+							{
+								"regex": "(?:^|/)(?:[^/.][^/]*|\\.[^/.][^/]*|\\.\\.[^/]+)/\\.{1,2}(?:/|$)",
+								"message": "internal import paths must not contain noncanonical dot segments"
+							},
+							{
+								"regex": "^(?:(?:\\./)+\\.\\.(?:/|$)|(?:\\.\\./)+(?:\\./)+)|//",
+								"message": "relative import paths must not contain normalized traversal segments"
+							},
+							{
+								"regex": "\\\\",
+								"message": "import paths must use portable forward slashes"
+							},
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^(?:@app(?:[/?#]|$)|(?:\\.\\./)+app(?:[/?#]|$))",
+								"message": "src environments must not depend on private app modules"
+							},
+							{
+								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
+								"message": "src/styles must not depend on Node or server-only modules"
+							},
+							{
+								"regex": "^(?:@src/bootstrap(?:[/?#]|$)|@orkestrel/[^/]+/bootstrap(?:[/?#]|$)|(?:\\.\\./)+(?:bootstrap|src/bootstrap)(?:[/?#]|$))",
+								"message": "src/styles must not import another styles face's TypeScript"
+							},
+							{
+								"regex": "^(?:@src/tailwindcss(?:[/?#]|$)|@orkestrel/[^/]+/tailwindcss(?:[/?#]|$)|(?:\\.\\./)+(?:tailwindcss|src/tailwindcss)(?:[/?#]|$))",
+								"message": "src/styles must not import another styles face's TypeScript"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
 			"files": ["src/vue/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
 				"no-restricted-imports": [
