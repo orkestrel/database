@@ -1,6 +1,9 @@
 {
 	"$schema": "https://json.schemastore.org/claude-code-settings.json",
 	"enableAllProjectMcpServers": true,
+	"env": {
+		"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+	},
 	"permissions": {
 		"defaultMode": "bypassPermissions",
 		"allow": [
@@ -180,6 +183,8 @@
 			"Bash(npm run test:guides *)",
 			"Bash(npm run test:conformance)",
 			"Bash(npm run test:conformance *)",
+			"Bash(npm run test:tree)",
+			"Bash(npm run test:tree *)",
 			"Bash(npm run test:integration)",
 			"Bash(npm run test:integration *)",
 			"Bash(npm run test:distribution)",
@@ -969,8 +974,8 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/deps.sh",
-						"timeout": 600
+						"command": "\"$CLAUDE_PROJECT_DIR\"/scripts/npm.sh && \"$CLAUDE_PROJECT_DIR\"/scripts/deps.sh && \"$CLAUDE_PROJECT_DIR\"/scripts/browsers.sh",
+						"timeout": 900
 					},
 					{
 						"type": "command",
