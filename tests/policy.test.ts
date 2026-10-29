@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { POLICY_BANNED_TERMS, POLICY_JUDGED_TERMS } from '../configs/policy.js'
@@ -10,10 +10,17 @@ import {
 	createPolicySurfaceGuide,
 	writePolicySurfaceHost,
 	createSkillMetadata,
+	DIST_POLICY_CONTROLS,
+	DIST_POLICY_MESSAGE,
 	inspectPolicyControl,
+	inspectPolicyDist,
 	inspectPolicyFilenamePaths,
 	inspectPolicyMirrorPaths,
+	inspectPolicyMirrors,
 	inspectPolicyPortability,
+	inspectPolicyShellPaths,
+	inspectPolicyShells,
+	inspectPolicyText,
 	inspectPolicyWiring,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
@@ -55,6 +62,7 @@ import {
 	SKILL_POLICY_PARAGRAPHS,
 	SKILL_POLICY_TEXT,
 	stemToPolicyCandidates,
+	TEXT_POLICY_CONTROLS,
 	testToPolicyStem,
 } from './setupPolicy.js'
 
@@ -87,10 +95,23 @@ describe('surface policy controls', () => {
 		}
 	})
 
-	it('refuses a target catalog row absent from the installed guides', () => {
+	it('ignores a target catalog row the installed scaffold does not stage', () => {
 		const scratch = createPolicySurfaceFixture()
 		try {
 			scratch.write(POLICY_CATALOG_FILE, createPolicyCatalog(['other', 'sample', 'uncovered']))
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('refuses a staged catalog row absent from the installed guides', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write(
+				`${POLICY_SURFACE_HOST}/${POLICY_SURFACE_CATALOG}`,
+				createPolicyCatalog(['other', 'sample', 'uncovered']),
+			)
 			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
 				{
 					rule: 'surface',
@@ -206,6 +227,31 @@ describe('surface policy controls', () => {
 			])
 			rmSync(join(scratch.path, 'tests/setupServer.ts'), { recursive: true, force: true })
 			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('excludes the distribution harness in an adopter while reporting target-owned collisions', () => {
+		const scratch = createPolicySurfaceFixture()
+		try {
+			scratch.write('tests/setupDistribution.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
+			scratch.write('tests/setupExtra.ts', 'export function readShared() {}\n')
+			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
+				{
+					rule: 'mirror',
+					path: 'tests/setupExtra.ts',
+					message:
+						'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+				},
+				{
+					rule: 'surface',
+					path: 'tests/setupExtra.ts',
+					line: 1,
+					message: 'surface name belongs to one package: readShared (other)',
+				},
+			])
 		} finally {
 			scratch.destroy()
 		}
@@ -361,6 +407,24 @@ describe('fleet policy register', () => {
 		]
 		const modules = new Set(['src/worker/Worker.ts', 'app/browser/routes.ts'])
 		expect(inspectPolicyMirrorPaths(tests, modules)).toEqual([])
+	})
+
+	// A study test names a package-level subject, so it sits beside no module it mirrors. The mirrored
+	// population is `tests/{app,src}`, and the root `studies` directory holds adapters outside it.
+	it('leaves study tests and the root studies directory outside the mirrored population', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-studies-' })
+		try {
+			scratch.write('studies/adapter.ts', 'export {}\n')
+			scratch.write('tests/studies/adapter.test.ts', '')
+			expect(inspectPolicyMirrors(scratch.path)).toEqual([])
+			// The control: a mirrored test with no module reports through the same sweep.
+			scratch.write('tests/src/worker/Worker.test.ts', '')
+			expect(inspectPolicyMirrors(scratch.path).map((violation) => violation.path)).toEqual([
+				'tests/src/worker/Worker.test.ts',
+			])
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('derives mirror candidates in module resolution order', () => {
@@ -655,6 +719,140 @@ describe('portability policy', () => {
 			]),
 		).toEqual([])
 	})
+
+	it('rejects a shell-family file outside scripts whatever its case, and a non-shell file inside it', () => {
+		expect(
+			inspectPolicyShellPaths([
+				'src/run.sh',
+				'tools/BUILD.PY',
+				'scripts/probe.ts',
+				'scripts/a/b.cmd',
+			]),
+		).toEqual([
+			{
+				rule: 'portability',
+				path: 'src/run.sh',
+				message: 'shell, PowerShell, Python, and batch files sit only in scripts',
+			},
+			{
+				rule: 'portability',
+				path: 'tools/BUILD.PY',
+				message: 'shell, PowerShell, Python, and batch files sit only in scripts',
+			},
+			{
+				rule: 'portability',
+				path: 'scripts/probe.ts',
+				message: 'scripts holds .sh files and nothing else',
+			},
+			{
+				rule: 'portability',
+				path: 'scripts/a/b.cmd',
+				message: 'scripts holds .sh files and nothing else',
+			},
+		])
+	})
+
+	it('accepts a shell file at any depth inside scripts and every other file elsewhere', () => {
+		expect(
+			inspectPolicyShellPaths([
+				'scripts/deps.sh',
+				'scripts/DEPS.SH',
+				'scripts/nested/hook.sh',
+				'src/worker/helpers.ts',
+				'package.json',
+				'.gitattributes',
+				'build.shared.ts',
+			]),
+		).toEqual([])
+	})
+
+	it('reads files only: a directory named like a shell file or inside scripts is no violation', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-shells-' })
+		try {
+			scratch.write('src/tools.py/index.ts', 'export {}\n')
+			scratch.write('scripts/nested/deps.sh', '#!/usr/bin/env bash\n')
+			scratch.write('src/run.sh', '#!/usr/bin/env bash\n')
+			// The refused file arrives beside the directories, so an empty result elsewhere is a read
+			// that reached the population rather than one that found nothing.
+			expect(inspectPolicyShells(scratch.path)).toEqual([
+				{
+					rule: 'portability',
+					path: 'src/run.sh',
+					message: 'shell, PowerShell, Python, and batch files sit only in scripts',
+				},
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
+
+describe('dist import policy', () => {
+	for (const control of DIST_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(
+				inspectPolicyControl(control).filter((violation) => violation.rule === 'dist'),
+			).toEqual(control.violations)
+		})
+	}
+
+	// The valid file beside the broken one proves the sweep ran over the workspace and refused the
+	// file it could not read, rather than reporting nothing because it read nothing.
+	it('reports a file the parser refuses and still reads the files beside it', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-dist-' })
+		try {
+			scratch.write('src/core/valid.ts', "import '../../dist/src/core/index.js'\n")
+			scratch.write('src/core/broken.ts', 'export const = \n')
+			const violations = inspectPolicyDist(scratch.path)
+			expect(violations).toHaveLength(2)
+			expect(violations[0]).toMatchObject({ rule: 'dist', path: 'src/core/broken.ts' })
+			expect(violations[0]?.message.startsWith('tracked TypeScript parses: ')).toBe(true)
+			expect(violations[1]).toEqual({
+				rule: 'dist',
+				path: 'src/core/valid.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../dist/src/core/index.js`,
+			})
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('holds the tracked TypeScript of this workspace clear of dist', () => {
+		expect(inspectPolicyDist(process.cwd())).toEqual([])
+	})
+})
+
+describe('text integrity policy', () => {
+	for (const control of TEXT_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(
+				inspectPolicyControl(control).filter((violation) => violation.rule === 'text'),
+			).toEqual(control.violations)
+		})
+	}
+
+	// A text fixture is a JavaScript string and cannot hold a byte sequence UTF-8 never carries, so
+	// the bytes are written directly. The valid file beside the broken one proves the sweep ran
+	// over the workspace and refused one file rather than every file.
+	it('rejects a file whose bytes are not UTF-8 and accepts the same file once they are', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-policy-text-' })
+		try {
+			mkdirSync(join(scratch.path, 'src'), { recursive: true })
+			writeFileSync(join(scratch.path, 'src', 'valid.ts'), Uint8Array.of(0x61, 0xc3, 0xa8, 0x0a))
+			writeFileSync(join(scratch.path, 'src', 'broken.ts'), Uint8Array.of(0x61, 0xc3, 0x28, 0x0a))
+			expect(inspectPolicyText(scratch.path)).toEqual([
+				{ rule: 'text', path: 'src/broken.ts', message: 'text decodes as UTF-8' },
+			])
+			writeFileSync(join(scratch.path, 'src', 'broken.ts'), Uint8Array.of(0x61, 0xc3, 0xa8, 0x0a))
+			expect(inspectPolicyText(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('holds the authored and source text of this workspace to clean UTF-8', () => {
+		expect(inspectPolicyText(process.cwd())).toEqual([])
+	})
 })
 
 describe('prose policy', () => {
@@ -739,7 +937,7 @@ describe('denylist currency', () => {
 
 	it('reports a table row neither set names', () => {
 		// The control: a table carrying one row outside the membership, which the reader returns
-		// and neither set holds, so the comparison above would fail on it.
+		// and neither set holds, so the preceding comparison would fail on it.
 		const fixture = [
 			'# Fixture',
 			'',
@@ -792,7 +990,7 @@ describe('repository policy', () => {
 			)
 			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
 			// The control: the same workspace with one canonical skill planted and no
-			// bridge beside it reports the twin violation, so the empty result above is a
+			// bridge beside it reports the twin violation, so the preceding empty result is a
 			// sweep that ran rather than a sweep with nothing it could report.
 			scratch.write(`${SKILL_FAMILY_ROOT}/sample/SKILL.md`, SKILL_POLICY_TEXT)
 			scratch.write(`${SKILL_FAMILY_ROOT}/sample/agents/openai.yaml`, createSkillMetadata('sample'))
@@ -834,6 +1032,29 @@ describe('policy configuration wiring', () => {
 		expect(inspectPolicyWiring(configuration, [], [['src/**/*.ts', 'app/**/*.ts']])).toEqual([
 			'no override files list declares the population exactly: src/**/*.ts app/**/*.ts',
 		])
+	})
+
+	it('counts a rule as enabled only at error severity, in the string or an array first member', () => {
+		const configuration = {
+			rules: { 'rule/top-off': 'off', 'rule/top-warn': ['warn'], 'rule/top-error': 'error' },
+			overrides: [
+				{
+					files: ['a/**'],
+					rules: { 'rule/scoped-off': 'off', 'rule/scoped-error': ['error', {}] },
+				},
+			],
+		}
+		expect(
+			inspectPolicyWiring(
+				configuration,
+				['rule/top-off', 'rule/top-warn', 'rule/top-error', 'rule/scoped-off', 'rule/scoped-error'],
+				[],
+			),
+		).toEqual(
+			['rule/top-off', 'rule/top-warn', 'rule/scoped-off'].map(
+				(rule) => `${rule} is enabled by no top-level or override rules record`,
+			),
+		)
 	})
 
 	it('reports a configuration that is not a record', () => {

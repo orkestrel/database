@@ -153,34 +153,33 @@ export function resolvePinnedBrowser(): string | undefined {
  */
 export function resolveManagedBrowser(pinned: string): string | undefined {
 	if (isBrowserExecutable(pinned)) return pinned
-	let revisionRoot = dirname(pinned)
-	for (;;) {
-		if (CHROMIUM_ENTRY_PATTERN.test(basename(revisionRoot))) break
-		const parent = dirname(revisionRoot)
-		if (parent === revisionRoot) return undefined
-		revisionRoot = parent
-	}
+	// One `dirname` per path segment reaches the root from any path, and the nearest
+	// ancestor named `chromium-<revision>` is the revision directory this build sits in.
+	const directory = dirname(pinned)
+	const ancestors = directory
+		.split(/[\\/]/u)
+		.reduce<string[]>((chain) => [...chain, dirname(chain.at(-1) ?? directory)], [directory])
+	const revisionRoot = ancestors.find((ancestor) => CHROMIUM_ENTRY_PATTERN.test(basename(ancestor)))
+	if (revisionRoot === undefined) return undefined
 	const browsersRoot = dirname(revisionRoot)
 	for (const alias of ['chromium', 'chromium.exe']) {
 		const candidate = resolvePath(browsersRoot, alias)
 		if (isBrowserExecutable(candidate)) return candidate
 	}
-	let entries: readonly string[]
 	try {
-		entries = readdirSync(browsersRoot)
+		const revisions = readdirSync(browsersRoot)
+			.filter((entry) => CHROMIUM_ENTRY_PATTERN.test(entry))
+			.sort(compareRevisions)
+		for (const revision of revisions) {
+			for (const layout of CHROMIUM_LAYOUTS) {
+				const candidate = resolvePath(browsersRoot, revision, layout)
+				if (isBrowserExecutable(candidate)) return candidate
+			}
+		}
+		return undefined
 	} catch {
 		return undefined
 	}
-	const revisions = entries
-		.filter((entry) => CHROMIUM_ENTRY_PATTERN.test(entry))
-		.sort(compareRevisions)
-	for (const revision of revisions) {
-		for (const layout of CHROMIUM_LAYOUTS) {
-			const candidate = resolvePath(browsersRoot, revision, layout)
-			if (isBrowserExecutable(candidate)) return candidate
-		}
-	}
-	return undefined
 }
 
 /**
@@ -198,15 +197,13 @@ export function resolveManagedBrowser(pinned: string): string | undefined {
 export function resolveBundledBrowser(platform: NodeJS.Platform, root: string): string | undefined {
 	if (platform !== 'linux') return undefined
 	for (const layout of BUNDLED_CHROMIUM_LAYOUTS) {
-		let matches: readonly string[]
 		try {
-			matches = globSync(layout, { cwd: root })
+			for (const match of globSync(layout, { cwd: root }).sort(compareRevisions)) {
+				const candidate = resolvePath(root, match)
+				if (isBrowserExecutable(candidate)) return candidate
+			}
 		} catch {
 			return undefined
-		}
-		for (const match of [...matches].sort(compareRevisions)) {
-			const candidate = resolvePath(root, match)
-			if (isBrowserExecutable(candidate)) return candidate
 		}
 	}
 	return undefined
@@ -229,21 +226,22 @@ export function resolveSystemBrowser(
 	environment: NodeJS.ProcessEnv,
 ): string | undefined {
 	if (platform !== 'linux' && platform !== 'darwin' && platform !== 'win32') return undefined
-	const roots = new Set<string>()
-	if (platform === 'win32') {
-		for (const root of [
-			environment.LOCALAPPDATA,
-			environment.PROGRAMFILES,
-			environment['PROGRAMFILES(X86)'],
-		]) {
-			if (root !== undefined && root.length > 0) roots.add(root)
-		}
-		const homeDrive = environment.HOMEDRIVE
-		if (homeDrive !== undefined && homeDrive.length > 0) {
-			roots.add(join(homeDrive, 'Program Files'))
-			roots.add(join(homeDrive, 'Program Files (x86)'))
-		}
-	}
+	const roots = new Set(
+		platform === 'win32'
+			? [
+					...[
+						environment.LOCALAPPDATA,
+						environment.PROGRAMFILES,
+						environment['PROGRAMFILES(X86)'],
+					].flatMap((root) => (root !== undefined && root.length > 0 ? [root] : [])),
+					...[environment.HOMEDRIVE].flatMap((homeDrive) =>
+						homeDrive !== undefined && homeDrive.length > 0
+							? [join(homeDrive, 'Program Files'), join(homeDrive, 'Program Files (x86)')]
+							: [],
+					),
+				]
+			: [],
+	)
 	for (const browser of SYSTEM_BROWSER_CHANNELS) {
 		if (platform === 'win32') {
 			for (const root of roots) {
@@ -271,11 +269,11 @@ export function resolveSystemBrowser(
  * verified system channel, then the platform default channel. An operator override outranks
  * discovery and is returned exactly as given: none of those environment values is checked
  * against the filesystem, because verifying an override would defeat the override. The pinned
- * managed revision outranks anything found on the host because it is deterministic. The installed
- * pinned revision returns empty options unless `PLAYWRIGHT_SCROLLBARS=classic` is set. Only a
- * discovered system channel is verified before it is named. The platform default is unverified
- * as well and exists only as a last resort: Windows takes `msedge`, which ships with the OS and
- * never collides with a foreground Chrome.
+ * managed revision outranks anything found on the host because it is deterministic. Every resolved
+ * managed path names the full Chromium executable so headless launches retain browser permissions.
+ * Only a discovered system channel is verified before it is named. The platform default is
+ * unverified as well and exists only as a last resort: Windows takes `msedge`, which ships with the
+ * OS and never collides with a foreground Chrome.
  *
  * Set `PLAYWRIGHT_SCROLLBARS=classic` only for runs that measure scrollbar compensation, never
  * for a standing gate. Every Chromium launch in that run omits Playwright's `--hide-scrollbars`
@@ -322,7 +320,6 @@ export function resolveBrowser(
 	}
 	const managed = pinned === undefined ? undefined : resolveManagedBrowser(pinned)
 	if (managed !== undefined) {
-		if (managed === pinned) return scrollbars === 'classic' ? { launchOptions: launch } : {}
 		return { launchOptions: { executablePath: managed, ...launch } }
 	}
 	const bundled = resolveBundledBrowser(platform, root)

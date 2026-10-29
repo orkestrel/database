@@ -1,4 +1,4 @@
-import type { Plugin, Rolldown } from 'vite'
+import type { Plugin, ResolvedConfig, Rolldown } from 'vite'
 import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -27,6 +27,29 @@ export function hasAsciiUrlControl(value: string): boolean {
 		if (code !== undefined && (code <= 0x1f || code === 0x7f)) return true
 	}
 	return false
+}
+
+/**
+ * Runs a producer once and returns its value, or `undefined` when the producer throws.
+ *
+ * @remarks
+ * This leaf is vendored byte-identical to every workspace, so it imports no result helper and keeps
+ * its own value-returning form.
+ *
+ * @param produce - The producer to run once.
+ * @returns The producer's value, or `undefined` when it throws.
+ * @example
+ * ```ts
+ * attemptValue(() => decodeURI('%E0%A4%A')) // undefined
+ * attemptValue(() => decodeURI('%20')) // ' '
+ * ```
+ */
+export function attemptValue<T>(produce: () => T): T | undefined {
+	try {
+		return produce()
+	} catch {
+		return undefined
+	}
 }
 
 export const PACKAGE_MANIFEST_BYTES = 1_048_576
@@ -171,18 +194,10 @@ export function isBoundaryExemptModule(id: string): boolean {
 	) {
 		return true
 	}
-	let physicalId: string | undefined
-	try {
-		physicalId = physicalPath(id).replaceAll('\\', '/')
-	} catch {
-		physicalId = undefined
-	}
-	for (const candidate of physicalId === undefined ? [path] : [path, physicalId]) {
-		if (candidate.split('/').some((segment) => segment.toLowerCase() === 'node_modules')) {
-			return true
-		}
-	}
-	return false
+	const physicalId = attemptValue(() => physicalPath(id).replaceAll('\\', '/'))
+	return (physicalId === undefined ? [path] : [path, physicalId]).some((candidate) =>
+		candidate.split('/').some((segment) => segment.toLowerCase() === 'node_modules'),
+	)
 }
 
 export function isWorkspaceBoundaryModule(id: string): boolean {
@@ -190,12 +205,9 @@ export function isWorkspaceBoundaryModule(id: string): boolean {
 	const normalizedId = id.replaceAll('\\', '/')
 	const [path] = normalizedId.split(/[?#]/)
 	if (path === undefined) return false
-	let candidate = fileSystemPath(path)
-	try {
-		if (/^file:/i.test(candidate)) candidate = fileURLToPath(candidate)
-	} catch {
-		return false
-	}
+	const system = fileSystemPath(path)
+	const candidate = /^file:/i.test(system) ? attemptValue(() => fileURLToPath(system)) : system
+	if (candidate === undefined) return false
 	const rootRelative = /^\/(?:app|src)\/(?:core|browser|server|vue)\//.test(candidate)
 	const absoluteCandidate = rootRelative
 		? resolvePath(WORKSPACE_ROOT, candidate.slice(1))
@@ -247,6 +259,27 @@ export function packageNameOf(source: string): string | undefined {
 	return segments[0]
 }
 
+/**
+ * Fills a buffer from an open file handle until the handle ends, and reports how many bytes it read.
+ *
+ * @param handle - The open file descriptor.
+ * @param bytes - The buffer to fill; its length is the read ceiling.
+ * @param offset - The count of bytes already read into the buffer.
+ * @param limit - The largest total count the file may hold.
+ * @returns The total count read when the handle ends, or `undefined` when the count passes `limit`.
+ */
+export function readHandleBytes(
+	handle: number,
+	bytes: Buffer,
+	offset: number,
+	limit: number,
+): number | undefined {
+	const count = readSync(handle, bytes, offset, bytes.length - offset, null)
+	if (count === 0) return offset
+	const total = offset + count
+	return total > limit ? undefined : readHandleBytes(handle, bytes, total, limit)
+}
+
 export function readBoundedFile(path: string, limit: number): string | undefined {
 	if (!existsSync(path)) return undefined
 	try {
@@ -269,13 +302,8 @@ export function readBoundedFile(path: string, limit: number): string | undefined
 				return undefined
 			}
 			const bytes = Buffer.allocUnsafe(current.size + 1)
-			let offset = 0
-			for (;;) {
-				const count = readSync(handle, bytes, offset, bytes.length - offset, null)
-				if (count === 0) break
-				offset += count
-				if (offset > current.size) return undefined
-			}
+			const offset = readHandleBytes(handle, bytes, 0, current.size)
+			if (offset === undefined) return undefined
 			const final = fstatSync(handle)
 			if (
 				!final.isFile() ||
@@ -315,10 +343,7 @@ export function packageManifestName(directory: string): string | undefined {
 
 export function isPackageBoundary(directory: string): boolean {
 	const segments = directory.replaceAll('\\', '/').split('/')
-	let nodeModules = -1
-	for (const [index, segment] of segments.entries()) {
-		if (segment.toLowerCase() === 'node_modules') nodeModules = index
-	}
+	const nodeModules = segments.findLastIndex((segment) => segment.toLowerCase() === 'node_modules')
 	if (nodeModules < 0) return false
 	const packageSegments = segments.slice(nodeModules + 1)
 	return (
@@ -329,47 +354,39 @@ export function isPackageBoundary(directory: string): boolean {
 	)
 }
 
+/**
+ * Finds the nearest directory, starting at the given one, that is a package boundary or holds a
+ * `package.json`.
+ *
+ * @param current - The directory to start from.
+ * @returns That directory, or `undefined` when none up to the filesystem root qualifies.
+ */
+export function findPackageDirectory(current: string): string | undefined {
+	if (isPackageBoundary(current) || existsSync(resolvePath(current, 'package.json'))) {
+		return current
+	}
+	const parent = dirname(current)
+	return parent === current ? undefined : findPackageDirectory(parent)
+}
+
 export function packageRootOf(packageName: string, resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
-	let current =
-		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical)
-	for (;;) {
-		const boundary = isPackageBoundary(current)
-		const manifest = resolvePath(current, 'package.json')
-		if (boundary || existsSync(manifest)) {
-			return packageManifestName(current) === packageName ? realpathSync.native(current) : undefined
-		}
-		const parent = dirname(current)
-		if (parent === current) return undefined
-		current = parent
-	}
+	const directory = findPackageDirectory(
+		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical),
+	)
+	return directory !== undefined && packageManifestName(directory) === packageName
+		? realpathSync.native(directory)
+		: undefined
 }
 
 export function packageRootForResolved(resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
-	let current =
-		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical)
-	for (;;) {
-		const boundary = isPackageBoundary(current)
-		const manifest = resolvePath(current, 'package.json')
-		if (boundary || existsSync(manifest)) {
-			return packageManifestName(current) === undefined ? undefined : realpathSync.native(current)
-		}
-		const parent = dirname(current)
-		if (parent === current) return undefined
-		current = parent
-	}
-}
-
-export function trustedPackageRootFor(
-	target: string,
-	trustedPackageRoots: ReadonlySet<string>,
-): string | undefined {
-	const physical = physicalPath(target)
-	for (const root of trustedPackageRoots) {
-		if (containedPath(root, physical)) return root
-	}
-	return undefined
+	const directory = findPackageDirectory(
+		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical),
+	)
+	return directory !== undefined && packageManifestName(directory) !== undefined
+		? realpathSync.native(directory)
+		: undefined
 }
 
 export function isStylesheetPath(path: string): boolean {
@@ -487,6 +504,84 @@ export function environmentSourceError(owner: string, source: string): string | 
 	return undefined
 }
 
+/**
+ * Holds what a build plugin reads from the resolved Vite configuration after `configResolved` ran.
+ *
+ * @remarks
+ * Vite runs a plugin hook with its own context as `this`, so a plugin cannot keep this state on
+ * itself. Each plugin factory owns one instance and fills it from `configResolved`; before that hook
+ * runs, the instance holds the workspace defaults. The environment boundary plugin also keeps the
+ * physical package roots it has admitted here, because they outlive each hook call. The admitted
+ * roots are read through `locate` and never returned.
+ */
+export class BuildState {
+	#building = false
+	#output: string
+	#root = WORKSPACE_ROOT
+	#source = ''
+	readonly #trusted = new Set<string>()
+
+	constructor(output = WORKSPACE_ROOT) {
+		this.#output = output
+	}
+
+	/** Whether the resolved command is a build. */
+	get building(): boolean {
+		return this.#building
+	}
+
+	/** The absolute build output directory. */
+	get output(): string {
+		return this.#output
+	}
+
+	/** The physical project root. */
+	get root(): string {
+		return this.#root
+	}
+
+	/** The library entry path, or an empty string when the build has none. */
+	get source(): string {
+		return this.#source
+	}
+
+	/**
+	 * Admits one physical package root.
+	 *
+	 * @param root - The physical package root to admit.
+	 */
+	trust(root: string): void {
+		this.#trusted.add(root)
+	}
+
+	/**
+	 * Finds the admitted package root that contains a path.
+	 *
+	 * @param target - The path to place, followed through links to its physical location.
+	 * @returns The first admitted root, in admission order, that contains the path, or `undefined`
+	 * when none does.
+	 */
+	locate(target: string): string | undefined {
+		const physical = physicalPath(target)
+		return [...this.#trusted].find((root) => containedPath(root, physical))
+	}
+
+	/**
+	 * Reads the command, output directory, project root, and library entry from a resolved config.
+	 *
+	 * @param config - The resolved Vite configuration.
+	 */
+	resolve(config: ResolvedConfig): void {
+		this.#building = config.command === 'build'
+		this.#output = resolvePath(config.root, config.build.outDir)
+		this.#root = physicalPath(config.root)
+		this.#source =
+			config.build.lib !== false && typeof config.build.lib.entry === 'string'
+				? config.build.lib.entry
+				: ''
+	}
+}
+
 export function enforceOutputPath(configured: string, expected: string): void {
 	if (relative(expected, configured) !== '') {
 		throw new Error(
@@ -501,10 +596,10 @@ export function enforceOutputPath(configured: string, expected: string): void {
 	) {
 		throw new Error('[orkestrel-output-boundary] Build output must remain inside the workspace')
 	}
-	let current = WORKSPACE_ROOT
-	for (const segment of workspaceRelative.split(sep)) {
+	const segments = workspaceRelative.split(sep)
+	for (const [index, segment] of segments.entries()) {
 		if (segment.length === 0) continue
-		current = resolvePath(current, segment)
+		const current = resolvePath(WORKSPACE_ROOT, ...segments.slice(0, index + 1))
 		if (!existsSync(current)) continue
 		const status = lstatSync(current)
 		if (status.isSymbolicLink() || !status.isDirectory()) {
@@ -520,8 +615,7 @@ export function enforceOutputPath(configured: string, expected: string): void {
 
 export function outputBoundary(output: string): Plugin {
 	const expected = resolvePath(WORKSPACE_ROOT, output)
-	let configured = expected
-	let build = false
+	const state = new BuildState(expected)
 	return {
 		name: 'orkestrel-output-boundary',
 		enforce: 'pre',
@@ -549,11 +643,10 @@ export function outputBoundary(output: string): Plugin {
 					)
 				}
 			}
-			build = config.command === 'build'
-			configured = resolvePath(config.root, config.build.outDir)
+			state.resolve(config)
 		},
 		buildStart() {
-			if (build) enforceOutputPath(configured, expected)
+			if (state.building) enforceOutputPath(state.output, expected)
 		},
 	}
 }
@@ -661,6 +754,26 @@ export function readCompilerOutput(compiler: string, args: readonly string[]): s
 		)
 	}
 	return result.stdout ?? ''
+}
+
+/**
+ * Resolves the TypeScript command from its exported package manifest.
+ * @param path - The module or manifest path whose installation supplies TypeScript.
+ * @returns The absolute compiler command path on TypeScript 6 and 7.
+ * @throws An error when the package declares no `bin.tsc` command.
+ */
+export function resolveCompiler(path: string): string {
+	const load = createRequire(path)
+	const manifest = load.resolve('typescript/package.json')
+	const declared: unknown = load(manifest)
+	if (typeof declared !== 'object' || declared === null || !('bin' in declared)) {
+		throw new Error('The TypeScript package declares no bin.tsc command')
+	}
+	const bin = declared.bin
+	if (typeof bin !== 'object' || bin === null || !('tsc' in bin) || typeof bin.tsc !== 'string') {
+		throw new Error('The TypeScript package declares no bin.tsc command')
+	}
+	return resolvePath(dirname(manifest), bin.tsc)
 }
 
 /**
@@ -778,29 +891,22 @@ export function rewriteBrowserSpecifier(content: string): string {
  * or at check.
  */
 export function declarationRollup(options: DeclarationRollupOptions): Plugin {
-	let output = WORKSPACE_ROOT
-	let source = ''
-	let build = false
+	const state = new BuildState()
 	return {
 		name: 'orkestrel-declaration-rollup',
 		configResolved(config) {
-			build = config.command === 'build'
-			output = resolvePath(config.root, config.build.outDir)
-			source =
-				config.build.lib !== false && typeof config.build.lib.entry === 'string'
-					? config.build.lib.entry
-					: ''
+			state.resolve(config)
 		},
 		closeBundle() {
-			if (!build) return
-			const declaration = source.replace(/\.tsx?$/, '.d.ts')
-			if (declaration === source) {
+			if (!state.building) return
+			const declaration = state.source.replace(/\.tsx?$/, '.d.ts')
+			if (declaration === state.source) {
 				throw new Error(
 					'[orkestrel-declaration-rollup] The face must build one TypeScript library entry',
 				)
 			}
 			const load = createRequire(import.meta.url)
-			const compiler = load.resolve('typescript/bin/tsc')
+			const compiler = resolveCompiler(import.meta.url)
 			const scope = parseProjectScope(
 				readCompilerOutput(compiler, ['--showConfig', '-p', options.project]),
 				options.project,
@@ -811,7 +917,7 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 				)
 			}
 			const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-declarations-'))
-			const rollup = resolvePath(output, 'index.d.ts')
+			const rollup = resolvePath(state.output, 'index.d.ts')
 			try {
 				readCompilerOutput(compiler, [
 					'-p',
@@ -825,9 +931,8 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 				])
 				const entry = resolvePath(scratch, relative(scope.root, declaration))
 				// A literal `import()` of the extractor reddens `tsc` in a workspace that does not
-				// install it, and a variable specifier reddens `import/no-dynamic-require`, so the
-				// literal `createRequire` call is the form that clears every gate in an app-only
-				// workspace.
+				// install it, so the literal `createRequire` call is the form that clears the
+				// typecheck in an app-only workspace.
 				const loaded: unknown = load('@microsoft/api-extractor')
 				if (!isExtractorModule(loaded)) {
 					throw new Error(
@@ -906,16 +1011,15 @@ export async function environmentAssetSources(
 	const visitor = new Visitor({
 		ImportExpression(node) {
 			if (emitted) return
-			let value: string | undefined
-			if (node.source.type === 'Literal' && typeof node.source.value === 'string') {
-				value = node.source.value
-			} else if (node.source.type === 'TemplateLiteral' && node.source.expressions.length === 0) {
-				value = node.source.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('')
-			} else {
-				throw new Error(
-					'[orkestrel-environment-boundary] Dynamic imports must use static string values',
-				)
-			}
+			const specifier = node.source
+			const value =
+				specifier.type === 'Literal' && typeof specifier.value === 'string'
+					? specifier.value
+					: specifier.type === 'TemplateLiteral' && specifier.expressions.length === 0
+						? specifier.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('')
+						: undefined
+			// A computed specifier names no module to inspect statically.
+			if (value === undefined) return
 			const decoded = decodeAssetSource(value)
 			if (decoded === undefined) {
 				throw new Error('[orkestrel-environment-boundary] Module URLs must use valid URI encoding')
@@ -937,34 +1041,23 @@ export async function environmentAssetSources(
 			) {
 				return
 			}
-			let value: string | undefined
-			if (source?.type === 'Literal' && typeof source.value === 'string') {
-				const decoded = decodeAssetSource(source.value)
-				if (decoded === undefined) {
-					throw new Error('[orkestrel-environment-boundary] Asset URLs must use valid URI encoding')
-				}
-				value = decoded
-			} else if (source?.type === 'TemplateLiteral') {
-				const decodedQuasis: string[] = []
-				for (const quasi of source.quasis) {
-					const decoded = decodeAssetSource(quasi.value.cooked ?? quasi.value.raw)
-					if (decoded === undefined) {
-						throw new Error(
-							'[orkestrel-environment-boundary] Asset URLs must use valid URI encoding',
-						)
-					}
-					decodedQuasis.push(decoded)
-				}
-				if (source.expressions.length > 0) {
-					throw new Error(
-						'[orkestrel-environment-boundary] Asset URLs must use static string values',
-					)
-				}
-				value = decodedQuasis.join('__orkestrel__')
-			} else {
+			const parts =
+				source?.type === 'Literal' && typeof source.value === 'string'
+					? [source.value]
+					: source?.type === 'TemplateLiteral'
+						? source.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw)
+						: undefined
+			if (parts === undefined) {
 				throw new Error('[orkestrel-environment-boundary] Asset URLs must use static string values')
 			}
-			if (value === undefined) return
+			const decodedParts = parts.map((part) => decodeAssetSource(part))
+			if (decodedParts.includes(undefined)) {
+				throw new Error('[orkestrel-environment-boundary] Asset URLs must use valid URI encoding')
+			}
+			if (source?.type === 'TemplateLiteral' && source.expressions.length > 0) {
+				throw new Error('[orkestrel-environment-boundary] Asset URLs must use static string values')
+			}
+			const value = decodedParts.join('__orkestrel__')
 			if (
 				value.startsWith('.') ||
 				value.startsWith('/') ||
@@ -990,13 +1083,12 @@ export function environmentBoundary(
 		| 'app/server'
 		| 'app/vue',
 ): Plugin {
-	const trustedPackageRoots = new Set<string>()
-	let environmentRoot = WORKSPACE_ROOT
+	const state = new BuildState()
 	return {
 		name: 'orkestrel-environment-boundary',
 		enforce: 'pre',
 		configResolved(config) {
-			environmentRoot = physicalPath(config.root)
+			state.resolve(config)
 		},
 		async resolveId(source, importer) {
 			if (importer === undefined || !isWorkspaceBoundaryModule(importer)) return null
@@ -1006,7 +1098,7 @@ export function environmentBoundary(
 			if (sourceError !== undefined) this.error(sourceError)
 			const importerPath = workspacePath(importer)
 			const physicalImporter = physicalPath(importer)
-			const importerPackageRoot = trustedPackageRootFor(physicalImporter, trustedPackageRoots)
+			const importerPackageRoot = state.locate(physicalImporter)
 			if (importerPath === undefined && importerPackageRoot === undefined) return null
 			const [layer, environment] = importerPath?.split('/') ?? []
 			if (
@@ -1049,7 +1141,7 @@ export function environmentBoundary(
 							'Dependency package imports must resolve inside an exact physical package root',
 						)
 					}
-					trustedPackageRoots.add(mappedPackageRoot)
+					state.trust(mappedPackageRoot)
 				} else {
 					this.error('Dependency modules cannot import files outside their physical package root')
 				}
@@ -1066,7 +1158,7 @@ export function environmentBoundary(
 				if (packageRoot === undefined || !containedPath(packageRoot, physicalResolution)) {
 					return this.error('Resolved dependencies must remain inside their physical package root')
 				}
-				trustedPackageRoots.add(packageRoot)
+				state.trust(packageRoot)
 			}
 			const resolvedSource = workspacePath(resolution?.id ?? fallbackSource)
 			if (pathLike && resolvedSource === undefined && importerPackageRoot === undefined) {
@@ -1082,7 +1174,7 @@ export function environmentBoundary(
 		async load(id) {
 			if (!isWorkspaceBoundaryModule(id)) return null
 			const physicalImporter = physicalPath(id)
-			const trustedPackageRoot = trustedPackageRootFor(physicalImporter, trustedPackageRoots)
+			const trustedPackageRoot = state.locate(physicalImporter)
 			const inferredPackageRoot =
 				trustedPackageRoot === undefined ? packageRootForResolved(physicalImporter) : undefined
 			const packageRoot =
@@ -1136,12 +1228,12 @@ export function environmentBoundary(
 				}
 				for (const original of output.originalFileNames) {
 					const physical = physicalPath(
-						isAbsolute(original) ? original : resolvePath(environmentRoot, original),
+						isAbsolute(original) ? original : resolvePath(state.root, original),
 					)
 					if (isBoundaryExemptModule(original) || isBoundaryExemptModule(physical)) continue
 					const target = workspacePath(physical)
 					if (target === undefined) {
-						if (trustedPackageRootFor(physical, trustedPackageRoots) === undefined) {
+						if (state.locate(physical) === undefined) {
 							this.error('Environment modules cannot import files outside the workspace')
 						}
 						continue
@@ -1157,10 +1249,7 @@ export function environmentBoundary(
 				if (!isWorkspaceBoundaryModule(id)) continue
 				const target = workspacePath(id)
 				if (target === undefined) {
-					if (
-						isOutsideWorkspacePath(id) &&
-						trustedPackageRootFor(physicalPath(id), trustedPackageRoots) === undefined
-					) {
+					if (isOutsideWorkspacePath(id) && state.locate(physicalPath(id)) === undefined) {
 						this.error('Environment modules cannot import files outside the workspace')
 					}
 					continue
@@ -1175,7 +1264,7 @@ export function environmentBoundary(
 				if (!isWorkspaceBoundaryModule(id)) return null
 				const target = workspacePath(id)
 				const physicalImporter = physicalPath(id)
-				const importerPackageRoot = trustedPackageRootFor(physicalImporter, trustedPackageRoots)
+				const importerPackageRoot = state.locate(physicalImporter)
 				if (target === undefined) {
 					if (isOutsideWorkspacePath(id) && importerPackageRoot === undefined) {
 						this.error('Environment modules cannot import files outside the workspace')
@@ -1221,7 +1310,7 @@ export function environmentBoundary(
 									'Resolved dependencies must remain inside their physical package root',
 								)
 							}
-							trustedPackageRoots.add(packageRoot)
+							state.trust(packageRoot)
 						}
 						continue
 					}

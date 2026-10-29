@@ -1,4 +1,4 @@
 interface:
   display_name: 'Orkestrel Parallel'
-  short_description: 'Coordinate writer lanes and one runner in a shared checkout'
-  default_prompt: 'Use $orkestrel-parallel to coordinate writers in one checkout with owned regions, queued checks, and Orchestrator rulings.'
+  short_description: 'Run parallel lanes and peer sessions within one host budget'
+  default_prompt: 'Use $orkestrel-parallel to run lanes in one session or across sessions with a host budget, visible lanes, owned regions, queued checks, and Orchestrator rulings.'

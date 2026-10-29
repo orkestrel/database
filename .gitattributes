@@ -1,3 +1,2 @@
 # Enforce LF line endings everywhere — prevents CRLF/LF churn on Windows
 * text=auto eol=lf
-

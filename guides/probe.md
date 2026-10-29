@@ -165,7 +165,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 `StageInterface.progress` is the seam a foreign coordinator reads to decide whose budget an expiry
 belongs to, and this is the proof behind it.
 [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) proves the gauge boundary
-deterministically: it holds one inspection at the results cache with a FIFO, reads `progress`
+deterministically on Vitest 4: it holds one inspection at the results cache with a FIFO, reads `progress`
 elevated while the caller's run is in flight, and reads it level with its pre-inspection value while
 the stage evicts.
 [`LintStage.test.ts`](../tests/src/server/stages/LintStage.test.ts) reads the same boundary at the
@@ -552,12 +552,31 @@ and proof waits for type readiness and the boot controls. See [Lifecycle](#lifec
   the gate only while probe and the gate read one installed copy of each tool.
 
 Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its
-`typescript` and `vitest` tools are optional peers; probe resolves them and `oxlint` from that
-workspace when a direct probe is constructed or a server begins onset. The `oxlint`
-package carries no peer range because npm also resolves the peers of an optional peer: `oxlint`
-declares an optional `vite-plus` peer, `vite-plus` 1.0.0 depends on `vitest` 5, and npm 11.19.0
-refuses that conflict with the `vitest` peer range when it installs probe into an empty project
-(measured 2026-09-29).
+`typescript` and `vitest` tools are optional peers, with ranges `^6.0.3 || ^7.0.2` and
+`^4.1.12 || ^5.0.5`. Probe resolves them and `oxlint` from that workspace when a direct probe is
+constructed or a server begins onset. Starting refuses TypeScript majors outside 6 and 7 before
+a stage starts. Vue workspaces can retain TypeScript 6 while other workspaces use TypeScript 7.
+
+The type stage resolves `tsc` through `typescript/package.json` and its `bin` field. It requires
+neither an in-process compiler API nor an exported `typescript/bin/tsc` subpath. Printed diagnostics
+decide its result, so the differing TypeScript 6 and 7 exit codes do not change a verdict. The
+runtime stage uses the mode-first `createVitest` overload: Vitest 4.1.12 requires that form, and
+Vitest 5.0.5 retains it as a deprecated overload. The `oxlint` package carries no peer range.
+
+TypeScript 7's `--showConfig` can succeed with partial JSON for a malformed project. Before
+returning a project's identity, the type stage therefore validates it with `--noEmit` unless
+warming or an earlier unoverlaid check already validated it. Configuration diagnostics name the
+caller’s project rather than the generated scratch configuration.
+
+Runtime eviction removes the generated file from Vitest 4's results cache. Vitest 5 exposes no
+per-file cache eviction API, so the stage calls its public `clearCache()` method after each run.
+That call clears results, dependencies, and filesystem module caches. The per-file FIFO cleanup
+instrument applies only to Vitest 4; the runner-retention test checks both versions for generated
+specifications left in the results cache.
+
+Vitest 4 installs its termination handlers synchronously; Vitest 5 installs them after resolving
+configuration. Probe removes handlers registered within the factory's async context before signal
+delivery and preserves handlers the host registers outside that context, including during warming.
 
 ## Registering the server
 
@@ -746,7 +765,7 @@ const claim: Claim = {
 const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 verdict.digest // 'bdf03e5dfd6bd413ead671c7a2940fcf'
-verdict.receipt // 'probe:bdf03e5dfd6bd413ead671c7a2940fcf:type:typescript@6.0.3:oxlint@1.87.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
+verdict.receipt?.startsWith(`probe:${verdict.digest}:type:`) // true
 await probe.destroy()
 ```
 

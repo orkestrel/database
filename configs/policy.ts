@@ -12,8 +12,20 @@ export interface PolicyExpression extends PolicyNode {
 	readonly key?: PolicyExpression
 	readonly id?: PolicyExpression | null
 	readonly method?: boolean
-	readonly kind?: 'const' | 'get' | 'init' | 'let' | 'set' | 'var'
+	readonly kind?:
+		| 'const'
+		| 'get'
+		| 'global'
+		| 'init'
+		| 'let'
+		| 'module'
+		| 'namespace'
+		| 'set'
+		| 'var'
 	readonly expression?: boolean
+	readonly readonly?: boolean
+	readonly test?: PolicyExpression
+	readonly alternate?: PolicyExpression | null
 	readonly object?: PolicyExpression
 	readonly property?: PolicyExpression
 	readonly computed?: boolean
@@ -25,10 +37,11 @@ export interface PolicyExpression extends PolicyNode {
 	readonly quasis?: readonly PolicyExpression[]
 	readonly expressions?: readonly PolicyExpression[]
 	readonly accessibility?: 'private' | 'protected' | 'public' | null
+	readonly declare?: boolean
 	readonly declaration?: PolicyExpression
 	readonly declarations?: readonly PolicyExpression[]
 	readonly init?: PolicyExpression | null
-	readonly source?: PolicyExpression
+	readonly source?: PolicyExpression | null
 	readonly specifiers?: readonly PolicyExpression[]
 	readonly imported?: PolicyExpression
 	readonly exported?: PolicyExpression
@@ -52,10 +65,28 @@ export interface PolicyComment extends PolicyNode {
 	readonly value: string
 }
 
+/** Describes one reference the scope manager records to a declared variable. */
+export interface PolicyReference {
+	readonly identifier: PolicyNode
+	readonly init?: boolean
+	isWrite(): boolean
+}
+
+/** Describes one variable the scope manager records for a declaration. */
+export interface PolicyVariable {
+	readonly identifiers: readonly PolicyNode[]
+	readonly references: readonly PolicyReference[]
+}
+
 /** Lists the Oxlint source-text operations the comment rules read. */
 export interface PolicySourceCode {
 	readonly text: string
 	getAllComments(): readonly PolicyComment[]
+}
+
+/** Adds the Oxlint scope operation the binding rule reads. */
+export interface PolicyScopeCode extends PolicySourceCode {
+	getDeclaredVariables(node: PolicyNode): readonly PolicyVariable[]
 }
 
 /** Pairs one doc block with the declared name its first sentence must not repeat. */
@@ -89,7 +120,7 @@ export interface PolicyContext {
 	readonly filename: string
 	/** Names the directory Oxlint resolves `filename` against. */
 	readonly cwd: string
-	readonly sourceCode: PolicySourceCode
+	readonly sourceCode: PolicyScopeCode
 	report(diagnostic: PolicyDiagnostic): void
 }
 
@@ -116,6 +147,9 @@ export interface PolicyVisitor {
 	readonly FunctionExpression?: (node: PolicyNode) => void
 	readonly ArrowFunctionExpression?: (node: PolicyNode) => void
 	readonly ImportDeclaration?: (node: PolicyNode) => void
+	readonly ImportExpression?: (node: PolicyNode) => void
+	readonly ExportNamedDeclaration?: (node: PolicyNode) => void
+	readonly ExportAllDeclaration?: (node: PolicyNode) => void
 	readonly MemberExpression?: (node: PolicyNode) => void
 	readonly MethodDefinition?: (node: PolicyNode) => void
 	readonly PropertyDefinition?: (node: PolicyNode) => void
@@ -127,6 +161,7 @@ export interface PolicyVisitor {
 	readonly TSEnumDeclaration?: (node: PolicyNode) => void
 	readonly TSInterfaceDeclaration?: (node: PolicyNode) => void
 	readonly TSModuleDeclaration?: (node: PolicyNode) => void
+	readonly TSPropertySignature?: (node: PolicyNode) => void
 	readonly TSTypeAliasDeclaration?: (node: PolicyNode) => void
 	readonly VariableDeclaration?: (node: PolicyNode) => void
 }
@@ -205,7 +240,23 @@ export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts']
 /** Lists the fleet-registered folders whose direct modules each contain one named function. */
 export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze([
 	'app/browser/composables',
+	'app/vue/composables',
 	'src/server/execution',
+])
+
+/** Lists the published destinations a Vue relative import may reach before independent restrictions. */
+export const VUE_SOURCE_ROOTS: readonly string[] = Object.freeze([
+	'src/core',
+	'src/browser',
+	'src/vue',
+])
+
+/** Lists the additional private destinations an application Vue relative import may reach. */
+export const VUE_APPLICATION_ROOTS: readonly string[] = Object.freeze([
+	...VUE_SOURCE_ROOTS,
+	'app/core',
+	'app/browser',
+	'app/vue',
 ])
 
 /** Lists the registered function-domain names no source file may take as its stem. */
@@ -245,6 +296,68 @@ export const POLICY_ENDING_GLOBS: readonly string[] = Object.freeze([
 	'app/**/*.ts',
 	'configs/**/*.ts',
 	'src/**/*.ts',
+])
+
+/** Lists every source extension the nested-function rule reads. */
+export const POLICY_CODE_EXTENSIONS: readonly string[] = Object.freeze([
+	'cjs',
+	'cts',
+	'js',
+	'jsx',
+	'mjs',
+	'mts',
+	'ts',
+	'tsx',
+	'vue',
+])
+
+/**
+ * Matches the lint population the nested-function rule runs over, as the Oxlint configuration
+ * declares it.
+ */
+export const POLICY_NESTED_GLOBS: readonly string[] = Object.freeze(
+	['src', 'app', 'tests', 'configs'].map(
+		(root) => `${root}/**/*.{${POLICY_CODE_EXTENSIONS.join(',')}}`,
+	),
+)
+
+/**
+ * Matches the lint population the skill-script rules run over, as the Oxlint configuration declares
+ * it.
+ */
+export const POLICY_SCRIPT_GLOBS: readonly string[] = Object.freeze([
+	'.agents/skills/*/scripts/*.ts',
+])
+
+/** Matches the workspace-relative path of a skill script, the file shape the script rule reads. */
+export const POLICY_SCRIPT_PATTERN = /^\.agents\/skills\/[^/]+\/scripts\/[^/]+\.ts$/u
+
+/** Holds the one entry guard a skill script runs `main` under, as its source text reads. */
+export const POLICY_ENTRY_GUARD =
+	'process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename'
+
+/** Lists every statement type that declares a name at module scope. */
+export const POLICY_DECLARATION_TYPES: readonly string[] = Object.freeze([
+	'ClassDeclaration',
+	'FunctionDeclaration',
+	'TSDeclareFunction',
+	'TSEnumDeclaration',
+	'TSInterfaceDeclaration',
+	'TSModuleDeclaration',
+	'TSTypeAliasDeclaration',
+	'VariableDeclaration',
+])
+
+/**
+ * Lists the type nodes a property signature's search for its owning declaration never crosses,
+ * because a parameter, call, or construct signature beyond one is an inline type.
+ */
+export const POLICY_INLINE_TYPES: readonly string[] = Object.freeze([
+	'TSCallSignatureDeclaration',
+	'TSConstructSignatureDeclaration',
+	'TSConstructorType',
+	'TSFunctionType',
+	'TSMethodSignature',
 ])
 
 /**
@@ -386,8 +499,9 @@ export const POLICY_BANNED_TERMS: readonly PolicyTerm[] = Object.freeze([
  *
  * @remarks
  * Each row carries a permitted sense: a date value, a version value, a causal clause, the name a
- * replication topology takes, and a comparative or spatial relation. The currency check proves each
- * row is registered here.
+ * replication topology takes, a comparative or spatial relation, and a literal engineering term such
+ * as a string escape, a loop `break`, or a request payload. The currency check proves each row is
+ * registered here.
  */
 export const POLICY_JUDGED_TERMS: readonly string[] = Object.freeze([
 	'now',
@@ -398,6 +512,16 @@ export const POLICY_JUDGED_TERMS: readonly string[] = Object.freeze([
 	'above',
 	'below',
 	'master',
+	'hostile',
+	'adversarial',
+	'attack',
+	'break',
+	'forge',
+	'bypass',
+	'poison',
+	'escape',
+	'exploit',
+	'payload',
 ])
 
 /** Returns the file name a policy rule keys on, read from either host separator. */
@@ -426,6 +550,69 @@ export function pathToPolicyRelative(filename: string, cwd: string): string {
 	const normalizedCwd = cwd.replaceAll('\\', '/').replace(/\/+$/u, '')
 	const prefix = `${normalizedCwd}/`
 	return normalizedFile.startsWith(prefix) ? normalizedFile.slice(prefix.length) : normalizedFile
+}
+
+/**
+ * Computes a lexical workspace-relative destination from an absolute Vue importer and its cwd.
+ * Refuses unclassifiable locations, noncanonical relative segments, and traversal above the
+ * workspace. Query and fragment text is excluded from the path without decoding it; callers retain
+ * the original specifier for independent restrictions. No filesystem or module resolution occurs.
+ */
+export function computePolicyTarget(
+	filename: string,
+	cwd: string,
+	specifier: string,
+): string | undefined {
+	const relative = pathToPolicyRelative(filename, cwd)
+	const location = relative.split('/')
+	if (
+		!/^(?:\/|[A-Za-z]:\/)/u.test(cwd.replaceAll('\\', '/')) ||
+		/(?:^|\/)\.{1,2}(?:\/|$)/u.test(cwd.replaceAll('\\', '/')) ||
+		relative === filename.replaceAll('\\', '/') ||
+		location.length < 3 ||
+		(location[0] !== 'src' && location[0] !== 'app') ||
+		location[1] !== 'vue' ||
+		location.some((part) => part === '' || part === '.' || part === '..')
+	) {
+		return undefined
+	}
+	const path = specifier.split(/[?#]/u)[0] ?? ''
+	if (!/^\.{1,2}(?:\/|$)/u.test(path) || path.includes('\\') || path.includes('//')) {
+		return undefined
+	}
+	const parts = path.replace(/\/$/u, '').split('/')
+	const first = parts.findIndex((part) => part !== '.' && part !== '..')
+	const boundary = first === -1 ? parts.length : first
+	const leading = parts.slice(0, boundary)
+	const parents = leading.filter((part) => part === '..').length
+	const remaining = parts.slice(boundary)
+	const directory = pathToPolicyFolder(relative).split('/')
+	if (
+		(parents === 0 && leading.length !== 1) ||
+		(parents !== 0 && parents !== leading.length) ||
+		parents > directory.length ||
+		remaining.some((part) => part === '' || part === '.' || part === '..')
+	) {
+		return undefined
+	}
+	return [...directory.slice(0, directory.length - parents), ...remaining].join('/')
+}
+
+/** Reports a literal relative import or re-export whose actual destination leaves its Vue boundary. */
+export function reportVueImport(context: PolicyContext, node: PolicyExpression): void {
+	const source = node.source
+	if (source?.type !== 'Literal' || typeof source.value !== 'string') return
+	if (!/^\.{1,2}(?:[/?#]|$)/u.test(source.value)) return
+	const target = computePolicyTarget(context.filename, context.cwd, source.value)
+	const roots = pathToPolicyRelative(context.filename, context.cwd).startsWith('app/vue/')
+		? VUE_APPLICATION_ROOTS
+		: VUE_SOURCE_ROOTS
+	if (
+		target !== undefined &&
+		roots.some((root) => target === root || target.startsWith(root + '/'))
+	)
+		return
+	context.report({ node, messageId: 'vue' })
 }
 
 /** Returns the extensionless stem of one policy file name. */
@@ -536,31 +723,29 @@ export function isPolicyDeclaredFunction(node: PolicyExpression): boolean {
 
 /** Returns a policy function's position through parentheses, object values, and array elements. */
 export function functionToPolicyPosition(node: PolicyExpression): PolicyExpression {
-	let position = node
-	while (position.parent !== undefined && position.parent !== null) {
-		const parent = position.parent
-		if (parent.type === 'ParenthesizedExpression') {
-			position = parent
-			continue
-		}
-		if (
-			parent.type === 'Property' &&
-			parent.kind === 'init' &&
-			parent.method === false &&
-			parent.computed !== true &&
-			parent.value === position &&
-			parent.parent?.type === 'ObjectExpression'
-		) {
-			position = parent.parent
-			continue
-		}
-		if (parent.type === 'ArrayExpression' && parent.elements?.includes(position) === true) {
-			position = parent
-			continue
-		}
-		break
+	const parent = node.parent
+	if (parent === undefined || parent === null) return node
+	if (parent.type === 'ParenthesizedExpression') return functionToPolicyPosition(parent)
+	if (
+		parent.type === 'Property' &&
+		parent.kind === 'init' &&
+		parent.method === false &&
+		parent.computed !== true &&
+		parent.value === node &&
+		parent.parent?.type === 'ObjectExpression'
+	) {
+		return functionToPolicyPosition(parent.parent)
 	}
-	return position
+	if (parent.type === 'ArrayExpression' && parent.elements?.includes(node) === true) {
+		return functionToPolicyPosition(parent)
+	}
+	return node
+}
+
+/** Returns a policy node's position through its enclosing parentheses alone. */
+export function nodeToPolicyOuter(node: PolicyExpression): PolicyExpression {
+	const parent = node.parent
+	return parent?.type === 'ParenthesizedExpression' ? nodeToPolicyOuter(parent) : node
 }
 
 /** Reports whether a literal position is admitted as an argument, return, or arrow body. */
@@ -611,20 +796,22 @@ export function isPolicyMethod(node: PolicyExpression): boolean {
 /**
  * Reports whether a policy function sits inside another function before any class-expression
  * boundary.
+ *
+ * @param node - The function node whose ancestors are read.
+ * @param method - If `true`, a method body was already crossed on the way up; if `false`, none was.
+ *   Default: `false`.
+ * @returns True if a non-method function, or a method inside a class declaration, encloses the node
+ *   before a class expression does; false otherwise.
  */
-export function hasPolicyFunctionAncestor(node: PolicyExpression): boolean {
-	let parent = node.parent
-	let method = false
-	while (parent !== undefined && parent !== null) {
-		if (parent.type === 'ClassExpression') return false
-		if (parent.type === 'ClassDeclaration' && method) return true
-		if (isPolicyFunction(parent)) {
-			if (!isPolicyMethod(parent)) return true
-			method = true
-		}
-		parent = parent.parent
+export function hasPolicyFunctionAncestor(node: PolicyExpression, method = false): boolean {
+	const parent = node.parent
+	if (parent === undefined || parent === null) return method
+	if (parent.type === 'ClassExpression') return false
+	if (parent.type === 'ClassDeclaration' && method) return true
+	if (isPolicyFunction(parent)) {
+		return !isPolicyMethod(parent) || hasPolicyFunctionAncestor(parent, true)
 	}
-	return method
+	return hasPolicyFunctionAncestor(parent, method)
 }
 
 /**
@@ -634,15 +821,11 @@ export function hasPolicyFunctionAncestor(node: PolicyExpression): boolean {
  * reads module regions rather than class members.
  */
 export function functionToPolicyRegion(node: PolicyExpression): PolicyExpression | undefined {
-	let current = node
-	let parent = current.parent
-	while (parent !== undefined && parent !== null) {
-		if (parent.type === 'ClassDeclaration' || parent.type === 'ClassExpression') return undefined
-		if (parent.type === 'Program') return statementToPolicyDeclaration(current)
-		current = parent
-		parent = parent.parent
-	}
-	return undefined
+	const parent = node.parent
+	if (parent === undefined || parent === null) return undefined
+	if (parent.type === 'ClassDeclaration' || parent.type === 'ClassExpression') return undefined
+	if (parent.type === 'Program') return statementToPolicyDeclaration(node)
+	return functionToPolicyRegion(parent)
 }
 
 /** Lists every module function a top-level statement declares, paired with its declared name. */
@@ -651,15 +834,16 @@ export function statementToPolicyBindings(node: PolicyExpression): readonly Poli
 		return [{ node, name: identifierToPolicyName(node.id) }]
 	}
 	if (node.type !== 'VariableDeclaration') return []
-	const bindings: PolicyBinding[] = []
-	for (const declarator of node.declarations ?? []) {
-		const init = declarator.init
-		if (init === undefined || init === null || !isPolicyFunction(init)) continue
-		const name = identifierToPolicyName(declarator.id)
-		if (name === undefined) continue
-		bindings.push({ node: declarator, name })
-	}
-	return bindings
+	// The iterator consumes one declarator at a time and reads a hole as an `undefined` declarator,
+	// as a `for…of` over the list would.
+	return Iterator.from(node.declarations ?? [])
+		.flatMap((declarator) => {
+			const init = declarator.init
+			if (init === undefined || init === null || !isPolicyFunction(init)) return []
+			const name = identifierToPolicyName(declarator.id)
+			return name === undefined ? [] : [{ node: declarator, name }]
+		})
+		.toArray()
 }
 
 /** Reports whether a call trims a whole payload before splitting it on a line feed. */
@@ -735,11 +919,9 @@ export function stripPolicyCode(text: string): string {
  * @returns One hit per match, each naming its row and the offset the match starts at.
  */
 export function textToPolicyHits(text: string): readonly PolicyHit[] {
-	const hits: PolicyHit[] = []
-	for (const term of POLICY_BANNED_TERMS) {
-		for (const match of text.matchAll(term.pattern)) hits.push({ term, index: match.index })
-	}
-	return hits.sort((left, right) => left.index - right.index)
+	return POLICY_BANNED_TERMS.flatMap((term) =>
+		[...text.matchAll(term.pattern)].map((match) => ({ term, index: match.index })),
+	).sort((left, right) => left.index - right.index)
 }
 
 /**
@@ -749,13 +931,15 @@ export function textToPolicyHits(text: string): readonly PolicyHit[] {
  * @returns The description with continuation markers removed and whitespace collapsed.
  */
 export function commentToPolicyParagraph(comment: PolicyComment): string {
-	const description: string[] = []
-	for (const line of comment.value.split(POLICY_BREAK_PATTERN)) {
-		const text = line.replace(POLICY_MARKER_PATTERN, '')
-		if (text.trimStart().startsWith('@')) break
-		description.push(text)
-	}
-	return description.join(' ').replace(/\s+/gu, ' ').trim()
+	const lines = comment.value
+		.split(POLICY_BREAK_PATTERN)
+		.map((line) => line.replace(POLICY_MARKER_PATTERN, ''))
+	const end = lines.findIndex((text) => text.trimStart().startsWith('@'))
+	return lines
+		.slice(0, end === -1 ? lines.length : end)
+		.join(' ')
+		.replace(/\s+/gu, ' ')
+		.trim()
 }
 
 /**
@@ -780,12 +964,37 @@ export function isPolicyVoiced(word: string): boolean {
 }
 
 /**
- * Pairs every exported top-level statement with the doc block written directly above it.
+ * Reads the doc block written directly above one top-level statement.
  *
  * @remarks
  * A statement takes the last comment that closes before it, and takes it only where that comment is
  * a doc block and nothing but whitespace separates the two. A blank line between them is still
- * whitespace, so the pairing survives one.
+ * whitespace, so the pairing survives one. Every comment is read where a `findLast` would stop at
+ * the nearest one.
+ *
+ * @param statement - The top-level statement to pair.
+ * @param comments - Every comment of the linted file, in source order.
+ * @param sourceCode - The source-text reader supplying the text between a comment and the statement.
+ * @returns The paired doc block, or `undefined` where the statement has none.
+ */
+export function statementToPolicyDoc(
+	statement: PolicyExpression,
+	comments: readonly PolicyComment[],
+	sourceCode: PolicySourceCode,
+): PolicyComment | undefined {
+	const start = statement.range[0]
+	const previous = Iterator.from(comments)
+		.flatMap((comment) => (comment.range[1] <= start ? [comment] : []))
+		.toArray()
+		.at(-1)
+	if (previous === undefined || previous.type !== 'Block') return undefined
+	if (!previous.value.startsWith('*')) return undefined
+	if (sourceCode.text.slice(previous.range[1], start).trim() !== '') return undefined
+	return previous
+}
+
+/**
+ * Pairs every exported top-level statement with the doc block written directly above it.
  *
  * @param node - The program node whose top-level statements are read.
  * @param sourceCode - The source-text reader supplying the comments and the text between them.
@@ -795,27 +1004,26 @@ export function programToPolicyDocs(
 	node: PolicyExpression,
 	sourceCode: PolicySourceCode,
 ): readonly PolicyDoc[] {
+	// The iterator consumes one entry at a time and reads a hole as an `undefined` entry, as a
+	// `for…of` over the list would. The comments are read once, and a statement pairs with one only
+	// where it is an export.
 	const comments = sourceCode.getAllComments()
-	const docs: PolicyDoc[] = []
-	for (const statement of programToPolicyStatements(node)) {
-		if (!statement.type.startsWith('Export')) continue
-		const start = statement.range[0]
-		let previous: PolicyComment | undefined
-		for (const comment of comments) {
-			if (comment.range[1] <= start) previous = comment
-		}
-		if (previous === undefined || previous.type !== 'Block') continue
-		if (!previous.value.startsWith('*')) continue
-		if (sourceCode.text.slice(previous.range[1], start).trim() !== '') continue
-		const declaration = statement.declaration
-		docs.push({
-			comment: previous,
-			name:
-				identifierToPolicyName(declaration?.id) ??
-				identifierToPolicyName(declaration?.declarations?.[0]?.id),
+	return Iterator.from(programToPolicyStatements(node))
+		.flatMap((statement) => {
+			if (!statement.type.startsWith('Export')) return []
+			const comment = statementToPolicyDoc(statement, comments, sourceCode)
+			if (comment === undefined) return []
+			const declaration = statement.declaration
+			return [
+				{
+					comment,
+					name:
+						identifierToPolicyName(declaration?.id) ??
+						identifierToPolicyName(declaration?.declarations?.[0]?.id),
+				},
+			]
 		})
-	}
-	return docs
+		.toArray()
 }
 
 /** Reports a doc block whose first sentence is not a third-person summary of its own symbol. */
@@ -928,6 +1136,54 @@ export function reportPrivacy(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
+/** Checks whether code writes a declared variable anywhere but in its own declaration. */
+export function isPolicyReassigned(variable: PolicyVariable): boolean {
+	return variable.references.some(
+		(reference) =>
+			reference.isWrite() &&
+			reference.init !== true &&
+			!variable.identifiers.includes(reference.identifier),
+	)
+}
+
+/**
+ * Checks whether a node sits inside a `declare` module, namespace, or global augmentation.
+ *
+ * @remarks
+ * A declaration inside such a block carries no `declare` flag of its own and no value, because the
+ * block is the ambient context. A `global` block is ambient wherever it stands.
+ */
+export function isPolicyInDeclaredModule(node: PolicyExpression): boolean {
+	const parent = node.parent
+	if (parent === undefined || parent === null) return false
+	return (
+		(parent.type === 'TSModuleDeclaration' &&
+			(parent.declare === true || parent.kind === 'global')) ||
+		isPolicyInDeclaredModule(parent)
+	)
+}
+
+/** Reports a let declaration that prefer-const leaves: one reassigned or declared without a value. */
+export function reportLet(context: PolicyContext, node: PolicyExpression): void {
+	if (
+		node.kind !== 'let' ||
+		node.declare === true ||
+		isPolicyAmbient(context.filename) ||
+		isPolicyInDeclaredModule(node)
+	) {
+		return
+	}
+	const head = node.parent?.type === 'ForInStatement' || node.parent?.type === 'ForOfStatement'
+	const bare =
+		!head &&
+		(node.declarations ?? []).some(
+			(declarator) => declarator.init === undefined || declarator.init === null,
+		)
+	if (bare || context.sourceCode.getDeclaredVariables(node).some(isPolicyReassigned)) {
+		context.report({ node, messageId: 'let' })
+	}
+}
+
 /** Reports a centralized declaration that carries no export. */
 export function reportHidden(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
@@ -981,8 +1237,7 @@ export function reportFunction(context: PolicyContext, node: PolicyExpression): 
 		return
 	}
 	if (region.type !== 'VariableDeclaration') return
-	let position = node
-	while (position.parent?.type === 'ParenthesizedExpression') position = position.parent
+	const position = nodeToPolicyOuter(node)
 	// Module placement admits direct callbacks; a literal member still belongs in a function file.
 	if (
 		(node.type === 'ArrowFunctionExpression' || node.id === null) &&
@@ -1062,24 +1317,28 @@ export function reportDomain(context: PolicyContext, node: PolicyExpression): vo
 	}
 	if (!isPolicyDomain(context.filename, context.cwd)) return
 	const expected = fileToPolicyStem(file)
-	let implementations = 0
-	let malformed = 0
-	for (const statement of programToPolicyStatements(node)) {
-		if (statement.type === 'ImportDeclaration') continue
-		const declaration = statementToPolicyDeclaration(statement)
-		if (declaration === undefined || !isPolicyDeclaredFunction(declaration)) {
-			malformed += 1
-			continue
-		}
-		if (declaration.type === 'FunctionDeclaration') implementations += 1
-		if (
-			statement.type !== 'ExportNamedDeclaration' ||
-			identifierToPolicyName(declaration.id) !== expected
-		) {
-			malformed += 1
-		}
-	}
-	if (implementations !== 1 || malformed > 0) context.report({ node, messageId: 'module' })
+	// The iterator consumes one statement at a time and reads a hole as an `undefined` statement, as
+	// a `for…of` over the body would. Each statement is judged whole before the next is read.
+	const members = Iterator.from(programToPolicyStatements(node))
+		.flatMap((statement) => {
+			if (statement.type === 'ImportDeclaration') return []
+			const declaration = statementToPolicyDeclaration(statement)
+			if (declaration === undefined || !isPolicyDeclaredFunction(declaration)) {
+				return [{ implementation: false, malformed: true }]
+			}
+			return [
+				{
+					implementation: declaration.type === 'FunctionDeclaration',
+					malformed:
+						statement.type !== 'ExportNamedDeclaration' ||
+						identifierToPolicyName(declaration.id) !== expected,
+				},
+			]
+		})
+		.toArray()
+	const implementations = members.filter(({ implementation }) => implementation).length
+	const malformed = members.some((member) => member.malformed)
+	if (implementations !== 1 || malformed) context.report({ node, messageId: 'module' })
 }
 
 /** Reports source that reads the host line ending or splits arrived text before trimming it. */
@@ -1093,6 +1352,64 @@ export function reportEnding(context: PolicyContext, node: PolicyExpression): vo
 export function reportEndingImport(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
 	if (importsPolicyTerminator(node)) context.report({ node, messageId: 'terminator' })
+}
+
+/** Reports whether a path is a skill script, the one file shape the script rule reads. */
+export function isPolicyScript(filename: string, cwd: string): boolean {
+	return POLICY_SCRIPT_PATTERN.test(pathToPolicyRelative(filename, cwd))
+}
+
+/** Reports whether a statement is the one entry guard a skill script runs its main under. */
+export function isPolicyGuard(statement: PolicyExpression, sourceCode: PolicySourceCode): boolean {
+	const test = statement.test
+	if (statement.type !== 'IfStatement' || test === undefined) return false
+	if (statement.alternate !== undefined && statement.alternate !== null) return false
+	const text = sourceCode.text.slice(test.range[0], test.range[1]).replace(/\s+/gu, ' ')
+	return text === POLICY_ENTRY_GUARD
+}
+
+/** Reports a skill script's top-level statement that is hidden, undocumented, or runs at import. */
+export function reportScript(context: PolicyContext, node: PolicyExpression): void {
+	if (isPolicyAmbient(context.filename) || !isPolicyScript(context.filename, context.cwd)) return
+	const sourceCode = context.sourceCode
+	const comments = sourceCode.getAllComments()
+	const statements = programToPolicyStatements(node)
+	const guard = statements.findIndex((statement) => isPolicyGuard(statement, sourceCode))
+	for (const [index, statement] of statements.entries()) {
+		if (statement.type === 'ImportDeclaration' || index === guard) continue
+		const declaration = statement.declaration
+		if (
+			statement.type === 'ExportNamedDeclaration' &&
+			declaration !== undefined &&
+			declaration !== null
+		) {
+			if (statementToPolicyDoc(statement, comments, sourceCode) === undefined) {
+				context.report({ node: statement, messageId: 'doc' })
+			}
+			continue
+		}
+		context.report({
+			node: statement,
+			messageId: POLICY_DECLARATION_TYPES.includes(statement.type) ? 'hidden' : 'entry',
+		})
+	}
+}
+
+/** Reports whether a property signature sits in an interface or in a type alias's object type. */
+export function isPolicyOwned(node: PolicyExpression): boolean {
+	const parent = node.parent
+	if (parent === undefined || parent === null) return false
+	if (parent.type === 'TSInterfaceDeclaration' || parent.type === 'TSTypeAliasDeclaration') {
+		return true
+	}
+	if (POLICY_INLINE_TYPES.includes(parent.type)) return false
+	return isPolicyOwned(parent)
+}
+
+/** Reports a property signature of an interface or type alias that is not readonly. */
+export function reportMutable(context: PolicyContext, node: PolicyExpression): void {
+	if (isPolicyAmbient(context.filename) || node.readonly === true) return
+	if (isPolicyOwned(node)) context.report({ node, messageId: 'mutable' })
 }
 
 /** Bans function declarations and assignments inside another function body. */
@@ -1160,6 +1477,25 @@ export const PRIVACY_RULE: PolicyRuleInterface = {
 			TSAbstractMethodDefinition: (node) => reportPrivacy(context, node),
 			TSAbstractPropertyDefinition: (node) => reportPrivacy(context, node),
 			TSAbstractAccessorProperty: (node) => reportPrivacy(context, node),
+		}
+	},
+}
+
+/** Bans a let declaration that prefer-const does not already report. */
+export const LET_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow a let declaration that is reassigned or declared without a value; prefer-const reports the rest.',
+		},
+		messages: {
+			let: 'Declare this binding with const and derive its value: an expression, a helper that returns it, or a for…of over entries() in place of a counter.',
+		},
+	},
+	create(context) {
+		return {
+			VariableDeclaration: (node) => reportLet(context, node),
 		}
 	},
 }
@@ -1383,6 +1719,28 @@ export const DOMAIN_RULE: PolicyRuleInterface = {
 	},
 }
 
+/** Bans literal relative imports and re-exports outside the importing Vue face's permitted roots. */
+export const VUE_IMPORT_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow Vue relative imports outside the faces their importing file may reach.',
+		},
+		messages: {
+			vue: 'Keep this Vue relative import within the permitted source and application faces.',
+		},
+	},
+	create(context) {
+		return {
+			ImportDeclaration: (node) => reportVueImport(context, node),
+			ImportExpression: (node) => reportVueImport(context, node),
+			ExportNamedDeclaration: (node) => reportVueImport(context, node),
+			ExportAllDeclaration: (node) => reportVueImport(context, node),
+		}
+	},
+}
+
 /** Bans host-specific line-ending handling. */
 export const ENDING_RULE: PolicyRuleInterface = {
 	meta: {
@@ -1426,6 +1784,49 @@ export const VOICE_RULE: PolicyRuleInterface = {
 	},
 }
 
+/** Bans a skill script top-level statement that is hidden, undocumented, or runs at import. */
+export const SCRIPT_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow an unexported declaration, an undocumented export, and a statement beyond the one guarded entry in a skill script.',
+		},
+		messages: {
+			hidden:
+				'Export this declaration; a skill script exports every declaration so its proof can test each one.',
+			doc: 'Write a one-sentence TSDoc summary directly above this export.',
+			entry:
+				'Move this statement into a function; a skill script holds imports, exported declarations, and the one process.argv[1] guard that runs main, and an import runs nothing.',
+		},
+	},
+	create(context) {
+		return {
+			Program: (node) => reportScript(context, node),
+		}
+	},
+}
+
+/** Bans a property signature in an interface or type alias that is not readonly. */
+export const MUTABLE_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow a property signature without readonly in an interface or in the object type of a type alias.',
+		},
+		messages: {
+			mutable:
+				'Declare this property readonly; a contract exposes its members and no holder rewrites them.',
+		},
+	},
+	create(context) {
+		return {
+			TSPropertySignature: (node) => reportMutable(context, node),
+		}
+	},
+}
+
 /** Bans a comment carrying a term the substitution table bans unconditionally. */
 export const TERM_RULE: PolicyRuleInterface = {
 	meta: {
@@ -1451,6 +1852,7 @@ export default {
 	rules: {
 		'no-mocking': MOCKING_RULE,
 		'no-keyword-privacy': PRIVACY_RULE,
+		'no-let': LET_RULE,
 		'no-nested-functions': NESTED_RULE,
 		'no-hidden-declaration': HIDDEN_RULE,
 		'no-misplaced-type': TYPE_RULE,
@@ -1462,8 +1864,11 @@ export default {
 		'no-misnamed-factory': FACTORY_RULE,
 		'no-misnamed-plugin': PLUGIN_RULE,
 		'no-malformed-domain': DOMAIN_RULE,
+		'no-cross-vue-face': VUE_IMPORT_RULE,
 		'no-host-line-endings': ENDING_RULE,
 		'no-malformed-summary': VOICE_RULE,
 		'no-banned-term': TERM_RULE,
+		'no-malformed-script': SCRIPT_RULE,
+		'no-mutable-property': MUTABLE_RULE,
 	},
 }

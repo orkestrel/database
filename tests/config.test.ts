@@ -1,13 +1,16 @@
 // P1: Every checked population must exist and be non-empty; absence fails instead of passing vacuously.
 // P2: Required items are checked strictly; extra items are ignored before their shape is read.
 
-import type { UserConfig } from 'vite'
+import type { InlineConfig, UserConfig } from 'vite'
+import type { PolicyComment, PolicyDiagnostic, PolicyExpression } from '../configs/policy.js'
+import type { PolicyProject } from './setupPolicy.js'
 import { spawnSync } from 'node:child_process'
 import {
+	closeSync,
 	existsSync,
 	globSync,
-	lstatSync,
 	mkdirSync,
+	openSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
@@ -16,9 +19,9 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { build, createServer, loadConfigFromFile } from 'vite'
+import { dirname, join, parse, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { build, createServer, loadConfigFromFile, parseSync, resolveConfig } from 'vite'
 import { RuleTester } from 'oxlint/plugins-dev'
 import * as configHelpers from '../configs/helpers.js'
 import policyPlugin, {
@@ -33,23 +36,34 @@ import policyPlugin, {
 	FUNCTION_RULE,
 	FUNCTION_SOURCE_FILES,
 	HIDDEN_RULE,
+	LET_RULE,
 	MOCKING_RULE,
+	MUTABLE_RULE,
 	NESTED_RULE,
 	PARSER_RULE,
 	PLUGIN_RULE,
 	POLICY_BANNED_TERMS,
 	POLICY_ENDING_GLOBS,
 	POLICY_JUDGED_TERMS,
+	POLICY_NESTED_GLOBS,
 	POLICY_PLACEMENT_GLOBS,
+	POLICY_SCRIPT_GLOBS,
 	POLICY_VOICE_STOPWORDS,
 	PRIVACY_RULE,
+	SCRIPT_RULE,
 	TERM_RULE,
 	TYPE_RULE,
 	VOICE_RULE,
+	VUE_IMPORT_RULE,
 	blankPolicyText,
 	commentToPolicyParagraph,
+	computePolicyTarget,
 	isPolicyVoiced,
+	nodeToPolicyOuter,
 	paragraphToPolicyOpener,
+	programToPolicyDocs,
+	reportDomain,
+	statementToPolicyBindings,
 	stripPolicyCode,
 	textToPolicyHits,
 } from '../configs/policy.js'
@@ -57,7 +71,9 @@ import configuration, { resolveWorkspacePath } from '../vite.config.js'
 import * as rootConfiguration from '../vite.config.js'
 import tsconfig from '../tsconfig.json' with { type: 'json' }
 import {
+	COMPUTED_IMPORT_PATHS,
 	collectSheets,
+	collectStudies,
 	collectFrameworks,
 	readConfigRecord,
 	readConfigScript,
@@ -67,25 +83,55 @@ import {
 	SHEET_POLICY_BARREL_PATTERN,
 	SHEET_POLICY_ORDER_PATTERN,
 	readImportDiagnostics,
+	readNativeDiagnostics,
+	createPolicyComment,
+	createPolicyContext,
+	createPolicyDeclarator,
+	createPolicyExport,
+	createPolicyLazyCases,
+	createPolicyRefused,
 	createPolicyScratch,
+	createPolicySource,
+	createPolicySparse,
 	inspectPolicyConfiguration,
 	inspectPolicyWiring,
 	normalizePolicyFilename,
+	POLICY_EXTRACTOR,
+	POLICY_IMPORT_CASES,
+	POLICY_LAZY_SHAPES,
+	POLICY_NAME_CASES,
+	POLICY_PUBLISHES,
+	POLICY_ROOT,
+	POLICY_WIRING_SETTINGS,
+	POLICY_VUE_COMPOSABLE_SOURCE,
+	POLICY_VUE_RELATIVE_SOURCES,
+	POLICY_VUE_TARGET_CASES,
+	POLICY_VUE_FACES,
+	POLICY_VUE_UNCLASSIFIED_FILES,
+	POLICY_VUE_IMPORT_FORMS,
+	POLICY_VUE_POPULATIONS,
+	POLICY_VUE_IMPORT_CASES,
+	POLICY_VUE_BOUNDARY_CASES,
+	POLICY_VUE_COMPUTED_CASES,
+	POLICY_VUE_COMPUTED_FORMS,
+	POLICY_VUE_PARSER_ROWS,
+	POLICY_VUE_PARSER_CASES,
+	POLICY_VUE_PARSED_CASES,
+	POLICY_VUE_ORIGINAL_RELATIVES,
+	POLICY_VUE_DOMAIN_CASES,
 } from './setupPolicy.js'
 import { describe, expect, it } from 'vitest'
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
 describe('selected faces', () => {
 	it('collects each selected sheet proof from the effective project root and rejects a wrong root', async () => {
-		for (const face of collectSheets(root)) {
-			const proofs = resolve(root, 'tests/src', face)
+		for (const face of collectSheets(POLICY_ROOT)) {
+			const proofs = resolve(POLICY_ROOT, 'tests/src', face)
 			if (!existsSync(proofs)) continue
-			const wrapper = resolve(root, `configs/src/vite.${face}.config.ts`)
+			const wrapper = resolve(POLICY_ROOT, `configs/src/vite.${face}.config.ts`)
 			const loaded = await loadConfigFromFile(
 				{ command: 'serve', mode: 'test' },
 				wrapper,
-				root,
+				POLICY_ROOT,
 				'silent',
 			)
 			if (loaded === null) throw new Error(`Unloaded wrapper ${wrapper}`)
@@ -94,16 +140,19 @@ describe('selected faces', () => {
 			if (include === undefined) throw new Error(`Missing sheet include ${face}`)
 			// Vitest roots a file project at its wrapper directory unless test.root overrides it.
 			const directory = resolve(
-				root,
+				POLICY_ROOT,
 				project.test?.root ?? dirname(wrapper),
 				project.test?.dir || '.',
 			)
 			const collected = globSync(include, { cwd: directory }).map((path) =>
 				resolve(directory, path),
 			)
-			const expected = [resolve(proofs, 'index.test.ts')]
-			if (face === 'styles' && existsSync(resolve(proofs, 'themes/index.test.ts')))
-				expected.push(resolve(proofs, 'themes/index.test.ts'))
+			const expected = [
+				resolve(proofs, 'index.test.ts'),
+				...(face === 'styles' && existsSync(resolve(proofs, 'themes/index.test.ts'))
+					? [resolve(proofs, 'themes/index.test.ts')]
+					: []),
+			]
 			expect(collected).toEqual(expect.arrayContaining(expected))
 			const control = globSync(include, { cwd: dirname(wrapper) }).map((path) =>
 				resolve(dirname(wrapper), path),
@@ -150,15 +199,60 @@ describe('selected faces', () => {
 		}
 	})
 
+	it('collects study tests by exact case, nested or direct, and nothing a lookalike supplies', () => {
+		// Each lookalike gets its own workspace, because a host that folds case writes
+		// `tests/Studies/adapter.test.ts` into an existing `tests/studies` directory.
+		const lookalikes = [
+			['no tests directory', []],
+			['a types module alone', ['tests/studies/types.ts']],
+			['the harness module alone', ['tests/setupStudy.ts']],
+			['a root studies directory alone', ['studies/adapter.test.ts']],
+			['a case-folded directory', ['tests/Studies/adapter.test.ts']],
+			['a test of another suffix', ['tests/studies/adapter.test.js']],
+			['a studies entry that is a file', ['tests/studies']],
+			[
+				'a test inside a nested node_modules',
+				['tests/studies/fixture/node_modules/kit/index.test.ts'],
+			],
+			['a test inside a .git directory', ['tests/studies/fixture/.git/hooks/index.test.ts']],
+		] as const
+		for (const [label, paths] of lookalikes) {
+			const fixture = createPolicyScratch({ prefix: 'config-studies-lookalike-' })
+			try {
+				for (const path of paths) fixture.write(path, '')
+				expect({ label, studies: collectStudies(fixture.path) }).toEqual({ label, studies: [] })
+			} finally {
+				fixture.destroy()
+			}
+		}
+		const fixture = createPolicyScratch({ prefix: 'config-studies-' })
+		try {
+			for (const path of [
+				'tests/studies/types.ts',
+				'tests/studies/memory/deep/adapter.test.ts',
+				'tests/studies/session.test.ts',
+				'tests/studies/memory/adapter.test.js',
+				'src/core/index.ts',
+			])
+				fixture.write(path, '')
+			expect(collectStudies(fixture.path)).toEqual([
+				'tests/studies/memory/deep/adapter.test.ts',
+				'tests/studies/session.test.ts',
+			])
+		} finally {
+			fixture.destroy()
+		}
+	})
+
 	it('loads each selected sheet and framework wrapper and checks its packaging and browser project', async () => {
 		const manifest = readConfigRecord(
-			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+			JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8')),
 		)
 		const scripts = readConfigRecord(manifest.scripts)
-		const sheets = collectSheets(root)
-		const frameworks = collectFrameworks(root)
-		const wrappers = collectFaceWrappers(root)
-		const readings: Array<{
+		const sheets = collectSheets(POLICY_ROOT)
+		const frameworks = collectFrameworks(POLICY_ROOT)
+		const wrappers = collectFaceWrappers(POLICY_ROOT)
+		const configurations: Array<{
 			readonly axis: string
 			readonly face: string
 			readonly wrapper: string
@@ -170,8 +264,8 @@ describe('selected faces', () => {
 		for (const wrapper of wrappers) {
 			const loaded = await loadConfigFromFile(
 				{ command: 'build', mode: 'test' },
-				resolve(root, wrapper),
-				root,
+				resolve(POLICY_ROOT, wrapper),
+				POLICY_ROOT,
 				'silent',
 			)
 			if (loaded === null) throw new Error(`Unloaded wrapper ${wrapper}`)
@@ -193,12 +287,12 @@ describe('selected faces', () => {
 			expect(
 				Object.getOwnPropertyDescriptor(tsconfig.compilerOptions.paths, `@${axis}/${face}`)?.value,
 			).toEqual([`./${axis}/${face}/index.ts`])
-			readings.push({ axis, face, wrapper, project })
+			configurations.push({ axis, face, wrapper, project })
 		}
-		for (const { face, wrapper, project } of readings.filter((reading) =>
-			sheets.includes(reading.face),
+		for (const { face, wrapper, project } of configurations.filter((faceConfiguration) =>
+			sheets.includes(faceConfiguration.face),
 		)) {
-			expect(readFileSync(resolve(root, wrapper), 'utf8')).toContain('sheetProject(')
+			expect(readFileSync(resolve(POLICY_ROOT, wrapper), 'utf8')).toContain('sheetProject(')
 			expect(inspectSheetConfiguration(project)).toEqual([])
 			const exports = readConfigRecord(manifest.exports)
 			expect(exports[`./${face}`]).toBe(`./dist/src/${face}/index.css`)
@@ -210,34 +304,36 @@ describe('selected faces', () => {
 			)
 			expect(readConfigScript(scripts, 'build:src')).toContain(`npm run build:src:${face}`)
 		}
-		for (const { project } of readings.filter((reading) =>
-			frameworks.includes(`${reading.axis}/${reading.face}`),
+		for (const { project } of configurations.filter((faceConfiguration) =>
+			frameworks.includes(`${faceConfiguration.axis}/${faceConfiguration.face}`),
 		)) {
 			expect(project.optimizeDeps?.include).toContain('vue')
 			expect(project.test?.setupFiles).toEqual(
 				expect.arrayContaining(['./tests/setup.ts', './tests/setupBrowser.ts']),
 			)
 		}
-		for (const { wrapper } of readings.filter(
-			(reading) => reading.axis === 'src' && frameworks.includes(`${reading.axis}/${reading.face}`),
+		for (const { wrapper } of configurations.filter(
+			(faceConfiguration) =>
+				faceConfiguration.axis === 'src' &&
+				frameworks.includes(`${faceConfiguration.axis}/${faceConfiguration.face}`),
 		)) {
-			const text = readFileSync(resolve(root, wrapper), 'utf8')
+			const text = readFileSync(resolve(POLICY_ROOT, wrapper), 'utf8')
 			expect(text).toContain('rewriteCoreSpecifier')
 			expect(text).toContain('rewriteBrowserSpecifier')
 		}
-		if (!existsSync(resolve(root, 'src/styles/themes/index.scss'))) return
+		if (!existsSync(resolve(POLICY_ROOT, 'src/styles/themes/index.scss'))) return
 		const loaded = await loadConfigFromFile(
 			{ command: 'build', mode: 'test' },
-			resolve(root, 'configs/src/vite.themes.config.ts'),
-			root,
+			resolve(POLICY_ROOT, 'configs/src/vite.themes.config.ts'),
+			POLICY_ROOT,
 			'silent',
 		)
 		if (loaded === null) throw new Error('Unloaded themes wrapper')
 		expect(loaded.config.build?.outDir).toBe('dist/src/styles/themes')
-		const barrel = readFileSync(resolve(root, 'src/styles/themes/index.scss'), 'utf8')
+		const barrel = readFileSync(resolve(POLICY_ROOT, 'src/styles/themes/index.scss'), 'utf8')
 		expect(readSheetPrelude(barrel)).toMatch(SHEET_POLICY_BARREL_PATTERN)
 		expect(
-			readSheetPrelude(readFileSync(resolve(root, 'src/styles/_tokens.scss'), 'utf8')),
+			readSheetPrelude(readFileSync(resolve(POLICY_ROOT, 'src/styles/_tokens.scss'), 'utf8')),
 		).toMatch(SHEET_POLICY_ORDER_PATTERN)
 		const target = sheets.includes('styles') ? 'styles' : 'themes'
 		const command = sheets.includes('styles')
@@ -256,40 +352,55 @@ describe('selected faces', () => {
 		}
 		const script =
 			'vite build --config configs/src/vite.styles.config.ts && vite build --config configs/src/vite.themes.config.ts'
-		expect(inspectSheetConfiguration(project, script)).toEqual([])
-		expect(
-			inspectSheetConfiguration(
-				{ test: { ...project.test, setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'] } },
-				script,
-			),
-		).toContain('./tests/setupStyles.ts')
-		expect(
-			inspectSheetConfiguration(project, script.split(' && ').reverse().join(' && ')),
-		).toContain('themes order')
+		const scratch = createPolicyScratch({ prefix: 'config-sheet-setup-' })
+		const withoutStyles = {
+			test: { ...project.test, setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'] },
+		}
+		try {
+			expect(inspectSheetConfiguration(withoutStyles, script, scratch.path)).toEqual([])
+			scratch.write('tests/setupStyles.ts', 'export {}\n')
+			expect(inspectSheetConfiguration(project, script, scratch.path)).toEqual([])
+			expect(inspectSheetConfiguration(withoutStyles, script, scratch.path)).toContain(
+				'./tests/setupStyles.ts',
+			)
+			expect(
+				inspectSheetConfiguration(
+					project,
+					script.split(' && ').reverse().join(' && '),
+					scratch.path,
+				),
+			).toContain('themes order')
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('resolves showcase and journey modes for every occupied application', async () => {
 		const applications = [
 			'browser',
-			...collectFrameworks(root)
+			...collectFrameworks(POLICY_ROOT)
 				.filter((face) => face.startsWith('app/'))
 				.map((face) => face.slice(4)),
 		]
 		const manifest = readConfigRecord(
-			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+			JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8')),
 		)
 		const scripts = readConfigRecord(manifest.scripts)
 		const factories = readConfigRecord(rootConfiguration)
 		const showcases = ['configs/app/vite.showcase.config.ts'].filter(
-			(path) => existsSync(resolve(root, path)) || existsSync(resolve(root, 'showcase')),
+			(path) =>
+				existsSync(resolve(POLICY_ROOT, path)) || existsSync(resolve(POLICY_ROOT, 'showcase')),
 		)
 		for (const showcase of showcases) {
-			const wrapper = readFileSync(resolve(root, 'configs/app/vite.showcase.config.ts'), 'utf8')
+			const wrapper = readFileSync(
+				resolve(POLICY_ROOT, 'configs/app/vite.showcase.config.ts'),
+				'utf8',
+			)
 			expect(wrapper).toContain('defineConfig(({ mode }) => appShowcase(mode))')
 			expect(wrapper).not.toContain('dist/showcase')
-			expect(readFileSync(resolve(root, '.prettierignore'), 'utf8').split(/\r\n|\n/u)).toContain(
-				'showcase/',
-			)
+			expect(
+				readFileSync(resolve(POLICY_ROOT, '.prettierignore'), 'utf8').split(/\r\n|\n/u),
+			).toContain('showcase/')
 			for (const application of applications) {
 				const script = 'build:showcase' + (application === 'browser' ? '' : ':' + application)
 				expect(readConfigScript(scripts, script)).toContain('configs/app/vite.showcase.config.ts')
@@ -301,27 +412,27 @@ describe('selected faces', () => {
 				}
 				const loaded = await loadConfigFromFile(
 					{ command: 'build', mode: application },
-					resolve(root, showcase),
-					root,
+					resolve(POLICY_ROOT, showcase),
+					POLICY_ROOT,
 					'silent',
 				)
 				if (loaded === null) throw new Error('Unloaded showcase wrapper')
 				const output = loaded.config.build?.outDir
 				if (output === undefined) throw new Error('Missing showcase output')
-				expect(relative(root, output)).toBe('showcase')
+				expect(relative(POLICY_ROOT, output)).toBe('showcase')
 				expect(() =>
-					expect(relative(root, resolve(root, 'dist/showcase'))).toBe('showcase'),
+					expect(relative(POLICY_ROOT, resolve(POLICY_ROOT, 'dist/showcase'))).toBe('showcase'),
 				).toThrow('expected')
 				expect(loaded.config.build?.emptyOutDir).toBe(false)
 			}
 			expect(scripts.show).toBeUndefined()
 		}
-		if (!existsSync(resolve(root, 'configs/app/vite.journey.config.ts'))) return
+		if (!existsSync(resolve(POLICY_ROOT, 'configs/app/vite.journey.config.ts'))) return
 		for (const application of applications) {
 			const loaded = await loadConfigFromFile(
 				{ command: 'serve', mode: application },
-				resolve(root, 'configs/app/vite.journey.config.ts'),
-				root,
+				resolve(POLICY_ROOT, 'configs/app/vite.journey.config.ts'),
+				POLICY_ROOT,
 				'silent',
 			)
 			if (
@@ -330,8 +441,8 @@ describe('selected faces', () => {
 				loaded.config.test.projects.length === 0
 			)
 				throw new Error('Missing journey projects')
-			const variants = new Set<string>()
-			const declared = new Set<string>()
+			// Each awaited factory appends the variant it provides and the variants it declares.
+			const provided: Array<{ readonly variant: string; readonly names: readonly string[] }> = []
 			for (const factory of loaded.config.test.projects) {
 				if (typeof factory !== 'function') throw new Error('Missing journey factory')
 				const project = readConfigRecord(
@@ -343,12 +454,14 @@ describe('selected faces', () => {
 				const provide = readConfigRecord(test.provide)
 				if (typeof provide.variant !== 'string' || !Array.isArray(provide.variants))
 					throw new Error('Missing journey variant values')
-				variants.add(provide.variant)
-				for (const value of provide.variants) {
-					const variant = readConfigRecord(value)
-					if (typeof variant.name !== 'string') throw new Error('Unnamed journey variant')
-					declared.add(variant.name)
-				}
+				provided.push({
+					variant: provide.variant,
+					names: provide.variants.map((value: unknown) => {
+						const variant = readConfigRecord(value)
+						if (typeof variant.name !== 'string') throw new Error('Unnamed journey variant')
+						return variant.name
+					}),
+				})
 				const selected = provide.variants
 					.map(readConfigRecord)
 					.find((variant) => variant.name === provide.variant)
@@ -370,7 +483,52 @@ describe('selected faces', () => {
 					expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
 				)
 			}
-			expect(variants).toEqual(declared)
+			expect(new Set(provided.map(({ variant }) => variant))).toEqual(
+				new Set(provided.flatMap(({ names }) => names)),
+			)
+		}
+		// The runner loads the wrapper beside this file's own root configuration, so every journey
+		// project's record and the commands module's export are one object graph. A wrapper can
+		// add commands of its own; it keeps every command the module registers.
+		const registered = (
+			await Promise.all(
+				Object.values(import.meta.glob<unknown>('../configs/commands.ts')).map((load) => load()),
+			)
+		).map((module) => readConfigRecord(readConfigRecord(module).commands))
+		const wrappers = await Promise.all(
+			Object.values(
+				import.meta.glob<unknown>('../configs/app/vite.journey.config.ts', { import: 'default' }),
+			).map((load) => load()),
+		)
+		expect(wrappers).toHaveLength(1)
+		for (const wrapper of wrappers) {
+			if (typeof wrapper !== 'function') throw new Error('Missing journey wrapper factory')
+			for (const application of applications) {
+				// Vite accepts an async config factory, so the wrapper's result is awaited like each project's.
+				const composed = readConfigRecord(
+					await Reflect.apply(wrapper, undefined, [{ command: 'serve', mode: application }]),
+				)
+				const projects = readConfigRecord(composed.test).projects
+				if (!Array.isArray(projects) || projects.length === 0)
+					throw new Error('Missing journey projects')
+				for (const project of projects) {
+					if (typeof project !== 'function') throw new Error('Missing journey factory')
+					const held = readConfigRecord(
+						readConfigRecord(
+							readConfigRecord(
+								readConfigRecord(
+									await Reflect.apply(project, undefined, [
+										{ command: 'serve', mode: application },
+									]),
+								).test,
+							).browser,
+						).commands,
+					)
+					for (const commands of registered) {
+						for (const [key, command] of Object.entries(commands)) expect(held[key]).toBe(command)
+					}
+				}
+			}
 		}
 		const factory = factories.appJourney
 		if (typeof factory !== 'function') throw new Error('Missing application journey')
@@ -383,14 +541,55 @@ describe('selected faces', () => {
 		).toThrow('not declared')
 	})
 
-	it('collects both browser setup proofs and optimizes every selected browser factory', () => {
+	it('collects both browser setup proofs and optimizes every selected browser factory', async () => {
 		const factories = readConfigRecord(rootConfiguration)
 		const manifest = readConfigRecord(
-			JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')),
+			JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8')),
 		)
 		const dependencies = {
 			...readConfigRecord(manifest.dependencies ?? {}),
 			...readConfigRecord(manifest.devDependencies ?? {}),
+		}
+		// The runner loads the module this file's root configuration imports, so each factory's
+		// record and the module's export are one object graph.
+		const registered = (
+			await Promise.all(
+				Object.values(import.meta.glob<unknown>('../configs/commands.ts')).map((load) => load()),
+			)
+		).map((module) => readConfigRecord(readConfigRecord(module).commands))
+		// The configuration bundle carries `configs/commands.ts` into every load, builds included,
+		// and leaves an alias it cannot resolve as a bare package import. The module therefore
+		// imports only a `node:` module or a declared package, and loads workspace source inside a
+		// command. The control carries both refused forms.
+		const control =
+			"import { GREETING } from '@src/core'\nexport * from '../src/server/index.js'\nimport { join } from 'node:path'\nimport type { BrowserConfigOptions } from 'vitest/node'\n"
+		for (const [path, text, refused] of [
+			['control', control, ['@src/core', '../src/server/index.js']],
+			...['configs/commands.ts']
+				.filter((module) => existsSync(resolve(POLICY_ROOT, module)))
+				.map((module) => [module, readFileSync(resolve(POLICY_ROOT, module), 'utf8'), []] as const),
+		] as const) {
+			const specifiers = parseSync('commands.ts', text).program.body.flatMap((statement) =>
+				statement.type === 'ImportDeclaration' ||
+				statement.type === 'ExportAllDeclaration' ||
+				(statement.type === 'ExportNamedDeclaration' && statement.source !== null)
+					? [statement.source?.value ?? '']
+					: [],
+			)
+			expect({
+				path,
+				refused: specifiers.filter(
+					(specifier) =>
+						!specifier.startsWith('node:') &&
+						!Object.hasOwn(
+							dependencies,
+							specifier
+								.split('/')
+								.slice(0, specifier.startsWith('@') ? 2 : 1)
+								.join('/'),
+						),
+				),
+			}).toStrictEqual({ path, refused })
 		}
 		for (const name of [
 			'srcBrowser',
@@ -422,9 +621,13 @@ describe('selected faces', () => {
 					...(dependencies['@orkestrel/contract'] === undefined ? [] : ['@orkestrel/contract']),
 				]),
 			)
+			for (const commands of registered) {
+				const held = readConfigRecord(readConfigRecord(test.browser).commands)
+				for (const [key, command] of Object.entries(commands)) expect(held[key]).toBe(command)
+			}
 		}
 		for (const proof of ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'].filter((path) =>
-			existsSync(resolve(root, path)),
+			existsSync(resolve(POLICY_ROOT, path)),
 		)) {
 			const factory = factories.setupBrowser
 			if (typeof factory !== 'function') throw new Error('Missing browser setup project')
@@ -443,59 +646,32 @@ describe('selected faces', () => {
 	})
 })
 
-// The `src` axis a declaration roll-up reads, derived from a recognized source environment that is
-// a physical directory rather than from a `src` entry of any shape. A regular file, an empty
-// directory, a directory holding no recognized environment, a symbolic link, and an entry this host
-// refuses to inspect each leave a workspace publishing nothing, and reading the entry alone would
-// put every one of them under the face proof. The inspection is caught rather than excused by
-// option: `throwIfNoEntry` excuses an absent path alone and rethrows a permission refusal, and a
-// throw on this line is a collection error that takes this whole file down in that target rather
-// than failing one case. `isPhysicalDirectory` reads the same two facts off an `lstat` and returns
-// false for every inspection error, and this reads them the same way. This is the derivation
-// `targetToEnvironments` uses, which filters the environment names by a contained physical
-// directory, and it answers the same question `blueprintToScripts`
-// answers from a blueprint's own `src` list. A workspace declaring app environments alone publishes
-// no library, so it vendors no `configs/src/` face wrapper and has no roll-up to measure. A face
-// proof is conditioned on this axis rather than on a face wrapper: a workspace that declares the
-// axis and vendors no wrapper carries the defect such a proof reports, so that workspace must still
-// fail the proof. The manifest cases read the same fact from their own `private` flag and name it
-// `manifestPublishes` for the source that decides it there; this reads the axis on disk, so a
-// workspace whose manifest and shape disagree fails one of the two rather than neither.
-const publishes = ['core', 'browser', 'server'].some((environment) => {
-	try {
-		const entry = lstatSync(resolve(root, 'src', environment))
-		return entry.isDirectory() && !entry.isSymbolicLink()
-	} catch {
-		return false
-	}
-})
-
-// A declaration roll-up loads the extractor package, which only a workspace publishing source from
-// `src` installs. The resolution below is the mechanism its proof is conditioned on.
-let extractorPath: string | undefined
-try {
-	extractorPath = createRequire(import.meta.url).resolve('@microsoft/api-extractor')
-} catch {
-	extractorPath = undefined
-}
-
 describe('root configuration', () => {
 	it('resolves every declared alias to its real entry', () => {
 		const aliases = configuration.resolve?.alias
 		if (typeof aliases !== 'object' || aliases === null || Array.isArray(aliases)) {
 			throw new Error('The root configuration carries no alias record')
 		}
-		const required = new Map<string, string>()
-		for (const axis of ['src', 'app']) {
-			for (const environment of ['core', 'browser', 'server']) {
-				const path = `${axis}/${environment}/index.ts`
-				if (existsSync(resolve(root, path))) required.set(`@${axis}/${environment}`, path)
-			}
-		}
-		for (const face of collectSheets(root)) required.set(`@src/${face}`, `src/${face}/index.ts`)
-		for (const face of collectFrameworks(root)) required.set(`@${face}`, `${face}/index.ts`)
+		const required = new Map<string, string>([
+			...['src', 'app'].flatMap((axis) =>
+				['core', 'browser', 'server'].flatMap((environment): Array<[string, string]> => {
+					const path = `${axis}/${environment}/index.ts`
+					return existsSync(resolve(POLICY_ROOT, path)) ? [[`@${axis}/${environment}`, path]] : []
+				}),
+			),
+			...collectSheets(POLICY_ROOT).map((face): [string, string] => [
+				`@src/${face}`,
+				`src/${face}/index.ts`,
+			]),
+			...collectFrameworks(POLICY_ROOT).map((face): [string, string] => [
+				`@${face}`,
+				`${face}/index.ts`,
+			]),
+		])
 		const declared = new Map(Object.entries(tsconfig.compilerOptions.paths))
-		expect(required.size > 0 || existsSync(resolve(root, 'src/styles/themes/sheet.ts'))).toBe(true)
+		expect(
+			required.size > 0 || existsSync(resolve(POLICY_ROOT, 'src/styles/themes/sheet.ts')),
+		).toBe(true)
 		if (required.size === 0) {
 			if (declared.size !== 0 || Object.keys(aliases).length !== 0)
 				throw new Error('The themes-only workspace declares an unexpected alias')
@@ -514,138 +690,151 @@ describe('root configuration', () => {
 			if (path === undefined) throw new Error(`${key} carries no target`)
 			const target = resolveWorkspacePath(path)
 			expect(existsSync(target)).toBe(true)
-			expect(target).toBe(resolve(root, expected))
+			expect(target).toBe(resolve(POLICY_ROOT, expected))
 			expect(Object.getOwnPropertyDescriptor(aliases, key)?.value).toBe(target)
 		}
 	})
 
 	it('registers every workspace project with its fixed include and setup files', () => {
-		const expected = new Map<
-			string,
-			{
-				readonly benchmark?: readonly string[]
-				readonly include: string | readonly string[]
-				readonly parallel?: boolean
-				readonly pool?: string
-				readonly setup: readonly string[]
-			}
-		>()
-		if (existsSync(resolve(root, 'src/core'))) {
-			expected.set('src:core', {
-				include: 'tests/src/core/**/*.test.ts',
-				setup: ['./tests/setup.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'src/browser'))) {
-			expected.set('src:browser', {
-				include: 'tests/src/browser/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupBrowser.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'src/server'))) {
-			expected.set('src:server', {
-				include: 'tests/src/server/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'src/bin'))) {
-			expected.set('src:bin', {
-				include: 'tests/src/bin/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'app/core'))) {
-			expected.set('app:core', {
-				include: 'tests/app/core/**/*.test.ts',
-				setup: ['./tests/setup.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'app/browser'))) {
-			expected.set('app:browser', {
-				include: 'tests/app/browser/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupBrowser.ts'],
-			})
-		}
-		if (existsSync(resolve(root, 'app/server'))) {
-			expected.set('app:server', {
-				include: 'tests/app/server/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
-			})
-		}
-		// The `configs/agents/tsconfig.skills.json` wrapper selects the `skills` blueprint fact, and the
-		// project it registers runs the mirrored proofs under `tests/agents/`.
-		if (existsSync(resolve(root, 'configs/agents/tsconfig.skills.json'))) {
-			expected.set('skills', {
-				include: 'tests/agents/**/*.test.ts',
-				setup: ['./tests/setup.ts'],
-			})
-		}
-		for (const label of [
-			'policy',
-			'config',
-			'guides',
-			'conformance',
-			'distribution',
-			'integration',
-		]) {
-			if (!existsSync(resolve(root, `tests/${label}.test.ts`))) continue
-			const setup = ['./tests/setup.ts']
-			if (label === 'conformance') setup.push('./tests/setupServer.ts')
-			if (
-				label === 'integration' &&
-				(collectSheets(root).length > 0 ||
-					existsSync(resolve(root, 'src/styles/themes/index.scss')))
-			)
-				setup.push('./tests/setupBrowser.ts', './tests/setupStyles.ts')
-			expected.set(label, {
-				include: `tests/${label}.test.ts`,
-				setup,
-			})
-		}
 		const browserProofs = ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts']
-		const setupProofs = globSync('tests/setup*.test.ts', { cwd: root })
+		const setupProofs = globSync('tests/setup*.test.ts', { cwd: POLICY_ROOT })
 			.map((path) => path.replaceAll('\\', '/'))
 			.filter((path) => /^tests\/setup[^/]*\.test\.ts$/u.test(path))
-		if (setupProofs.some((path) => !browserProofs.includes(path))) {
-			expected.set('setup', {
-				include: 'tests/setup*.test.ts',
-				setup: ['./tests/setup.ts'],
-			})
-		}
-		if (setupProofs.some((path) => browserProofs.includes(path))) {
-			expected.set('setup:browser', {
-				include: browserProofs,
-				setup: ['./tests/setup.ts', './tests/setupBrowser.ts'],
-			})
-		}
-		// The live-service project covers a directory rather than one proof, so its
-		// readiness module is the fact that selects it. A suite beneath
-		// `tests/service` with no setup module is a project nothing configures.
-		if (existsSync(resolve(root, 'tests/setupService.ts'))) {
-			expected.set('service', {
-				include: 'tests/service/**/*.test.ts',
-				setup: ['./tests/setup.ts', './tests/setupService.ts'],
-			})
-		}
-		expected.set('probe', {
-			benchmark: ['tmp/probes/**/*.test.ts', 'tests/**/*.test.ts'],
-			include: 'tmp/probes/**/*.test.ts',
-			parallel: false,
-			pool: 'threads',
-			setup: ['./tests/setup.ts'],
-		})
-		// A row that is a configuration rather than a factory. Every generated
-		// workspace registers the factory itself, so this shape is required by the
-		// expectation rather than observed: the proof exercises that resolution wherever it runs
-		// instead of only where a hand-written configuration happens to produce it.
-		expected.set('concrete', { include: 'tests/concrete.test.ts', setup: ['./tests/setup.ts'] })
+		const expected = new Map<string, PolicyProject>([
+			// Each row is a project label, the path whose presence selects it, its include, and its setup.
+			...(
+				[
+					['src:core', 'src/core', 'tests/src/core/**/*.test.ts', ['./tests/setup.ts']],
+					[
+						'src:browser',
+						'src/browser',
+						'tests/src/browser/**/*.test.ts',
+						['./tests/setup.ts', './tests/setupBrowser.ts'],
+					],
+					[
+						'src:server',
+						'src/server',
+						'tests/src/server/**/*.test.ts',
+						['./tests/setup.ts', './tests/setupServer.ts'],
+					],
+					[
+						'src:bin',
+						'src/bin',
+						'tests/src/bin/**/*.test.ts',
+						['./tests/setup.ts', './tests/setupServer.ts'],
+					],
+					['app:core', 'app/core', 'tests/app/core/**/*.test.ts', ['./tests/setup.ts']],
+					[
+						'app:browser',
+						'app/browser',
+						'tests/app/browser/**/*.test.ts',
+						['./tests/setup.ts', './tests/setupBrowser.ts'],
+					],
+					[
+						'app:server',
+						'app/server',
+						'tests/app/server/**/*.test.ts',
+						['./tests/setup.ts', './tests/setupServer.ts'],
+					],
+					// The `configs/agents/tsconfig.skills.json` wrapper selects the `skills` blueprint fact, and the
+					// project it registers runs the mirrored proofs under `tests/agents/`.
+					[
+						'skills',
+						'configs/agents/tsconfig.skills.json',
+						'tests/agents/**/*.test.ts',
+						['./tests/setup.ts'],
+					],
+				] as const
+			)
+				.filter(([, path]) => existsSync(resolve(POLICY_ROOT, path)))
+				.map(([label, , include, setup]): [string, PolicyProject] => [label, { include, setup }]),
+			...['policy', 'config', 'guides', 'conformance', 'tree', 'distribution', 'integration']
+				.filter((label) => readdirSync(resolve(POLICY_ROOT, 'tests')).includes(`${label}.test.ts`))
+				.map((label): [string, PolicyProject] => [
+					label,
+					{
+						include: `tests/${label}.test.ts`,
+						setup: [
+							'./tests/setup.ts',
+							...(label === 'conformance' || label === 'tree' ? ['./tests/setupServer.ts'] : []),
+							...(label === 'integration' &&
+							(collectSheets(POLICY_ROOT).length > 0 ||
+								existsSync(resolve(POLICY_ROOT, 'src/styles/themes/index.scss')))
+								? [
+										'./tests/setupBrowser.ts',
+										...(existsSync(resolve(POLICY_ROOT, 'tests/setupStyles.ts'))
+											? ['./tests/setupStyles.ts']
+											: []),
+									]
+								: []),
+						],
+					},
+				]),
+			...(setupProofs.some((path) => !browserProofs.includes(path))
+				? [
+						['setup', { include: 'tests/setup*.test.ts', setup: ['./tests/setup.ts'] }] satisfies [
+							string,
+							PolicyProject,
+						],
+					]
+				: []),
+			...(setupProofs.some((path) => browserProofs.includes(path))
+				? [
+						[
+							'setup:browser',
+							{ include: browserProofs, setup: ['./tests/setup.ts', './tests/setupBrowser.ts'] },
+						] satisfies [string, PolicyProject],
+					]
+				: []),
+			// The live-service project covers a directory rather than one proof, so its
+			// readiness module is the fact that selects it. A suite beneath
+			// `tests/service` with no setup module is a project nothing configures.
+			...(existsSync(resolve(POLICY_ROOT, 'tests/setupService.ts'))
+				? [
+						[
+							'service',
+							{
+								include: 'tests/service/**/*.test.ts',
+								setup: ['./tests/setup.ts', './tests/setupService.ts'],
+							},
+						] satisfies [string, PolicyProject],
+					]
+				: []),
+			// The study project covers a directory too, and the exact-case test files beneath
+			// `tests/studies` select it, outside any `node_modules` or `.git` directory, which Vitest's
+			// default exclude never collects. `tests/setupStudy.ts` is a harness module those tests import
+			// and no project loads it as a setup file, so the setup list names `tests/setup.ts` alone.
+			...(collectStudies(POLICY_ROOT).length > 0
+				? [
+						[
+							'studies',
+							{ include: 'tests/studies/**/*.test.ts', setup: ['./tests/setup.ts'] },
+						] satisfies [string, PolicyProject],
+					]
+				: []),
+			[
+				'probe',
+				{
+					benchmark: ['tmp/probes/**/*.bench.ts', 'tests/**/*.bench.ts'],
+					include: 'tmp/probes/**/*.test.ts',
+					parallel: false,
+					pool: 'threads',
+					setup: ['./tests/setup.ts'],
+				},
+			],
+			// A row that is a configuration rather than a factory. Every generated
+			// workspace registers the factory itself, so this shape is required by the
+			// expectation rather than observed: the proof exercises that resolution wherever it runs
+			// instead of only where a hand-written configuration happens to produce it.
+			['concrete', { include: 'tests/concrete.test.ts', setup: ['./tests/setup.ts'] }],
+		])
 
 		const projects = configuration.test?.projects
 		if (!Array.isArray(projects)) throw new Error('The root configuration carries no projects')
-		let extraLoaded = false
+		const extraLoads: string[] = []
 		const control = Object.defineProperty(
 			() => {
-				extraLoaded = true
+				extraLoads.push('control')
 				return {
 					test: {
 						name: { label: 'control' },
@@ -665,112 +854,110 @@ describe('root configuration', () => {
 			},
 		}
 		const controlled = projects.concat(control, concrete)
-		const configured = new Map<
-			string,
-			{
-				readonly benchmark?: readonly string[]
-				readonly include: string | readonly string[]
-				readonly parallel?: boolean
-				readonly pool?: string
-				readonly setup: readonly string[]
-			}
-		>()
-		for (const [requiredLabel] of expected) {
-			const factoryName = requiredLabel.replace(/:([a-z])/gu, (_match, letter: string) =>
-				letter.toUpperCase(),
-			)
-			// A row is either the factory named for the project or the configuration
-			// that project resolves to, and a required project is found as whichever
-			// it is. Only the required row is read, so an extra factory is still
-			// selected by name and never called.
-			const row = controlled.find((candidate) => {
-				if (typeof candidate === 'function') return candidate.name === factoryName
-				if (typeof candidate !== 'object' || candidate === null) return false
-				const block: unknown = Object.getOwnPropertyDescriptor(candidate, 'test')?.value
-				if (typeof block !== 'object' || block === null) return false
-				const named: unknown = Object.getOwnPropertyDescriptor(block, 'name')?.value
-				if (typeof named !== 'object' || named === null) return false
-				return Object.getOwnPropertyDescriptor(named, 'label')?.value === requiredLabel
-			})
-			if (row === undefined) {
-				throw new Error(`${requiredLabel} has no project factory or configuration`)
-			}
-			const project: unknown = typeof row === 'function' ? Reflect.apply(row, undefined, []) : row
-			if (typeof project !== 'object' || project === null) {
-				throw new Error('A project factory returned no configuration')
-			}
-			const test: unknown = Object.getOwnPropertyDescriptor(project, 'test')?.value
-			if (typeof test !== 'object' || test === null) {
-				throw new Error('A project configuration carries no test block')
-			}
-			const name: unknown = Object.getOwnPropertyDescriptor(test, 'name')?.value
-			const include: unknown = Object.getOwnPropertyDescriptor(test, 'include')?.value
-			const exclude: unknown = Object.getOwnPropertyDescriptor(test, 'exclude')?.value
-			const setup: unknown = Object.getOwnPropertyDescriptor(test, 'setupFiles')?.value
-			const label =
-				typeof name === 'object' && name !== null
-					? Object.getOwnPropertyDescriptor(name, 'label')?.value
-					: undefined
-			if (
-				typeof label !== 'string' ||
-				!Array.isArray(include) ||
-				typeof include[0] !== 'string' ||
-				!Array.isArray(setup) ||
-				!setup.every((path) => typeof path === 'string')
-			) {
-				throw new Error('A project does not expose one include and its setup files')
-			}
-			const effective = include.filter(
-				(path) => typeof path === 'string' && (!Array.isArray(exclude) || !exclude.includes(path)),
-			)
-			if (
-				effective.length !== (label === 'setup:browser' ? 2 : 1) ||
-				typeof effective[0] !== 'string'
-			) {
-				throw new Error(`${label} does not resolve to its required includes`)
-			}
-			for (const required of label === 'setup' ? browserProofs : [])
-				expect(exclude).toContain(required)
-			if (label === 'probe') {
-				const benchmark: unknown = Object.getOwnPropertyDescriptor(test, 'benchmark')?.value
-				const parallel: unknown = Object.getOwnPropertyDescriptor(test, 'fileParallelism')?.value
-				const pool: unknown = Object.getOwnPropertyDescriptor(test, 'pool')?.value
-				if (typeof benchmark !== 'object' || benchmark === null) {
-					throw new Error('The probe project carries no benchmark block')
-				}
-				const benchmarkInclude: unknown = Object.getOwnPropertyDescriptor(
-					benchmark,
-					'include',
-				)?.value
-				if (
-					!Array.isArray(benchmarkInclude) ||
-					!benchmarkInclude.every((path) => typeof path === 'string') ||
-					typeof parallel !== 'boolean' ||
-					typeof pool !== 'string'
-				) {
-					throw new Error('The probe project carries an invalid benchmark configuration')
-				}
-				configured.set(label, {
-					benchmark: benchmarkInclude,
-					include: effective[0],
-					parallel,
-					pool,
-					setup: [...new Set(setup)],
+		const configured = new Map(
+			[...expected].map(([requiredLabel]): [string, PolicyProject] => {
+				const factoryName = requiredLabel.replace(/:([a-z])/gu, (_match, letter: string) =>
+					letter.toUpperCase(),
+				)
+				// A row is either the factory named for the project or the configuration
+				// that project resolves to, and a required project is found as whichever
+				// it is. Only the required row is read, so an extra factory is still
+				// selected by name and never called.
+				const row = controlled.find((candidate) => {
+					if (typeof candidate === 'function') return candidate.name === factoryName
+					if (typeof candidate !== 'object' || candidate === null) return false
+					const block: unknown = Object.getOwnPropertyDescriptor(candidate, 'test')?.value
+					if (typeof block !== 'object' || block === null) return false
+					const named: unknown = Object.getOwnPropertyDescriptor(block, 'name')?.value
+					if (typeof named !== 'object' || named === null) return false
+					return Object.getOwnPropertyDescriptor(named, 'label')?.value === requiredLabel
 				})
-				continue
-			}
-			configured.set(label, {
-				include: label === 'setup:browser' ? effective : effective[0],
-				setup: [...new Set(setup)],
-			})
-		}
+				if (row === undefined) {
+					throw new Error(`${requiredLabel} has no project factory or configuration`)
+				}
+				const project: unknown = typeof row === 'function' ? Reflect.apply(row, undefined, []) : row
+				if (typeof project !== 'object' || project === null) {
+					throw new Error('A project factory returned no configuration')
+				}
+				const test: unknown = Object.getOwnPropertyDescriptor(project, 'test')?.value
+				if (typeof test !== 'object' || test === null) {
+					throw new Error('A project configuration carries no test block')
+				}
+				const name: unknown = Object.getOwnPropertyDescriptor(test, 'name')?.value
+				const include: unknown = Object.getOwnPropertyDescriptor(test, 'include')?.value
+				const exclude: unknown = Object.getOwnPropertyDescriptor(test, 'exclude')?.value
+				const setup: unknown = Object.getOwnPropertyDescriptor(test, 'setupFiles')?.value
+				const label =
+					typeof name === 'object' && name !== null
+						? Object.getOwnPropertyDescriptor(name, 'label')?.value
+						: undefined
+				if (
+					typeof label !== 'string' ||
+					!Array.isArray(include) ||
+					typeof include[0] !== 'string' ||
+					!Array.isArray(setup) ||
+					!setup.every((path) => typeof path === 'string')
+				) {
+					throw new Error('A project does not expose one include and its setup files')
+				}
+				const effective = include.filter(
+					(path) =>
+						typeof path === 'string' && (!Array.isArray(exclude) || !exclude.includes(path)),
+				)
+				if (
+					effective.length !== (label === 'setup:browser' ? 2 : 1) ||
+					typeof effective[0] !== 'string'
+				) {
+					throw new Error(`${label} does not resolve to its required includes`)
+				}
+				for (const required of label === 'setup' ? browserProofs : [])
+					expect(exclude).toContain(required)
+				if (label === 'probe') {
+					const benchmark: unknown = Object.getOwnPropertyDescriptor(test, 'benchmark')?.value
+					const parallel: unknown = Object.getOwnPropertyDescriptor(test, 'fileParallelism')?.value
+					const pool: unknown = Object.getOwnPropertyDescriptor(test, 'pool')?.value
+					if (typeof benchmark !== 'object' || benchmark === null) {
+						throw new Error('The probe project carries no benchmark block')
+					}
+					const benchmarkInclude: unknown = Object.getOwnPropertyDescriptor(
+						benchmark,
+						'include',
+					)?.value
+					if (
+						!Array.isArray(benchmarkInclude) ||
+						!benchmarkInclude.every((path) => typeof path === 'string') ||
+						typeof parallel !== 'boolean' ||
+						typeof pool !== 'string'
+					) {
+						throw new Error('The probe project carries an invalid benchmark configuration')
+					}
+					return [
+						label,
+						{
+							benchmark: benchmarkInclude,
+							include: effective[0],
+							parallel,
+							pool,
+							setup: [...new Set(setup)],
+						},
+					]
+				}
+				return [
+					label,
+					{
+						include: label === 'setup:browser' ? effective : effective[0],
+						setup: [...new Set(setup)],
+					},
+				]
+			}),
+		)
 
 		// Required projects come from present source and test paths. Each factory is selected by name
 		// before its result is read. Extra factories are ignored without validating their result shape.
-		expect(extraLoaded).toBe(false)
+		expect(extraLoads).toStrictEqual([])
 		for (const [label, project] of expected) expect(configured.get(label)).toStrictEqual(project)
-		for (const label of ['setup', 'setup:browser']) {
-			const name = label === 'setup' ? 'setup' : 'setupBrowser'
+		for (const label of ['setup', 'setup:browser', 'tree']) {
+			const name = label === 'setup:browser' ? 'setupBrowser' : label
 			expect(projects.some((entry) => typeof entry === 'function' && entry.name === name)).toBe(
 				expected.has(label),
 			)
@@ -818,21 +1005,25 @@ describe('root configuration', () => {
 			sentinel: true,
 		}
 		const test = { name: { label: 'control' }, include: ['tests/control.test.ts'] }
-		const ignoring = Object.defineProperty(() => ({ test }), 'name', { value: 'ignoring' })
-		const spreading = Object.defineProperty((record: object) => ({ ...record, test }), 'name', {
+		const ignoreInput = Object.defineProperty(() => ({ test }), 'name', { value: 'ignoring' })
+		const spreadInput = Object.defineProperty((record: object) => ({ ...record, test }), 'name', {
 			value: 'spreading',
 		})
 		const wrappers = projects.filter((entry) => typeof entry === 'string')
-		const sheets = collectSheets(root)
-		const expectedWrappers = sheets.map((face) => `./configs/src/vite.${face}.config.ts`)
-		if (!sheets.includes('styles') && existsSync(resolve(root, 'src/styles/themes/index.scss')))
-			expectedWrappers.push('./configs/src/vite.themes.config.ts')
+		const sheets = collectSheets(POLICY_ROOT)
+		const expectedWrappers = [
+			...sheets.map((face) => `./configs/src/vite.${face}.config.ts`),
+			...(!sheets.includes('styles') &&
+			existsSync(resolve(POLICY_ROOT, 'src/styles/themes/index.scss'))
+				? ['./configs/src/vite.themes.config.ts']
+				: []),
+		]
 		expect([...wrappers].sort()).toEqual(expectedWrappers.sort())
 		for (const wrapper of wrappers) {
 			const loaded = await loadConfigFromFile(
 				{ command: 'serve', mode: invocation.mode },
-				resolve(root, wrapper),
-				root,
+				resolve(POLICY_ROOT, wrapper),
+				POLICY_ROOT,
 				'silent',
 			)
 			if (loaded === null) throw new Error(`Unloaded file project ${wrapper}`)
@@ -847,8 +1038,8 @@ describe('root configuration', () => {
 			).toThrow('expected')
 		}
 		const factories = projects.filter((entry) => typeof entry !== 'string')
-		const entries: readonly unknown[] = [...factories, ignoring, spreading, { test }]
-		const readings = entries.map((entry) => {
+		const entries: readonly unknown[] = [...factories, ignoreInput, spreadInput, { test }]
+		const outcomes = entries.map((entry) => {
 			if (typeof entry !== 'function') {
 				return { name: undefined, callable: false, mode: undefined, leaked: [] }
 			}
@@ -866,13 +1057,13 @@ describe('root configuration', () => {
 			}
 		})
 		const forwarded = { callable: true, mode: 'sentinel-mode', leaked: [] }
-		expect(readings.slice(0, factories.length)).toStrictEqual(
+		expect(outcomes.slice(0, factories.length)).toStrictEqual(
 			factories.map((entry) => ({
 				name: typeof entry === 'function' ? entry.name : undefined,
 				...forwarded,
 			})),
 		)
-		expect(readings.slice(factories.length)).toStrictEqual([
+		expect(outcomes.slice(factories.length)).toStrictEqual([
 			{ name: 'ignoring', callable: true, mode: undefined, leaked: [] },
 			{
 				name: 'spreading',
@@ -882,8 +1073,8 @@ describe('root configuration', () => {
 			},
 			{ name: undefined, callable: false, mode: undefined, leaked: [] },
 		])
-		for (const reading of readings.slice(factories.length)) {
-			expect({ ...reading, name: undefined }).not.toStrictEqual({ name: undefined, ...forwarded })
+		for (const outcome of outcomes.slice(factories.length)) {
+			expect({ ...outcome, name: undefined }).not.toStrictEqual({ name: undefined, ...forwarded })
 		}
 
 		// A record that carries no string `mode` is refused rather than forwarded as a project
@@ -897,28 +1088,32 @@ describe('root configuration', () => {
 	})
 
 	it('requires and validates every selected target wrapper', async () => {
-		const required: string[] = []
-		for (const axis of ['src', 'app']) {
-			for (const environment of ['core', 'browser', 'server']) {
-				if (!existsSync(resolve(root, axis, environment))) continue
-				required.push(`configs/${axis}/tsconfig.${environment}.json`)
-				if (axis === 'src' || environment !== 'core') {
-					required.push(`configs/${axis}/vite.${environment}.config.ts`)
-				}
-			}
-		}
-		for (const face of collectFrameworks(root)) {
-			required.push(`configs/${face.replace('/', '/tsconfig.')}.json`)
-		}
-		if (existsSync(resolve(root, 'src/bin'))) {
-			required.push('configs/src/tsconfig.bin.json', 'configs/src/vite.bin.config.ts')
-		}
-		if (existsSync(resolve(root, 'configs/app/vite.showcase.config.ts'))) {
-			required.push('configs/app/vite.showcase.config.ts')
-		}
-		if (existsSync(resolve(root, 'configs/app/vite.journey.config.ts'))) {
-			required.push('configs/app/vite.journey.config.ts')
-		}
+		const required = [
+			...['src', 'app'].flatMap((axis) =>
+				['core', 'browser', 'server'].flatMap((environment) =>
+					existsSync(resolve(POLICY_ROOT, axis, environment))
+						? [
+								`configs/${axis}/tsconfig.${environment}.json`,
+								...(axis === 'src' || environment !== 'core'
+									? [`configs/${axis}/vite.${environment}.config.ts`]
+									: []),
+							]
+						: [],
+				),
+			),
+			...collectFrameworks(POLICY_ROOT).map(
+				(face) => `configs/${face.replace('/', '/tsconfig.')}.json`,
+			),
+			...(existsSync(resolve(POLICY_ROOT, 'src/bin'))
+				? ['configs/src/tsconfig.bin.json', 'configs/src/vite.bin.config.ts']
+				: []),
+			...(existsSync(resolve(POLICY_ROOT, 'configs/app/vite.showcase.config.ts'))
+				? ['configs/app/vite.showcase.config.ts']
+				: []),
+			...(existsSync(resolve(POLICY_ROOT, 'configs/app/vite.journey.config.ts'))
+				? ['configs/app/vite.journey.config.ts']
+				: []),
+		]
 		if (required[0] === undefined) {
 			throw new Error('The workspace selects no configuration target')
 		}
@@ -929,10 +1124,9 @@ describe('root configuration', () => {
 				'configs/src/tsconfig.*.json',
 				'configs/app/tsconfig.*.json',
 			],
-			{ cwd: root },
+			{ cwd: POLICY_ROOT },
 		).map((path) => path.replaceAll('\\', '/'))
 		const extra = 'configs/app/vite.core.config.ts'
-		const controlled = found.concat(extra)
 		const planted = createPolicyScratch({ prefix: 'config-journey-' })
 		const journey = 'configs/app/vite.journey.config.ts'
 		planted.write(
@@ -951,9 +1145,11 @@ describe('root configuration', () => {
 }\n`,
 		)
 		const journeys: object[][] = []
-		const targets = required.map((wrapper) => ({ wrapper, directory: root }))
-		targets.push({ wrapper: journey, directory: planted.path })
-		controlled.push(journey)
+		const targets = [
+			...required.map((wrapper) => ({ wrapper, directory: POLICY_ROOT })),
+			{ wrapper: journey, directory: planted.path },
+		]
+		const controlled = [...found, extra, journey]
 
 		// Required wrappers come from selected src/app targets. Only that set is loaded and validated.
 		// Extra wrappers remain in the found population but are ignored before their content is read.
@@ -1008,7 +1204,7 @@ describe('root configuration', () => {
 							: environment === 'showcase'
 								? 'showcase'
 								: `dist/${axis}/${environment}`
-					if (resolve(root, output) !== resolve(root, expected)) {
+					if (resolve(POLICY_ROOT, output) !== resolve(POLICY_ROOT, expected)) {
 						throw new Error(`${wrapper} resolves to the wrong output`)
 					}
 					continue
@@ -1023,7 +1219,7 @@ describe('root configuration', () => {
 				if (axis === undefined || environment === undefined) {
 					throw new Error(`${wrapper} carries no TypeScript scope`)
 				}
-				const parsed: unknown = JSON.parse(readFileSync(resolve(root, wrapper), 'utf8'))
+				const parsed: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, wrapper), 'utf8'))
 				if (typeof parsed !== 'object' || parsed === null) {
 					throw new Error(`${wrapper} is not a TypeScript configuration record`)
 				}
@@ -1057,8 +1253,7 @@ describe('root configuration', () => {
 				}
 			}
 			for (const tests of journeys) {
-				const names: string[] = []
-				for (const test of tests) {
+				const names = tests.map((test) => {
 					expect(Object.getOwnPropertyDescriptor(test, 'include')?.value).toStrictEqual([
 						'tests/app/browser/integration.test.ts',
 					])
@@ -1096,9 +1291,9 @@ describe('root configuration', () => {
 						)
 					)
 						throw new Error('A journey variant is absent from its declared set')
-					expect(names).not.toContain(variant)
-					names.push(variant)
-				}
+					return variant
+				})
+				expect(new Set(names).size).toBe(names.length)
 			}
 		} finally {
 			planted.destroy()
@@ -1112,13 +1307,92 @@ describe('root configuration', () => {
 		expect(() => {
 			for (const wrapper of controlRequired) expect(controlFound).toContain(wrapper)
 		}).toThrow(/vite\.browser/u)
-		expect(() => expect(resolve(root, 'dist/actual')).toBe(resolve(root, 'dist/control'))).toThrow(
-			/expected/u,
-		)
+		expect(() =>
+			expect(resolve(POLICY_ROOT, 'dist/actual')).toBe(resolve(POLICY_ROOT, 'dist/control')),
+		).toThrow(/expected/u)
+	})
+
+	// A target with a server application builds it to one `main.cjs`, so a
+	// single-executable embed has one file to take. The real wrapper's configuration
+	// builds a scratch entry that dynamically imports a scratch module, once as the
+	// wrapper declares it and once with splitting forced on. The second build is the
+	// control: it shows the single chunk comes from the wrapper's `codeSplitting` option
+	// and not from the entry's shape. Evaluation order of the inlined module is proved
+	// once, by executing the emitted file, in the template proof that stages a server
+	// root. A workspace without an `app/server` has no wrapper to build, so this case
+	// reports nothing about the server application of a target that has one: the
+	// assertion below only classifies the absence, and each target with a server
+	// application establishes this proof when its own configuration test runs.
+	it('builds the application server wrapper to one entry and splits it under the control', async () => {
+		const wrapper = resolve(POLICY_ROOT, 'configs/app/vite.server.config.ts')
+		const present = existsSync(wrapper)
+		expect(present || !existsSync(resolve(POLICY_ROOT, 'app/server'))).toBe(true)
+		if (!present) return
+		const scratch = createPolicyScratch({
+			parent: resolve(POLICY_ROOT, 'app/server'),
+			prefix: 'config-server-entry-',
+		})
+		try {
+			scratch.write(
+				'index.ts',
+				"process.stdout.write('entry\\n')\nvoid import('./lazy.js').then(({ lazy }) => process.stdout.write(lazy()))\nprocess.stdout.write('after\\n')\n",
+			)
+			scratch.write(
+				'lazy.ts',
+				"process.stdout.write('lazy\\n')\nexport function lazy(): string {\n\treturn String(process.argv.length)\n}\n",
+			)
+			const rosters: Array<readonly string[]> = []
+			for (const chunked of [false, true]) {
+				const loaded = await loadConfigFromFile(
+					{ command: 'build', mode: 'production', isSsrBuild: false, isPreview: false },
+					wrapper,
+					POLICY_ROOT,
+					'silent',
+				)
+				if (loaded === null) throw new Error('The server wrapper did not load')
+				const rolldown = loaded.config.build?.rolldownOptions
+				const output: unknown = rolldown?.output
+				if (typeof output !== 'object' || output === null || Array.isArray(output)) {
+					throw new Error('The server wrapper declares no output options')
+				}
+				expect(Object.getOwnPropertyDescriptor(output, 'codeSplitting')?.value).toBe(false)
+				const built = await build({
+					...loaded.config,
+					root: POLICY_ROOT,
+					configFile: false,
+					logLevel: 'silent',
+					build: {
+						...loaded.config.build,
+						write: false,
+						lib: {
+							entry: resolve(scratch.path, 'index.ts'),
+							formats: ['cjs'],
+							fileName: () => 'main.cjs',
+						},
+						rolldownOptions: chunked
+							? { ...rolldown, output: { codeSplitting: true } }
+							: { ...rolldown },
+					},
+				})
+				// A library build returns one result per format, an array even for one format.
+				const results = Array.isArray(built) ? built : [built]
+				expect(results).toHaveLength(1)
+				for (const result of results) {
+					if (!('output' in result)) throw new Error('The server build returned no output')
+					rosters.push(result.output.map(({ fileName }) => fileName).toSorted())
+				}
+			}
+			const [single, split] = rosters
+			expect(single).toStrictEqual(['main.cjs'])
+			expect(split).toContain('main.cjs')
+			expect(split?.length).toBeGreaterThan(1)
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('registers proof scripts in the correct gate', () => {
-		const manifest: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+		const manifest: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8'))
 		if (typeof manifest !== 'object' || manifest === null) {
 			throw new Error('The package manifest is not a record')
 		}
@@ -1132,35 +1406,37 @@ describe('root configuration', () => {
 		const distribution = Object.getOwnPropertyDescriptor(scripts, 'test:distribution')?.value
 		const integration = Object.getOwnPropertyDescriptor(scripts, 'test:integration')?.value
 		const conformance = Object.getOwnPropertyDescriptor(scripts, 'test:conformance')?.value
+		const tree = Object.getOwnPropertyDescriptor(scripts, 'test:tree')?.value
 		const service = Object.getOwnPropertyDescriptor(scripts, 'test:service')?.value
+		const studies = Object.getOwnPropertyDescriptor(scripts, 'test:studies')?.value
 		const publish = Object.getOwnPropertyDescriptor(scripts, 'prepublishOnly')?.value
-		const hasIntegration = existsSync(resolve(root, 'tests/integration.test.ts'))
+		const hasIntegration = existsSync(resolve(POLICY_ROOT, 'tests/integration.test.ts'))
 		// The optional proofs are read off the registered project set rather than off
 		// their files, because the defect this measures is a registered project no
 		// gate runs. A project selected by a path that is not yet there is still
 		// registered, and it is exactly the one whose script goes missing.
 		const rows = configuration.test?.projects
 		if (!Array.isArray(rows)) throw new Error('The root configuration carries no projects')
-		const registered = new Set<string>()
-		for (const row of rows) {
-			if (typeof row === 'function') {
-				registered.add(row.name)
-				continue
-			}
-			if (typeof row !== 'object' || row === null) continue
-			const block: unknown = Object.getOwnPropertyDescriptor(row, 'test')?.value
-			if (typeof block !== 'object' || block === null) continue
-			const named: unknown = Object.getOwnPropertyDescriptor(block, 'name')?.value
-			if (typeof named !== 'object' || named === null) continue
-			const label: unknown = Object.getOwnPropertyDescriptor(named, 'label')?.value
-			if (typeof label === 'string') registered.add(label)
-		}
+		const registered = new Set(
+			rows.flatMap((row) => {
+				if (typeof row === 'function') return [row.name]
+				if (typeof row !== 'object' || row === null) return []
+				const block: unknown = Object.getOwnPropertyDescriptor(row, 'test')?.value
+				if (typeof block !== 'object' || block === null) return []
+				const named: unknown = Object.getOwnPropertyDescriptor(block, 'name')?.value
+				if (typeof named !== 'object' || named === null) return []
+				const label: unknown = Object.getOwnPropertyDescriptor(named, 'label')?.value
+				return typeof label === 'string' ? [label] : []
+			}),
+		)
 		// The population must be able to answer both ways before either answer counts.
 		expect(registered.has('config')).toBe(true)
 		expect(registered.has('control')).toBe(false)
 		const hasConformance = registered.has('conformance')
+		const hasTree = registered.has('tree')
 		const hasDistribution = registered.has('distribution')
 		const hasService = registered.has('service')
+		const hasStudies = registered.has('studies')
 		expect(config).toBe(
 			'vitest run --config vite.config.ts --no-cache --reporter=dot --project config',
 		)
@@ -1200,6 +1476,13 @@ describe('root configuration', () => {
 		expect(typeof test === 'string' && test.includes('npm run test:conformance')).toBe(
 			hasConformance,
 		)
+		expect(tree).toBe(
+			hasTree
+				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project tree'
+				: undefined,
+		)
+		expect(typeof test === 'string' && test.includes('npm run test:tree')).toBe(hasTree)
+		expect(typeof publish === 'string' && publish.includes('npm run test:tree')).toBe(false)
 		expect(service).toBe(
 			hasService
 				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project service'
@@ -1211,10 +1494,28 @@ describe('root configuration', () => {
 		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(
 			hasService && manifestPublishes,
 		)
+		// The study proof spawns processes, so it follows the same split as the live-service proof:
+		// the publish gate of a publishing workspace runs it after `npm test` and before the release
+		// proof, and a private workspace reaches it from `test`.
+		expect(studies).toBe(
+			hasStudies
+				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project studies'
+				: undefined,
+		)
+		expect(typeof test === 'string' && test.includes('npm run test:studies')).toBe(
+			hasStudies && !manifestPublishes,
+		)
+		expect(typeof publish === 'string' && publish.includes('npm run test:studies')).toBe(
+			hasStudies && manifestPublishes,
+		)
+		const steps = ['npm test &&', 'npm run test:studies', 'npm run test:distribution']
+		const positions = typeof publish === 'string' ? steps.map((step) => publish.indexOf(step)) : []
+		const sequenced = positions.every((position, index) => position > (positions[index - 1] ?? -1))
+		expect(sequenced || !(hasStudies && hasDistribution && manifestPublishes)).toBe(true)
 	})
 
 	it('rebuilds publishing workspaces before packing', () => {
-		const manifest: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+		const manifest: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8'))
 		if (typeof manifest !== 'object' || manifest === null) {
 			throw new Error('The package manifest is not a record')
 		}
@@ -1236,7 +1537,9 @@ describe('root configuration', () => {
 	it('keeps the committed host inventory aligned with the vendored checkout bytes', async () => {
 		// Run this gate against a quiescent checkout. It compares two reads and cannot
 		// distinguish stale committed data from a source edit made while it runs.
-		const packageValue: unknown = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+		const packageValue: unknown = JSON.parse(
+			readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8'),
+		)
 		if (typeof packageValue !== 'object' || packageValue === null) {
 			throw new Error('The package manifest is not a record')
 		}
@@ -1247,7 +1550,7 @@ describe('root configuration', () => {
 		const generator: unknown = Object.getOwnPropertyDescriptor(scripts, 'build:inventory')?.value
 		expect(generator === undefined || typeof generator === 'string').toBe(true)
 		if (generator === undefined) {
-			if (existsSync(resolve(root, 'host.json'))) {
+			if (existsSync(resolve(POLICY_ROOT, 'host.json'))) {
 				throw new Error('A committed host inventory exists without a generator')
 			}
 			return
@@ -1255,17 +1558,17 @@ describe('root configuration', () => {
 		if (typeof generator !== 'string') {
 			throw new Error('The host inventory generator is not a script')
 		}
-		const committed = resolve(root, 'host.json')
+		const committed = resolve(POLICY_ROOT, 'host.json')
 		if (!existsSync(committed)) {
 			throw new Error('The committed host inventory is absent at host.json')
 		}
-		const helper = resolve(root, 'src/server/helpers.ts')
+		const helper = resolve(POLICY_ROOT, 'src/server/helpers.ts')
 		if (!existsSync(helper)) {
 			throw new Error('The committed host inventory has no server stager')
 		}
 		const server = await createServer({
 			configFile: false,
-			root,
+			root: POLICY_ROOT,
 			...(configuration.resolve === undefined ? {} : { resolve: configuration.resolve }),
 			server: { middlewareMode: true },
 		})
@@ -1282,49 +1585,47 @@ describe('root configuration', () => {
 			const workspace = scratch.path
 			try {
 				const generated = join(workspace, 'host.json')
-				Reflect.apply(stage, undefined, [root, generated])
+				Reflect.apply(stage, undefined, [POLICY_ROOT, generated])
 				const generatedText = readFileSync(generated, 'utf8')
 				const committedText = readFileSync(committed, 'utf8')
 				const values: readonly unknown[] = [JSON.parse(generatedText), JSON.parse(committedText)]
-				const indexes: Array<Map<string, string>> = []
-				for (const value of values) {
+				const indexes = values.map((value) => {
 					if (typeof value !== 'object' || value === null) {
 						throw new Error('A host inventory is not a record')
 					}
 					const entries: unknown = Object.getOwnPropertyDescriptor(value, 'entries')?.value
 					if (!Array.isArray(entries)) throw new Error('A host inventory carries no entry list')
-					const index = new Map<string, string>()
-					for (const entry of entries) {
-						if (typeof entry !== 'object' || entry === null) {
-							throw new Error('A host inventory carries a malformed entry')
-						}
-						const destination: unknown = Object.getOwnPropertyDescriptor(
-							entry,
-							'destination',
-						)?.value
-						const digest: unknown = Object.getOwnPropertyDescriptor(entry, 'digest')?.value
-						if (typeof destination !== 'string' || typeof digest !== 'string') {
-							throw new Error('A host inventory entry carries no destination digest')
-						}
-						index.set(destination, digest)
-					}
-					indexes.push(index)
-				}
+					return new Map(
+						entries.map((entry: unknown): [string, string] => {
+							if (typeof entry !== 'object' || entry === null) {
+								throw new Error('A host inventory carries a malformed entry')
+							}
+							const destination: unknown = Object.getOwnPropertyDescriptor(
+								entry,
+								'destination',
+							)?.value
+							const digest: unknown = Object.getOwnPropertyDescriptor(entry, 'digest')?.value
+							if (typeof destination !== 'string' || typeof digest !== 'string') {
+								throw new Error('A host inventory entry carries no destination digest')
+							}
+							return [destination, digest]
+						}),
+					)
+				})
 				const generatedIndex = indexes[0]
 				const committedIndex = indexes[1]
 				if (generatedIndex === undefined || committedIndex === undefined) {
 					throw new Error('The host inventories were not indexed')
 				}
 				if (generatedText !== committedText) {
-					const stale: string[] = []
-					for (const [destination, digest] of generatedIndex) {
-						if (committedIndex.get(destination) !== digest) stale.push(destination)
-					}
-					for (const destination of committedIndex.keys()) {
-						if (!generatedIndex.has(destination)) stale.push(destination)
-					}
+					const stale = [
+						...[...generatedIndex].flatMap(([destination, digest]) =>
+							committedIndex.get(destination) === digest ? [] : [destination],
+						),
+						...[...committedIndex.keys()].filter((destination) => !generatedIndex.has(destination)),
+					]
 					throw new Error(
-						`The committed host inventory is stale at ${stale.length > 0 ? stale.sort().join(', ') : 'host.json'}`,
+						`The committed host inventory is stale at ${stale.length > 0 ? stale.toSorted().join(', ') : 'host.json'}`,
 					)
 				}
 				console.info(`host-inventory: entries=${generatedIndex.size}`)
@@ -1337,7 +1638,7 @@ describe('root configuration', () => {
 	})
 
 	it('keeps policy rules active across every linted workspace path', () => {
-		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
+		const parsed: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
 		expect(inspectPolicyConfiguration(parsed)).toEqual([])
 		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
 			throw new Error('The Oxlint configuration is not a record')
@@ -1357,10 +1658,53 @@ describe('root configuration', () => {
 		expect(inspectPolicyConfiguration(controlled)).toEqual([
 			'overrides must not configure policy/no-mocking',
 		])
+		// The skill scripts sit under .agents, so an ignore pattern that reaches the folder defeats the
+		// script rules as an ignore of a source root defeats the placement rules.
+		const ignored = structuredClone(parsed)
+		Object.defineProperty(ignored, 'ignorePatterns', {
+			value: ['.orkestrel/', '.agents/skills/'],
+			enumerable: true,
+			configurable: true,
+			writable: true,
+		})
+		expect(inspectPolicyConfiguration(ignored)).toEqual([
+			'ignorePatterns must not reach .agents/skills/',
+		])
+		// An entry without an inner slash matches at any depth, so a glob or a directory name the
+		// overrides route through silences guarded files while its first segment names no root.
+		for (const pattern of ['*.ts', 'scripts', 'scripts/', 'policy.ts']) {
+			expect(
+				inspectPolicyConfiguration({ ...readConfigRecord(parsed), ignorePatterns: [pattern] }),
+			).toEqual([`ignorePatterns must not reach ${pattern}`])
+		}
+		for (const patterns of [['.orkestrel/'], ['.orkestrel/', '!src/keep.ts'], ['./scripts']]) {
+			expect(
+				inspectPolicyConfiguration({ ...readConfigRecord(parsed), ignorePatterns: patterns }),
+			).toEqual([])
+		}
+	})
+
+	it('refuses a wiring rule whose options weaken it beneath an error severity', () => {
+		const parsed: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+		const rules = readConfigRecord(readConfigRecord(parsed).rules)
+		for (const [rule, setting] of [
+			['typescript/explicit-member-accessibility', ['error', { accessibility: 'off' }]],
+			['typescript/parameter-properties', ['error', { allow: ['private readonly'] }]],
+			['no-var', ['error', { ignore: true }]],
+		] as const) {
+			expect(
+				inspectPolicyConfiguration({
+					...readConfigRecord(parsed),
+					rules: { ...rules, [rule]: setting },
+				}),
+			).toEqual([
+				`${rule} must have the top-level setting ${JSON.stringify(POLICY_WIRING_SETTINGS[rule])}`,
+			])
+		}
 	})
 
 	it('omits the audit-confirmed dead policy type exports', () => {
-		const source = readFileSync(resolve(root, 'configs/policy.ts'), 'utf8')
+		const source = readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8')
 		expect(source).not.toMatch(/\bPolicy(?:Call|ClassMember)\b/u)
 	})
 })
@@ -1370,6 +1714,35 @@ describe('policy plugin', () => {
 	RuleTester.it = it
 
 	const tester = new RuleTester({ languageOptions: { parserOptions: { lang: 'ts' } } })
+	tester.run('no-cross-vue-face', VUE_IMPORT_RULE, {
+		valid: [...POLICY_VUE_IMPORT_CASES, ...POLICY_VUE_BOUNDARY_CASES, ...POLICY_VUE_COMPUTED_CASES]
+			.filter((source) => source.path.endsWith('.ts') && !source.boundary)
+			.map((source) => ({
+				name: `accepts the native relative boundary in ${source.path}`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+			})),
+		invalid: [
+			...POLICY_VUE_IMPORT_CASES,
+			...POLICY_VUE_BOUNDARY_CASES,
+			...POLICY_VUE_UNCLASSIFIED_FILES.map((path) => ({
+				path,
+				content: "import './entry.js'\ndebugger\n",
+				boundary: true,
+				restricted: false,
+			})),
+		]
+			.filter((source) => source.path.endsWith('.ts') && source.boundary)
+			.map((source) => ({
+				name: `rejects the native relative boundary in ${source.path} [membership: literal relative import or export outside permitted Vue destinations]`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+				errors: [{ messageId: 'vue' }],
+			})),
+	})
+
 	tester.run('no-mocking', MOCKING_RULE, {
 		valid: [
 			{ name: 'accepts recorders', code: 'createRecorder()' },
@@ -1439,6 +1812,80 @@ describe('policy plugin', () => {
 				code: 'class Example { protected read() { return 1 } }',
 				errors: [{ messageId: 'keyword' }],
 			},
+		],
+	})
+
+	tester.run('no-let', LET_RULE, {
+		valid: [
+			{ name: 'leaves an unwritten let to prefer-const', code: 'let value = 1\nread(value)' },
+			{
+				name: 'leaves an unwritten for-of head to prefer-const',
+				code: 'for (let entry of entries) read(entry)',
+			},
+			{
+				name: 'leaves an unwritten for-in head to prefer-const',
+				code: 'for (let key in record) read(key)',
+			},
+			{ name: 'accepts const', code: 'const value = 1\nread(value)' },
+			{ name: 'leaves var to no-var', code: 'var value\nvalue = 1' },
+			{ name: 'accepts an ambient let', code: 'declare let value: number' },
+			{
+				name: 'accepts a let in a global augmentation',
+				code: 'declare global { let ambient: number }',
+			},
+			{
+				name: 'accepts an exported let in a declared module',
+				code: "declare module 'm' { export let ambient: string }",
+			},
+			{
+				name: 'accepts a let in a declared namespace',
+				code: 'declare namespace Ambient { let value: number }',
+			},
+			{
+				name: 'accepts a let in a namespace nested in a declared module',
+				code: "declare module 'm' { namespace Inner { let value: number } }",
+			},
+		],
+		invalid: [
+			...[
+				{ form: 'assignment', code: 'let count = 0\ncount = 1' },
+				{ form: 'compound assignment', code: 'let count = 0\ncount += 1' },
+				{ form: 'logical assignment', code: 'let count: number | undefined = 0\ncount ??= 1' },
+				{ form: 'update', code: 'let count = 0\ncount++' },
+				{ form: 'counter loop', code: 'for (let index = 0; index < 3; index++) read(index)' },
+				{ form: 'array destructuring target', code: 'let [first] = [1]\n;[first] = [2]' },
+				{ form: 'object destructuring target', code: 'let { a } = record\n;({ a } = other)' },
+				{
+					form: 'for-of head written in the body',
+					code: 'for (let entry of entries) { entry = 1 }',
+				},
+				{ form: 'closure write', code: 'let ready = false\nlisten(() => { ready = true })' },
+				{ form: 'later declarator', code: 'let a = 1, b = 2\nb = 3\nread(a, b)' },
+				{ form: 'declaration without a value', code: 'let value\nread(value)' },
+				{ form: 'value assigned later', code: 'let value: number\nvalue = 1\nread(value)' },
+			].map(({ form, code }) => ({
+				name: `rejects a let by ${form} [membership: let that prefer-const leaves]`,
+				code,
+				errors: [{ messageId: 'let' }],
+			})),
+			...[
+				{
+					form: 'a bare let beside a global augmentation',
+					code: 'declare global { let ambient: number }\nlet value\nread(value)',
+				},
+				{
+					form: 'a reassigned let beside a declared module',
+					code: "declare module 'm' { export let ambient: string }\nlet count = 0\ncount++",
+				},
+				{
+					form: 'a bare let in a namespace that is not declared',
+					code: 'namespace Local { let value: number }',
+				},
+			].map(({ form, code }) => ({
+				name: `rejects ${form} [membership: let outside an ambient block]`,
+				code,
+				errors: [{ messageId: 'let' }],
+			})),
 		],
 	})
 
@@ -1739,6 +2186,12 @@ createSomething({
 
 	tester.run('no-misplaced-function', FUNCTION_RULE, {
 		valid: [
+			...POLICY_VUE_DOMAIN_CASES.filter((source) => !source.misplaced).map((source) => ({
+				name: `accepts Vue function placement in ${source.path}`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+			})),
 			{
 				name: 'accepts a function in a function-kind file',
 				filename: 'src/worker/helpers.ts',
@@ -1787,6 +2240,13 @@ createSomething({
 				code: 'export function runTask(): void {}',
 				errors: [{ messageId: 'function' }],
 			},
+			...POLICY_VUE_DOMAIN_CASES.filter((source) => source.misplaced).map((source) => ({
+				name: `rejects Vue function placement in ${source.path} [membership: modules outside the exact direct function register]`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+				errors: [{ messageId: 'function' }],
+			})),
 			{
 				name: 'rejects a property-held arrow in a route table [membership: module function syntax whose file is absent from the function register]',
 				filename: 'src/worker/routes.ts',
@@ -2089,6 +2549,12 @@ createSomething({
 
 	tester.run('no-malformed-domain', DOMAIN_RULE, {
 		valid: [
+			...POLICY_VUE_DOMAIN_CASES.filter((source) => !source.malformed).map((source) => ({
+				name: `accepts Vue domain shape in ${source.path}`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+			})),
 			{
 				name: 'accepts a registered function module carrying imports and one named export',
 				filename: 'app/browser/composables/useTheme.ts',
@@ -2114,6 +2580,13 @@ createSomething({
 				code: 'export function useMode(): void {}',
 				errors: [{ messageId: 'module' }],
 			},
+			...POLICY_VUE_DOMAIN_CASES.filter((source) => source.malformed).map((source) => ({
+				name: `rejects Vue domain shape in ${source.path} [membership: direct camelCase modules in the Vue function domain]`,
+				filename: resolve(POLICY_ROOT, source.path),
+				cwd: POLICY_ROOT,
+				code: source.content,
+				errors: [{ messageId: 'module' }],
+			})),
 			{
 				name: 'rejects a hidden domain function [membership: direct camelCase modules in a registered function-domain folder]',
 				filename: 'app/browser/composables/useTheme.ts',
@@ -2171,6 +2644,253 @@ createSomething({
 				filename: 'configs/helpers.ts',
 				code: ["import { EOL } from 'node:os'", 'export const end = EOL'].join('\n'),
 				errors: [{ messageId: 'terminator' }],
+			},
+		],
+	})
+
+	const SCRIPT_GUARD = [
+		'if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) {',
+		'\tprocess.exitCode = main()',
+		'}',
+	].join('\n')
+
+	tester.run('no-malformed-script', SCRIPT_RULE, {
+		valid: [
+			{
+				name: 'accepts imports, documented exports, and the one guarded entry',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [
+					"import { realpathSync } from 'node:fs'",
+					'',
+					'/** Reads the one value. */',
+					'export function read(): number {',
+					'\treturn 1',
+					'}',
+					'',
+					'/** Runs the script. */',
+					'export function main(): number {',
+					'\treturn read()',
+					'}',
+					'',
+					SCRIPT_GUARD,
+				].join('\n'),
+			},
+			{
+				name: 'accepts a documented exported type, interface, and constant',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [
+					'/** Names the one value. */',
+					'export type Value = number',
+					'',
+					'/** Describes the one record. */',
+					'export interface Entry {',
+					'\treadonly value: Value',
+					'}',
+					'',
+					'/** Holds the one constant. */',
+					'export const VALUE = 1',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a guard the formatter wrapped over lines',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [
+					'if (',
+					'\tprocess.argv[1] !== undefined &&',
+					'\trealpathSync(process.argv[1]) === import.meta.filename',
+					') {',
+					'\tmain()',
+					'}',
+				].join('\n'),
+			},
+			{
+				name: 'accepts a doc block separated from its export by a blank line',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['/** Holds the one constant. */', '', 'export const VALUE = 1'].join('\n'),
+			},
+			{
+				name: 'accepts a module outside the skill scripts',
+				filename: 'src/worker/helpers.ts',
+				code: 'function hidden(): void {}\nhidden()',
+			},
+			{
+				name: 'accepts a file beside the skill scripts',
+				filename: '.agents/skills/sample/references/tool.ts',
+				code: 'function hidden(): void {}\nhidden()',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects an unexported function [membership: top-level declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: 'function read(): number { return 1 }',
+				errors: [{ messageId: 'hidden' }],
+			},
+			{
+				name: 'rejects an unexported constant [membership: top-level declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: 'const VALUE = 1',
+				errors: [{ messageId: 'hidden' }],
+			},
+			{
+				name: 'rejects an unexported interface even with a doc block [membership: top-level declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [
+					'/** Describes the one record. */',
+					'interface Value { readonly value: number }',
+				].join('\n'),
+				errors: [{ messageId: 'hidden' }],
+			},
+			{
+				name: 'rejects an export with no comment above it [membership: exported declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: 'export function read(): number { return 1 }',
+				errors: [{ messageId: 'doc' }],
+			},
+			{
+				name: 'rejects an export under a line comment [membership: exported declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['// Reads the one value.', 'export function read(): number { return 1 }'].join('\n'),
+				errors: [{ messageId: 'doc' }],
+			},
+			{
+				name: 'rejects an export under a plain block comment [membership: exported declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['/* Reads the one value. */', 'export const VALUE = 1'].join('\n'),
+				errors: [{ messageId: 'doc' }],
+			},
+			{
+				name: 'rejects a doc block separated from its export by code [membership: exported declarations of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['/** Holds the one constant. */', 'const FIRST = 1', 'export const SECOND = 2'].join(
+					'\n',
+				),
+				errors: [{ messageId: 'hidden' }, { messageId: 'doc' }],
+			},
+			{
+				name: 'rejects a bare call [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: 'main()',
+				errors: [{ messageId: 'entry' }],
+			},
+			{
+				name: 'rejects an entry under another condition [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['if (process.argv[1] !== undefined) {', '\tmain()', '}'].join('\n'),
+				errors: [{ messageId: 'entry' }],
+			},
+			{
+				name: 'rejects the guard when it carries an else branch [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [SCRIPT_GUARD.replace(/\}$/u, '} else {'), '\tmain()', '}'].join('\n'),
+				errors: [{ messageId: 'entry' }],
+			},
+			{
+				name: 'rejects a second guard [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: [SCRIPT_GUARD, SCRIPT_GUARD].join('\n'),
+				errors: [{ messageId: 'entry' }],
+			},
+			{
+				name: 'rejects an export list [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: ['/** Holds the one constant. */', 'const VALUE = 1', 'export { VALUE }'].join('\n'),
+				errors: [{ messageId: 'hidden' }, { messageId: 'entry' }],
+			},
+			{
+				name: 'rejects a default export [membership: top-level statements of a skill script]',
+				filename: '.agents/skills/sample/scripts/tool.ts',
+				code: 'export default {}',
+				errors: [{ messageId: 'entry' }],
+			},
+		],
+	})
+
+	tester.run('no-mutable-property', MUTABLE_RULE, {
+		valid: [
+			{
+				name: 'accepts a readonly interface property',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { readonly id: string }',
+			},
+			{
+				name: 'accepts a readonly property of a type alias object',
+				filename: 'src/core/types.ts',
+				code: 'export type Value = { readonly id: string; readonly name?: string }',
+			},
+			{
+				name: 'accepts a method signature',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { read(): string }',
+			},
+			{
+				name: 'accepts an inline parameter type',
+				filename: 'src/core/helpers.ts',
+				code: 'export function read(options: { id: string }): string { return options.id }',
+			},
+			{
+				name: 'accepts an inline parameter type of an interface method',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { read(options: { id: string }): string }',
+			},
+			{
+				name: 'accepts an inline parameter type of a function typed property',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { readonly read: (options: { id: string }) => string }',
+			},
+			{
+				name: 'accepts an object type annotating a binding',
+				filename: 'src/core/constants.ts',
+				code: "export const VALUE: { id: string } = { id: 'a' }",
+			},
+			{
+				name: 'accepts a mutable property of an ambient declaration file',
+				filename: 'src/core/types.d.ts',
+				code: 'export interface Value { id: string }',
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a mutable interface property [membership: property signatures of an interface]',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { id: string }',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable optional interface property [membership: property signatures of an interface]',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { readonly id: string; name?: string }',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable property of a type alias object [membership: property signatures of a type alias object type]',
+				filename: 'src/core/types.ts',
+				code: 'export type Value = { id: string }',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable property of a union member [membership: property signatures of a type alias object type]',
+				filename: 'src/core/types.ts',
+				code: 'export type Value = { readonly id: string } | { name: string }',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable property of a nested object type [membership: property signatures of a type alias object type]',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { readonly inner: { id: string } }',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable property of a generic argument [membership: property signatures of a type alias object type]',
+				filename: 'src/core/types.ts',
+				code: 'export type Value = ReadonlyArray<{ id: string }>',
+				errors: [{ messageId: 'mutable' }],
+			},
+			{
+				name: 'rejects a mutable function typed property [membership: property signatures of an interface]',
+				filename: 'src/core/types.ts',
+				code: 'export interface Value { read: () => string }',
+				errors: [{ messageId: 'mutable' }],
 			},
 		],
 	})
@@ -2532,6 +3252,78 @@ createSomething({
 		expect(commentToPolicyParagraph({ type: 'Block', value: '* ', range: [0, 0] })).toBe('')
 	})
 
+	describe('readers over a caller-supplied list with a hole', () => {
+		// A `for…of` loop and a spread read a hole as `undefined`, where `map`, `filter`, `flatMap`, and
+		// `findLast` skip it or stop before it, so each case puts the hole where the reader would not
+		// reach it and pins the refusal the loop gave.
+		const name: PolicyExpression = { type: 'Identifier', range: [0, 0], name: 'run' }
+		const exported: PolicyExpression = {
+			type: 'ExportNamedDeclaration',
+			range: [47, 63],
+			declaration: { type: 'FunctionDeclaration', range: [0, 0], id: name },
+		}
+		const source = createPolicySource('')
+
+		it('refuses a hole in the declarators of a statement as the declarator it reads as', () => {
+			const declarator: PolicyExpression = {
+				type: 'VariableDeclarator',
+				range: [0, 0],
+				id: name,
+				init: { type: 'ArrowFunctionExpression', range: [0, 0] },
+			}
+
+			expect(
+				statementToPolicyBindings({
+					type: 'VariableDeclaration',
+					range: [0, 0],
+					declarations: [declarator],
+				}),
+			).toHaveLength(1)
+			expect(() =>
+				statementToPolicyBindings({
+					type: 'VariableDeclaration',
+					range: [0, 0],
+					declarations: createPolicySparse(2, new Map([[0, declarator]])),
+				}),
+			).toThrow(TypeError)
+		})
+
+		it('refuses a hole in the statements of a program as the statement it reads as', () => {
+			const program: PolicyExpression = {
+				type: 'Program',
+				range: [0, 0],
+				body: createPolicySparse(2, new Map([[0, exported]])),
+			}
+
+			expect(() => programToPolicyDocs(program, source)).toThrow(TypeError)
+		})
+
+		it('refuses a hole in the comments of a source as the comment it reads as', () => {
+			const comment: PolicyComment = { type: 'Block', value: '* One.', range: [0, 11] }
+			const comments = createPolicySparse(2, new Map([[1, comment]]))
+			const program: PolicyExpression = { type: 'Program', range: [0, 0], body: [exported] }
+
+			expect(() =>
+				programToPolicyDocs(program, { text: '/** One. */\n', getAllComments: () => comments }),
+			).toThrow(TypeError)
+		})
+
+		it('refuses a hole in the body of a function-domain module as the statement it reads as', () => {
+			const reports: PolicyDiagnostic[] = []
+			const context = createPolicyContext('/ws/src/server/execution/run.ts', '/ws', reports)
+			const dense: PolicyExpression = { type: 'Program', range: [0, 0], body: [exported] }
+			const sparse: PolicyExpression = {
+				type: 'Program',
+				range: [0, 0],
+				body: createPolicySparse(2, new Map([[0, exported]])),
+			}
+
+			reportDomain(context, dense)
+			expect(reports).toStrictEqual([])
+			expect(() => reportDomain(context, sparse)).toThrow(TypeError)
+		})
+	})
+
 	it('reads the opening word of a paragraph as its letters alone', () => {
 		expect(paragraphToPolicyOpener('Creates a control.')).toBe('Creates')
 		expect(paragraphToPolicyOpener('"Creates" a control.')).toBe('Creates')
@@ -2575,146 +3367,720 @@ createSomething({
 		expect(DATA_SOURCE_FILES).not.toContain('plugins.ts')
 	})
 
+	it('pins the global dynamic-require setting to esmodule false with no override touching it', () => {
+		const configured = readConfigRecord(
+			JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8')),
+		)
+		expect(readConfigRecord(configured.rules)['import/no-dynamic-require']).toEqual([
+			'error',
+			{ esmodule: false },
+		])
+		if (!Array.isArray(configured.overrides)) throw new Error('Missing lint overrides')
+		const overrides = configured.overrides
+			.map(readConfigRecord)
+			.filter(
+				(override) => readConfigRecord(override.rules)['import/no-dynamic-require'] !== undefined,
+			)
+		expect(overrides).toEqual([])
+	})
+
+	it('permits a computed import() and refuses a computed require at every module path', () => {
+		const fixture = createPolicyScratch({ prefix: 'computed-imports-' })
+		try {
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			const configured = readConfigRecord(
+				JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8')),
+			)
+			const required = COMPUTED_IMPORT_PATHS.map((path) => path.replace(/\.(\w+)$/u, '.require.$1'))
+			for (const path of COMPUTED_IMPORT_PATHS) {
+				fixture.write(path, 'const selected = process.argv[2]\nvoid import(selected)\ndebugger\n')
+			}
+			for (const path of required) {
+				fixture.write(path, 'const selected = process.argv[2]\nvoid require(selected)\ndebugger\n')
+			}
+			const paths = [...COMPUTED_IMPORT_PATHS, ...required]
+			// Include campaign fixtures even when the workspace's default lint walk ignores them.
+			fixture.write('.oxlintrc.json', JSON.stringify({ ...configured, ignorePatterns: [] }))
+			const codes = readImportDiagnostics(fixture.path, paths)
+			for (const path of COMPUTED_IMPORT_PATHS) {
+				expect({ path, refused: codes.has('import(no-dynamic-require) ' + path) }).toEqual({
+					path,
+					refused: false,
+				})
+			}
+			for (const path of required) {
+				expect({ path, refused: codes.has('import(no-dynamic-require) ' + path) }).toEqual({
+					path,
+					refused: true,
+				})
+			}
+			// The sentinel proves each fixture was linted, so an unlinted path cannot read as permitted.
+			for (const path of paths) expect(codes.has('eslint(no-debugger) ' + path)).toBe(true)
+
+			// The control restores the ESM setting and must refuse the same computed imports.
+			fixture.write(
+				'.oxlintrc.json',
+				JSON.stringify({
+					...configured,
+					ignorePatterns: [],
+					rules: {
+						...readConfigRecord(configured.rules),
+						'import/no-dynamic-require': ['error', { esmodule: true }],
+					},
+				}),
+			)
+			const strict = readImportDiagnostics(fixture.path, paths)
+			for (const path of paths) {
+				expect({ path, refused: strict.has('import(no-dynamic-require) ' + path) }).toEqual({
+					path,
+					refused: true,
+				})
+			}
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('computes Vue targets from lexical importer and workspace boundaries', () => {
+		expect(POLICY_VUE_TARGET_CASES.length).toBeGreaterThan(30)
+		for (const [filename, cwd, source, expected] of POLICY_VUE_TARGET_CASES) {
+			expect({ filename, cwd, source, target: computePolicyTarget(filename, cwd, source) }).toEqual(
+				{
+					filename,
+					cwd,
+					source,
+					target: expected,
+				},
+			)
+		}
+	})
+
+	it('partitions every Vue syntax input between parsed and native parser-refused coverage', () => {
+		const originals = [...POLICY_VUE_IMPORT_CASES, ...POLICY_VUE_COMPUTED_CASES]
+		const partition = [...POLICY_VUE_PARSED_CASES, ...POLICY_VUE_PARSER_CASES]
+		expect(originals).toHaveLength(312)
+		expect(new Set(originals.map(({ path }) => path)).size).toBe(originals.length)
+		expect(POLICY_VUE_PARSED_CASES).toHaveLength(298)
+		expect(POLICY_VUE_PARSER_CASES).toHaveLength(14)
+		expect(new Set(partition.map(({ path }) => path)).size).toBe(partition.length)
+		expect(partition.map(({ path }) => path).toSorted()).toEqual(
+			originals.map(({ path }) => path).toSorted(),
+		)
+		for (const original of originals) {
+			expect(partition.find((source) => source.path === original.path)).toMatchObject(original)
+		}
+		expect(POLICY_VUE_PARSER_CASES.map(({ path }) => path).toSorted()).toEqual(
+			POLICY_VUE_FACES.flatMap((face) =>
+				POLICY_VUE_PARSER_ROWS.map(([file]) => `${face}/${file}`),
+			).toSorted(),
+		)
+		expect(POLICY_VUE_PARSER_CASES.every(({ path }) => path.endsWith('.cjs'))).toBe(true)
+		expect([...new Set(POLICY_VUE_POPULATIONS.map(({ extension }) => extension))]).toEqual([
+			'cjs',
+			'cts',
+			'js',
+			'jsx',
+			'mjs',
+			'mts',
+			'ts',
+			'tsx',
+			'vue',
+		])
+		for (const face of POLICY_VUE_FACES) {
+			const sources = originals.filter((source) => source.path.startsWith(face + '/'))
+			expect(sources).toHaveLength(156)
+			for (const population of POLICY_VUE_POPULATIONS) {
+				for (const form of POLICY_VUE_IMPORT_FORMS.filter(
+					(item) => !item.typed || population.typed,
+				)) {
+					expect(sources).toContainEqual(
+						expect.objectContaining({
+							path: `${face}/${population.name}${form.name}.${population.extension}`,
+							boundary: true,
+						}),
+					)
+					expect(sources).toContainEqual(
+						expect.objectContaining({
+							path: `${face}/features/editor/${population.name}${form.name}.${population.extension}`,
+							boundary: false,
+						}),
+					)
+				}
+				for (const index of POLICY_VUE_COMPUTED_FORMS.keys()) {
+					expect(sources).toContainEqual(
+						expect.objectContaining({
+							path: `${face}/computed${population.name}${index}.${population.extension}`,
+							boundary: false,
+						}),
+					)
+				}
+			}
+		}
+	})
+
+	it('checks Vue import syntax and populations through the canonical policy', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-syntax-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			for (const face of POLICY_VUE_FACES) {
+				const sources = POLICY_VUE_PARSED_CASES.filter((source) =>
+					source.path.startsWith(face + '/'),
+				)
+				expect(sources).toHaveLength(149)
+				expect(sources).toContainEqual(
+					expect.objectContaining({ path: `${face}/cjsdynamic.cjs`, boundary: true }),
+				)
+				expect(sources).toContainEqual(
+					expect.objectContaining({
+						path: `${face}/features/editor/cjsdynamic.cjs`,
+						boundary: false,
+					}),
+				)
+				for (const source of sources) fixture.write(source.path, source.content)
+				const codes = readImportDiagnostics(
+					fixture.path,
+					sources.map(({ path }) => path),
+				)
+				expect(
+					sources.map(({ path }) => ({
+						path,
+						boundary: codes.has('policy(no-cross-vue-face) ' + path),
+						restricted: codes.has('eslint(no-restricted-imports) ' + path),
+					})),
+				).toEqual(sources.map(({ path, boundary, restricted }) => ({ path, boundary, restricted })))
+			}
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('retains exact native parser refusals for CommonJS Vue inputs on both faces', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-parser-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			const sources = POLICY_VUE_PARSER_CASES
+			const paths = sources.map(({ path }) => path)
+			expect(paths).toHaveLength(14)
+			for (const source of sources) fixture.write(source.path, source.content)
+			const diagnostics = readNativeDiagnostics(fixture.path, paths)
+			expect(diagnostics).toHaveLength(paths.length)
+			const comparisonRoot = realpathSync.native(fixture.path)
+			const observed = diagnostics.map((diagnostic) => {
+				if (typeof diagnostic.filename !== 'string')
+					throw new Error('Missing parser diagnostic filename: ' + JSON.stringify(diagnostic))
+				const path = normalizePolicyFilename(comparisonRoot, diagnostic.filename)
+				const source = sources.find((candidate) => candidate.path === path)
+				if (source === undefined)
+					throw new Error('Unexpected parser diagnostic: ' + JSON.stringify(diagnostic))
+				expect(diagnostic).toEqual({
+					message: source.message,
+					severity: 'error',
+					filename: diagnostic.filename,
+					labels: [{ span: source.span }],
+				})
+				expect(
+					source.content.slice(source.span.offset, source.span.offset + source.span.length),
+				).toBe(source.keyword)
+				return path
+			})
+			expect(observed.toSorted()).toEqual(paths.toSorted())
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('retains Vue independent restrictions beside exact relative diagnostics', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-boundaries-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			const sources = POLICY_VUE_BOUNDARY_CASES
+			expect(sources.length).toBeGreaterThan(100)
+			for (const source of sources) fixture.write(source.path, source.content)
+			const codes = readImportDiagnostics(
+				fixture.path,
+				sources.map(({ path }) => path),
+			)
+			expect(
+				sources.map(({ path }) => ({
+					path,
+					boundary: codes.has('policy(no-cross-vue-face) ' + path),
+					restricted: codes.has('eslint(no-restricted-imports) ' + path),
+				})),
+			).toEqual(sources.map(({ path, boundary, restricted }) => ({ path, boundary, restricted })))
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('detects suppressed Vue reporting in a scratch policy without weakening independent bans', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-report-control-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			const plugin = readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8')
+			const marker = "context.report({ node, messageId: 'vue' })"
+			expect(plugin.split(marker)).toHaveLength(2)
+			fixture.write('configs/policy.ts', plugin)
+			const sources = POLICY_VUE_BOUNDARY_CASES
+			for (const source of sources) fixture.write(source.path, source.content)
+			const paths = sources.map(({ path }) => path)
+			const enabled = readImportDiagnostics(fixture.path, paths)
+			const expected = sources.filter(({ boundary }) => boundary).map(({ path }) => path)
+			expect(expected).toContain('src/vue/boundary0.ts')
+			expect(expected).toContain('app/vue/boundary0.ts')
+			expect(paths.filter((path) => enabled.has('policy(no-cross-vue-face) ' + path))).toEqual(
+				expected,
+			)
+			fixture.write('configs/policy.ts', plugin.replace(marker, 'void node'))
+			const suppressed = readImportDiagnostics(fixture.path, paths)
+			const actual = paths.filter((path) => suppressed.has('policy(no-cross-vue-face) ' + path))
+			expect(actual).toEqual([])
+			expect(() => expect(actual).toEqual(expected)).toThrow('deeply equal')
+			for (const { path, restricted } of sources) {
+				expect({ path, enabled: enabled.has('eslint(no-restricted-imports) ' + path) }).toEqual({
+					path,
+					enabled: restricted,
+				})
+				expect({
+					path,
+					suppressed: suppressed.has('eslint(no-restricted-imports) ' + path),
+				}).toEqual({ path, suppressed: restricted })
+			}
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('detects restored Vue relative regexes against nested canonical imports', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-regex-control-' })
+		try {
+			const text = readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8')
+			fixture.write('.oxlintrc.json', text)
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			for (const source of POLICY_VUE_RELATIVE_SOURCES) fixture.write(source.path, source.content)
+			const paths = POLICY_VUE_RELATIVE_SOURCES.map(({ path }) => path)
+			const enabled = readImportDiagnostics(fixture.path, paths)
+			expect(paths.filter((path) => enabled.has('eslint(no-restricted-imports) ' + path))).toEqual(
+				[],
+			)
+			expect(paths.filter((path) => enabled.has('policy(no-cross-vue-face) ' + path))).toEqual([])
+			const restoredConfiguration = readConfigRecord(JSON.parse(text))
+			if (!Array.isArray(restoredConfiguration.overrides)) throw new Error('Missing lint overrides')
+			const restored = restoredConfiguration.overrides.map((value: unknown) => {
+				const block = readConfigRecord(value)
+				const files = block.files
+				const owner = POLICY_VUE_FACES.find(
+					(face) =>
+						Array.isArray(files) &&
+						files.some((file: unknown) => typeof file === 'string' && file.startsWith(face + '/')),
+				)
+				if (owner === undefined) return block
+				const original = POLICY_VUE_ORIGINAL_RELATIVES[owner]
+				if (original === undefined) throw new Error('Missing original Vue relative pattern')
+				const rules = readConfigRecord(block.rules)
+				const rule = rules['no-restricted-imports']
+				if (!Array.isArray(rule)) throw new Error('Missing Vue import restrictions')
+				const options = readConfigRecord(rule[1])
+				if (!Array.isArray(options.patterns)) throw new Error('Missing Vue import patterns')
+				const patterns = options.patterns.map((patternValue: unknown): Record<string, unknown> => {
+					const pattern = readConfigRecord(patternValue)
+					if (pattern.message !== 'Vue faces must not depend on sibling sheet faces') return pattern
+					if (typeof pattern.regex !== 'string' || !pattern.regex.endsWith(')'))
+						throw new Error('Missing Vue sibling alias pattern')
+					return { ...pattern, regex: pattern.regex.slice(0, -1) + '|' + original + ')' }
+				})
+				expect(
+					patterns.filter(
+						(pattern) => pattern.message === 'Vue faces must not depend on sibling sheet faces',
+					),
+				).toHaveLength(1)
+				return {
+					...block,
+					rules: { ...rules, 'no-restricted-imports': [rule[0], { ...options, patterns }] },
+				}
+			})
+			expect(
+				restored.filter(
+					(block) => readConfigRecord(block.rules)['policy/no-cross-vue-face'] === 'error',
+				),
+			).toHaveLength(2)
+			fixture.write(
+				'.oxlintrc.json',
+				JSON.stringify({ ...restoredConfiguration, overrides: restored }),
+			)
+			const control = readImportDiagnostics(fixture.path, paths)
+			const refused = paths.filter((path) => control.has('eslint(no-restricted-imports) ' + path))
+			expect(refused).toEqual(paths)
+			expect(() => expect(refused).toEqual([])).toThrow('deeply equal')
+			expect(paths.filter((path) => control.has('policy(no-cross-vue-face) ' + path))).toEqual([])
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('checks exact Vue composable membership and malformed modules through the canonical policy', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-domain-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			const sources = POLICY_VUE_DOMAIN_CASES
+			expect(sources).toContainEqual({
+				...POLICY_VUE_COMPOSABLE_SOURCE,
+				misplaced: false,
+				malformed: false,
+			})
+			for (const source of sources) fixture.write(source.path, source.content)
+			const codes = readImportDiagnostics(
+				fixture.path,
+				sources.map(({ path }) => path),
+			)
+			expect(
+				sources.map(({ path }) => ({
+					path,
+					misplaced: codes.has('policy(no-misplaced-function) ' + path),
+					malformed: codes.has('policy(no-malformed-domain) ' + path),
+				})),
+			).toEqual(sources.map(({ path, misplaced, malformed }) => ({ path, misplaced, malformed })))
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('detects a removed Vue composable registration in a scratch policy', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-domain-control-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			const plugin = readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8')
+			const registration = /^\t'app\/vue\/composables',\r?\n/gmu
+			expect(plugin.match(registration)).toHaveLength(1)
+			fixture.write('configs/policy.ts', plugin)
+			const source = POLICY_VUE_COMPOSABLE_SOURCE
+			fixture.write(source.path, source.content)
+			const enabled = readImportDiagnostics(fixture.path, [source.path])
+			expect(enabled.has('policy(no-misplaced-function) ' + source.path)).toBe(false)
+			expect(enabled.has('policy(no-malformed-domain) ' + source.path)).toBe(false)
+			fixture.write('configs/policy.ts', plugin.replace(registration, ''))
+			const control = readImportDiagnostics(fixture.path, [source.path])
+			expect(control.has('policy(no-misplaced-function) ' + source.path)).toBe(true)
+			expect(control.has('policy(no-malformed-domain) ' + source.path)).toBe(false)
+			expect(() =>
+				expect(control.has('policy(no-misplaced-function) ' + source.path)).toBe(false),
+			).toThrow('expected')
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('admits nested same-face Vue relative imports through the canonical policy', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-relative-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			for (const source of POLICY_VUE_RELATIVE_SOURCES) {
+				fixture.write(source.path, source.content)
+			}
+			const paths = POLICY_VUE_RELATIVE_SOURCES.map(({ path }) => path)
+			expect(paths).toContain('app/vue/components/Panel.vue')
+			expect(paths).toContain('src/vue/features/helpers.ts')
+			const codes = readImportDiagnostics(fixture.path, paths)
+			const refused = paths.filter(
+				(path) =>
+					codes.has('eslint(no-restricted-imports) ' + path) ||
+					codes.has('policy(no-cross-vue-face) ' + path),
+			)
+			expect(refused).toEqual([])
+		} finally {
+			fixture.destroy()
+		}
+	})
+
+	it('admits a valid direct application Vue composable through the canonical policy', () => {
+		const fixture = createPolicyScratch({ prefix: 'policy-vue-composable-' })
+		try {
+			fixture.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			fixture.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
+			const source = POLICY_VUE_COMPOSABLE_SOURCE
+			expect(source.path).toBe('app/vue/composables/useTheme.ts')
+			fixture.write(source.path, source.content)
+			const codes = readImportDiagnostics(fixture.path, [source.path])
+			expect({
+				misplaced: codes.has('policy(no-misplaced-function) ' + source.path),
+				malformed: codes.has('policy(no-malformed-domain) ' + source.path),
+			}).toEqual({ misplaced: false, malformed: false })
+		} finally {
+			fixture.destroy()
+		}
+	})
+
 	it('matches every isolated import pattern with refused and admitted fixtures', () => {
 		const fixture = createPolicyScratch({ prefix: 'propagation-patterns-' })
 		const scratch = fixture.path
 		try {
 			const configured = readConfigRecord(
-				JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8')),
+				JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8')),
 			)
 			if (!Array.isArray(configured.overrides)) throw new Error('Missing overrides')
-			const overrides: object[] = []
-			const expected = new Map<string, boolean>()
-			for (const [blockIndex, value] of configured.overrides.entries()) {
+			const built = configured.overrides.flatMap((value: unknown, blockIndex: number) => {
 				const block = readConfigRecord(value)
 				const rule = readConfigRecord(block.rules)['no-restricted-imports']
-				if (!Array.isArray(rule)) continue
+				if (!Array.isArray(rule)) return []
 				const patterns = readConfigRecord(rule[1]).patterns
 				if (!Array.isArray(patterns)) throw new Error('Missing restriction patterns')
-				for (const [patternIndex, patternValue] of patterns.entries()) {
+				const fromPatterns = patterns.map((patternValue: unknown, patternIndex: number) => {
 					const pattern = readConfigRecord(patternValue)
 					const message = pattern.message
 					if (typeof message !== 'string') throw new Error('Missing pattern message')
-					let sources: ReadonlyArray<readonly [string, boolean]> = message.includes('URL schemes')
-						? [
-								['https://host/x', true],
-								['data:text/plain,x', true],
-								['node:fs', false],
-								['n:entry', true],
-								['no:entry', true],
-								['nod:entry', true],
-								['nodea:entry', true],
-								['1bad:entry', false],
-								['./data:entry', false],
-							]
-						: message.includes('noncanonical dot')
+					const alias = /@src\/(core|browser|server) alias/u.exec(message)?.[1]
+					const fence = POLICY_IMPORT_CASES.find(({ marker }) => message.includes(marker))
+					const chained: ReadonlyArray<readonly [string, boolean]> =
+						alias !== undefined
 							? [
-									['../core/../server/index.js', true],
-									['../core/./index.js', true],
-									['../core/index.js', false],
-									['./index.js', false],
-									['../../core/index.js', false],
-									['.../../index.js', true],
-									['.name/../index.js', true],
+									[`../${alias}/index.js`, true],
+									[`../../${alias}/types.js`, true],
+									[`../../src/${alias}/index.js`, true],
+									[`../${alias}`, true],
+									[`../${alias}/`, true],
+									[`../${alias}?raw`, true],
+									[`../${alias}#fragment`, true],
+									[`@src/${alias}`, false],
+									[`./${alias}/index.js`, false],
+									[`../${alias}x/index.js`, false],
+									[`../${alias}.ext/index.js`, false],
 								]
-							: message.includes('sibling sheet')
+							: message.includes('self-contained')
 								? [
-										['@src/print', true],
-										['../print/index.js', true],
-										['@src/core', false],
-										['@src/browser', false],
-										['@src/vue', false],
-										['@app/core', false],
-										['@app/browser', false],
-										['@src/corex', true],
-										['@src/', true],
-										['../src/print/index.js', true],
-										['../browser?x', true],
-										['../print.ext/index.js', false],
-										...(Array.isArray(block.files) &&
-										block.files.some(
-											(file: unknown) => typeof file === 'string' && file.startsWith('app/vue/'),
-										)
-											? [['@app/print', true] as const]
-											: []),
+										['./helpers.ts', true],
+										['../../orkestrel-dispatch/scripts/helpers.ts', true],
+										['@orkestrel/test', true],
+										['fs', true],
+										['', true],
+										['n', true],
+										['no', true],
+										['nod', true],
+										['node', true],
+										['nodes:fs', true],
+										['node:fs', false],
+										['node:child_process', false],
 									]
-								: [
-										[
-											message.includes('absolute paths')
-												? '/machine/module.js'
-												: message.includes('normalized traversal')
-													? './../core/index.js'
-													: message.includes('forward slashes')
-														? '..\\core\\index.js'
-														: message.includes('compiler API')
-															? 'typescript'
-															: message.includes('private app')
-																? '@app/core'
-																: message.includes('stylesheets')
-																	? './index.css'
-																	: message.includes('host-independent') ||
-																		  message.includes('Node or server')
-																		? 'node:fs'
-																		: message.includes('Vue extension')
-																			? '@src/vue'
-																			: '@src/browser',
-											true,
-										],
-									]
-					if (message.includes('another styles face')) {
-						const face =
-							typeof pattern.regex === 'string'
-								? /@src\/(bootstrap|tailwindcss|styles)\(/u.exec(pattern.regex)?.[1]
-								: undefined
-						if (face === undefined) throw new Error('Missing styles face in restriction pattern')
-						sources = [
-							[`@src/${face}`, true],
-							[`@src/${face}?raw`, true],
-							[`@orkestrel/x/${face}`, true],
-							[`../${face}/index.js`, true],
-							[`../src/${face}/index.js`, true],
-							[`../../src/${face}/index.js`, true],
-							['@src/browser', false],
-							[`@src/${face}x`, false],
-							[`../${face}.ext/index.js`, false],
-						]
-					}
+								: message.includes('URL schemes')
+									? [
+											['https://host/x', true],
+											['data:text/plain,x', true],
+											['node:fs', false],
+											['n:entry', true],
+											['no:entry', true],
+											['nod:entry', true],
+											['nodea:entry', true],
+											['1bad:entry', false],
+											['./data:entry', false],
+										]
+									: message.includes('noncanonical dot')
+										? [
+												['../core/../server/index.js', true],
+												['../core/./index.js', true],
+												['../core/index.js', false],
+												['./index.js', false],
+												['../../core/index.js', false],
+												['.../../index.js', true],
+												['.name/../index.js', true],
+											]
+										: message.includes('sibling sheet')
+											? [
+													['@src/print', true],
+													// Relative refusals now belong to the canonical filename-based matrix.
+													['@src/core', false],
+													['@src/browser', false],
+													['@src/vue', false],
+													['@app/core', false],
+													['@app/browser', false],
+													['@src/corex', true],
+													['@src/', true],
+													// The app browser query is admitted there; src retains its alias refusal.
+													['../browser?x', false],
+													['../print.ext/index.js', false],
+													...(Array.isArray(block.files) &&
+													block.files.some(
+														(file: unknown) =>
+															typeof file === 'string' && file.startsWith('app/vue/'),
+													)
+														? [['@app/print', true] as const]
+														: []),
+												]
+											: [
+													[
+														message.includes('absolute paths')
+															? '/machine/module.js'
+															: message.includes('normalized traversal')
+																? './../core/index.js'
+																: message.includes('forward slashes')
+																	? '..\\core\\index.js'
+																	: message.includes('compiler API')
+																		? 'typescript'
+																		: message.includes('private app')
+																			? '@app/core'
+																			: message.includes('stylesheets')
+																				? './index.css'
+																				: message.includes('host-independent') ||
+																					  message.includes('Node or server')
+																					? 'node:fs'
+																					: message.includes('Vue extension')
+																						? '@src/vue'
+																						: '@src/browser',
+														true,
+													],
+												]
+					// A setup-module fence lists its own refused and admitted specifiers in the setup module.
+					const listed = fence?.cases ?? chained
+					const face =
+						message.includes('another styles face') && typeof pattern.regex === 'string'
+							? /@src\/(bootstrap|tailwindcss|styles)\(/u.exec(pattern.regex)?.[1]
+							: undefined
+					if (message.includes('another styles face') && face === undefined)
+						throw new Error('Missing styles face in restriction pattern')
+					const sources: ReadonlyArray<readonly [string, boolean]> =
+						face === undefined
+							? listed
+							: [
+									[`@src/${face}`, true],
+									[`@src/${face}?raw`, true],
+									[`@orkestrel/x/${face}`, true],
+									[`../${face}/index.js`, true],
+									[`../src/${face}/index.js`, true],
+									[`../../src/${face}/index.js`, true],
+									['@src/browser', false],
+									[`@src/${face}x`, false],
+									[`../${face}.ext/index.js`, false],
+								]
+					// A per-file glob such as `.agents/skills/*/scripts/*.ts` or `tests/setup.ts` names a
+					// directory once its file part is dropped and each wildcard segment takes a sample name.
 					const owner =
 						Array.isArray(block.files) && typeof block.files[0] === 'string'
-							? block.files[0].split('/**')[0]
+							? block.files[0]
+									.split('/**')[0]
+									?.replace(/\/[^/]*\.[a-z]+$/u, '')
+									.replaceAll('*', 'sample')
 							: undefined
 					if (owner === undefined) throw new Error('Missing pattern owner')
-					const paths: string[] = []
-					for (const [index, [source, refusal]] of [
-						...sources,
-						['./index.js', false] as const,
-					].entries()) {
+					// Every relative specifier is refused in a self-contained script and in the policy
+					// plugin, which imports nothing, so their admitted controls are the rows above.
+					const controls =
+						message.includes('self-contained') || fence?.controlled === false
+							? []
+							: [['./index.js', false] as const]
+					const cases = [...sources, ...controls].map(([source, refusal], index) => {
 						const path = `${owner}/pattern${blockIndex}_${patternIndex}_${index}.ts`
 						mkdirSync(dirname(resolve(scratch, path)), { recursive: true })
 						writeFileSync(
 							resolve(scratch, path),
 							'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
 						)
-						expected.set(path, refusal)
-						paths.push(path)
-					}
-					overrides.push({
-						files: paths,
-						rules: { 'no-restricted-imports': ['error', { patterns: [pattern] }] },
+						return { path, refusal }
 					})
-				}
-			}
+					return {
+						cases,
+						override: {
+							files: cases.map(({ path }) => path),
+							rules: { 'no-restricted-imports': ['error', { patterns: [pattern] }] },
+						},
+					}
+				})
+				// A path entry restricts named imports of one module, so each case imports one clause.
+				const entries = readConfigRecord(rule[1]).paths
+				const fromPaths = (Array.isArray(entries) ? entries : []).map(
+					(entryValue: unknown, entryIndex: number) => {
+						const entry = readConfigRecord(entryValue)
+						const message = entry.message
+						if (typeof message !== 'string' || typeof entry.name !== 'string') {
+							throw new Error('Missing path entry message or module')
+						}
+						const named = POLICY_NAME_CASES.find(({ marker }) => message.includes(marker))
+						if (named === undefined) throw new Error('Missing named import cases for a path entry')
+						const owner =
+							Array.isArray(block.files) && typeof block.files[0] === 'string'
+								? block.files[0].replace(/\/[^/]*\.[a-z]+$/u, '').replaceAll('*', 'sample')
+								: undefined
+						if (owner === undefined) throw new Error('Missing path owner')
+						const cases = [
+							...named.refused.map((clause): [string, boolean] => [clause, true]),
+							...named.admitted.map((clause): [string, boolean] => [clause, false]),
+						].map(([clause, refusal], index) => {
+							const path = `${owner}/path${blockIndex}_${entryIndex}_${index}.ts`
+							mkdirSync(dirname(resolve(scratch, path)), { recursive: true })
+							writeFileSync(
+								resolve(scratch, path),
+								`import { ${clause} } from ${JSON.stringify(entry.name)}\ndebugger\n`,
+							)
+							return { path, refusal }
+						})
+						return {
+							cases,
+							override: {
+								files: cases.map(({ path }) => path),
+								rules: { 'no-restricted-imports': ['error', { paths: [entry] }] },
+							},
+						}
+					},
+				)
+				return [...fromPatterns, ...fromPaths]
+			})
+			// Each fence keeps a pattern or path entry in the configuration, so deleting one fails here
+			// rather than leaving the loop above with nothing to read.
+			const messages = configured.overrides.flatMap((value: unknown) => {
+				const rule = readConfigRecord(readConfigRecord(value).rules)['no-restricted-imports']
+				if (!Array.isArray(rule)) return []
+				const options = readConfigRecord(rule[1])
+				return [options.patterns, options.paths]
+					.flatMap((list: unknown) => (Array.isArray(list) ? list : []))
+					.map((entry: unknown) => String(readConfigRecord(entry).message))
+			})
+			expect(
+				[...POLICY_IMPORT_CASES, ...POLICY_NAME_CASES]
+					.map(({ marker }) => marker)
+					.filter((marker) => !messages.some((message) => message.includes(marker))),
+			).toEqual([])
+			const overrides = built.map(({ override }) => override)
+			const expected = new Map(
+				built.flatMap(({ cases }) =>
+					cases.map(({ path, refusal }): [string, boolean] => [path, refusal]),
+				),
+			)
 			writeFileSync(
 				resolve(scratch, '.oxlintrc.json'),
 				JSON.stringify({ rules: { 'no-debugger': 'error' }, overrides }),
 			)
 			const codes = readImportDiagnostics(scratch, [...expected.keys()])
-			const readings = [...expected].map(([path, refusal]) => ({
+			const verdicts = [...expected].map(([path, refusal]) => ({
 				path,
 				expected: refusal,
 				actual: codes.has('eslint(no-restricted-imports) ' + path),
 			}))
-			expect(readings.filter((reading) => reading.expected !== reading.actual)).toEqual([])
+			expect(verdicts.filter((verdict) => verdict.expected !== verdict.actual)).toEqual([])
 			writeFileSync(
 				resolve(scratch, '.oxlintrc.json'),
 				JSON.stringify({ rules: { 'no-debugger': 'error', 'no-restricted-imports': 'off' } }),
@@ -2739,132 +4105,166 @@ createSomething({
 			mkdirSync(resolve(scratch, 'configs'))
 			writeFileSync(
 				resolve(scratch, 'configs/policy.ts'),
-				readFileSync(resolve(root, 'configs/policy.ts')),
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts')),
 			)
-			const text = readFileSync(resolve(root, '.oxlintrc.json'), 'utf8')
+			const text = readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8')
 			writeFileSync(resolve(scratch, '.oxlintrc.json'), text)
-			const expected = new Map<string, boolean>()
-			for (const owner of [
-				'src/vue',
-				'app/vue',
-				'src/browser',
-				'src/bootstrap',
-				'src/tailwindcss',
-				'src/styles',
-				'app/browser',
-				'src/core',
-				'app/core',
-				'src/server',
-				'app/server',
-				'src/bin',
-			]) {
-				const refused: Array<string | readonly [string, string]> = owner.endsWith('/vue')
-					? [
-							'node:fs',
-							'@src/server',
-							'../server/index.js',
-							'@src/print',
-							'../print/index.js',
-							...(owner.startsWith('src/')
-								? ['@app/core', '../../app/core/index.js']
-								: ['@app/server', '@app/print']),
-						]
-					: [
-							'vue',
-							'vue/runtime-dom',
-							'@vue/runtime-core',
-							'@vitejs/plugin-vue',
-							'@src/vue',
-							'@orkestrel/sample/vue',
-							'@app/vue',
-							'../vue/index.js',
-							'../../src/vue/index.js',
-							'../../app/vue/index.js',
-						]
-				const admitted = owner.endsWith('/vue')
-					? [
-							'@src/core',
-							'@src/browser',
-							'../core/index.js',
-							'../browser/index.js',
-							'vue',
-							'@vue/runtime-core',
-							...(owner.startsWith('app/')
-								? ['@app/core', '@app/browser', '@src/vue', '../../src/vue/index.js']
-								: []),
-						]
-					: ['@src/core']
-				if (owner === 'src/core') refused.push('@src/browser', './index.css')
-				if (['src/bootstrap', 'src/tailwindcss', 'src/styles'].includes(owner)) {
-					refused.push('node:fs', '@src/server', '../server/index.js', '@app/core')
-					for (const face of ['bootstrap', 'tailwindcss', 'styles']) {
-						if (owner === `src/${face}`) continue
-						refused.push(
-							`@src/${face}`,
-							`@orkestrel/x/${face}`,
-							`../${face}/index.js`,
-							`../src/${face}/index.js`,
-							`../../src/${face}/index.js`,
-							['export * from', `@src/${face}`],
-							['import type * as boundary from', `@src/${face}`],
-						)
-						admitted.push(`@src/${face}x`, `../${face}.ext/index.js`)
-					}
-					admitted.push('@src/browser', './sheet.js', '@orkestrel/contract')
-				}
-				for (const [sources, refusal] of [
-					[
+			const faces = ['bootstrap', 'tailwindcss', 'styles']
+			const expected = new Map([
+				...[
+					'src/vue',
+					'app/vue',
+					'src/browser',
+					'src/bootstrap',
+					'src/tailwindcss',
+					'src/styles',
+					'app/browser',
+					'src/core',
+					'app/core',
+					'src/server',
+					'app/server',
+					'src/bin',
+				].flatMap((owner) => {
+					const sheet = ['src/bootstrap', 'src/tailwindcss', 'src/styles'].includes(owner)
+					const refused: ReadonlyArray<string | readonly [string, string]> = [
+						...(owner.endsWith('/vue')
+							? [
+									'node:fs',
+									'@src/server',
+									'../server/index.js',
+									'@src/print',
+									'../print/index.js',
+									...(owner.startsWith('src/')
+										? ['@app/core', '../../app/core/index.js']
+										: ['@app/server', '@app/print']),
+								]
+							: [
+									'vue',
+									'vue/runtime-dom',
+									'@vue/runtime-core',
+									'@vitejs/plugin-vue',
+									'@src/vue',
+									'@orkestrel/sample/vue',
+									'@app/vue',
+									'../vue/index.js',
+									'../../src/vue/index.js',
+									'../../app/vue/index.js',
+								]),
+						...(owner === 'src/core' ? ['@src/browser', './index.css'] : []),
+						...(sheet
+							? [
+									'node:fs',
+									'@src/server',
+									'../server/index.js',
+									'@app/core',
+									...faces
+										.filter((face) => owner !== `src/${face}`)
+										.flatMap((face): ReadonlyArray<string | readonly [string, string]> => [
+											`@src/${face}`,
+											`@orkestrel/x/${face}`,
+											`../${face}/index.js`,
+											`../src/${face}/index.js`,
+											`../../src/${face}/index.js`,
+											['export * from', `@src/${face}`],
+											['import type * as boundary from', `@src/${face}`],
+										]),
+								]
+							: []),
+						...(['src/browser', 'src/server', 'src/vue', 'src/bin'].includes(owner)
+							? ['../core/index.js', '../../src/core/index.js']
+							: []),
+						...(owner === 'src/vue' ? ['../browser/index.js', '../../src/browser/index.js'] : []),
+						...(owner === 'src/bin' ? ['../server/index.js', '../../src/server/index.js'] : []),
+					]
+					const admitted = [
+						...(owner.endsWith('/vue')
+							? [
+									'@src/core',
+									'@src/browser',
+									'vue',
+									'@vue/runtime-core',
+									...(owner.startsWith('app/')
+										? [
+												'@app/core',
+												'@app/browser',
+												'@src/vue',
+												'../../src/vue/index.js',
+												'../browser/index.js',
+											]
+										: []),
+								]
+							: ['@src/core']),
+						...(['src/browser', 'src/server', 'src/vue', 'src/bin'].includes(owner)
+							? []
+							: ['../core/index.js']),
+						...(owner === 'src/bin' ? ['@src/server'] : []),
+						...(sheet
+							? [
+									...faces
+										.filter((face) => owner !== `src/${face}`)
+										.flatMap((face) => [`@src/${face}x`, `../${face}.ext/index.js`]),
+									'@src/browser',
+									'./sheet.js',
+									'@orkestrel/contract',
+								]
+							: []),
+					]
+					return (
 						[
-							...refused,
-							'https://host/x',
-							'data:text/plain,x',
-							'../core/../server/index.js',
-							'../core/./index.js',
-						],
-						true,
-					],
+							[
+								[
+									...refused,
+									'https://host/x',
+									'data:text/plain,x',
+									'../core/../server/index.js',
+									'../core/./index.js',
+								],
+								true,
+							],
+							[
+								[
+									...admitted,
+									'./index.js',
+									...(owner.endsWith('/server') || owner === 'src/bin' ? ['node:fs'] : []),
+								],
+								false,
+							],
+						] as const
+					).flatMap(([sources, refusal]) =>
+						sources.map((source, index): [string, boolean] => {
+							const file = owner + '/' + (refusal ? 'refused' : 'admitted') + index + '.ts'
+							mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
+							writeFileSync(
+								resolve(scratch, file),
+								typeof source === 'string'
+									? 'import * as boundary from ' +
+											JSON.stringify(source) +
+											'\nvoid boundary\ndebugger\n'
+									: source[0] + ' ' + JSON.stringify(source[1]) + '\ndebugger\n',
+							)
+							return [file, refusal]
+						}),
+					)
+				}),
+				...(
 					[
-						[
-							...admitted,
-							'./index.js',
-							'../core/index.js',
-							...(owner.endsWith('/server') || owner === 'src/bin' ? ['node:fs'] : []),
-						],
-						false,
-					],
-				] as const) {
-					for (const [index, source] of sources.entries()) {
-						const file = owner + '/' + (refusal ? 'refused' : 'admitted') + index + '.ts'
-						mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
-						writeFileSync(
-							resolve(scratch, file),
-							typeof source === 'string'
-								? 'import * as boundary from ' +
-										JSON.stringify(source) +
-										'\nvoid boundary\ndebugger\n'
-								: source[0] + ' ' + JSON.stringify(source[1]) + '\ndebugger\n',
-						)
-						expected.set(file, refusal)
-					}
-				}
-			}
-			for (const [file, source, refusal] of [
-				['probe.config.ts', 'typescript', true],
-				['allowed.config.ts', 'node:fs', false],
-				['src/core/compiler.ts', 'typescript', true],
-				['tests/compiler.ts', 'typescript', true],
-				['configs/compiler.ts', 'typescript', true],
-				['scripts/compiler.ts', 'typescript', true],
-			] as const) {
-				mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
-				writeFileSync(
-					resolve(scratch, file),
-					'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
-				)
-				expected.set(file, refusal)
-			}
-			const reports: Array<ReadonlySet<string>> = []
-			for (const disabled of [false, true]) {
+						['probe.config.ts', 'typescript', true],
+						['allowed.config.ts', 'node:fs', false],
+						['src/core/compiler.ts', 'typescript', true],
+						['tests/compiler.ts', 'typescript', true],
+						['configs/compiler.ts', 'typescript', true],
+						['scripts/compiler.ts', 'typescript', true],
+					] as const
+				).map(([file, source, refusal]): [string, boolean] => {
+					mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
+					writeFileSync(
+						resolve(scratch, file),
+						'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+					)
+					return [file, refusal]
+				}),
+			])
+			const reports = [false, true].map((disabled) => {
 				if (disabled) {
 					const parsed: unknown = JSON.parse(text)
 					if (typeof parsed !== 'object' || parsed === null)
@@ -2887,25 +4287,28 @@ createSomething({
 					}
 					writeFileSync(resolve(scratch, '.oxlintrc.json'), JSON.stringify(parsed))
 				}
-				const codes = readImportDiagnostics(scratch, [...expected.keys()])
-				reports.push(codes)
-			}
+				return readImportDiagnostics(scratch, [...expected.keys()])
+			})
 			const [enabled, disabled] = reports
 			if (enabled === undefined || disabled === undefined)
 				throw new Error('Missing boundary readings')
-			const readings = [...expected].map(([path, refusal]) => ({
+			const verdicts = [...expected].map(([path, refusal]) => ({
 				path,
 				expected: refusal,
-				actual: enabled.has('eslint(no-restricted-imports) ' + path),
+				actual:
+					enabled.has('eslint(no-restricted-imports) ' + path) ||
+					enabled.has('policy(no-cross-vue-face) ' + path),
 			}))
-			expect(readings.filter((reading) => reading.actual !== reading.expected)).toEqual([])
+			expect(verdicts.filter((verdict) => verdict.actual !== verdict.expected)).toEqual([])
 			const control = [...expected].map(([path, refusal]) => ({
 				path,
 				expected: refusal,
-				actual: disabled.has('eslint(no-restricted-imports) ' + path),
+				actual:
+					disabled.has('eslint(no-restricted-imports) ' + path) ||
+					disabled.has('policy(no-cross-vue-face) ' + path),
 			}))
 			expect(() =>
-				expect(control.filter((reading) => reading.actual !== reading.expected)).toEqual([]),
+				expect(control.filter((verdict) => verdict.actual !== verdict.expected)).toEqual([]),
 			).toThrow('deeply equal')
 			expect(control).toContainEqual({ path: 'src/vue/refused3.ts', expected: true, actual: false })
 			expect(control).toContainEqual({ path: 'src/vue/refused8.ts', expected: true, actual: false })
@@ -2915,7 +4318,7 @@ createSomething({
 	})
 
 	it('enables every plugin rule over the population its law names', () => {
-		const parsed: unknown = JSON.parse(readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
+		const parsed: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
 		const rules: unknown = Object.getOwnPropertyDescriptor(policyPlugin, 'rules')?.value
 		if (typeof rules !== 'object' || rules === null) {
 			throw new Error('The policy plugin declares no rules')
@@ -2923,13 +4326,53 @@ createSomething({
 		const declared = Object.getOwnPropertyNames(rules)
 		expect(declared).toContain('no-misplaced-function')
 		expect(declared).toContain('no-host-line-endings')
+		expect(declared).toContain('no-cross-vue-face')
+		expect(declared).toContain('no-malformed-script')
+		expect(declared).toContain('no-mutable-property')
 		expect(
 			inspectPolicyWiring(
 				parsed,
 				declared.map((name) => `policy/${name}`),
-				[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS],
+				[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS, POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS],
 			),
 		).toEqual([])
+		// The controls: a configuration with the skill-script override or the nested-function
+		// override removed reports the population it no longer declares.
+		const overrides: unknown = Object.getOwnPropertyDescriptor(parsed, 'overrides')?.value
+		if (!Array.isArray(overrides)) throw new Error('The Oxlint configuration has no overrides')
+		for (const population of [POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS]) {
+			const trimmed = {
+				...readConfigRecord(parsed),
+				overrides: overrides.filter((override: unknown) => {
+					const files = readConfigRecord(override).files
+					return !Array.isArray(files) || files.join(' ') !== population.join(' ')
+				}),
+			}
+			expect(
+				inspectPolicyWiring(
+					trimmed,
+					[],
+					[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS, POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS],
+				),
+			).toEqual([`no override files list declares the population exactly: ${population.join(' ')}`])
+		}
+		// The control: the script override keeps its exact population while the rule it enables is
+		// set to off, which names the rule as enabled by no record.
+		const disabled = {
+			...readConfigRecord(parsed),
+			overrides: overrides.map((override: unknown) => {
+				const record = readConfigRecord(override)
+				return Object.hasOwn(readConfigRecord(record.rules ?? {}), 'policy/no-malformed-script')
+					? {
+							...record,
+							rules: { ...readConfigRecord(record.rules), 'policy/no-malformed-script': 'off' },
+						}
+					: record
+			}),
+		}
+		expect(
+			inspectPolicyWiring(disabled, ['policy/no-malformed-script'], [POLICY_SCRIPT_GLOBS]),
+		).toEqual(['policy/no-malformed-script is enabled by no top-level or override rules record'])
 	})
 
 	it('loads every configured policy rule through the real binary', () => {
@@ -2937,8 +4380,11 @@ createSomething({
 		try {
 			// Compare diagnostics from the real directory while the child keeps the scratch cwd.
 			const comparisonRoot = realpathSync.native(scratch.path)
-			scratch.write('.oxlintrc.json', readFileSync(resolve(root, '.oxlintrc.json'), 'utf8'))
-			scratch.write('configs/policy.ts', readFileSync(resolve(root, 'configs/policy.ts'), 'utf8'))
+			scratch.write('.oxlintrc.json', readFileSync(resolve(POLICY_ROOT, '.oxlintrc.json'), 'utf8'))
+			scratch.write(
+				'configs/policy.ts',
+				readFileSync(resolve(POLICY_ROOT, 'configs/policy.ts'), 'utf8'),
+			)
 			scratch.write(
 				'src/violations/fixture.ts',
 				[
@@ -2955,6 +4401,15 @@ createSomething({
 					"export const STATUS = 'ready'",
 					"export const lines = text.trim().split('\\n')",
 					'export const ending = os.EOL + EOL',
+					'let counter = 0',
+					'counter++',
+					'let unchanged = 1',
+					'var legacy = 1',
+					'function shiftValue(value: number) { value += 1; return value }',
+					'try { void counter } catch (error) { error = undefined; void error }',
+					'void unchanged',
+					'void legacy',
+					'void shiftValue',
 					'void PrivateMember',
 					'void ParameterMember',
 					'void PublicMember',
@@ -2971,6 +4426,185 @@ createSomething({
 			scratch.write('src/violations/constants.ts', 'export const values = []\n')
 			scratch.write('src/violations/composables.ts', "export const READY = 'yes'\n")
 			scratch.write('app/browser/composables/useTheme.ts', 'export function useMode(): void {}\n')
+			scratch.write('app/vue/helpers.ts', "export * from '../print/index.js'\ndebugger\n")
+			scratch.write(
+				'.agents/skills/sample/scripts/shared.ts',
+				["import { readOption } from './helpers.ts'", 'void readOption'].join('\n'),
+			)
+			// The fence reads a dynamic specifier as it reads a static one, and the empty specifier opens
+			// with no `node:` as every other refused specifier does.
+			scratch.write(
+				'.agents/skills/sample/scripts/dynamic.ts',
+				[
+					'/** Loads a sibling. */',
+					"export function load(): Promise<unknown> { return import('./other.ts') }",
+				].join('\n'),
+			)
+			scratch.write(
+				'.agents/skills/sample/scripts/empty.ts',
+				[
+					'/** Loads nothing. */',
+					"export function load(): Promise<unknown> { return import('') }",
+				].join('\n'),
+			)
+			scratch.write(
+				'.agents/skills/sample/scripts/alone.ts',
+				["import { readFileSync } from 'node:fs'", 'void readFileSync'].join('\n'),
+			)
+			// A script that hides a declaration, exports one with no doc block, and runs at import draws
+			// every message; the conforming script beside it draws none, and its `debugger` statement
+			// sits inside a function, outside the top-level statements the script rule reads, so the
+			// root `no-debugger` rule proves the file entered the run.
+			scratch.write(
+				'.agents/skills/sample/scripts/malformed.ts',
+				[
+					'function hidden(): void {}',
+					'export function bare(): void {}',
+					'hidden()',
+					'bare()',
+				].join('\n'),
+			)
+			scratch.write(
+				'.agents/skills/sample/scripts/conforming.ts',
+				[
+					"import { realpathSync } from 'node:fs'",
+					'',
+					'/** Reads the one value. */',
+					'export function read(): number {',
+					'\tdebugger',
+					'\treturn 1',
+					'}',
+					'',
+					'/** Runs the script. */',
+					'export function main(): number {',
+					'\treturn read()',
+					'}',
+					'',
+					'if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) {',
+					'\tprocess.exitCode = main()',
+					'}',
+				].join('\n'),
+			)
+			// Every form of write to a parameter or a catch binding draws the built-in rule, one file per
+			// form so that a form the binary misses names itself.
+			const reassignments = [
+				{
+					file: 'param-update',
+					code: 'no-param-reassign',
+					source: 'export function f(a: number) { a++; return a }',
+				},
+				{
+					file: 'param-array-target',
+					code: 'no-param-reassign',
+					source: 'export function f(b: number[]) { ;[b] = [[1]]; return b }',
+				},
+				{
+					file: 'param-object-target',
+					code: 'no-param-reassign',
+					source: 'export function f(c: object) { ;({ c } = { c: {} }); return c }',
+				},
+				{
+					file: 'param-for-in-head',
+					code: 'no-param-reassign',
+					source: 'export function f(e: string, c: object) { for (e in c) void e; return e }',
+				},
+				{
+					file: 'param-for-of-head',
+					code: 'no-param-reassign',
+					source: "export function f(e: string) { for (e of ['x']) void e; return e }",
+				},
+				{
+					file: 'catch-update',
+					code: 'no-ex-assign',
+					source: 'try { void 0 } catch (err) { err++ }',
+				},
+				{
+					file: 'catch-destructured',
+					code: 'no-ex-assign',
+					source: "try { void 0 } catch ({ message }) { message = 'x' }",
+				},
+				{
+					file: 'catch-for-of-head',
+					code: 'no-ex-assign',
+					source: 'try { void 0 } catch (err) { for (err of [1]) void err }',
+				},
+			].map(({ file, code, source }) => ({
+				code: `eslint(${code})`,
+				filename: `src/violations/reassign/${file}.ts`,
+				source,
+			}))
+			for (const { filename, source } of reassignments) scratch.write(filename, source)
+			// An ambient block holds a `let` with no value and no `declare` flag of its own, and the
+			// `debugger` statement proves the file entered the run the absence assertion reads.
+			scratch.write(
+				'src/violations/ambient.ts',
+				[
+					'declare global { let ambientGlobal: number }',
+					"declare module 'ambient-module' { export let ambientExport: string }",
+					'debugger',
+					'export {}',
+				].join('\n'),
+			)
+			scratch.write(
+				'src/violations/types.ts',
+				[
+					'/** Describes a mutable record. */',
+					'export interface MutableRecord { id: string }',
+					'/** Describes a frozen record. */',
+					'export interface FrozenRecord { readonly id: string }',
+					'/** Aliases an object type. */',
+					'export type MutableAlias = { value: number }',
+					'/** Reads one field through an inline parameter type. */',
+					'export type Reader = (options: { id: string }) => string',
+				].join('\n'),
+			)
+			// The setup-module fences replace the generic tests restriction for the files they name,
+			// and the proofs beside them keep the generic one. The `debugger` statement proves each file
+			// entered the run.
+			scratch.write(
+				'tests/setup.ts',
+				["import { readFileSync } from 'node:fs'", "import { ref } from 'vue'", 'debugger'].join(
+					'\n',
+				),
+			)
+			scratch.write(
+				'tests/setupBrowser.ts',
+				[
+					"import { describe, it } from 'vitest'",
+					"import { readFileSync } from 'node:fs'",
+					'debugger',
+				].join('\n'),
+			)
+			scratch.write(
+				'tests/setupServer.ts',
+				["import { expect } from 'vitest'", 'debugger'].join('\n'),
+			)
+			scratch.write(
+				'tests/setupPolicy.ts',
+				["import { readFileSync } from 'node:fs'", "import { vi } from 'vitest'", 'debugger'].join(
+					'\n',
+				),
+			)
+			scratch.write(
+				'tests/setupStyles.ts',
+				["import { TestRunner } from 'vitest'", 'debugger'].join('\n'),
+			)
+			scratch.write(
+				'tests/setup.test.ts',
+				["import { describe, expect, it } from 'vitest'", 'debugger'].join('\n'),
+			)
+			scratch.write(
+				'tests/setupServer.bench.ts',
+				["import { describe, expect, it } from 'vitest'", 'debugger'].join('\n'),
+			)
+			scratch.write(
+				'tests/titles.test.ts',
+				[
+					"import { expect, it } from 'vitest'",
+					"it('reads one value', () => expect(1).toBe(1))",
+					"it('reads one value', () => expect(2).toBe(2))",
+				].join('\n'),
+			)
 			// The line-ending population reaches src, app, and configs alone, so this module
 			// outside them carries the same defect and must draw no diagnostic. The `debugger`
 			// statement is the arrival control the root `no-debugger` rule reports, which proves
@@ -3002,7 +4636,9 @@ createSomething({
 			// extensionless form; spawning the `.cmd` would need `shell: true`, which breaks on paths
 			// containing spaces. Resolving through `createRequire` reads oxlint's own `bin` field, so
 			// the entry survives hoisting, a nested `node_modules` layout, and a future rename.
-			const manifestPath = createRequire(join(root, 'package.json')).resolve('oxlint/package.json')
+			const manifestPath = createRequire(join(POLICY_ROOT, 'package.json')).resolve(
+				'oxlint/package.json',
+			)
 			const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
 			if (typeof manifest !== 'object' || manifest === null) {
 				throw new Error('The oxlint package manifest is not an object')
@@ -3021,7 +4657,18 @@ createSomething({
 			const config = resolve(scratch.path, '.oxlintrc.json')
 			const violations = spawnSync(
 				process.execPath,
-				[binary, '--config', config, '--format', 'json', 'src/violations', 'app', 'scripts'],
+				[
+					binary,
+					'--config',
+					config,
+					'--format',
+					'json',
+					'src/violations',
+					'app',
+					'scripts',
+					'tests',
+					'.agents',
+				],
 				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
 			const clean = spawnSync(
@@ -3029,8 +4676,7 @@ createSomething({
 				[binary, '--config', config, '--format', 'json', 'src/clean'],
 				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
-			const reports: string[][] = []
-			for (const result of [violations, clean]) {
+			const reports = [violations, clean].map((result): string[] => {
 				if (result.error !== undefined) throw result.error
 				const report: unknown = JSON.parse(result.stdout)
 				if (typeof report !== 'object' || report === null) {
@@ -3038,8 +4684,7 @@ createSomething({
 				}
 				const diagnostics: unknown = Object.getOwnPropertyDescriptor(report, 'diagnostics')?.value
 				if (!Array.isArray(diagnostics)) throw new Error('Oxlint returned no diagnostic list')
-				const codes: string[] = []
-				for (const diagnostic of diagnostics) {
+				return diagnostics.map((diagnostic: unknown) => {
 					if (typeof diagnostic !== 'object' || diagnostic === null) {
 						throw new Error('Oxlint returned a malformed diagnostic')
 					}
@@ -3048,10 +4693,9 @@ createSomething({
 					if (typeof code !== 'string' || typeof filename !== 'string') {
 						throw new Error('Oxlint returned a diagnostic without a rule id and a file')
 					}
-					codes.push(`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`)
-				}
-				reports.push(codes)
-			}
+					return `${code} ${normalizePolicyFilename(comparisonRoot, filename)}`
+				})
+			})
 
 			const violationCodes = reports[0]
 			const cleanCodes = reports[1]
@@ -3062,7 +4706,33 @@ createSomething({
 			for (const { code, filename } of [
 				{ code: 'policy(no-mocking)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-keyword-privacy)', filename: 'src/violations/fixture.ts' },
+				{ code: 'policy(no-let)', filename: 'src/violations/fixture.ts' },
+				{ code: 'eslint(prefer-const)', filename: 'src/violations/fixture.ts' },
+				{ code: 'eslint(no-var)', filename: 'src/violations/fixture.ts' },
+				{ code: 'eslint(no-param-reassign)', filename: 'src/violations/fixture.ts' },
+				{ code: 'eslint(no-ex-assign)', filename: 'src/violations/fixture.ts' },
+				{ code: 'vitest(no-identical-title)', filename: 'tests/titles.test.ts' },
+				{
+					code: 'eslint(no-restricted-imports)',
+					filename: '.agents/skills/sample/scripts/shared.ts',
+				},
+				{
+					code: 'eslint(no-restricted-imports)',
+					filename: '.agents/skills/sample/scripts/dynamic.ts',
+				},
+				{
+					code: 'eslint(no-restricted-imports)',
+					filename: '.agents/skills/sample/scripts/empty.ts',
+				},
 				{ code: 'policy(no-nested-functions)', filename: 'src/violations/fixture.ts' },
+				{
+					code: 'policy(no-malformed-script)',
+					filename: '.agents/skills/sample/scripts/malformed.ts',
+				},
+				{ code: 'policy(no-mutable-property)', filename: 'src/violations/types.ts' },
+				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setup.ts' },
+				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupBrowser.ts' },
+				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupServer.ts' },
 				{ code: 'policy(no-misplaced-type)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-misplaced-data)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-misplaced-function)', filename: 'src/violations/fixture.ts' },
@@ -3074,6 +4744,8 @@ createSomething({
 				{ code: 'policy(no-misnamed-plugin)', filename: 'src/violations/plugins.ts' },
 				{ code: 'policy(no-malformed-constant)', filename: 'src/violations/constants.ts' },
 				{ code: 'policy(no-malformed-domain)', filename: 'src/violations/composables.ts' },
+				{ code: 'policy(no-cross-vue-face)', filename: 'app/vue/helpers.ts' },
+				{ code: 'eslint(no-debugger)', filename: 'app/vue/helpers.ts' },
 				{
 					code: 'policy(no-malformed-domain)',
 					filename: 'app/browser/composables/useTheme.ts',
@@ -3090,12 +4762,57 @@ createSomething({
 					`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`,
 				)
 			}
+			for (const { code, filename } of reassignments) {
+				expect(violationCodes).toContain(
+					`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`,
+				)
+			}
+			expect(violationCodes).toContain(
+				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'src/violations/ambient.ts')}`,
+			)
+			expect(violationCodes).not.toContain(
+				`policy(no-let) ${normalizePolicyFilename(comparisonRoot, 'src/violations/ambient.ts')}`,
+			)
 			expect(violationCodes).toContain(
 				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
 			)
 			expect(violationCodes).not.toContain(
 				`policy(no-host-line-endings) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
 			)
+			expect(violationCodes).not.toContain(
+				`eslint(no-restricted-imports) ${normalizePolicyFilename(comparisonRoot, '.agents/skills/sample/scripts/alone.ts')}`,
+			)
+			// The conforming script arrives, through the `debugger` statement inside its function, and
+			// draws no script diagnostic; the inline parameter type beside the two mutable properties
+			// draws none either, so the types file draws exactly two.
+			expect(violationCodes).toContain(
+				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, '.agents/skills/sample/scripts/conforming.ts')}`,
+			)
+			expect(violationCodes).not.toContain(
+				`policy(no-malformed-script) ${normalizePolicyFilename(comparisonRoot, '.agents/skills/sample/scripts/conforming.ts')}`,
+			)
+			expect(
+				violationCodes.filter(
+					(code) =>
+						code ===
+						`policy(no-mutable-property) ${normalizePolicyFilename(comparisonRoot, 'src/violations/types.ts')}`,
+				),
+			).toHaveLength(2)
+			// The fences replace only the restriction of the files they name: a setup module that
+			// imports a Node module or a vitest helper the law admits, a browser-enabled helper module
+			// the law admits, and a setup proof that registers tests all draw the root arrival
+			// diagnostic and no import restriction. A benchmark beside a setup module registers and
+			// asserts as a proof does, so it is admitted the same way.
+			for (const filename of [
+				'tests/setupPolicy.ts',
+				'tests/setupStyles.ts',
+				'tests/setup.test.ts',
+				'tests/setupServer.bench.ts',
+			]) {
+				const normalized = normalizePolicyFilename(comparisonRoot, filename)
+				expect(violationCodes).toContain(`eslint(no-debugger) ${normalized}`)
+				expect(violationCodes).not.toContain(`eslint(no-restricted-imports) ${normalized}`)
+			}
 			expect(clean.status).toBe(0)
 			expect(cleanCodes).toHaveLength(0)
 		} finally {
@@ -3230,9 +4947,11 @@ describe('configuration helpers', () => {
 
 	it('exposes every helper this proof requires', () => {
 		const required = [
+			'BuildState',
 			'ENVIRONMENT_MODULE_BYTES',
 			'PACKAGE_MANIFEST_BYTES',
 			'WORKSPACE_ROOT',
+			'attemptValue',
 			'buildExtractorOverride',
 			'containedPath',
 			'decodeAssetSource',
@@ -3244,6 +4963,7 @@ describe('configuration helpers', () => {
 			'environmentPathError',
 			'environmentSourceError',
 			'fileSystemPath',
+			'findPackageDirectory',
 			'hasAsciiUrlControl',
 			'isBoundaryExemptModule',
 			'isExtractorModule',
@@ -3260,10 +4980,11 @@ describe('configuration helpers', () => {
 			'parseProjectScope',
 			'physicalPath',
 			'readBoundedFile',
+			'readHandleBytes',
 			'readCompilerOutput',
+			'resolveCompiler',
 			'rewriteCoreSpecifier',
 			'sourceFallback',
-			'trustedPackageRootFor',
 			'workspacePath',
 		]
 		const found = Object.keys(configHelpers)
@@ -3302,17 +5023,19 @@ describe('configuration helpers', () => {
 		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-outside-' })
 		try {
 			const outside = scratch.path
-			const importer = resolve(root, 'tests/config.test.ts')
-			expect(configHelpers.WORKSPACE_ROOT).toBe(realpathSync.native(root))
-			expect(configHelpers.fileSystemPath(`/@fs/${root}`)).toBe(root)
-			expect(configHelpers.physicalPath(`${root}?control=true`)).toBe(realpathSync.native(root))
+			const importer = resolve(POLICY_ROOT, 'tests/config.test.ts')
+			expect(configHelpers.WORKSPACE_ROOT).toBe(realpathSync.native(POLICY_ROOT))
+			expect(configHelpers.fileSystemPath(`/@fs/${POLICY_ROOT}`)).toBe(POLICY_ROOT)
+			expect(configHelpers.physicalPath(`${POLICY_ROOT}?control=true`)).toBe(
+				realpathSync.native(POLICY_ROOT),
+			)
 			expect(configHelpers.sourceFallback(importer, './setup.ts')).toBe(
-				resolve(root, 'tests/setup.ts'),
+				resolve(POLICY_ROOT, 'tests/setup.ts'),
 			)
 			expect(configHelpers.sourceFallback(importer, pathToFileURL(importer).href)).toBe(importer)
 			expect(configHelpers.workspacePath(importer)).toBe('tests/config.test.ts')
-			expect(configHelpers.containedPath(root, importer)).toBe(true)
-			expect(configHelpers.containedPath(root, outside)).toBe(false)
+			expect(configHelpers.containedPath(POLICY_ROOT, importer)).toBe(true)
+			expect(configHelpers.containedPath(POLICY_ROOT, outside)).toBe(false)
 			expect(configHelpers.workspacePath(outside)).toBeUndefined()
 			expect(configHelpers.isOutsideWorkspacePath(outside)).toBe(true)
 			expect(configHelpers.isOutsideWorkspacePath('src/core/index.ts')).toBe(false)
@@ -3351,12 +5074,173 @@ describe('configuration helpers', () => {
 				realpathSync.native(packageRoot),
 			)
 			expect(configHelpers.packageRootForResolved(source)).toBe(realpathSync.native(packageRoot))
-			expect(
-				configHelpers.trustedPackageRootFor(source, new Set([realpathSync.native(packageRoot)])),
-			).toBe(realpathSync.native(packageRoot))
 		} finally {
 			scratch.destroy()
 		}
+	})
+
+	it('returns a producer value, or undefined when the producer throws', () => {
+		expect(configHelpers.attemptValue(() => decodeURI('%20'))).toBe(' ')
+		expect(configHelpers.attemptValue(() => decodeURI('%E0%A4%A'))).toBeUndefined()
+		expect(configHelpers.attemptValue(() => undefined)).toBeUndefined()
+		expect(configHelpers.attemptValue(() => 0)).toBe(0)
+	})
+
+	it('fills a buffer from an open handle until it ends, and refuses a file over the limit', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-handle-' })
+		try {
+			// Each case is a file's text, the offset already read into the buffer, and the largest total allowed.
+			const results = [
+				{ text: 'abc', offset: 0, limit: 4 },
+				{ text: 'abcd', offset: 0, limit: 4 },
+				{ text: 'abcde', offset: 0, limit: 4 },
+				{ text: '', offset: 0, limit: 4 },
+				{ text: 'abc', offset: 2, limit: 10 },
+				{ text: 'abc', offset: 2, limit: 4 },
+			].map(({ text, offset, limit }) => {
+				scratch.write('subject.txt', text)
+				const handle = openSync(resolve(scratch.path, 'subject.txt'), 'r')
+				try {
+					const bytes = Buffer.alloc(16)
+					const count = configHelpers.readHandleBytes(handle, bytes, offset, limit)
+					return { count, filled: bytes.toString('utf8', offset, count ?? offset) }
+				} finally {
+					closeSync(handle)
+				}
+			})
+			// A file at or under the limit answers its length; the shifted read adds the offset to the
+			// length and fills the buffer past it; a file over the limit answers nothing.
+			expect(results.map(({ count }) => count)).toStrictEqual([3, 4, undefined, 0, 5, undefined])
+			expect(results.map(({ filled }) => filled)).toStrictEqual(['abc', 'abcd', '', '', 'abc', ''])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('finds the nearest package directory from a manifest, a package boundary, or nothing', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-find-' })
+		try {
+			scratch.write('held/package.json', '{"name":"held"}')
+			scratch.write('held/src/deep/file.txt', '')
+			scratch.write('modules/node_modules/plain/lib/file.txt', '')
+			scratch.write('modules/node_modules/@scope/named/lib/file.txt', '')
+			scratch.write('modules/node_modules/@scope/file.txt', '')
+			const held = resolve(scratch.path, 'held')
+			expect(configHelpers.findPackageDirectory(held)).toBe(held)
+			expect(configHelpers.findPackageDirectory(resolve(held, 'src/deep'))).toBe(held)
+			const plain = resolve(scratch.path, 'modules/node_modules/plain')
+			expect(configHelpers.findPackageDirectory(resolve(plain, 'lib'))).toBe(plain)
+			const named = resolve(scratch.path, 'modules/node_modules/@scope/named')
+			expect(configHelpers.findPackageDirectory(resolve(named, 'lib'))).toBe(named)
+			expect(configHelpers.findPackageDirectory(named)).toBe(named)
+			// A scope directory alone is not a package boundary, so the walk passes it by.
+			expect(
+				configHelpers.isPackageBoundary(resolve(scratch.path, 'modules/node_modules/@scope')),
+			).toBe(false)
+			// The walk ends at the filesystem root; the answer there is the root only if it holds a manifest.
+			const root = parse(scratch.path).root
+			expect(configHelpers.findPackageDirectory(root)).toBe(
+				existsSync(resolve(root, 'package.json')) ? root : undefined,
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('holds the workspace defaults until a resolved build config replaces them', async () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-state-' })
+		try {
+			const fresh = new configHelpers.BuildState()
+			expect(fresh.building).toBe(false)
+			expect(fresh.output).toBe(configHelpers.WORKSPACE_ROOT)
+			expect(fresh.root).toBe(configHelpers.WORKSPACE_ROOT)
+			expect(fresh.source).toBe('')
+			expect(new configHelpers.BuildState('C:/output').output).toBe('C:/output')
+
+			const entry = resolve(scratch.path, 'index.ts')
+			const inline: InlineConfig = {
+				root: scratch.path,
+				configFile: false,
+				logLevel: 'silent',
+				build: { outDir: 'out', lib: { entry, formats: ['es'] } },
+			}
+			const buildState = new configHelpers.BuildState()
+			buildState.resolve(await resolveConfig(inline, 'build'))
+			expect(buildState.building).toBe(true)
+			expect(buildState.output).toBe(resolve(scratch.path, 'out'))
+			expect(buildState.root).toBe(realpathSync.native(scratch.path))
+			expect(buildState.source).toBe(entry)
+
+			// The control: a serve command is not a build, and a config with no library entry has no source.
+			const serveState = new configHelpers.BuildState()
+			serveState.resolve(await resolveConfig({ ...inline, build: { outDir: 'out' } }, 'serve'))
+			expect(serveState.building).toBe(false)
+			expect(serveState.source).toBe('')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('admits each physical package root once and locates the first admitted root containing a path', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-locate-' })
+		try {
+			scratch.write('modules/outer/inner/index.ts', '')
+			scratch.write('modules/other/index.ts', '')
+			const outer = realpathSync.native(resolve(scratch.path, 'modules/outer'))
+			const inner = realpathSync.native(resolve(scratch.path, 'modules/outer/inner'))
+			const inside = resolve(scratch.path, 'modules/outer/inner/index.ts')
+			const beside = resolve(scratch.path, 'modules/other/index.ts')
+
+			const state = new configHelpers.BuildState()
+			// A fresh state admits nothing, so it locates nothing.
+			expect(state.locate(inside)).toBeUndefined()
+			state.trust(outer)
+			state.trust(outer)
+			state.trust(inner)
+			expect(state.locate(inside)).toBe(outer)
+			expect(state.locate(beside)).toBeUndefined()
+			// Admission order decides which of two containing roots answers.
+			const reversed = new configHelpers.BuildState()
+			reversed.trust(inner)
+			reversed.trust(outer)
+			expect(reversed.locate(inside)).toBe(inner)
+			expect(new configHelpers.BuildState().locate(inside)).toBeUndefined()
+			// The admitted roots are never returned, so the class publishes no member that lists them.
+			expect(Object.getOwnPropertyNames(configHelpers.BuildState.prototype).sort()).toEqual([
+				'building',
+				'constructor',
+				'locate',
+				'output',
+				'resolve',
+				'root',
+				'source',
+				'trust',
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('climbs from a policy node through its enclosing parentheses alone', () => {
+		const call = { type: 'CallExpression', range: [0, 9] } satisfies PolicyExpression
+		const outer = {
+			type: 'ParenthesizedExpression',
+			range: [1, 8],
+			parent: call,
+		} satisfies PolicyExpression
+		const inner = {
+			type: 'ParenthesizedExpression',
+			range: [2, 7],
+			parent: outer,
+		} satisfies PolicyExpression
+		const leaf = { type: 'Identifier', range: [3, 4], parent: inner } satisfies PolicyExpression
+		expect(nodeToPolicyOuter(leaf)).toBe(outer)
+		expect(nodeToPolicyOuter(inner)).toBe(outer)
+		expect(nodeToPolicyOuter(outer)).toBe(outer)
+		// The control: a node under a non-parenthesized parent, or under none, stays where it is.
+		const argument = { type: 'Identifier', range: [1, 2], parent: call } satisfies PolicyExpression
+		expect(nodeToPolicyOuter(argument)).toBe(argument)
+		expect(nodeToPolicyOuter(call)).toBe(call)
 	})
 
 	it('classifies module boundaries and extracts static asset sources', async () => {
@@ -3371,8 +5255,12 @@ describe('configuration helpers', () => {
 			expect(configHelpers.hasAsciiUrlControl('clean')).toBe(false)
 			expect(configHelpers.hasAsciiUrlControl('line\u0000break')).toBe(true)
 			expect(configHelpers.isBoundaryExemptModule('virtual:control')).toBe(true)
-			expect(configHelpers.isBoundaryExemptModule(resolve(root, 'src/core/index.ts'))).toBe(false)
-			expect(configHelpers.isWorkspaceBoundaryModule(resolve(root, 'src/core/index.ts'))).toBe(true)
+			expect(configHelpers.isBoundaryExemptModule(resolve(POLICY_ROOT, 'src/core/index.ts'))).toBe(
+				false,
+			)
+			expect(
+				configHelpers.isWorkspaceBoundaryModule(resolve(POLICY_ROOT, 'src/core/index.ts')),
+			).toBe(true)
 			expect(configHelpers.isWorkspaceBoundaryModule(source)).toBe(false)
 			expect(configHelpers.isStylesheetPath('src/styles/index.scss?direct')).toBe(true)
 			expect(configHelpers.isStylesheetPath('src/core/index.ts')).toBe(false)
@@ -3398,31 +5286,52 @@ describe('configuration helpers', () => {
 			'Browser modules cannot depend on Node or server-only modules',
 		)
 		expect(configHelpers.environmentSourceError('src/browser', '@src/core')).toBeUndefined()
-		const expected = resolve(root, 'dist/config-control')
+		const expected = resolve(POLICY_ROOT, 'dist/config-control')
 		expect(() => configHelpers.enforceOutputPath(expected, expected)).not.toThrow()
 		expect(() =>
-			configHelpers.enforceOutputPath(resolve(root, 'dist/outside-control'), expected),
+			configHelpers.enforceOutputPath(resolve(POLICY_ROOT, 'dist/outside-control'), expected),
 		).toThrow('Build output must use its exact configured workspace directory')
-		const outside = resolve(dirname(root), 'outside-config-control')
+		const outside = resolve(dirname(POLICY_ROOT), 'outside-config-control')
 		expect(() => configHelpers.enforceOutputPath(outside, outside)).toThrow(
 			'Build output must remain inside the workspace',
 		)
+	})
+
+	it('admits a computed import() through Vite at every module path while collecting literal specifiers', async () => {
+		for (const path of [...COMPUTED_IMPORT_PATHS, '../outside/src/server/load.ts']) {
+			await expect(
+				configHelpers.environmentAssetSources(
+					'void import(process.argv[2])',
+					resolve(POLICY_ROOT, path),
+				),
+			).resolves.toEqual([])
+			await expect(
+				configHelpers.environmentAssetSources(
+					"void import('@src/browser')",
+					resolve(POLICY_ROOT, path),
+				),
+			).resolves.toEqual(['@src/browser'])
+		}
+		expect(configHelpers.environmentSourceError('src/server', '@src/browser')).toBeDefined()
 	})
 
 	it('drives each plugin through its real Vite hooks', async () => {
 		const environments: ReadonlyArray<
 			'src/core' | 'src/browser' | 'src/server' | 'app/core' | 'app/browser' | 'app/server'
 		> = ['src/core', 'src/browser', 'src/server', 'app/core', 'app/browser', 'app/server']
-		const owner = environments.find((environment) => existsSync(resolve(root, environment)))
+		const owner = environments.find((environment) => existsSync(resolve(POLICY_ROOT, environment)))
 		if (owner === undefined) throw new Error('The workspace carries no environment plugin target')
-		const scratch = createPolicyScratch({ parent: resolve(root, owner), prefix: 'config-build-' })
+		const scratch = createPolicyScratch({
+			parent: resolve(POLICY_ROOT, owner),
+			prefix: 'config-build-',
+		})
 		const workspace = scratch.path
 		try {
 			const source = resolve(workspace, 'index.ts')
 			writeFileSync(source, 'export const control = true\n', 'utf8')
 			await expect(
 				build({
-					root,
+					root: POLICY_ROOT,
 					configFile: false,
 					logLevel: 'silent',
 					publicDir: false,
@@ -3461,6 +5370,65 @@ describe('configuration helpers', () => {
 		}
 	})
 
+	it('resolves the installed compiler through bin.tsc when private package paths are unexported', () => {
+		const compiler = configHelpers.resolveCompiler(import.meta.url)
+		expect(configHelpers.readCompilerOutput(compiler, ['--version'])).toMatch(/^Version \d+\./u)
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-compiler-exports-' })
+		try {
+			const root = join(scratch.path, 'node_modules/typescript')
+			scratch.write('package.json', '{"type":"module"}')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				JSON.stringify({
+					name: 'typescript',
+					exports: { './package.json': './package.json' },
+					bin: { tsc: relative(root, compiler) },
+				}),
+			)
+			const path = join(scratch.path, 'package.json')
+			expect(() => createRequire(path).resolve('typescript/bin/tsc')).toThrow(
+				'not defined by "exports"',
+			)
+			expect(configHelpers.resolveCompiler(path)).toBe(compiler)
+			expect(
+				configHelpers.readCompilerOutput(configHelpers.resolveCompiler(path), ['--version']),
+			).toMatch(/^Version \d+\./u)
+			scratch.write('consumer.ts', 'const value: string = 1\nconsole.log(value)\n')
+			const refused = spawnSync(
+				process.execPath,
+				[compiler, '--noEmit', '--pretty', 'false', '--skipLibCheck', 'consumer.ts'],
+				{ cwd: scratch.path, encoding: 'utf8', windowsHide: true },
+			)
+			expect(refused.status).toBeGreaterThan(0)
+			expect(refused.stdout).toContain('error TS2322')
+			scratch.write('consumer.ts', "const value: string = 'accepted'\nconsole.log(value)\n")
+			const accepted = spawnSync(
+				process.execPath,
+				[compiler, '--noEmit', '--pretty', 'false', '--skipLibCheck', 'consumer.ts'],
+				{ cwd: scratch.path, encoding: 'utf8', windowsHide: true },
+			)
+			expect(accepted.status, `${accepted.stdout}${accepted.stderr}`).toBe(0)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it.each([{}, { bin: null }, { bin: { tsc: 7 } }])(
+		'refuses a compiler manifest without a bin.tsc command: %s',
+		(declared) => {
+			const scratch = createPolicyScratch({ prefix: 'orkestrel-compiler-manifest-' })
+			try {
+				scratch.write('package.json', '{"type":"module"}')
+				scratch.write('node_modules/typescript/package.json', JSON.stringify(declared))
+				expect(() => configHelpers.resolveCompiler(join(scratch.path, 'package.json'))).toThrow(
+					'The TypeScript package declares no bin.tsc command',
+				)
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
 	// The scope reading applies only where the workspace publishes source from `src`, which is what
 	// `publishes` reads, and the name ends at that mechanism. An absent face project is the defect
 	// this case exists to report rather than a second reason to excuse it, so a workspace holding
@@ -3469,18 +5437,18 @@ describe('configuration helpers', () => {
 	// raise its passed count with nothing measured. Every generated workspace runs its projects
 	// under `--reporter=dot`, which prints a skip as an unnamed `-`, so the case name and the
 	// condition in it are read by re-running the project with a reporter that names skipped cases.
-	it.skipIf(!publishes)(
+	it.skipIf(!POLICY_PUBLISHES)(
 		'reads the compiler scope a declaration roll-up requires [inapplicable where src holds no recognized environment directory]',
 		() => {
-			const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+			const compiler = configHelpers.resolveCompiler(import.meta.url)
 			// The order mirrors ENVIRONMENTS in src/core/constants.ts; a server-only workspace vendors
 			// no core project, so this walks to the first face the workspace actually carries.
 			const faces = ['core', 'browser', 'server']
 			const face = faces.find((candidate) =>
-				existsSync(resolve(root, `configs/src/tsconfig.${candidate}.json`)),
+				existsSync(resolve(POLICY_ROOT, `configs/src/tsconfig.${candidate}.json`)),
 			)
 			if (face === undefined) throw new Error('The workspace declares no face project')
-			const project = resolve(root, `configs/src/tsconfig.${face}.json`)
+			const project = resolve(POLICY_ROOT, `configs/src/tsconfig.${face}.json`)
 			const declared: unknown = JSON.parse(readFileSync(project, 'utf8'))
 			if (typeof declared !== 'object' || declared === null) {
 				throw new Error(`The ${face} project is not a TypeScript configuration record`)
@@ -3532,10 +5500,10 @@ describe('configuration helpers', () => {
 	// reading a face project must not excuse it from the helpers behind the roll-up, which it
 	// vendors whether or not it publishes.
 	it('reads the refusals, guards, overrides, and rewrites a declaration roll-up requires from every workspace', () => {
-		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+		const compiler = configHelpers.resolveCompiler(import.meta.url)
 		// Any project path resolves these, because each reading is refused by the text before the
 		// path is read. The root project is the one file every workspace carries.
-		const project = resolve(root, 'tsconfig.json')
+		const project = resolve(POLICY_ROOT, 'tsconfig.json')
 		expect(configHelpers.parseProjectScope('not a configuration', project)).toBeUndefined()
 		expect(
 			configHelpers.parseProjectScope('{"compilerOptions":{"lib":[],"types":[]}}', project),
@@ -3548,7 +5516,7 @@ describe('configuration helpers', () => {
 			configHelpers.readCompilerOutput(compiler, [
 				'--showConfig',
 				'-p',
-				resolve(root, 'configs/tsconfig.absent.json'),
+				resolve(POLICY_ROOT, 'configs/tsconfig.absent.json'),
 			]),
 		).toThrow('The declaration compiler failed')
 
@@ -3621,12 +5589,12 @@ describe('configuration helpers', () => {
 
 	// A hoisted install can place the extractor anywhere `require.resolve` reaches, so the skip
 	// control compares against the path resolution actually returned rather than a fixed layout.
-	it.skipIf(extractorPath === undefined)('finds the resolved extractor on disk', () => {
-		if (extractorPath === undefined) throw new Error('The extractor resolution left no path')
-		expect(existsSync(extractorPath)).toBe(true)
+	it.skipIf(POLICY_EXTRACTOR === undefined)('finds the resolved extractor on disk', () => {
+		if (POLICY_EXTRACTOR === undefined) throw new Error('The extractor resolution left no path')
+		expect(existsSync(POLICY_EXTRACTOR)).toBe(true)
 	})
 
-	it.skipIf(extractorPath !== undefined)('rejects resolving the unavailable extractor', () => {
+	it.skipIf(POLICY_EXTRACTOR !== undefined)('rejects resolving the unavailable extractor', () => {
 		expect(() => createRequire(import.meta.url).resolve('@microsoft/api-extractor')).toThrow(
 			'Cannot find module',
 		)
@@ -3634,7 +5602,7 @@ describe('configuration helpers', () => {
 
 	// The roll-up loads the declaration extractor, which only a workspace publishing source from
 	// `src` installs. Where `require.resolve` rejects that package, this proof does not apply.
-	it.skipIf(extractorPath === undefined)(
+	it.skipIf(POLICY_EXTRACTOR === undefined)(
 		'rolls one face into a single declaration and rewrites its core and browser specifiers',
 		async () => {
 			const scratch = createPolicyScratch({ prefix: 'orkestrel-config-rollup-' })
@@ -3696,8 +5664,15 @@ describe('configuration helpers', () => {
 				const rewritten = join(workspace, 'rewritten')
 				const kept = join(workspace, 'kept')
 				const builds = [
-					{ output: rewritten, rewrite: true },
-					{ output: kept, rewrite: false },
+					{
+						output: rewritten,
+						plugin: configHelpers.declarationRollup({
+							project,
+							rewrite: (text) =>
+								configHelpers.rewriteBrowserSpecifier(configHelpers.rewriteCoreSpecifier(text)),
+						}),
+					},
+					{ output: kept, plugin: configHelpers.declarationRollup({ project }) },
 				]
 				for (const face of builds) {
 					await build({
@@ -3705,19 +5680,7 @@ describe('configuration helpers', () => {
 						configFile: false,
 						logLevel: 'silent',
 						publicDir: false,
-						plugins: [
-							configHelpers.declarationRollup(
-								face.rewrite
-									? {
-											project,
-											rewrite: (text) =>
-												configHelpers.rewriteBrowserSpecifier(
-													configHelpers.rewriteCoreSpecifier(text),
-												),
-										}
-									: { project },
-							),
-						],
+						plugins: [face.plugin],
 						build: {
 							write: true,
 							outDir: face.output,
@@ -3732,12 +5695,12 @@ describe('configuration helpers', () => {
 				}
 
 				const idle = join(workspace, 'idle')
-				const serving = configHelpers.declarationRollup({
+				const plugins = configHelpers.declarationRollup({
 					project,
 					rewrite: configHelpers.rewriteCoreSpecifier,
 				})
-				const configure = serving.configResolved
-				const close = serving.closeBundle
+				const configure = plugins.configResolved
+				const close = plugins.closeBundle
 				if (typeof configure !== 'function' || typeof close !== 'function') {
 					throw new Error('The declaration roll-up exposes no build hooks')
 				}
@@ -3778,4 +5741,116 @@ describe('configuration helpers', () => {
 			}
 		},
 	)
+})
+
+// A `for…of` loop reads one entry, works on it, and stops at the first failure, where a copy of the
+// list reads every entry first. Each case runs a policy reader over a recorded list and pins the
+// outcome and the entries it read, as the loop the reader replaced gave them.
+describe('policy readers consume a caller-supplied list one entry at a time', () => {
+	const failureCases = [
+		[POLICY_LAZY_SHAPES.hole, 'throw TypeError', []],
+		[POLICY_LAZY_SHAPES.holeFailure, 'throw TypeError', []],
+		[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+		[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+		[POLICY_LAZY_SHAPES.holeBetween, 'throw TypeError', [0]],
+		[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+	] as const
+
+	it.each([
+		...createPolicyLazyCases(
+			'statementToPolicyBindings',
+			(declarations: PolicyExpression[]) =>
+				statementToPolicyBindings({ type: 'VariableDeclaration', range: [0, 0], declarations }).map(
+					(binding) => binding.name,
+				),
+			{ valid: createPolicyDeclarator, refusal: createPolicyRefused(createPolicyDeclarator) },
+			[
+				[POLICY_LAZY_SHAPES.empty, 'return []', []],
+				[POLICY_LAZY_SHAPES.dense, 'return ["run"]', [0]],
+				...failureCases,
+			],
+		),
+		...createPolicyLazyCases(
+			'reportDomain',
+			(body: PolicyExpression[]) => {
+				const reports: Array<string | undefined> = []
+				reportDomain(
+					{
+						filename: '/ws/src/server/execution/run.ts',
+						cwd: '/ws',
+						sourceCode: { text: '', getAllComments: () => [], getDeclaredVariables: () => [] },
+						report: (diagnostic) => {
+							reports.push(diagnostic.messageId)
+						},
+					},
+					{ type: 'Program', range: [0, 0], body },
+				)
+				return reports
+			},
+			{ valid: createPolicyExport, refusal: createPolicyRefused(createPolicyExport) },
+			[
+				[POLICY_LAZY_SHAPES.empty, 'return ["module"]', []],
+				[POLICY_LAZY_SHAPES.dense, 'return []', [0]],
+				...failureCases,
+			],
+		),
+		...createPolicyLazyCases(
+			'programToPolicyDocs statements',
+			(body: PolicyExpression[]) =>
+				programToPolicyDocs(
+					{ type: 'Program', range: [0, 0], body },
+					{
+						text: '/** One. */\nexport function run() {}',
+						getAllComments: () => [createPolicyComment()],
+					},
+				).map((doc) => doc.name),
+			{ valid: createPolicyExport, refusal: createPolicyRefused(createPolicyExport) },
+			[
+				[POLICY_LAZY_SHAPES.empty, 'return []', []],
+				[POLICY_LAZY_SHAPES.dense, 'return []', [0]],
+				...failureCases,
+			],
+		),
+		...createPolicyLazyCases(
+			'programToPolicyDocs comments',
+			(comments: PolicyComment[]) =>
+				programToPolicyDocs(
+					{ type: 'Program', range: [0, 0], body: [createPolicyExport()] },
+					{ text: '/** One. */\n', getAllComments: () => comments },
+				).map((doc) => doc.name),
+			{ valid: createPolicyComment, refusal: createPolicyRefused(createPolicyComment) },
+			[
+				[POLICY_LAZY_SHAPES.empty, 'return []', []],
+				[POLICY_LAZY_SHAPES.dense, 'return ["run"]', [0]],
+				...failureCases,
+			],
+		),
+		...createPolicyLazyCases(
+			'programToPolicyDocs comments of a program with no export',
+			(comments: PolicyComment[]) =>
+				programToPolicyDocs(
+					{ type: 'Program', range: [0, 0], body: [{ type: 'ImportDeclaration', range: [0, 0] }] },
+					{ text: 'import x', getAllComments: () => comments },
+				).map((doc) => doc.name),
+			{ valid: createPolicyComment, refusal: createPolicyRefused(createPolicyComment) },
+			[
+				[POLICY_LAZY_SHAPES.empty, 'return []', []],
+				[POLICY_LAZY_SHAPES.dense, 'return []', []],
+				[POLICY_LAZY_SHAPES.hole, 'return []', []],
+				[POLICY_LAZY_SHAPES.holeFailure, 'return []', []],
+				[POLICY_LAZY_SHAPES.failureFirst, 'return []', []],
+				[POLICY_LAZY_SHAPES.refusalFirst, 'return []', []],
+				[POLICY_LAZY_SHAPES.holeBetween, 'return []', []],
+				[POLICY_LAZY_SHAPES.unlisted, 'return []', []],
+			],
+		),
+	])('$label', ({ observe, outcome, reads }) => {
+		const read: number[] = []
+		expect(
+			observe((index) => {
+				read.push(index)
+			}),
+		).toBe(outcome)
+		expect(read).toStrictEqual(reads)
+	})
 })

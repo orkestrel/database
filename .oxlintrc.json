@@ -38,7 +38,7 @@
 		],
 
 		"import/no-default-export": "error",
-		"import/no-dynamic-require": ["error", { "esmodule": true }],
+		"import/no-dynamic-require": ["error", { "esmodule": false }],
 		"import/extensions": "off",
 		"import/no-unassigned-import": [
 			"error",
@@ -50,14 +50,20 @@
 		"no-unused-private-class-members": "error",
 		"no-var": "error",
 		"prefer-const": "error",
+		"no-param-reassign": "error",
+		"no-ex-assign": "error",
 		"no-debugger": "error",
 		"no-underscore-dangle": "warn",
 
 		"vitest/no-alias-methods": "error",
+		"vitest/no-identical-title": "error",
+		"vitest/no-focused-tests": "error",
+		"vitest/no-disabled-tests": "error",
 		"vitest/warn-todo": "off",
 
 		"policy/no-mocking": "error",
 		"policy/no-keyword-privacy": "error",
+		"policy/no-let": "error",
 		"policy/no-malformed-summary": "error",
 		"policy/no-banned-term": "error"
 	},
@@ -86,13 +92,27 @@
 			"files": [".agents/skills/*/scripts/*.ts"],
 			"rules": {
 				"policy/no-nested-functions": "error",
-				"policy/no-host-line-endings": "error"
+				"policy/no-host-line-endings": "error",
+				"policy/no-malformed-script": "error",
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^(?:[^n]|n[^o]|no[^d]|nod[^e]|node[^:]|n$|no$|nod$|node$|$)",
+								"message": "a skill script is self-contained: import node: modules only and declare every helper in the script"
+							}
+						]
+					}
+				]
 			}
 		},
 		{
 			"files": [
 				"src/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
-				"app/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"
+				"app/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"tests/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}",
+				"configs/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"
 			],
 			"rules": {
 				"policy/no-nested-functions": "error"
@@ -110,7 +130,8 @@
 				"policy/no-misnamed-parser": "error",
 				"policy/no-misnamed-factory": "error",
 				"policy/no-misnamed-plugin": "error",
-				"policy/no-malformed-domain": "error"
+				"policy/no-malformed-domain": "error",
+				"policy/no-mutable-property": "error"
 			}
 		},
 		{
@@ -220,6 +241,10 @@
 							{
 								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
 								"message": "src/browser must not depend on Node or server-only modules"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?core(?:[/?#]|$)",
+								"message": "src/browser must import src/core through the @src/core alias"
 							}
 						]
 					}
@@ -397,12 +422,13 @@
 		{
 			"files": ["src/vue/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"policy/no-cross-vue-face": "error",
 				"no-restricted-imports": [
 					"error",
 					{
 						"patterns": [
 							{
-								"regex": "^(?:@src/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$)|(?:\\.\\./)+(?:src/)?(?:[^/.scbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$))",
+								"regex": "^(?:@src/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$))",
 								"message": "Vue faces must not depend on sibling sheet faces"
 							},
 							{
@@ -436,6 +462,14 @@
 							{
 								"regex": "^(?:node:|(?:_(?:http_(?:agent|client|common|incoming|outgoing|server)|stream_(?:duplex|passthrough|readable|transform|wrap|writable)|tls_(?:common|wrap))|assert(?:/strict)?|async_hooks|buffer|child_process|cluster|console|constants|crypto|dgram|diagnostics_channel|dns(?:/promises)?|domain|events|fs(?:/promises)?|http|http2|https|inspector(?:/promises)?|module|net|os|path(?:/(?:posix|win32))?|perf_hooks|process|punycode|querystring|readline(?:/promises)?|repl|sqlite|stream(?:/(?:consumers|promises|web))?|string_decoder|sys|timers(?:/promises)?|tls|trace_events|tty|url|util(?:/types)?|v8|vm|wasi|worker_threads|zlib)(?:[/?#]|$)|@src/server(?:[/?#]|$)|@orkestrel/[^/]+/server(?:[/?#]|$)|(?:\\.\\./)+(?:server|src/server|app/server)(?:[/?#]|$))",
 								"message": "src/vue must not depend on Node or server-only modules"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?core(?:[/?#]|$)",
+								"message": "src/vue must import src/core through the @src/core alias"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?browser(?:[/?#]|$)",
+								"message": "src/vue must import src/browser through the @src/browser alias"
 							}
 						]
 					}
@@ -488,6 +522,10 @@
 							{
 								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@src/browser(?:[/?#]|$)|@orkestrel/[^/]+/browser(?:[/?#]|$)|(?:\\.\\./)+(?:browser|src/browser|app/browser)(?:[/?#]|$))",
 								"message": "src/server must not depend on Vue or browser-only modules"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?core(?:[/?#]|$)",
+								"message": "src/server must import src/core through the @src/core alias"
 							}
 						]
 					}
@@ -589,12 +627,13 @@
 		{
 			"files": ["app/vue/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"policy/no-cross-vue-face": "error",
 				"no-restricted-imports": [
 					"error",
 					{
 						"patterns": [
 							{
-								"regex": "^(?:@(?:src|app)/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$)|(?:\\.\\./)+(?:src/|app/)?(?:[^/.sacbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|a|a[^/.p][^/.]*|ap|ap[^/.p][^/.]*|app[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$))",
+								"regex": "^(?:@(?:src|app)/(?:|[^/?#cbv][^/?#]*|c|c[^/?#o][^/?#]*|co|co[^/?#r][^/?#]*|cor|cor[^/?#e][^/?#]*|core[^/?#][^/?#]*|b|b[^/?#r][^/?#]*|br|br[^/?#o][^/?#]*|bro|bro[^/?#w][^/?#]*|brow|brow[^/?#s][^/?#]*|brows|brows[^/?#e][^/?#]*|browse|browse[^/?#r][^/?#]*|browser[^/?#][^/?#]*|v|v[^/?#u][^/?#]*|vu|vu[^/?#e][^/?#]*|vue[^/?#][^/?#]*)(?:[/?#]|$))",
 								"message": "Vue faces must not depend on sibling sheet faces"
 							},
 							{
@@ -720,6 +759,14 @@
 							{
 								"regex": "^(?:(?:vue|vite)(?:[/?#]|$)|@(?:vue|vitejs)/|@src/(?:browser|vue)(?:[/?#]|$)|@orkestrel/[^/]+/(?:browser|vue)(?:[/?#]|$)|(?:\\.\\./)+(?:browser|vue|src/(?:browser|vue)|app/browser)(?:[/?#]|$))",
 								"message": "src/bin must not depend on browser-only modules"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?core(?:[/?#]|$)",
+								"message": "src/bin must import src/core through the @src/core alias"
+							},
+							{
+								"regex": "^(?:\\.\\./)+(?:src/)?server(?:[/?#]|$)",
+								"message": "src/bin must import src/server through the @src/server alias"
 							}
 						]
 					}
@@ -741,6 +788,119 @@
 							{
 								"regex": "^typescript(?:[/?#]|$)",
 								"message": "the in-process compiler API is not a surface the fleet uses"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["tests/setup*.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"paths": [
+							{
+								"name": "vitest",
+								"importNames": ["describe", "it", "test", "expect"],
+								"message": "a setup module owns everything an assertion needs and nothing an assertion is: register and assert in a test file"
+							}
+						],
+						"patterns": [
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["tests/setup*.test.ts", "tests/setup*.bench.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["tests/setup.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"paths": [
+							{
+								"name": "vitest",
+								"importNames": ["describe", "it", "test", "expect"],
+								"message": "a setup module owns everything an assertion needs and nothing an assertion is: register and assert in a test file"
+							}
+						],
+						"patterns": [
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^node:",
+								"message": "tests/setup.ts must stay host-independent: import no node: module"
+							},
+							{
+								"regex": "^(?:vue(?:[/?#]|$)|@vue/)",
+								"message": "tests/setup.ts must stay host-independent: import no Vue module"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["tests/setupBrowser.ts", "tests/setupStyles.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"paths": [
+							{
+								"name": "vitest",
+								"importNames": ["describe", "it", "test", "expect"],
+								"message": "a setup module owns everything an assertion needs and nothing an assertion is: register and assert in a test file"
+							}
+						],
+						"patterns": [
+							{
+								"regex": "^typescript(?:[/?#]|$)",
+								"message": "the in-process compiler API is not a surface the fleet uses"
+							},
+							{
+								"regex": "^node:",
+								"message": "the browser and styles setup modules hold no Node: import no node: module"
+							}
+						]
+					}
+				]
+			}
+		},
+		{
+			"files": ["configs/policy.ts"],
+			"rules": {
+				"no-restricted-imports": [
+					"error",
+					{
+						"patterns": [
+							{
+								"regex": ".",
+								"message": "configs/policy.ts imports nothing, so it resolves in every workspace"
 							}
 						]
 					}

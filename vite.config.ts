@@ -11,12 +11,20 @@ import {
 	resolveExternal,
 } from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
+import { commands } from './configs/commands.js'
 import { fileURLToPath, URL } from 'node:url'
 
 const browserOptions = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
 
 const optimizeDeps = {
-	include: ['@orkestrel/test', '@orkestrel/test/browser', '@orkestrel/contract'],
+	include: [
+		'@orkestrel/test',
+		'@orkestrel/test/browser',
+		'@orkestrel/contract',
+		'@orkestrel/emitter',
+		'@orkestrel/indexeddb',
+		'@orkestrel/sqlite',
+	],
 }
 
 export function resolveWorkspacePath(relativePath: string): string {
@@ -36,11 +44,13 @@ export const peers: readonly string[] =
 	peerDependencies === undefined ? [] : Object.keys(peerDependencies)
 
 const resolve = {
-	alias: Object.entries(tsconfig.compilerOptions.paths).reduce((aliases, [key, values]) => {
-		const [path] = values
-		if (path === undefined) throw new Error('tsconfig path alias ' + key + ' has no target')
-		return Object.assign(aliases, { [key]: resolveWorkspacePath(path) })
-	}, {}),
+	alias: Object.fromEntries(
+		Object.entries(tsconfig.compilerOptions.paths).map(([key, values]) => {
+			const [path] = values
+			if (path === undefined) throw new Error('tsconfig path alias ' + key + ' has no target')
+			return [key, resolveWorkspacePath(path)]
+		}),
+	),
 }
 
 // Merges a caller's override onto the configuration a factory declares, so a
@@ -69,53 +79,67 @@ const resolve = {
 // merges it, so an override's arrays elsewhere concatenate with the base's rather than
 // replacing them.
 export function mergeOverride(base: UserConfig, override?: UserConfig): UserConfig {
-	if (override !== undefined && 'command' in override && 'mode' in override) {
-		if (typeof override.mode !== 'string') {
-			throw new Error('The project invocation carries no string mode')
-		}
-		override = { mode: override.mode }
+	if (
+		override !== undefined &&
+		'command' in override &&
+		'mode' in override &&
+		typeof override.mode !== 'string'
+	) {
+		throw new Error('The project invocation carries no string mode')
 	}
-	const merged: UserConfig = override === undefined ? { ...base } : mergeConfig(base, override)
+	const effective: UserConfig | undefined =
+		override !== undefined && 'command' in override && typeof override.mode === 'string'
+			? { mode: override.mode }
+			: override
+	const merged: UserConfig = effective === undefined ? { ...base } : mergeConfig(base, effective)
 	const name = merged.test?.name
 	const label = typeof name === 'string' ? name : name?.label
 	const browser = merged.test?.browser
-	if (label !== undefined && browser?.instances !== undefined) {
-		merged.test = {
-			...merged.test,
-			browser: {
-				...browser,
-				instances: browser.instances.map((instance) => ({
-					...instance,
-					name: instance.name ?? `${label} (${instance.browser})`,
-				})),
-			},
-		}
+	const named: UserConfig =
+		label !== undefined && browser?.instances !== undefined
+			? {
+					...merged,
+					test: {
+						...merged.test,
+						browser: {
+							...browser,
+							instances: browser.instances.map((instance) => ({
+								...instance,
+								name: instance.name ?? `${label} (${instance.browser})`,
+							})),
+						},
+					},
+				}
+			: merged
+	if (named.plugins === undefined || effective === undefined) return named
+	const candidates = [...(effective.plugins ?? [])]
+	const bases = [...(base.plugins ?? [])]
+	// A base plugin takes the first candidate of its own name that no earlier base plugin took, and
+	// candidates of other names never compete for it, so its pick is the candidate whose rank among
+	// its name equals the number of earlier base plugins sharing that name.
+	const chosen = bases.map((plugin, position) =>
+		isNamedPlugin(plugin)
+			? candidates
+					.flatMap((candidate, index) =>
+						isNamedPlugin(candidate) && candidate.name === plugin.name ? [index] : [],
+					)
+					.at(
+						bases
+							.slice(0, position)
+							.filter((earlier) => isNamedPlugin(earlier) && earlier.name === plugin.name).length,
+					)
+			: undefined,
+	)
+	return {
+		...named,
+		plugins: [
+			...bases.map((plugin, position) => {
+				const index = chosen[position]
+				return index === undefined ? plugin : (candidates[index] ?? plugin)
+			}),
+			...candidates.filter((_, index) => !chosen.includes(index)),
+		],
 	}
-	if (merged.plugins === undefined || override === undefined) return merged
-	const candidates = override.plugins ?? []
-	const taken = new Set<number>()
-	const selected: PluginOption[] = []
-	for (const plugin of base.plugins ?? []) {
-		if (!isNamedPlugin(plugin)) {
-			selected.push(plugin)
-			continue
-		}
-		const index = candidates.findIndex(
-			(candidate, position) =>
-				!taken.has(position) && isNamedPlugin(candidate) && candidate.name === plugin.name,
-		)
-		const replacement = candidates[index]
-		if (replacement === undefined) {
-			selected.push(plugin)
-		} else {
-			selected.push(replacement)
-			taken.add(index)
-		}
-	}
-	for (const [index, plugin] of candidates.entries()) {
-		if (!taken.has(index)) selected.push(plugin)
-	}
-	return { ...merged, plugins: selected }
 }
 
 function isNamedPlugin(plugin: PluginOption): plugin is { name: string } {
@@ -196,6 +220,7 @@ export function srcBrowser(override?: UserConfig): UserConfig {
 			browser: {
 				enabled: true,
 				provider: playwright(browserOptions),
+				commands,
 				instances: [{ browser: 'chromium', headless: true }],
 			},
 			fileParallelism: false,
@@ -315,6 +340,7 @@ export function setupBrowser(override?: UserConfig): UserConfig {
 			browser: {
 				enabled: true,
 				provider: playwright(browserOptions),
+				commands,
 				instances: [{ browser: 'chromium', headless: true }],
 			},
 		},
@@ -356,9 +382,9 @@ export function distribution(override?: UserConfig): UserConfig {
 
 // A workbench, not a proof. No gate selects this project. Run in test mode by the
 // `test:probe` script, it collects `tmp/probes/**/*.test.ts`. Run in benchmark mode by the
-// `test:bench` script, the same workbench also collects `tests/**/*.test.ts` for a `bench` block,
-// so a suite may carry a bench beside its ordinary tests without a second project. The mode
-// guard around each `bench` call keeps it out of test mode, so it never executes there.
+// `test:bench` script, it collects `*.bench.ts` files under `tmp/probes` and `tests`.
+// Each benchmark is a regular test that uses its context's `bench` fixture and awaits
+// `bench(name, options, fn).run()` or `bench.compare(...)`.
 export function probe(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -371,7 +397,7 @@ export function probe(override?: UserConfig): UserConfig {
 			fileParallelism: false,
 			sequence: { groupOrder: 1 },
 			pool: 'threads',
-			benchmark: { include: ['tmp/probes/**/*.test.ts', 'tests/**/*.test.ts'] },
+			benchmark: { include: ['tmp/probes/**/*.bench.ts', 'tests/**/*.bench.ts'] },
 		},
 	}
 	return mergeOverride(project, override)

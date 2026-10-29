@@ -1,33 +1,45 @@
 import type { Blueprint } from '@orkestrel/scaffold'
+import type {
+	PolicyComment,
+	PolicyContext,
+	PolicyDiagnostic,
+	PolicyExpression,
+	PolicyScopeCode,
+} from '../configs/policy.js'
 import {
 	createGuide,
 	extractSourceLines,
 	hasCanonicalSegments,
 	resolveLink,
 } from '@orkestrel/guide'
-import { BASE_DEV_DEPENDENCIES, HOST_PATHS } from '@orkestrel/scaffold'
+import { BASE_DEV_DEPENDENCIES, DISTRIBUTION_SETUP_PATH, HOST_PATHS } from '@orkestrel/scaffold'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
 	realpathSync,
+	chmodSync,
 	existsSync,
 	globSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, matchesGlob, relative as relativePath, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { parseAst, parseSync } from 'vite'
 import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
 /** Names a rule the fleet sweep decides from workspace text and paths. */
 export type PolicyRule =
 	| 'bridge'
+	| 'dist'
 	| 'mirror'
 	| 'portability'
 	| 'prose'
@@ -35,11 +47,24 @@ export type PolicyRule =
 	| 'skill'
 	| 'surface'
 	| 'suppression'
+	| 'text'
 
 /** Describes one workspace file a physical control writes. */
 export interface PolicySource {
 	readonly path: string
 	readonly content: string
+}
+
+/** Pairs a collected Vue import fixture with its native and independent restriction outcomes. */
+export interface PolicyVueImportCase extends PolicySource {
+	readonly boundary: boolean
+	readonly restricted: boolean
+}
+
+/** Pairs a collected composable fixture with its placement and domain outcomes. */
+export interface PolicyVueDomainCase extends PolicySource {
+	readonly misplaced: boolean
+	readonly malformed: boolean
 }
 
 /** Describes one policy failure the sweep reports. */
@@ -160,7 +185,16 @@ export function createPolicySurfaceFixture(): PolicyScratchInterface {
 	}
 }
 
-/** Describes one physical negative control, including the population boundary it attacks. */
+/** Describes the include, setup files, and probe settings one workspace project registers. */
+export interface PolicyProject {
+	readonly benchmark?: readonly string[]
+	readonly include: string | readonly string[]
+	readonly parallel?: boolean
+	readonly pool?: string
+	readonly setup: readonly string[]
+}
+
+/** Describes one physical negative control, including the population boundary it tests. */
 export interface PolicyControl {
 	readonly label: string
 	readonly membership: string
@@ -212,6 +246,579 @@ export function createPolicyScratch(options: {
 	}
 }
 
+/**
+ * Creates a list with the given length that holds only the entries written at their indexes.
+ *
+ * @remarks
+ * A literal cannot express a hole, so the list is sized first and then written once per index. A
+ * `for…of` loop and a spread visit each hole as `undefined`, where `map`, `filter`, and `flatMap`
+ * skip it, so a caller-supplied list built here separates the two.
+ *
+ * @param length - The length of the list, holes included.
+ * @param entries - The entry to write at each index; every other index stays a hole.
+ * @returns The sparse list.
+ */
+export function createPolicySparse<T>(length: number, entries: ReadonlyMap<number, T>): T[] {
+	const list: T[] = []
+	list.length = length
+	for (const [index, entry] of entries) list[index] = entry
+	return list
+}
+
+/**
+ * Creates a list whose entries are getters, so a reader's every read of an entry is recorded.
+ *
+ * @remarks
+ * Only the indexes in `entries` hold a getter, and every other index stays a hole. A getter reports
+ * its index to `record` and then produces its value, which may throw, so a case sees which entries
+ * a reader touched before it stopped. An iterator reads an entry once as it yields it, where a copy
+ * of the list reads every entry before the reader sees the first.
+ *
+ * @param length - The length of the list, holes included.
+ * @param entries - The producer behind each getter, by index.
+ * @param record - The function that receives an index each time its getter runs.
+ * @param iterable - If `true`, the list keeps the iterator every array has; if `false`, its
+ * `Symbol.iterator` is `undefined`, which a loop refuses and `Array.from` and `values()` do not.
+ * Default: `true`.
+ * @returns The list.
+ */
+export function createPolicyReads<T>(
+	length: number,
+	entries: ReadonlyMap<number, () => T>,
+	record: (index: number) => void,
+	iterable = true,
+): T[] {
+	const list = createPolicySparse<T>(length, new Map())
+	for (const [index, produce] of entries) {
+		Object.defineProperty(list, index, {
+			configurable: true,
+			enumerable: true,
+			get() {
+				record(index)
+				return produce()
+			},
+		})
+	}
+	if (!iterable) Object.defineProperty(list, Symbol.iterator, { value: undefined })
+	return list
+}
+
+/**
+ * Throws the error a getter raises when its entry refuses to be read.
+ *
+ * @returns Never.
+ * @throws RangeError - Thrown when called.
+ */
+export function failPolicyRead(): never {
+	throw new RangeError('The entry refused its read')
+}
+
+/**
+ * Settles one action into text a case compares for equality.
+ *
+ * @param action - The action to run.
+ * @returns `return` and the JSON of the returned value, or `throw` and the constructor name.
+ */
+export function settlePolicyOutcome(action: () => unknown): string {
+	try {
+		return `return ${JSON.stringify(action())}`
+	} catch (error) {
+		return `throw ${error instanceof Error ? error.constructor.name : typeof error}`
+	}
+}
+
+/** Describes one reader run over a recorded list, with the outcome and entry reads it must show. */
+export interface PolicyLazyCase {
+	readonly label: string
+	readonly outcome: string
+	readonly reads: readonly number[]
+	readonly observe: (record: (index: number) => void) => string
+}
+
+/**
+ * Creates one case that runs a reader over a recorded list.
+ *
+ * @param label - The text naming the reader and the list.
+ * @param reader - The reader to run over the list.
+ * @param list - The length of the list and the producer behind each getter, by index.
+ * @param expected - The settled outcome and the indexes the reader must read, in order.
+ * @returns The case.
+ */
+export function createPolicyLazyCase<T>(
+	label: string,
+	reader: (list: T[]) => unknown,
+	list: {
+		readonly length: number
+		readonly entries: ReadonlyMap<number, () => T>
+		readonly iterable?: boolean
+	},
+	expected: { readonly outcome: string; readonly reads: readonly number[] },
+): PolicyLazyCase {
+	return {
+		label,
+		outcome: expected.outcome,
+		reads: expected.reads,
+		observe: (record) =>
+			settlePolicyOutcome(() =>
+				reader(createPolicyReads(list.length, list.entries, record, list.iterable)),
+			),
+	}
+}
+
+/**
+ * Describes the entries of one recorded list.
+ *
+ * @remarks
+ * An index in `entries` produces a value the reader accepts, an index in `refusals` produces a
+ * value the reader fails on after it has the value, and an index in `failures` fails when the
+ * getter runs. Every other index is a hole. A list with `iterable` set to `false` has no iterator,
+ * which a loop refuses and `Array.from` and `values()` do not; it is an iterator list otherwise.
+ */
+export interface PolicyLazyShape {
+	readonly label: string
+	readonly length: number
+	readonly entries: readonly number[]
+	readonly refusals: readonly number[]
+	readonly failures: readonly number[]
+	readonly iterable?: boolean
+}
+
+/** Holds the list shapes that tell one-entry-at-a-time reading from a copy that reads ahead. */
+export const POLICY_LAZY_SHAPES = Object.freeze({
+	empty: { label: 'an empty list', length: 0, entries: [], refusals: [], failures: [] },
+	dense: { label: 'one entry', length: 1, entries: [0], refusals: [], failures: [] },
+	hole: { label: 'a hole, then an entry', length: 2, entries: [1], refusals: [], failures: [] },
+	holeFailure: {
+		label: 'a hole, then a failing entry',
+		length: 2,
+		entries: [],
+		refusals: [],
+		failures: [1],
+	},
+	failureFirst: {
+		label: 'a failing entry, then an entry',
+		length: 2,
+		entries: [1],
+		refusals: [],
+		failures: [0],
+	},
+	refusalFirst: {
+		label: 'a refused entry, then an entry',
+		length: 2,
+		entries: [1],
+		refusals: [0],
+		failures: [],
+	},
+	holeBetween: {
+		label: 'an entry, a hole, then an entry',
+		length: 3,
+		entries: [0, 2],
+		refusals: [],
+		failures: [],
+	},
+	unlisted: {
+		label: 'two entries on a list without an iterator',
+		length: 2,
+		entries: [0, 1],
+		refusals: [],
+		failures: [],
+		iterable: false,
+	},
+} satisfies Record<string, PolicyLazyShape>)
+
+/** Holds values a reader's signature refuses, which a case feeds it to make processing fail. */
+export const POLICY_REFUSALS = Object.freeze({ number: 7, symbol: Symbol('refused') })
+
+/**
+ * Creates a revoked proxy, which refuses every guard that inspects it.
+ *
+ * @returns The proxy, whose `Array.isArray` check throws a `TypeError`.
+ */
+export function createPolicyRevoked(): object {
+	const { proxy, revoke } = Proxy.revocable({}, {})
+	revoke()
+	return proxy
+}
+
+/**
+ * Creates a producer of revoked proxies over what another producer creates.
+ *
+ * @param entry - The producer whose value each proxy wraps.
+ * @returns A producer whose value refuses every read, which fails a reader once it holds the entry.
+ */
+export function createPolicyRefused<T extends object>(entry: () => T): () => T {
+	return () => {
+		const { proxy, revoke } = Proxy.revocable(entry(), {})
+		revoke()
+		return proxy
+	}
+}
+
+/** Creates a lint source over text and its comments that declares no variable. */
+export function createPolicySource(
+	text: string,
+	comments: readonly PolicyComment[] = [],
+): PolicyScopeCode {
+	return { text, getAllComments: () => comments, getDeclaredVariables: () => [] }
+}
+
+/** Creates a lint context over an empty source that appends each diagnostic to the given log. */
+export function createPolicyContext(
+	filename: string,
+	cwd: string,
+	reports: PolicyDiagnostic[],
+): PolicyContext {
+	return {
+		filename,
+		cwd,
+		sourceCode: createPolicySource(''),
+		report: (diagnostic) => {
+			reports.push(diagnostic)
+		},
+	}
+}
+
+/** Creates a variable declarator named `run` whose value is an arrow function. */
+export function createPolicyDeclarator(): PolicyExpression {
+	return {
+		type: 'VariableDeclarator',
+		range: [0, 0],
+		id: { type: 'Identifier', range: [0, 0], name: 'run' },
+		init: { type: 'ArrowFunctionExpression', range: [0, 0] },
+	}
+}
+
+/** Creates a named export of a function declaration named `run`. */
+export function createPolicyExport(): PolicyExpression {
+	return {
+		type: 'ExportNamedDeclaration',
+		range: [47, 63],
+		declaration: {
+			type: 'FunctionDeclaration',
+			range: [0, 0],
+			id: { type: 'Identifier', range: [0, 0], name: 'run' },
+		},
+	}
+}
+
+/** Creates the one-sentence block comment a doc reader reads above an export. */
+export function createPolicyComment(): PolicyComment {
+	return { type: 'Block', value: '* One.', range: [0, 11] }
+}
+
+/**
+ * Creates one case per list shape for a reader of a caller-supplied list.
+ *
+ * @param subject - The text naming the reader.
+ * @param reader - The reader to run over each list.
+ * @param producers - The producer behind each entry the reader accepts, and behind each it refuses.
+ * @param rows - Each shape with the settled outcome and the indexes the reader must read, in order.
+ * @returns One case per row.
+ */
+export function createPolicyLazyCases<T>(
+	subject: string,
+	reader: (list: T[]) => unknown,
+	producers: { readonly valid: () => T; readonly refusal: () => T },
+	rows: ReadonlyArray<readonly [PolicyLazyShape, string, readonly number[]]>,
+): readonly PolicyLazyCase[] {
+	return rows.map(([shape, outcome, reads]) =>
+		createPolicyLazyCase(
+			`${subject}: ${shape.label}`,
+			reader,
+			{
+				length: shape.length,
+				entries: new Map<number, () => T>([
+					...shape.entries.map((index): [number, () => T] => [index, producers.valid]),
+					...shape.refusals.map((index): [number, () => T] => [index, producers.refusal]),
+					...shape.failures.map((index): [number, () => T] => [index, failPolicyRead]),
+				]),
+				iterable: shape.iterable ?? true,
+			},
+			{ outcome, reads },
+		),
+	)
+}
+
+/**
+ * Holds one case per reader and list shape for the readers that take a caller-supplied list.
+ *
+ * @remarks
+ * Each outcome and read list is what the loop each reader replaced produced. A hole is visited as
+ * `undefined`, an entry after a failing one is never read, a refusal names its constructor, and a
+ * list without an iterator is refused with a `TypeError` before any entry is read.
+ */
+export const POLICY_LAZY_CASES: readonly PolicyLazyCase[] = Object.freeze([
+	...createPolicyLazyCases(
+		'inspectPolicyMirrorPaths',
+		(list: string[]) => inspectPolicyMirrorPaths(list, new Set()).map(({ path }) => path),
+		{
+			valid: () => 'tests/src/core/A.test.ts',
+			// The descriptor read answers `any`, so a value the signature refuses reaches the reader.
+			refusal: () => Object.getOwnPropertyDescriptor(POLICY_REFUSALS, 'symbol')?.value,
+		},
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[POLICY_LAZY_SHAPES.dense, 'return ["tests/src/core/A.test.ts"]', [0]],
+			[POLICY_LAZY_SHAPES.hole, 'throw TypeError', []],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw TypeError', []],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.holeBetween, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyWiring rules',
+		(list: string[]) => inspectPolicyWiring({}, list, []),
+		{
+			valid: () => 'a',
+			refusal: () => Object.getOwnPropertyDescriptor(POLICY_REFUSALS, 'symbol')?.value,
+		},
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[
+				POLICY_LAZY_SHAPES.dense,
+				'return ["a is enabled by no top-level or override rules record"]',
+				[0],
+			],
+			[
+				POLICY_LAZY_SHAPES.hole,
+				'return ["undefined is enabled by no top-level or override rules record","a is enabled by no top-level or override rules record"]',
+				[1],
+			],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			[
+				POLICY_LAZY_SHAPES.holeBetween,
+				'return ["a is enabled by no top-level or override rules record","undefined is enabled by no top-level or override rules record","a is enabled by no top-level or override rules record"]',
+				[0, 2],
+			],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyWiring populations',
+		(list: Array<readonly string[]>) => inspectPolicyWiring({}, [], list),
+		{
+			valid: () => ['a'],
+			refusal: () => Object.getOwnPropertyDescriptor(POLICY_REFUSALS, 'number')?.value,
+		},
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[
+				POLICY_LAZY_SHAPES.dense,
+				'return ["no override files list declares the population exactly: a"]',
+				[0],
+			],
+			[POLICY_LAZY_SHAPES.hole, 'throw TypeError', []],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw TypeError', []],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.holeBetween, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyWiring overrides',
+		(list: unknown[]) => inspectPolicyWiring({ overrides: list }, [], []),
+		{ valid: () => ({ files: ['a'] }), refusal: createPolicyRevoked },
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[POLICY_LAZY_SHAPES.dense, 'return []', [0]],
+			[POLICY_LAZY_SHAPES.hole, 'return []', [1]],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.holeBetween, 'return []', [0, 2]],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyConfiguration overrides',
+		(list: unknown[]) =>
+			inspectPolicyConfiguration({
+				rules: POLICY_WIRING_SETTINGS,
+				overrides: list,
+			}),
+		{ valid: () => ({}), refusal: createPolicyRevoked },
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[POLICY_LAZY_SHAPES.dense, 'return []', [0]],
+			[POLICY_LAZY_SHAPES.hole, 'return ["override entries must be records"]', [1]],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			[POLICY_LAZY_SHAPES.holeBetween, 'return ["override entries must be records"]', [0, 2]],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyConfiguration ignorePatterns',
+		(list: unknown[]) =>
+			inspectPolicyConfiguration({
+				rules: POLICY_WIRING_SETTINGS,
+				ignorePatterns: list,
+			}),
+		// The reader skips every entry that is not a string, so no entry refuses it and no row uses the
+		// refusal.
+		{ valid: () => 'src', refusal: createPolicyRevoked },
+		[
+			[POLICY_LAZY_SHAPES.empty, 'return []', []],
+			[POLICY_LAZY_SHAPES.dense, 'return ["ignorePatterns must not reach src"]', [0]],
+			[POLICY_LAZY_SHAPES.hole, 'return ["ignorePatterns must not reach src"]', [1]],
+			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
+			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
+			[
+				POLICY_LAZY_SHAPES.holeBetween,
+				'return ["ignorePatterns must not reach src","ignorePatterns must not reach src"]',
+				[0, 2],
+			],
+			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
+		],
+	),
+	...createPolicyLazyCases(
+		'inspectPolicyFilenamePaths',
+		(list: string[]) => inspectPolicyFilenamePaths(list).map(({ path }) => path),
+		{
+			valid: () => 'src/a.ts',
+			refusal: () => Object.getOwnPropertyDescriptor(POLICY_REFUSALS, 'symbol')?.value,
+		},
+		[[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []]],
+	),
+])
+
+/** Describes a population a guide states, the words that mark a sentence stating it, and its exclusion. */
+export interface PolicyPopulation {
+	readonly subject: string
+	readonly markers: readonly string[]
+	readonly exclusion: string
+}
+
+/** Describes the population of test files that selects the `studies` fact, and what it leaves out. */
+export const POLICY_STUDIES_POPULATION: PolicyPopulation = Object.freeze({
+	subject: '`studies`',
+	markers: Object.freeze(['`*.test.ts`', 'test files']),
+	exclusion: 'outside any `node_modules` or `.git` directory',
+})
+
+/**
+ * Collects the guide prose sentences that state one population.
+ *
+ * @remarks
+ * A sentence states the population when it names the subject and one marker. A fenced code block
+ * is not prose. The lines of a block that are not table rows are joined into one text, and each
+ * cell of a table row is a text of its own, so a `Summary` cell that equals its export's
+ * description is held to the same sentences as the prose: the source doc block is where that cell's
+ * wording is decided.
+ *
+ * @param markdown - The guide Markdown.
+ * @param population - The subject, markers, and exclusion that describe the population.
+ * @returns Each sentence that states the population, in document order.
+ */
+export function collectGuideStatements(
+	markdown: string,
+	population: PolicyPopulation,
+): readonly string[] {
+	return markdown
+		.replaceAll(/^```[^\n]*\n[\s\S]*?^```[^\n]*$/gmu, '')
+		.split(/(?:\r\n|\n){2,}/u)
+		.flatMap((block) => {
+			const lines = block.split(/\r\n|\n/u)
+			return [
+				lines.filter((line) => !line.startsWith('|')).join(' '),
+				...lines.filter((line) => line.startsWith('|')).flatMap((row) => row.split(/(?<!\\)\|/u)),
+			].flatMap((text) =>
+				text
+					.replaceAll(/\s+/gu, ' ')
+					.trim()
+					.split(/(?<=[.!?])\s+/u),
+			)
+		})
+		.filter(
+			(sentence) =>
+				sentence.includes(population.subject) &&
+				population.markers.some((marker) => sentence.includes(marker)),
+		)
+}
+
+/** Names the security identifier of the group every access token holds, in the form `icacls` accepts. */
+export const POLICY_DENY_PRINCIPAL = '*S-1-1-0'
+
+/**
+ * Runs one executable to completion and returns what it printed.
+ *
+ * @param file - The executable to run, resolved by name.
+ * @param args - The arguments, passed without a shell.
+ * @returns The standard output.
+ * @throws Error - Thrown when the executable cannot start or exits with a non-zero status.
+ */
+export function runPolicyCommand(file: string, args: readonly string[]): string {
+	const result = spawnSync(file, args, { encoding: 'utf8', windowsHide: true })
+	if (result.error !== undefined) throw result.error
+	if (result.status !== 0)
+		throw new Error(
+			`${file} ${args.join(' ')} exited with ${result.status}: ${result.stdout}${result.stderr}`,
+		)
+	return result.stdout
+}
+
+/**
+ * Reads the permission state of one file as text two readings compare for equality.
+ *
+ * @remarks
+ * Permission state is platform-defined. A POSIX file carries a mode, read as its octal digits
+ * through `statSync`, and a Windows file carries an access-control list, read as the `icacls`
+ * listing of the path, so the text holds every explicit and inherited entry in order.
+ *
+ * @param path - The absolute path of an existing file.
+ * @returns The octal mode on POSIX, and the `icacls` listing on Windows.
+ * @throws Error - Thrown when the Windows listing command exits with a non-zero status.
+ */
+export function readPolicyPermissions(path: string): string {
+	return process.platform === 'win32'
+		? runPolicyCommand('icacls', [path])
+		: (statSync(path).mode & 0o7777).toString(8)
+}
+
+/**
+ * Withholds read access to one file from the current user.
+ *
+ * @remarks
+ * Read permission is platform-defined. A POSIX mode of zero withholds it from every user but root,
+ * and a Windows access-control entry that denies read withholds it from the holder of every token.
+ * A `package.json` that is a directory cannot stand in for this: the regular-file check refuses it
+ * before any read starts, so only a file the host refuses to open reaches the read boundary.
+ *
+ * The restore returns the permission state it found. A POSIX restore writes back the mode read
+ * before the change. A Windows restore removes the deny entries of the one principal the denial
+ * names, because `icacls /restore` of a saved list needs a restore privilege a standard token does
+ * not hold, and `/remove:d` of the user would also strip a deny entry the file already carried. A
+ * restore that leaves the state different, as an earlier deny entry for that principal would,
+ * throws rather than report success.
+ *
+ * @param path - The absolute path of an existing file.
+ * @returns A function that restores the access, to run before the owning directory is removed.
+ * @throws Error - Thrown when a command exits with a non-zero status or the restore differs.
+ */
+export function denyPolicyRead(path: string): () => void {
+	const before = readPolicyPermissions(path)
+	if (process.platform === 'win32') {
+		runPolicyCommand('icacls', [path, '/deny', `${POLICY_DENY_PRINCIPAL}:(R)`])
+	} else {
+		chmodSync(path, 0o000)
+	}
+	return () => {
+		if (process.platform === 'win32') {
+			runPolicyCommand('icacls', [path, '/remove:d', POLICY_DENY_PRINCIPAL])
+		} else {
+			chmodSync(path, before)
+		}
+		if (readPolicyPermissions(path) !== before)
+			throw new Error(`The permissions of ${path} did not restore exactly`)
+	}
+}
+
 /** Holds parsed skill frontmatter and the exact scalar source used for bridge comparison. */
 export interface SkillFrontmatter {
 	readonly keys: readonly string[]
@@ -221,6 +828,15 @@ export interface SkillFrontmatter {
 		readonly name: string | undefined
 		readonly description: string | undefined
 	}
+}
+
+/** Holds the keys and fields read so far from one frontmatter and the last line a folded block consumed. */
+export interface SkillFrontmatterScan {
+	readonly keys: readonly string[]
+	readonly skipThrough: number
+	readonly fields: ReadonlyArray<
+		readonly [string, { readonly value: string; readonly source: string }]
+	>
 }
 
 /** Names the directory whose immediate child directories form the complete skill family. */
@@ -284,21 +900,60 @@ export const POLICY_SUPPRESSION_DIRECTIVE = ['oxlint', '-disable'].join('')
 /** Names the formatter directive the text sweep refuses, composed so the instrument does not report itself. */
 export const POLICY_FORMATTER_DIRECTIVE = ['prettier', '-ignore'].join('')
 
-/** Matches the source, test, config, script, and sheet files inspected for lint and formatter suppression directives. */
+/** Matches the source, test, config, script, skill script, and sheet files inspected for lint and formatter suppression directives. */
 export const POLICY_SUPPRESSION_GLOB: readonly string[] = Object.freeze([
 	'{src,app,tests,configs,scripts}/**/*.{cjs,css,cts,js,jsx,mjs,mts,scss,ts,tsx,vue}',
 	'*.{cjs,css,cts,js,jsx,mjs,mts,scss,ts,tsx,vue}',
+	'.agents/skills/*/scripts/*.ts',
 ])
 
-/** Lists the rules whose workspace-wide lint wiring must not be weakened by configuration. */
-export const POLICY_WIRING_RULES: readonly string[] = Object.freeze([
-	'policy/no-mocking',
-	'policy/no-keyword-privacy',
-	'policy/no-malformed-summary',
-	'policy/no-banned-term',
-	'typescript/parameter-properties',
-	'typescript/explicit-member-accessibility',
+/** Matches the TypeScript files inspected for an import that resolves into the built output. */
+export const POLICY_DIST_GLOB = '{src,app,tests,configs}/**/*.{cts,mts,ts,tsx}'
+
+/** Names the workspace-relative directory the build writes and no tracked TypeScript imports. */
+export const POLICY_DIST_ROOT = 'dist'
+
+/**
+ * Matches the instruction, configuration, and root text files the text sweep reads beside the
+ * authored Markdown and the suppression population.
+ */
+export const POLICY_TEXT_GLOB: readonly string[] = Object.freeze([
+	'{.agents,.claude,.codex,.cursor}/**/*.{toml,yaml,yml,mdc,json}',
+	'*.json',
+	'.*.json',
+	'.gitattributes',
+	'.prettierignore',
 ])
+
+/**
+ * Maps each rule whose workspace-wide lint wiring must not be weakened to the whole top-level
+ * setting the shipped configuration declares for it.
+ *
+ * @remarks
+ * A setting carries its options as well as its severity, so a rule listed at `error` with an option
+ * that switches its check off differs from the value declared here.
+ */
+export const POLICY_WIRING_SETTINGS: Readonly<Record<string, unknown>> = Object.freeze({
+	'policy/no-mocking': 'error',
+	'policy/no-keyword-privacy': 'error',
+	'policy/no-let': 'error',
+	'policy/no-malformed-summary': 'error',
+	'policy/no-banned-term': 'error',
+	'no-var': 'error',
+	'prefer-const': 'error',
+	'no-param-reassign': 'error',
+	'no-ex-assign': 'error',
+	'vitest/no-identical-title': 'error',
+	'vitest/no-focused-tests': 'error',
+	'vitest/no-disabled-tests': 'error',
+	'typescript/parameter-properties': 'error',
+	'typescript/explicit-member-accessibility': ['error', { accessibility: 'no-public' }],
+})
+
+/** Lists the rules whose workspace-wide lint wiring must not be weakened by configuration. */
+export const POLICY_WIRING_RULES: readonly string[] = Object.freeze(
+	Object.keys(POLICY_WIRING_SETTINGS),
+)
 
 /** Lists the linted workspace roots that ignore patterns must not reach. */
 export const POLICY_WIRING_ROOTS: readonly string[] = Object.freeze([
@@ -306,7 +961,11 @@ export const POLICY_WIRING_ROOTS: readonly string[] = Object.freeze([
 	'app',
 	'tests',
 	'configs',
+	'.agents',
 ])
+
+/** Matches a character that makes a path segment a glob rather than a literal name. */
+export const POLICY_GLOB_CHARACTER = /[*?[\]{}]/u
 
 /** Matches either lint suppression token or the formatter directive the text sweep refuses. */
 export const POLICY_SUPPRESSION_PATTERN = new RegExp(
@@ -315,6 +974,24 @@ export const POLICY_SUPPRESSION_PATTERN = new RegExp(
 	),
 	'u',
 )
+
+/**
+ * Holds the decoder the text sweep reads bytes through.
+ *
+ * @remarks
+ * `fatal` refuses a byte sequence UTF-8 does not carry, and `ignoreBOM` keeps a leading byte-order
+ * mark in the decoded text, where the default would drop it before the sweep could see it.
+ */
+export const POLICY_TEXT_DECODER = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+/** Lists the control code points a text file may carry: tab, line feed, and carriage return. */
+export const POLICY_TEXT_CONTROLS: readonly number[] = Object.freeze([0x09, 0x0a, 0x0d])
+
+/** Holds the code point of the replacement character a failed decode leaves behind. */
+export const POLICY_TEXT_REPLACEMENT = 0xfffd
+
+/** Holds the code point of the byte-order mark. */
+export const POLICY_TEXT_MARK = 0xfeff
 
 /**
  * Matches the workspace-authored path population inspected for a name a Windows checkout cannot
@@ -358,6 +1035,19 @@ export const POLICY_RESERVED_PATTERN = /[<>:"|?*]/u
 
 /** Matches a shell script named as a complete path token inside a manifest script. */
 export const POLICY_SHELL_PATTERN = /\.sh\b/u
+
+/** Lists the extensions of the shell, PowerShell, Python, and batch files a workspace keeps under one directory. */
+export const POLICY_SHELL_EXTENSIONS: readonly string[] = Object.freeze([
+	'.sh',
+	'.bash',
+	'.ps1',
+	'.py',
+	'.bat',
+	'.cmd',
+])
+
+/** Names the one directory whose files are Cloud setup hooks, the shell files a workspace admits. */
+export const POLICY_SHELL_ROOT = 'scripts'
 
 /** Names the directory whose direct Markdown files form the complete rule family. */
 export const POLICY_RULE_ROOT = '.claude/rules'
@@ -437,6 +1127,51 @@ export function isPolicyRecord(value: unknown): value is Readonly<Record<string,
 }
 
 /**
+ * Parses JSON text without throwing.
+ *
+ * @param content - The raw JSON text.
+ * @returns The parsed value, or `undefined` when the text is not JSON.
+ */
+export function parsePolicyJSON(content: string): unknown {
+	try {
+		return JSON.parse(content)
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Reads one file and parses its JSON without throwing.
+ *
+ * @remarks
+ * One boundary holds the read and the parse, so a file the host refuses to open answers as a file
+ * that holds no JSON.
+ *
+ * @param path - The absolute path of the file to read.
+ * @returns The parsed value, or `undefined` when the file cannot be read or holds no JSON.
+ */
+export function readPolicyJSON(path: string): unknown {
+	try {
+		return JSON.parse(readFileSync(path, 'utf8'))
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Extracts the lines beneath one heading, up to the next second-level heading.
+ *
+ * @param lines - The document lines.
+ * @param heading - The index of the heading line whose section is read.
+ * @returns Each line after the heading and before the next line starting with `## `, in order.
+ */
+export function extractPolicySection(lines: readonly string[], heading: number): readonly string[] {
+	const following = lines.slice(heading + 1)
+	const end = following.findIndex((line) => line.startsWith('## '))
+	return end === -1 ? following : following.slice(0, end)
+}
+
+/**
  * Creates one stable violation for an inspection result.
  *
  * @param rule - The rule that failed.
@@ -477,12 +1212,11 @@ export function stemToPolicyCandidates(stem: string): readonly string[] {
 	const normalized = normalizePolicyPath(stem)
 	const directory = dirname(normalized).replaceAll('\\', '/')
 	const name = basename(normalized)
-	const candidates = POLICY_MODULE_EXTENSIONS.map((extension) => `${normalized}.${extension}`)
-	for (const extension of POLICY_PARTIAL_EXTENSIONS) {
-		candidates.push(`${directory}/_${name}.${extension}`)
-	}
-	if (name.startsWith(POLICY_TESTS_MODULE_PREFIX)) candidates.push(`tests/${normalized}.ts`)
-	return candidates
+	return [
+		...POLICY_MODULE_EXTENSIONS.map((extension) => `${normalized}.${extension}`),
+		...POLICY_PARTIAL_EXTENSIONS.map((extension) => `${directory}/_${name}.${extension}`),
+		...(name.startsWith(POLICY_TESTS_MODULE_PREFIX) ? [`tests/${normalized}.ts`] : []),
+	]
 }
 
 /**
@@ -496,23 +1230,25 @@ export function inspectPolicyMirrorPaths(
 	tests: readonly string[],
 	modules: ReadonlySet<string>,
 ): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const test of tests) {
-		const path = normalizePolicyPath(test)
-		const stem = testToPolicyStem(path)
-		if (stem === undefined) continue
-		const candidates = stemToPolicyCandidates(stem)
-		if (!candidates.some((candidate) => modules.has(candidate))) {
-			violations.push(
-				createPolicyViolation(
-					'mirror',
-					path,
-					`module test requires one matching module: ${candidates.join(', ')}`,
-				),
-			)
-		}
-	}
-	return violations
+	// The mapper runs on each entry as the iterator yields it, so a hole reaches normalization as
+	// `undefined` and no entry after a failing one is read, as in the loop this replaced.
+	return Iterator.from(tests)
+		.flatMap((test) => {
+			const path = normalizePolicyPath(test)
+			const stem = testToPolicyStem(path)
+			if (stem === undefined) return []
+			const candidates = stemToPolicyCandidates(stem)
+			return candidates.some((candidate) => modules.has(candidate))
+				? []
+				: [
+						createPolicyViolation(
+							'mirror',
+							path,
+							`module test requires one matching module: ${candidates.join(', ')}`,
+						),
+					]
+		})
+		.toArray()
 }
 
 /**
@@ -531,8 +1267,27 @@ export function inspectPolicyMirrors(root: string): readonly PolicyViolation[] {
 }
 
 /**
+ * Checks whether a normalized path belongs to a scaffold-owned setup module.
+ * @param path - The workspace-relative module path.
+ * @param root - The workspace root whose manifest determines harness ownership.
+ * @returns True if scaffold owns the module; false otherwise.
+ */
+export function matchesScaffoldSetup(path: string, root: string): boolean {
+	const normalized = normalizePolicyPath(path)
+	const manifest = readPolicyJSON(join(root, 'package.json'))
+	return (
+		(normalized === DISTRIBUTION_SETUP_PATH &&
+			(!isPolicyRecord(manifest) || manifest.private !== true)) ||
+		HOST_PATHS.some(
+			(vendored) =>
+				normalized === normalizePolicyPath(vendored) ||
+				normalized.startsWith(normalizePolicyPath(vendored) + '/'),
+		)
+	)
+}
+
+/**
  * Inspects root setup modules and their proofs in both directions.
- *
  * @param root - The workspace root to inspect.
  * @returns Missing modules and uncovered exporting setup modules.
  */
@@ -541,44 +1296,34 @@ export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
 	const shared = paths.has('tests/setup.test.ts')
 		? readFileSync(join(root, 'tests/setup.test.ts'), 'utf8')
 		: ''
-	const imports = new Set<string>()
-	for (const declaration of parseAst(shared, { lang: 'ts' }).body) {
-		if (declaration.type !== 'ImportDeclaration') continue
-		const specifier = declaration.source.value
-		if (/^\.\/setup[^/]*\.(?:js|ts)$/u.test(specifier))
-			imports.add('tests/' + specifier.slice(2).replace(/\.js$/u, '.ts'))
-	}
-	const violations: PolicyViolation[] = []
-	for (const path of [...paths].sort()) {
+	const imports = new Set(
+		parseAst(shared, { lang: 'ts' }).body.flatMap((declaration) =>
+			declaration.type === 'ImportDeclaration' &&
+			/^\.\/setup[^/]*\.(?:js|ts)$/u.test(declaration.source.value)
+				? ['tests/' + declaration.source.value.slice(2).replace(/\.js$/u, '.ts')]
+				: [],
+		),
+	)
+	return [...paths].sort().flatMap((path) => {
 		const module = path.endsWith('.test.ts') ? path.replace(/\.test\.ts$/u, '.ts') : path
-		if (
-			HOST_PATHS.some(
-				(vendored) =>
-					module === normalizePolicyPath(vendored) ||
-					module.startsWith(normalizePolicyPath(vendored) + '/'),
-			)
-		)
-			continue
+		if (matchesScaffoldSetup(module, root)) return []
 		if (path.endsWith('.test.ts')) {
-			if (!paths.has(module))
-				violations.push(
-					createPolicyViolation('mirror', path, `setup proof requires its module: ${module}`),
-				)
-		} else if (
-			/^export /m.test(readFileSync(join(root, path), 'utf8')) &&
+			return paths.has(module)
+				? []
+				: [createPolicyViolation('mirror', path, `setup proof requires its module: ${module}`)]
+		}
+		return /^export /m.test(readFileSync(join(root, path), 'utf8')) &&
 			!paths.has(path.replace(/\.ts$/u, '.test.ts')) &&
 			!imports.has(path)
-		) {
-			violations.push(
-				createPolicyViolation(
-					'mirror',
-					path,
-					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
-				),
-			)
-		}
-	}
-	return violations
+			? [
+					createPolicyViolation(
+						'mirror',
+						path,
+						'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+					),
+				]
+			: []
+	})
 }
 
 /**
@@ -588,25 +1333,182 @@ export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
  * @returns Every suppression occurrence in path and line order.
  */
 export function inspectPolicySuppressions(root: string): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
 	const paths = globSync(POLICY_SUPPRESSION_GLOB, { cwd: root }).map(normalizePolicyPath).sort()
-	for (const path of paths) {
-		const lines = readFileSync(join(root, path), 'utf8').split('\n')
-		for (let index = 0; index < lines.length; index += 1) {
-			const line = lines[index]
-			if (line !== undefined && POLICY_SUPPRESSION_PATTERN.test(line)) {
-				violations.push(
+	return paths.flatMap((path) =>
+		readFileSync(join(root, path), 'utf8')
+			.split('\n')
+			.flatMap((line, index) =>
+				POLICY_SUPPRESSION_PATTERN.test(line)
+					? [
+							createPolicyViolation(
+								'suppression',
+								path,
+								'file carries a lint or formatter suppression directive',
+								index + 1,
+							),
+						]
+					: [],
+			),
+	)
+}
+
+/**
+ * Decodes file bytes as UTF-8 without throwing.
+ *
+ * @param bytes - The raw file bytes.
+ * @returns The decoded text with any leading byte-order mark kept, or `undefined` when the bytes
+ * are not valid UTF-8.
+ */
+export function parsePolicyText(bytes: Uint8Array): string | undefined {
+	try {
+		return POLICY_TEXT_DECODER.decode(bytes)
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Reports whether one code point is a character the text sweep refuses.
+ *
+ * @remarks
+ * The sweep refuses the replacement character, the byte-order mark, and every C0 or C1 control
+ * character other than the three {@link POLICY_TEXT_CONTROLS} lists.
+ *
+ * @param code - The code point to judge.
+ * @returns True if the code point is refused; false otherwise.
+ */
+export function matchesPolicyCharacter(code: number): boolean {
+	if (code === POLICY_TEXT_REPLACEMENT || code === POLICY_TEXT_MARK) return true
+	if (code < 0x20) return !POLICY_TEXT_CONTROLS.includes(code)
+	return code >= 0x7f && code <= 0x9f
+}
+
+/**
+ * Renders one code point as the `\u` escape a violation names it by.
+ *
+ * @param code - The code point to render.
+ * @returns The escape, four upper-case hexadecimal digits long.
+ */
+export function renderPolicyCharacter(code: number): string {
+	return `\\u${code.toString(16).toUpperCase().padStart(4, '0')}`
+}
+
+/**
+ * Inspects one file's bytes for text that is not clean UTF-8.
+ *
+ * @remarks
+ * Bytes that do not decode report once for the file. Decoded text reports each refused character
+ * once per line, so a line that repeats a character names it once.
+ *
+ * @param path - The workspace-relative path the bytes belong to.
+ * @param bytes - The raw file bytes.
+ * @returns Every text violation in line order.
+ */
+export function inspectPolicyBytes(path: string, bytes: Uint8Array): readonly PolicyViolation[] {
+	const text = parsePolicyText(bytes)
+	if (text === undefined) return [createPolicyViolation('text', path, 'text decodes as UTF-8')]
+	return text
+		.split(/\r\n|\n/u)
+		.flatMap((line, index) =>
+			[...new Set([...line].map((character) => character.codePointAt(0) ?? 0))]
+				.filter(matchesPolicyCharacter)
+				.map((code) =>
 					createPolicyViolation(
-						'suppression',
+						'text',
 						path,
-						'file carries a lint or formatter suppression directive',
+						`text carries no replacement, byte-order, or control character: ${renderPolicyCharacter(code)}`,
 						index + 1,
 					),
-				)
-			}
-		}
+				),
+		)
+}
+
+/**
+ * Collects the workspace-relative paths of the authored and source text the sweep reads.
+ *
+ * @param root - The workspace root to read.
+ * @returns The authored Markdown population joined with the source population the suppression
+ * sweep reads and the instruction, configuration, and root text population
+ * {@link POLICY_TEXT_GLOB} names, sorted by path. The three populations share no extension, so no
+ * path repeats.
+ */
+export function collectPolicyTextPaths(root: string): readonly string[] {
+	return [
+		...new Set([
+			...readPolicyProse(root),
+			...globSync(POLICY_SUPPRESSION_GLOB, { cwd: root }).map(normalizePolicyPath),
+			...globSync(POLICY_TEXT_GLOB, { cwd: root }).map(normalizePolicyPath),
+		]),
+	].sort()
+}
+
+/**
+ * Inspects every authored and source text file for text that is not clean UTF-8.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every text violation in path and line order.
+ */
+export function inspectPolicyText(root: string): readonly PolicyViolation[] {
+	return collectPolicyTextPaths(root).flatMap((path) =>
+		inspectPolicyBytes(path, readFileSync(join(root, path))),
+	)
+}
+
+/**
+ * Collects the literal path segments the files globs of a configuration's overrides route through.
+ *
+ * @remarks
+ * A segment that carries a glob character is not literal, and neither is an empty or dot segment.
+ *
+ * @param overrides - The parsed `overrides` value of an Oxlint configuration.
+ * @returns Each literal segment, in the order the globs declare them.
+ */
+export function collectPolicyOverrideSegments(overrides: unknown): readonly string[] {
+	return (Array.isArray(overrides) ? overrides : []).flatMap((override: unknown) => {
+		const files: unknown = isPolicyRecord(override)
+			? Object.getOwnPropertyDescriptor(override, 'files')?.value
+			: undefined
+		return (Array.isArray(files) ? files : []).flatMap((glob: unknown) =>
+			typeof glob === 'string'
+				? normalizePolicyPath(glob)
+						.split('/')
+						.filter(
+							(segment) =>
+								segment !== '' &&
+								segment !== '.' &&
+								segment !== '..' &&
+								!POLICY_GLOB_CHARACTER.test(segment),
+						)
+				: [],
+		)
+	})
+}
+
+/**
+ * Checks whether an ignore pattern can silence files inside a linted workspace root.
+ *
+ * @remarks
+ * Oxlint reads an ignore pattern with gitignore semantics. A pattern with a slash before its last
+ * character is anchored to the configuration directory, so only its first segment can reach a
+ * root. A pattern without one matches a name at any depth, so it reaches a root when it carries a
+ * glob character or names a segment the overrides route through. A negation reaches nothing.
+ *
+ * @param pattern - One entry of the configuration's `ignorePatterns`.
+ * @param overrides - The parsed `overrides` value of the same configuration.
+ * @returns Whether the pattern can silence a guarded file.
+ */
+export function isPolicyIgnoreReaching(pattern: string, overrides: unknown): boolean {
+	if (pattern.startsWith('!')) return false
+	const normalized = normalizePolicyPath(pattern)
+	const [first = ''] = normalized.replace(/^\.\//u, '').replace(/^\//u, '').split('/')
+	if (
+		POLICY_WIRING_ROOTS.some((root) => first === root || (first !== '' && matchesGlob(root, first)))
+	) {
+		return true
 	}
-	return violations
+	const name = normalized.replace(/\/$/u, '')
+	if (name.includes('/')) return false
+	return POLICY_GLOB_CHARACTER.test(name) || collectPolicyOverrideSegments(overrides).includes(name)
 }
 
 /**
@@ -616,63 +1518,53 @@ export function inspectPolicySuppressions(root: string): readonly PolicyViolatio
  * @returns Every wiring violation in rule and configuration order.
  */
 export function inspectPolicyConfiguration(configuration: unknown): readonly string[] {
-	const violations: string[] = []
 	if (!isPolicyRecord(configuration)) {
 		return ['Oxlint configuration must be a record']
 	}
 
 	const rules: unknown = Object.getOwnPropertyDescriptor(configuration, 'rules')?.value
-	for (const rule of POLICY_WIRING_RULES) {
-		const setting = isPolicyRecord(rules)
-			? Object.getOwnPropertyDescriptor(rules, rule)?.value
-			: undefined
-		const severity = Array.isArray(setting) ? setting[0] : setting
-		if (severity !== 'error') violations.push(`${rule} must have top-level error severity`)
-	}
-
 	const ignorePatterns: unknown = Object.getOwnPropertyDescriptor(
 		configuration,
 		'ignorePatterns',
 	)?.value
-	if (ignorePatterns !== undefined && !Array.isArray(ignorePatterns)) {
-		violations.push('ignorePatterns must be an array when declared')
-	} else if (Array.isArray(ignorePatterns)) {
-		for (const pattern of ignorePatterns) {
-			if (typeof pattern !== 'string' || pattern.startsWith('!')) continue
-			const normalized = normalizePolicyPath(pattern).replace(/^\.\//u, '').replace(/^\//u, '')
-			const [first = ''] = normalized.split('/')
-			if (
-				POLICY_WIRING_ROOTS.some(
-					(root) => first === root || (first !== '' && matchesGlob(root, first)),
-				)
-			) {
-				violations.push(`ignorePatterns must not reach ${pattern}`)
-			}
-		}
-	}
-
 	const overrides: unknown = Object.getOwnPropertyDescriptor(configuration, 'overrides')?.value
-	if (overrides !== undefined && !Array.isArray(overrides)) {
-		violations.push('overrides must be an array when declared')
-	} else if (Array.isArray(overrides)) {
-		for (const override of overrides) {
-			if (!isPolicyRecord(override)) {
-				violations.push('override entries must be records')
-				continue
-			}
-			const overrideRules: unknown = Object.getOwnPropertyDescriptor(override, 'rules')?.value
-			if (!isPolicyRecord(overrideRules)) {
-				continue
-			}
-			for (const rule of POLICY_WIRING_RULES) {
-				if (Object.getOwnPropertyDescriptor(overrideRules, rule) !== undefined) {
-					violations.push(`overrides must not configure ${rule}`)
-				}
-			}
-		}
-	}
-
-	return violations
+	return [
+		...Object.entries(POLICY_WIRING_SETTINGS).flatMap(([rule, declared]) => {
+			const setting = isPolicyRecord(rules)
+				? Object.getOwnPropertyDescriptor(rules, rule)?.value
+				: undefined
+			return isDeepStrictEqual(setting, declared)
+				? []
+				: [`${rule} must have the top-level setting ${JSON.stringify(declared)}`]
+		}),
+		...(ignorePatterns !== undefined && !Array.isArray(ignorePatterns)
+			? ['ignorePatterns must be an array when declared']
+			: // The mapper runs on each pattern as the iterator yields it, as the loop it replaced did.
+				Iterator.from(Array.isArray(ignorePatterns) ? ignorePatterns : [])
+					.flatMap((pattern) =>
+						typeof pattern === 'string' && isPolicyIgnoreReaching(pattern, overrides)
+							? [`ignorePatterns must not reach ${pattern}`]
+							: [],
+					)
+					.toArray()),
+		...(overrides !== undefined && !Array.isArray(overrides)
+			? ['overrides must be an array when declared']
+			: // The mapper runs on each entry as the iterator yields it, so a hole is a malformed entry as it
+				// was in the loop, and no entry after a failing one is read.
+				Iterator.from(Array.isArray(overrides) ? overrides : [])
+					.flatMap((override) => {
+						if (!isPolicyRecord(override)) return ['override entries must be records']
+						const overrideRules: unknown = Object.getOwnPropertyDescriptor(override, 'rules')?.value
+						return isPolicyRecord(overrideRules)
+							? POLICY_WIRING_RULES.flatMap((rule) =>
+									Object.getOwnPropertyDescriptor(overrideRules, rule) === undefined
+										? []
+										: [`overrides must not configure ${rule}`],
+								)
+							: []
+					})
+					.toArray()),
+	]
 }
 
 /**
@@ -692,36 +1584,45 @@ export function inspectPolicyWiring(
 		return ['Oxlint configuration must be a record']
 	}
 
-	const records: unknown[] = [Object.getOwnPropertyDescriptor(configuration, 'rules')?.value]
-	const declaredPopulations: string[] = []
+	const topRules: unknown = Object.getOwnPropertyDescriptor(configuration, 'rules')?.value
 	const overrides: unknown = Object.getOwnPropertyDescriptor(configuration, 'overrides')?.value
-	if (Array.isArray(overrides)) {
-		for (const entry of overrides) {
-			if (!isPolicyRecord(entry)) continue
-			records.push(Object.getOwnPropertyDescriptor(entry, 'rules')?.value)
+	// Each mapper runs on an entry as the iterator yields it, so a hole reaches the guard as
+	// `undefined` and no entry after a failing one is read, as in the loops these replaced.
+	const entries = Iterator.from(Array.isArray(overrides) ? overrides : [])
+		.flatMap((entry) => {
+			if (!isPolicyRecord(entry)) return []
+			const record: unknown = Object.getOwnPropertyDescriptor(entry, 'rules')?.value
 			const files: unknown = Object.getOwnPropertyDescriptor(entry, 'files')?.value
-			if (Array.isArray(files)) declaredPopulations.push(files.join(' '))
-		}
-	}
-
-	const enabled = new Set<string>()
-	for (const record of records) {
-		if (!isPolicyRecord(record)) continue
-		for (const name of Object.getOwnPropertyNames(record)) enabled.add(name)
-	}
-
-	const violations: string[] = []
-	for (const rule of rules) {
-		if (!enabled.has(rule))
-			violations.push(`${rule} is enabled by no top-level or override rules record`)
-	}
-	for (const population of populations) {
-		const joined = population.join(' ')
-		if (!declaredPopulations.includes(joined)) {
-			violations.push(`no override files list declares the population exactly: ${joined}`)
-		}
-	}
-	return violations
+			return [{ record, declared: Array.isArray(files) ? [files.join(' ')] : [] }]
+		})
+		.toArray()
+	// A name enables its rule only at error severity: the string, or the first member of an array.
+	const enabled = new Set(
+		[topRules, ...entries.map(({ record }) => record)].flatMap((record) =>
+			isPolicyRecord(record)
+				? Object.getOwnPropertyNames(record).filter((name) => {
+						const setting = Object.getOwnPropertyDescriptor(record, name)?.value
+						return (Array.isArray(setting) ? setting[0] : setting) === 'error'
+					})
+				: [],
+		),
+	)
+	const declaredPopulations = entries.flatMap(({ declared }) => declared)
+	return [
+		...Iterator.from(rules)
+			.flatMap((rule) =>
+				enabled.has(rule) ? [] : [`${rule} is enabled by no top-level or override rules record`],
+			)
+			.toArray(),
+		...Iterator.from(populations)
+			.flatMap((population) => {
+				const joined = population.join(' ')
+				return declaredPopulations.includes(joined)
+					? []
+					: [`no override files list declares the population exactly: ${joined}`]
+			})
+			.toArray(),
+	]
 }
 
 /**
@@ -734,15 +1635,13 @@ export function inspectPolicyWiring(
 export function resolvePolicyDirectory(root: string, path: string): string | undefined {
 	const normalized = normalizePolicyPath(path)
 	if (normalized === '' || normalized === '.') return root
-	let current = root
-	for (const segment of normalized.split('/')) {
+	return normalized.split('/').reduce<string | undefined>((current, segment) => {
+		if (current === undefined) return undefined
 		const entry = readdirSync(current, { withFileTypes: true }).find(
 			(candidate) => candidate.name === segment && candidate.isDirectory(),
 		)
-		if (entry === undefined) return undefined
-		current = join(current, entry.name)
-	}
-	return current
+		return entry === undefined ? undefined : join(current, entry.name)
+	}, root)
 }
 
 /**
@@ -800,76 +1699,68 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | undef
 	if (lines[0] !== '---') return undefined
 	const boundary = lines.indexOf('---', 1)
 	if (boundary === -1) return undefined
-	const keys: string[] = []
-	let name: string | undefined
-	let description: string | undefined
-	let nameSource: string | undefined
-	let descriptionSource: string | undefined
-
-	for (let index = 1; index < boundary; index += 1) {
-		const line = lines[index]
-		if (line === undefined) return undefined
-		const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):(.*)$/u)
-		const key = match?.[1]
-		const scalar = match?.[2]
-		if (key === undefined || scalar === undefined) return undefined
-		if (scalar !== '' && !scalar.startsWith(' ')) return undefined
-		keys.push(key)
-		let value = scalar === '' ? '' : scalar.slice(1)
-		let source = rawLines[index]?.slice(line.indexOf(':') + 1)
-		if (source === undefined) return undefined
-		if (value === '>-') {
-			if (key !== 'description') return undefined
-			const folded: string[] = []
-			const sourceLines: string[] = [source]
-			for (index += 1; index < boundary; index += 1) {
-				const continuation = lines[index]
-				if (continuation === undefined) return undefined
-				if (continuation.trim() === '') {
-					folded.push('')
-					const rawContinuation = rawLines[index]
-					if (rawContinuation === undefined) return undefined
-					sourceLines.push(rawContinuation)
-					continue
-				}
-				if (!continuation.startsWith('  ')) {
-					index -= 1
-					break
-				}
-				folded.push(continuation.slice(2))
-				const rawContinuation = rawLines[index]
-				if (rawContinuation === undefined) return undefined
-				sourceLines.push(rawContinuation)
+	// A folded description consumes the lines after its key, so `skipThrough` carries the last of them.
+	const scan = lines.slice(0, boundary).reduce<SkillFrontmatterScan | undefined>(
+		(state, line, index) => {
+			if (state === undefined || index === 0 || index <= state.skipThrough) return state
+			const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*):(.*)$/u)
+			const key = match?.[1]
+			const scalar = match?.[2]
+			if (key === undefined || scalar === undefined) return undefined
+			if (scalar !== '' && !scalar.startsWith(' ')) return undefined
+			const initial = scalar === '' ? '' : scalar.slice(1)
+			const own = rawLines[index]?.slice(line.indexOf(':') + 1)
+			if (own === undefined) return undefined
+			if (initial === '>-' && key !== 'description') return undefined
+			if (
+				initial !== '>-' &&
+				key === 'description' &&
+				(/^['"]/u.test(initial) || /^[>|][+-]?$/u.test(initial))
+			)
+				return undefined
+			const rest = initial === '>-' ? lines.slice(index + 1, boundary) : []
+			const ended = rest.findIndex(
+				(continuation) => continuation.trim() !== '' && !continuation.startsWith('  '),
+			)
+			const span = ended === -1 ? rest.length : ended
+			const block = rest.slice(0, span)
+			const rawBlock = rawLines.slice(index + 1, index + 1 + span)
+			if (rawBlock.length !== span) return undefined
+			const folded = block.map((continuation) =>
+				continuation.trim() === '' ? '' : continuation.slice(2),
+			)
+			// Each kept line joins to the one before it by a space, or by one newline per blank line between.
+			const kept = folded.flatMap((continuation, position) =>
+				continuation === '' ? [] : [{ continuation, position }],
+			)
+			const value =
+				initial === '>-'
+					? kept
+							.map((entry, rank) => {
+								const before = kept[rank - 1]
+								if (before === undefined) return entry.continuation
+								const blanks = entry.position - before.position - 1
+								return `${blanks === 0 ? ' ' : '\n'.repeat(blanks)}${entry.continuation}`
+							})
+							.join('')
+					: initial
+			const source = initial === '>-' ? [own, ...rawBlock].join('\n') : own
+			return {
+				keys: [...state.keys, key],
+				skipThrough: index + span,
+				fields: [...state.fields, [key, { value, source }]],
 			}
-			value = ''
-			let blanks = 0
-			for (const foldedLine of folded) {
-				if (foldedLine === '') {
-					blanks += 1
-					continue
-				}
-				if (value !== '') value += blanks === 0 ? ' ' : '\n'.repeat(blanks)
-				value += foldedLine
-				blanks = 0
-			}
-			source = sourceLines.join('\n')
-		} else if (key === 'description' && (/^['"]/u.test(value) || /^[>|][+-]?$/u.test(value))) {
-			return undefined
-		}
-		if (key === 'name') {
-			name = value
-			nameSource = source
-		} else if (key === 'description') {
-			description = value
-			descriptionSource = source
-		}
-	}
+		},
+		{ keys: [], skipThrough: 0, fields: [] },
+	)
+	if (scan === undefined) return undefined
+	const fields = new Map(scan.fields)
 
 	return {
-		keys,
-		name,
-		description,
-		source: { name: nameSource, description: descriptionSource },
+		keys: scan.keys,
+		name: fields.get('name')?.value,
+		description: fields.get('description')?.value,
+		source: { name: fields.get('name')?.source, description: fields.get('description')?.source },
 	}
 }
 
@@ -928,16 +1819,16 @@ export function readSkillScripts(root: string, name: string): readonly string[] 
  * @returns The distinct script paths, relative to the skill directory, in first-mention order.
  */
 export function extractSkillScripts(content: string, name: string): readonly string[] {
-	const found: string[] = []
-	for (const match of content.matchAll(
-		/(?:\.agents\/skills\/([A-Za-z0-9-]+)\/)?(scripts\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts)/gu,
-	)) {
+	const named = [
+		...content.matchAll(
+			/(?:\.agents\/skills\/([A-Za-z0-9-]+)\/)?(scripts\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts)/gu,
+		),
+	].flatMap((match) => {
 		const owner = match[1]
 		const script = match[2]
-		if (script === undefined || (owner !== undefined && owner !== name)) continue
-		if (!found.includes(script)) found.push(script)
-	}
-	return found
+		return script === undefined || (owner !== undefined && owner !== name) ? [] : [script]
+	})
+	return named.filter((script, index) => named.indexOf(script) === index)
 }
 
 /**
@@ -948,14 +1839,14 @@ export function extractSkillScripts(content: string, name: string): readonly str
  * @returns The distinct `.agents/skills/<other>/scripts/*.ts` paths, in first-mention order.
  */
 export function extractForeignSkillScripts(content: string, name: string): readonly string[] {
-	const found: string[] = []
-	for (const match of content.matchAll(
-		/\.agents\/skills\/([A-Za-z0-9-]+)\/scripts\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts/gu,
-	)) {
-		if (match[1] === name || found.includes(match[0])) continue
-		found.push(match[0])
-	}
-	return found
+	const named = [
+		...content.matchAll(
+			/\.agents\/skills\/([A-Za-z0-9-]+)\/scripts\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts/gu,
+		),
+	]
+		.filter((match) => match[1] !== name)
+		.map((match) => match[0])
+	return named.filter((script, index) => named.indexOf(script) === index)
 }
 
 /**
@@ -1008,11 +1899,14 @@ export function parseSkillPrompt(content: string): string | undefined {
  */
 export function matchesSkillToken(prompt: string, name: string): boolean {
 	const token = `$${name}`
-	for (let index = prompt.indexOf(token); index !== -1; index = prompt.indexOf(token, index + 1)) {
-		const next = prompt.charAt(index + token.length)
-		if (next === '' || !/[a-z-]/u.test(next)) return true
-	}
-	return false
+	// The token opens with `$`, so each `$` in the prompt is a start to try, and a name that carries
+	// `$` makes the token overlap itself.
+	return prompt
+		.matchAll(/\$/gu)
+		.some(
+			({ index }) =>
+				prompt.startsWith(token, index) && !/[a-z-]/u.test(prompt.charAt(index + token.length)),
+		)
 }
 
 /**
@@ -1022,12 +1916,12 @@ export function matchesSkillToken(prompt: string, name: string): boolean {
  * @returns Each distinct references/name.md token in sorted order.
  */
 export function extractSkillReferences(content: string): readonly string[] {
-	const references = new Set<string>()
 	// This raw-text scan includes fenced examples. Over-matching safely requires the named file.
-	for (const match of content.matchAll(/references\/[A-Za-z0-9._-]+\.md/gu)) {
-		const reference = match[0]
-		if (reference !== undefined) references.add(reference)
-	}
+	const references = new Set(
+		[...content.matchAll(/references\/[A-Za-z0-9._-]+\.md/gu)].flatMap((match) =>
+			match[0] === undefined ? [] : [match[0]],
+		),
+	)
 	return [...references].sort()
 }
 
@@ -1052,41 +1946,32 @@ export function inspectSkillTemplateTODOs(
 	path: string,
 	content: string,
 ): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
 	const lines = content.split(/\r\n|\r|\n/u)
-	let fence: string | undefined
-	for (let index = 0; index < lines.length; index += 1) {
-		const line = lines[index]
-		if (line === undefined) continue
-		const fenceLine = line.replace(/^ {0,3}/u, '')
-		if (fence !== undefined) {
-			if (fenceLine.startsWith(fence)) fence = undefined
-			continue
-		}
-		const opening = fenceLine.match(/^(`{3,}|~{3,})/u)?.[1]
-		if (opening !== undefined) {
-			fence = opening
-			continue
-		}
-		let cursor = 0
-		while (cursor < line.length) {
-			const openingBacktick = line.indexOf('`', cursor)
-			const end = openingBacktick === -1 ? line.length : openingBacktick
-			for (
-				let todo = line.indexOf('TODO', cursor);
-				todo !== -1 && todo < end;
-				todo = line.indexOf('TODO', todo + 4)
-			) {
-				violations.push(
-					createPolicyViolation(rule, path, 'skill documents contain no template TODOs', index + 1),
-				)
+	// Each line the scan reads is one outside every fence; the fence open at a line rides the fold.
+	const scanned = lines.reduce<{
+		readonly fence: string | undefined
+		readonly indexes: readonly number[]
+	}>(
+		(state, line, index) => {
+			const fenceLine = line.replace(/^ {0,3}/u, '')
+			if (state.fence !== undefined) {
+				return fenceLine.startsWith(state.fence)
+					? { fence: undefined, indexes: state.indexes }
+					: state
 			}
-			if (openingBacktick === -1) break
-			const closingBacktick = line.indexOf('`', openingBacktick + 1)
-			cursor = closingBacktick === -1 ? openingBacktick + 1 : closingBacktick + 1
-		}
-	}
-	return violations
+			const fence = fenceLine.match(/^(`{3,}|~{3,})/u)?.[1]
+			if (fence !== undefined) return { fence: fence, indexes: state.indexes }
+			return { fence: undefined, indexes: [...state.indexes, index] }
+		},
+		{ fence: undefined, indexes: [] },
+	).indexes
+	return scanned.flatMap((index) => {
+		// A matched pair of single backticks on one line is an inline span; a lone backtick is not.
+		const outside = (lines[index] ?? '').replace(/`[^`]*`/gu, ' ')
+		return Array.from({ length: outside.split('TODO').length - 1 }, () =>
+			createPolicyViolation(rule, path, 'skill documents contain no template TODOs', index + 1),
+		)
+	})
 }
 
 /** Names why a declaration reading produced no inventory. */
@@ -1335,8 +2220,8 @@ export function readSkillDeclarations(
 	const source = parseSync(path, readFileSync(path, 'utf8'))
 	const [failure] = source.errors
 	if (failure !== undefined) return { outcome: 'syntax', names: [], detail: failure.message }
-	const names = new Set<string>()
-	for (const statement of source.program.body) {
+	// Each statement answers its own declared names or the refusal it raises; the first refusal wins.
+	const declared = source.program.body.map((statement): SkillDeclarationResult => {
 		if (statement.type === 'ExportDefaultDeclaration')
 			return { outcome: 'form', names: [], detail: 'export default' }
 		if (statement.type === 'TSExportAssignment')
@@ -1345,69 +2230,90 @@ export function readSkillDeclarations(
 			return { outcome: 'form', names: [], detail: 'export as namespace' }
 		if (statement.type === 'TSModuleDeclaration')
 			return { outcome: 'form', names: [], detail: 'ambient module' }
-		if (statement.type !== 'ExportNamedDeclaration' || statement.source !== null) continue
-		for (const binding of statement.specifiers) {
-			const name =
-				binding.exported.type === 'Identifier' ? binding.exported.name : binding.exported.value
-			if (name === 'default') return { outcome: 'form', names: [], detail: 'default export list' }
-			names.add(name)
-		}
+		if (statement.type !== 'ExportNamedDeclaration' || statement.source !== null)
+			return { outcome: 'read', names: [] }
+		const listed = statement.specifiers.map((binding) =>
+			binding.exported.type === 'Identifier' ? binding.exported.name : binding.exported.value,
+		)
+		if (listed.includes('default'))
+			return { outcome: 'form', names: [], detail: 'default export list' }
 		const declaration = statement.declaration
-		if (declaration === null) continue
+		if (declaration === null) return { outcome: 'read', names: listed }
 		if (declaration.type === 'VariableDeclaration') {
-			for (const variable of declaration.declarations) {
-				if (variable.id.type !== 'Identifier')
-					return { outcome: 'form', names: [], detail: 'destructured declaration' }
-				names.add(variable.id.name)
-			}
-		} else if (declaration.type === 'TSModuleDeclaration') {
+			const identifiers = declaration.declarations.flatMap((variable) =>
+				variable.id.type === 'Identifier' ? [variable.id.name] : [],
+			)
+			return identifiers.length === declaration.declarations.length
+				? { outcome: 'read', names: [...listed, ...identifiers] }
+				: { outcome: 'form', names: [], detail: 'destructured declaration' }
+		}
+		if (declaration.type === 'TSModuleDeclaration')
 			return { outcome: 'form', names: [], detail: 'exported namespace' }
-		} else if (
+		if (
 			declaration.type === 'TSDeclareFunction' ||
 			declaration.type === 'ClassDeclaration' ||
 			declaration.type === 'TSEnumDeclaration' ||
 			declaration.type === 'TSInterfaceDeclaration' ||
 			declaration.type === 'TSTypeAliasDeclaration'
 		) {
-			if (declaration.id === null)
-				return { outcome: 'form', names: [], detail: 'anonymous declaration' }
-			names.add(declaration.id.name)
-		} else return { outcome: 'form', names: [], detail: 'unsupported exported declaration' }
-	}
-	if (ancestors.includes(path)) return { outcome: 'cycle', names: [...names] }
-	for (const statement of source.program.body) {
-		if (statement.type !== 'ExportAllDeclaration' && statement.type !== 'ExportNamedDeclaration')
-			continue
-		const origin = statement.source
-		if (origin === null) continue
-		if (statement.type === 'ExportAllDeclaration' && statement.exported !== null)
-			return { outcome: 'form', names: [], detail: 'star export alias' }
-		if (!origin.value.startsWith('./') && !origin.value.startsWith('../'))
-			return { outcome: 'form', names: [], detail: 'non-relative re-export' }
-		const declaration = /\.d\.(?:ts|mts|cts)$/u.test(origin.value)
-			? origin.value
-			: origin.value.replace(/\.(js|mjs|cjs)$/u, (_, extension: string) =>
-					extension === 'mjs' ? '.d.mts' : extension === 'cjs' ? '.d.cts' : '.d.ts',
-				)
-		if (!/\.d\.(?:ts|mts|cts)$/u.test(declaration))
-			return { outcome: 'form', names: [], detail: 'untyped re-export target' }
-		const targets = readSkillDeclarations(resolve(dirname(path), declaration), [...ancestors, path])
-		if (targets.outcome !== 'read' && targets.outcome !== 'cycle') return targets
-		if (statement.type === 'ExportAllDeclaration') {
-			if (targets.outcome === 'read') for (const name of targets.names) names.add(name)
-			continue
+			return declaration.id === null
+				? { outcome: 'form', names: [], detail: 'anonymous declaration' }
+				: { outcome: 'read', names: [...listed, declaration.id.name] }
 		}
-		for (const binding of statement.specifiers) {
-			const name =
-				binding.exported.type === 'Identifier' ? binding.exported.name : binding.exported.value
-			const original =
-				binding.local.type === 'Identifier' ? binding.local.name : binding.local.value
-			if (name === 'default') return { outcome: 'form', names: [], detail: 'default re-export' }
-			if (!targets.names.includes(original)) return { outcome: 'name', names: [], detail: original }
-			names.add(name)
-		}
-	}
-	return { outcome: 'read', names: [...names].sort() }
+		return { outcome: 'form', names: [], detail: 'unsupported exported declaration' }
+	})
+	const refused = declared.find((result) => result.outcome !== 'read')
+	if (refused !== undefined) return refused
+	const names = [...new Set(declared.flatMap((result) => result.names))]
+	if (ancestors.includes(path)) return { outcome: 'cycle', names }
+	// A refusal short-circuits the fold, so no later re-export is read.
+	const reexported = source.program.body.reduce<SkillDeclarationResult>(
+		(state, statement) => {
+			if (state.outcome !== 'read') return state
+			if (statement.type !== 'ExportAllDeclaration' && statement.type !== 'ExportNamedDeclaration')
+				return state
+			const origin = statement.source
+			if (origin === null) return state
+			if (statement.type === 'ExportAllDeclaration' && statement.exported !== null)
+				return { outcome: 'form', names: [], detail: 'star export alias' }
+			if (!origin.value.startsWith('./') && !origin.value.startsWith('../'))
+				return { outcome: 'form', names: [], detail: 'non-relative re-export' }
+			const declaration = /\.d\.(?:ts|mts|cts)$/u.test(origin.value)
+				? origin.value
+				: origin.value.replace(/\.(js|mjs|cjs)$/u, (_, extension: string) =>
+						extension === 'mjs' ? '.d.mts' : extension === 'cjs' ? '.d.cts' : '.d.ts',
+					)
+			if (!/\.d\.(?:ts|mts|cts)$/u.test(declaration))
+				return { outcome: 'form', names: [], detail: 'untyped re-export target' }
+			const targets = readSkillDeclarations(resolve(dirname(path), declaration), [
+				...ancestors,
+				path,
+			])
+			if (targets.outcome !== 'read' && targets.outcome !== 'cycle') return targets
+			if (statement.type === 'ExportAllDeclaration')
+				return {
+					outcome: 'read',
+					names: [...state.names, ...(targets.outcome === 'read' ? targets.names : [])],
+				}
+			const bindings = statement.specifiers.map((binding) => ({
+				name:
+					binding.exported.type === 'Identifier' ? binding.exported.name : binding.exported.value,
+				original: binding.local.type === 'Identifier' ? binding.local.name : binding.local.value,
+			}))
+			const rejected = bindings.find(
+				({ name, original }) => name === 'default' || !targets.names.includes(original),
+			)
+			if (rejected === undefined)
+				return { outcome: 'read', names: [...state.names, ...bindings.map(({ name }) => name)] }
+			return rejected.name === 'default'
+				? { outcome: 'form', names: [], detail: 'default re-export' }
+				: { outcome: 'name', names: [], detail: rejected.original }
+		},
+		{ outcome: 'read', names },
+	)
+	return reexported.outcome === 'read'
+		? { outcome: 'read', names: [...new Set(reexported.names)].sort() }
+		: reexported
 }
 
 /**
@@ -1434,63 +2340,297 @@ export function inspectSkillImports(
 	path: string,
 	content: string,
 ): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	const entries = new Map<string, SkillDeclarationResult>()
-	for (const fence of createGuide(content).fences()) {
-		const source = parseSync('skill.ts', fence.code)
-		const [failure] = source.errors
-		if (failure !== undefined && fence.code.includes('@orkestrel/')) {
-			violations.push(
+	const fences = createGuide(content)
+		.fences()
+		.map((fence) => {
+			const source = parseSync('skill.ts', fence.code)
+			const [failure] = source.errors
+			const refused = failure !== undefined && fence.code.includes('@orkestrel/')
+			return {
+				failure: refused ? failure : undefined,
+				imports: refused
+					? []
+					: source.program.body.flatMap((statement) => {
+							if (statement.type !== 'ImportDeclaration') return []
+							const specifier = statement.source.value
+							const bindings = statement.specifiers.filter(
+								(binding) => binding.type === 'ImportSpecifier',
+							)
+							return specifier.startsWith('@orkestrel/') && bindings.length > 0
+								? [{ specifier, bindings }]
+								: []
+						}),
+			}
+		})
+	const specifiers = [
+		...new Set(
+			fences
+				.flatMap(({ imports }) => imports.map(({ specifier }) => specifier))
+				.filter((specifier) =>
+					Object.hasOwn(BASE_DEV_DEPENDENCIES, specifier.split('/').slice(0, 2).join('/')),
+				),
+		),
+	]
+	// Each distinct supported specifier is read once, in first-seen order.
+	const entries = new Map(
+		specifiers.map((specifier) => [specifier, readSkillExports(root, specifier)]),
+	)
+	return fences.flatMap(({ failure, imports }) => {
+		if (failure !== undefined) {
+			return [
 				createPolicyViolation('skill', path, `skill fence could not be parsed: ${failure.message}`),
-			)
-			continue
+			]
 		}
-		for (const statement of source.program.body) {
-			if (statement.type !== 'ImportDeclaration') continue
-			const specifier = statement.source.value
-			const bindings = statement.specifiers.filter((binding) => binding.type === 'ImportSpecifier')
-			if (!specifier.startsWith('@orkestrel/') || bindings.length === 0) continue
+		return imports.flatMap(({ specifier, bindings }) => {
 			const packageName = specifier.split('/').slice(0, 2).join('/')
 			if (!Object.hasOwn(BASE_DEV_DEPENDENCIES, packageName)) {
-				violations.push(
+				return [
 					createPolicyViolation(
 						'skill',
 						path,
 						`skill fence import ${specifier} is outside BASE_DEV_DEPENDENCIES: ${packageName}`,
 					),
-				)
-				continue
+				]
 			}
-			const cached = entries.get(specifier)
-			const entry = cached ?? readSkillExports(root, specifier)
-			if (cached === undefined) entries.set(specifier, entry)
+			const entry = entries.get(specifier) ?? readSkillExports(root, specifier)
 			if (entry.outcome !== 'read' && entry.outcome !== 'cycle') {
 				const phrase = SKILL_DECLARATION_MESSAGES[entry.outcome]
-				violations.push(
+				return [
 					createPolicyViolation(
 						'skill',
 						path,
 						`skill fence import ${specifier} ${entry.detail === undefined ? phrase : `${phrase} ${entry.detail}`}`,
 					),
-				)
-				continue
+				]
 			}
-			for (const binding of bindings) {
+			return bindings.flatMap((binding) => {
 				const name =
 					binding.imported.type === 'Identifier' ? binding.imported.name : binding.imported.value
-				if (!entry.names.includes(name)) {
-					violations.push(
+				return entry.names.includes(name)
+					? []
+					: [
+							createPolicyViolation(
+								'skill',
+								path,
+								`skill fence import ${specifier} does not export ${name}`,
+							),
+						]
+			})
+		})
+	})
+}
+
+/**
+ * Reads the text of a specifier source that names one literally.
+ *
+ * @remarks
+ * A string literal names its value, and a template literal with no substitution names its cooked
+ * text, which TypeScript resolves the same way. Any other source, a template literal with a
+ * substitution included, names nothing.
+ *
+ * @param source - The `source` node of a declaration or an `import()` expression.
+ * @returns The literal specifier, or `undefined` when the source is computed.
+ */
+export function readPolicyLiteral(source: unknown): string | undefined {
+	if (!isPolicyRecord(source)) return undefined
+	const value: unknown = Object.getOwnPropertyDescriptor(source, 'value')?.value
+	if (typeof value === 'string') return value
+	const expressions: unknown = Object.getOwnPropertyDescriptor(source, 'expressions')?.value
+	const quasis: unknown = Object.getOwnPropertyDescriptor(source, 'quasis')?.value
+	if (
+		Object.getOwnPropertyDescriptor(source, 'type')?.value !== 'TemplateLiteral' ||
+		!Array.isArray(expressions) ||
+		expressions.length > 0 ||
+		!Array.isArray(quasis) ||
+		quasis.length !== 1
+	) {
+		return undefined
+	}
+	const [quasi]: readonly unknown[] = quasis
+	const text: unknown = isPolicyRecord(quasi)
+		? Object.getOwnPropertyDescriptor(quasi, 'value')?.value
+		: undefined
+	const cooked: unknown = isPolicyRecord(text)
+		? Object.getOwnPropertyDescriptor(text, 'cooked')?.value
+		: undefined
+	return typeof cooked === 'string' ? cooked : undefined
+}
+
+/**
+ * Collects every module specifier a syntax tree names, in source order.
+ *
+ * @remarks
+ * A specifier is the literal source of an `import` or `export … from` declaration, or of an
+ * `import()` expression anywhere in the tree, a template literal with no substitution included. An
+ * `import()` whose source is computed names none.
+ *
+ * @param node - The syntax tree, or any node or list of nodes within it.
+ * @returns Each literal specifier the tree names.
+ */
+export function collectPolicySpecifiers(node: unknown): readonly string[] {
+	if (Array.isArray(node)) return node.flatMap((child: unknown) => collectPolicySpecifiers(child))
+	if (!isPolicyRecord(node)) return []
+	const type: unknown = Object.getOwnPropertyDescriptor(node, 'type')?.value
+	const value = readPolicyLiteral(Object.getOwnPropertyDescriptor(node, 'source')?.value)
+	return [
+		...(value !== undefined &&
+		(type === 'ImportDeclaration' ||
+			type === 'ExportAllDeclaration' ||
+			type === 'ExportNamedDeclaration' ||
+			type === 'ImportExpression')
+			? [value]
+			: []),
+		...Object.values(node).flatMap((child: unknown) => collectPolicySpecifiers(child)),
+	]
+}
+
+/** Names the asset extensions `vite/client` types through an ambient wildcard declaration. */
+export const POLICY_ASSET_EXTENSIONS: ReadonlySet<string> = new Set([
+	'.css',
+	'.scss',
+	'.sass',
+	'.less',
+	'.styl',
+	'.stylus',
+	'.pcss',
+	'.sss',
+	'.apng',
+	'.bmp',
+	'.png',
+	'.jpg',
+	'.jpeg',
+	'.jfif',
+	'.pjpeg',
+	'.pjp',
+	'.gif',
+	'.svg',
+	'.ico',
+	'.webp',
+	'.avif',
+	'.cur',
+	'.jxl',
+	'.mp4',
+	'.webm',
+	'.ogg',
+	'.mp3',
+	'.wav',
+	'.flac',
+	'.aac',
+	'.opus',
+	'.mov',
+	'.m4a',
+	'.vtt',
+	'.woff',
+	'.woff2',
+	'.eot',
+	'.ttf',
+	'.otf',
+	'.webmanifest',
+	'.pdf',
+	'.txt',
+	'.wasm',
+])
+
+/**
+ * Tells whether the type check resolves a relative specifier as a module on disk.
+ *
+ * @remarks
+ * Every relative specifier resolves on disk (a script, a declaration, a `.json` file under
+ * `resolveJsonModule`, or a dotted name the bundler resolution completes) unless an ambient wildcard
+ * declaration types it: a specifier with a query or a fragment, or one whose final segment ends in an
+ * asset extension `vite/client` declares.
+ *
+ * @param specifier - The relative import specifier.
+ * @returns True when the type check resolves the specifier as a module on disk.
+ */
+export function isPolicyCodeSpecifier(specifier: string): boolean {
+	if (/[?#]/u.test(specifier)) return false
+	const segment = specifier.slice(specifier.lastIndexOf('/') + 1)
+	const dot = segment.lastIndexOf('.')
+	return dot <= 0 || !POLICY_ASSET_EXTENSIONS.has(segment.slice(dot).toLowerCase())
+}
+
+/**
+ * Inspects the tracked TypeScript for an import that resolves into the workspace's built output.
+ *
+ * @remarks
+ * `npm run check` runs before `npm run build`, so a clean clone holds no `dist/` for such an import to
+ * resolve. Each relative specifier of a static `import`, an `export … from`, and an `import()` with a
+ * literal source, a template literal with no substitution included, resolves against its file's
+ * directory. An `import()` with a computed source names no specifier and is left out. A file the parser refuses reports a violation, because its
+ * specifiers cannot be read.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns One violation per import into `dist/`, and one per unparsed file, in path order.
+ */
+export function inspectPolicyDist(root: string): readonly PolicyViolation[] {
+	// A specifier TypeScript types through an ambient wildcard declaration (an asset with a query or a
+	// non-code extension, such as a built sheet read `?raw`) never resolves on disk during the check.
+	return globSync(POLICY_DIST_GLOB, { cwd: root })
+		.map(normalizePolicyPath)
+		.sort()
+		.flatMap((path) => {
+			const source = parseSync(path, readFileSync(join(root, path), 'utf8'))
+			const [failure] = source.errors
+			if (failure !== undefined) {
+				return [
+					createPolicyViolation('dist', path, `tracked TypeScript parses: ${failure.message}`),
+				]
+			}
+			const directory = dirname(join(root, path))
+			return collectPolicySpecifiers(source.program)
+				.filter((specifier) => specifier.startsWith('.') && isPolicyCodeSpecifier(specifier))
+				.flatMap((specifier) => {
+					const target = normalizePolicyPath(relativePath(root, resolve(directory, specifier)))
+					return target === POLICY_DIST_ROOT || target.startsWith(`${POLICY_DIST_ROOT}/`)
+						? [
+								createPolicyViolation(
+									'dist',
+									path,
+									`tracked TypeScript imports nothing from dist, which exists only after npm run build: ${specifier}`,
+								),
+							]
+						: []
+				})
+		})
+}
+
+/**
+ * Inspects one skill script proof for an import of a skill file other than the script it proves.
+ *
+ * @remarks
+ * Each relative `import`, `export … from`, and literal `import()` specifier resolves against the
+ * proof's directory. A script is self-contained and no file but its own proof imports it, so a
+ * proof that reaches another script, or any other file beneath the skill family, shares a helper
+ * the script law places in the test setup modules.
+ *
+ * @param root - The workspace root to inspect.
+ * @param proof - The workspace-relative path of the proof.
+ * @param script - The workspace-relative path of the script the proof mirrors.
+ * @returns One violation per import of another skill file, in source order.
+ */
+export function inspectSkillProof(
+	root: string,
+	proof: string,
+	script: string,
+): readonly PolicyViolation[] {
+	if (!isPolicyFile(root, proof)) return []
+	const directory = dirname(join(root, proof))
+	return collectPolicySpecifiers(parseAst(readFileSync(join(root, proof), 'utf8'), { lang: 'ts' }))
+		.filter((specifier) => specifier.startsWith('.'))
+		.flatMap((specifier) => {
+			const imported = normalizePolicyPath(relativePath(root, resolve(directory, specifier)))
+			return imported.startsWith(`${SKILL_FAMILY_ROOT}/`) &&
+				imported.replace(/\.js$/u, '.ts') !== script
+				? [
 						createPolicyViolation(
 							'skill',
-							path,
-							`skill fence import ${specifier} does not export ${name}`,
+							proof,
+							`skill proof imports no skill file but its own script: ${imported}`,
 						),
-					)
-				}
-			}
-		}
-	}
-	return violations
+					]
+				: []
+		})
 }
 
 /**
@@ -1509,228 +2649,232 @@ export function inspectSkill(
 	const base = `${SKILL_FAMILY_ROOT}/${name}`
 	const skill = `${base}/SKILL.md`
 	const metadata = `${base}/agents/openai.yaml`
-	const violations: PolicyViolation[] = []
-	let content: string | undefined
 	const hasSkill = isPolicyFile(root, skill)
-	if (!hasSkill) {
-		violations.push(
-			createPolicyViolation('skill', skill, 'skill requires an exact-case regular SKILL.md'),
-		)
-	} else {
-		content = readFileSync(join(root, skill), 'utf8')
-		const frontmatter = parseSkillFrontmatter(content)
-		if (frontmatter === undefined) {
-			violations.push(
-				createPolicyViolation('skill', skill, 'SKILL.md frontmatter exists and parses'),
-			)
-		} else {
-			const keys = new Set(frontmatter.keys)
-			if (
-				frontmatter.keys.length !== 2 ||
-				keys.size !== 2 ||
-				!keys.has('name') ||
-				!keys.has('description')
-			) {
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						skill,
-						'SKILL.md frontmatter contains exactly name and description',
-					),
-				)
-			}
-			if (frontmatter.name !== name) {
-				violations.push(
-					createPolicyViolation('skill', skill, 'SKILL.md frontmatter name matches its directory'),
-				)
-			}
-			if (frontmatter.description === undefined || frontmatter.description.trim() === '') {
-				violations.push(createPolicyViolation('skill', skill, 'SKILL.md description is non-empty'))
-			} else if (!matchesSkillTrigger(frontmatter.description)) {
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						skill,
-						'SKILL.md description names when to use the skill in a sentence beginning Use',
-					),
-				)
-			}
-		}
-		violations.push(...inspectSkillTemplateTODOs('skill', skill, content))
-		violations.push(...inspectSkillImports(installation, skill, content))
-	}
+	const content = hasSkill ? readFileSync(join(root, skill), 'utf8') : undefined
+	const frontmatter = content === undefined ? undefined : parseSkillFrontmatter(content)
+	const keys = new Set(frontmatter?.keys)
+	const documented =
+		content === undefined
+			? [createPolicyViolation('skill', skill, 'skill requires an exact-case regular SKILL.md')]
+			: [
+					...(frontmatter === undefined
+						? [createPolicyViolation('skill', skill, 'SKILL.md frontmatter exists and parses')]
+						: [
+								...(frontmatter.keys.length !== 2 ||
+								keys.size !== 2 ||
+								!keys.has('name') ||
+								!keys.has('description')
+									? [
+											createPolicyViolation(
+												'skill',
+												skill,
+												'SKILL.md frontmatter contains exactly name and description',
+											),
+										]
+									: []),
+								...(frontmatter.name === name
+									? []
+									: [
+											createPolicyViolation(
+												'skill',
+												skill,
+												'SKILL.md frontmatter name matches its directory',
+											),
+										]),
+								...(frontmatter.description === undefined || frontmatter.description.trim() === ''
+									? [createPolicyViolation('skill', skill, 'SKILL.md description is non-empty')]
+									: matchesSkillTrigger(frontmatter.description)
+										? []
+										: [
+												createPolicyViolation(
+													'skill',
+													skill,
+													'SKILL.md description names when to use the skill in a sentence beginning Use',
+												),
+											]),
+							]),
+					...inspectSkillTemplateTODOs('skill', skill, content),
+					...inspectSkillImports(installation, skill, content),
+				]
 	const hasMetadata = isPolicyFile(root, metadata)
-	if (!hasMetadata) {
-		violations.push(
-			createPolicyViolation(
-				'skill',
-				metadata,
-				'skill requires an exact-case regular agents/openai.yaml',
-			),
-		)
-	} else {
-		const prompt = parseSkillPrompt(readFileSync(join(root, metadata), 'utf8'))
-		if (prompt === undefined) {
-			violations.push(
+	const prompt = hasMetadata
+		? parseSkillPrompt(readFileSync(join(root, metadata), 'utf8'))
+		: undefined
+	const described = !hasMetadata
+		? [
 				createPolicyViolation(
 					'skill',
 					metadata,
-					'agents/openai.yaml matches the canonical four-line interface schema',
+					'skill requires an exact-case regular agents/openai.yaml',
 				),
-			)
-		} else if (!matchesSkillToken(prompt, name)) {
-			violations.push(
-				createPolicyViolation(
-					'skill',
-					metadata,
-					`agents/openai.yaml default_prompt contains the complete token $${name}`,
-				),
-			)
-		}
-	}
+			]
+		: prompt === undefined
+			? [
+					createPolicyViolation(
+						'skill',
+						metadata,
+						'agents/openai.yaml matches the canonical four-line interface schema',
+					),
+				]
+			: matchesSkillToken(prompt, name)
+				? []
+				: [
+						createPolicyViolation(
+							'skill',
+							metadata,
+							`agents/openai.yaml default_prompt contains the complete token $${name}`,
+						),
+					]
 	const named = content === undefined ? [] : extractSkillReferences(content)
-	if (content !== undefined) {
-		for (const reference of named) {
-			const path = `${base}/${reference}`
-			if (!isPolicyFile(root, path)) {
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						path,
-						`SKILL.md reference resolves to an exact-case regular file: ${reference}`,
-					),
-				)
-			} else {
-				const referenceContent = readFileSync(join(root, path), 'utf8')
-				violations.push(
-					...inspectSkillTemplateTODOs('skill', path, referenceContent),
-					...inspectSkillImports(installation, path, referenceContent),
-				)
-			}
-		}
-	}
-	for (const reference of readSkillReferences(root, name)) {
-		if (!named.includes(reference)) {
-			violations.push(
+	const referenced = named.flatMap((reference) => {
+		const path = `${base}/${reference}`
+		if (!isPolicyFile(root, path)) {
+			return [
 				createPolicyViolation(
 					'skill',
-					`${base}/${reference}`,
-					`references Markdown file is named by SKILL.md: ${reference}`,
+					path,
+					`SKILL.md reference resolves to an exact-case regular file: ${reference}`,
 				),
-			)
+			]
 		}
-	}
+		const referenceContent = readFileSync(join(root, path), 'utf8')
+		return [
+			...inspectSkillTemplateTODOs('skill', path, referenceContent),
+			...inspectSkillImports(installation, path, referenceContent),
+		]
+	})
+	const unnamed = readSkillReferences(root, name).flatMap((reference) =>
+		named.includes(reference)
+			? []
+			: [
+					createPolicyViolation(
+						'skill',
+						`${base}/${reference}`,
+						`references Markdown file is named by SKILL.md: ${reference}`,
+					),
+				],
+	)
 	const scripts = content === undefined ? [] : extractSkillScripts(content, name)
-	for (const script of scripts) {
-		if (!isPolicyFile(root, `${base}/${script}`)) {
-			violations.push(
-				createPolicyViolation(
-					'skill',
-					`${base}/${script}`,
-					`SKILL.md script resolves to an exact-case regular file: ${script}`,
-				),
-			)
-		}
-	}
-	for (const script of readSkillScripts(root, name)) {
-		if (!scripts.includes(script)) {
-			violations.push(
-				createPolicyViolation(
-					'skill',
-					`${base}/${script}`,
-					`scripts TypeScript file is named by SKILL.md: ${script}`,
-				),
-			)
-		}
+	const unresolved = scripts.flatMap((script) =>
+		isPolicyFile(root, `${base}/${script}`)
+			? []
+			: [
+					createPolicyViolation(
+						'skill',
+						`${base}/${script}`,
+						`SKILL.md script resolves to an exact-case regular file: ${script}`,
+					),
+				],
+	)
+	const unproved = readSkillScripts(root, name).flatMap((script) => {
 		const proof = `${SKILL_PROOF_ROOT}/${name}/${script.replace(/\.ts$/u, '.test.ts')}`
-		if (!isPolicyFile(root, proof)) {
-			violations.push(
-				createPolicyViolation('skill', proof, `skill script has a mirrored proof: ${proof}`),
-			)
-		}
-	}
-	for (const script of content === undefined ? [] : extractForeignSkillScripts(content, name)) {
-		if (!isPolicyFile(root, script)) {
-			violations.push(
-				createPolicyViolation(
-					'skill',
-					script,
-					`SKILL.md names another skill's script that resolves to an exact-case regular file: ${script}`,
-				),
-			)
-		}
-	}
+		return [
+			...(scripts.includes(script)
+				? []
+				: [
+						createPolicyViolation(
+							'skill',
+							`${base}/${script}`,
+							`scripts TypeScript file is named by SKILL.md: ${script}`,
+						),
+					]),
+			...(isPolicyFile(root, proof)
+				? []
+				: [createPolicyViolation('skill', proof, `skill script has a mirrored proof: ${proof}`)]),
+			...inspectSkillProof(root, proof, `${base}/${script}`),
+		]
+	})
+	const foreign = (content === undefined ? [] : extractForeignSkillScripts(content, name)).flatMap(
+		(script) =>
+			isPolicyFile(root, script)
+				? []
+				: [
+						createPolicyViolation(
+							'skill',
+							script,
+							`SKILL.md names another skill's script that resolves to an exact-case regular file: ${script}`,
+						),
+					],
+	)
 	const references = resolvePolicyDirectory(root, `${base}/references`)
-	if (references !== undefined) {
-		for (const entry of readdirSync(references, { withFileTypes: true })) {
-			if (entry.isDirectory()) {
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						`${base}/references/${entry.name}`,
-						'skill references directory contains no subdirectories',
-					),
+	const nested =
+		references === undefined
+			? []
+			: readdirSync(references, { withFileTypes: true }).flatMap((entry) =>
+					entry.isDirectory()
+						? [
+								createPolicyViolation(
+									'skill',
+									`${base}/references/${entry.name}`,
+									'skill references directory contains no subdirectories',
+								),
+							]
+						: [],
 				)
-			}
-		}
-	}
 	const directory = resolvePolicyDirectory(root, base)
-	if (directory !== undefined) {
-		for (const path of globSync('**/*', { cwd: directory }).map(normalizePolicyPath).sort()) {
-			if (resolvePolicyDirectory(directory, path) !== undefined) {
-				if (
-					path === 'agents' ||
-					path === 'references' ||
-					path === 'scripts' ||
-					path.startsWith('references/') ||
-					(!hasSkill && path.toLowerCase() === 'skill.md') ||
-					(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml')
-				) {
-					continue
-				}
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						`${base}/${path}`,
-						'skill directory contains only agents/, references/, and scripts/ directories',
-					),
-				)
-				continue
-			}
-			if (!isPolicyFile(directory, path)) continue
-			const file = basename(path).toLowerCase()
-			if (file === 'readme.md' || file === 'changelog.md') {
-				violations.push(
-					createPolicyViolation(
-						'skill',
-						`${base}/${path}`,
-						'skill directory contains no README.md or CHANGELOG.md',
-					),
-				)
-				continue
-			}
-			if (
-				path === 'SKILL.md' ||
-				path === 'agents/openai.yaml' ||
-				/^references\/[^/]+\.md$/u.test(path) ||
-				/^scripts\/[^/]+\.ts$/u.test(path) ||
-				(!hasSkill &&
-					(path.toLowerCase() === 'skill.md' || path.toLowerCase().startsWith('skill.md/'))) ||
-				(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml') ||
-				(path.startsWith('references/') && path.slice('references/'.length).includes('/'))
-			) {
-				continue
-			}
-			violations.push(
-				createPolicyViolation(
-					'skill',
-					`${base}/${path}`,
-					'skill directory contains only SKILL.md, agents/openai.yaml, references/*.md, and scripts/*.ts',
-				),
-			)
-		}
-	}
-	return violations
+	const stray =
+		directory === undefined
+			? []
+			: globSync('**/*', { cwd: directory })
+					.map(normalizePolicyPath)
+					.sort()
+					.flatMap((path) => {
+						if (resolvePolicyDirectory(directory, path) !== undefined) {
+							return path === 'agents' ||
+								path === 'references' ||
+								path === 'scripts' ||
+								path.startsWith('references/') ||
+								(!hasSkill && path.toLowerCase() === 'skill.md') ||
+								(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml')
+								? []
+								: [
+										createPolicyViolation(
+											'skill',
+											`${base}/${path}`,
+											'skill directory contains only agents/, references/, and scripts/ directories',
+										),
+									]
+						}
+						if (!isPolicyFile(directory, path)) return []
+						const file = basename(path).toLowerCase()
+						if (file === 'readme.md' || file === 'changelog.md') {
+							return [
+								createPolicyViolation(
+									'skill',
+									`${base}/${path}`,
+									'skill directory contains no README.md or CHANGELOG.md',
+								),
+							]
+						}
+						return path === 'SKILL.md' ||
+							path === 'agents/openai.yaml' ||
+							/^references\/[^/]+\.md$/u.test(path) ||
+							/^scripts\/[^/]+\.ts$/u.test(path) ||
+							(!hasSkill &&
+								(path.toLowerCase() === 'skill.md' ||
+									path.toLowerCase().startsWith('skill.md/'))) ||
+							(!hasMetadata && path.toLowerCase() === 'agents/openai.yaml') ||
+							(path.startsWith('references/') && path.slice('references/'.length).includes('/'))
+							? []
+							: [
+									createPolicyViolation(
+										'skill',
+										`${base}/${path}`,
+										'skill directory contains only SKILL.md, agents/openai.yaml, references/*.md, and scripts/*.ts',
+									),
+								]
+					})
+	return [
+		...documented,
+		...described,
+		...referenced,
+		...unnamed,
+		...unresolved,
+		...unproved,
+		...foreign,
+		...nested,
+		...stray,
+	]
 }
 
 /**
@@ -1741,10 +2885,7 @@ export function inspectSkill(
  * @returns Every skill-family violation in directory and invariant order.
  */
 export function inspectSkillFamily(root: string, installation = root): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const name of readSkillFamily(root))
-		violations.push(...inspectSkill(root, name, installation))
-	return violations
+	return readSkillFamily(root).flatMap((name) => inspectSkill(root, name, installation))
 }
 
 /**
@@ -1768,71 +2909,64 @@ export function inspectBridge(root: string, name: string): readonly PolicyViolat
 	const canonical = isPolicyFile(root, canonicalPath)
 		? parseSkillFrontmatter(readFileSync(join(root, canonicalPath), 'utf8'))
 		: undefined
-	const violations: PolicyViolation[] = []
-	if (bridge === undefined) {
-		violations.push(
-			createPolicyViolation('bridge', bridgePath, 'bridge SKILL.md frontmatter parses'),
-		)
-	} else {
-		const keys = new Set(bridge.keys)
-		if (
-			bridge.keys.length !== 2 ||
-			keys.size !== 2 ||
-			!keys.has('name') ||
-			!keys.has('description')
-		) {
-			violations.push(
-				createPolicyViolation(
-					'bridge',
-					bridgePath,
-					'bridge SKILL.md frontmatter contains exactly name and description',
-				),
-			)
-		}
-	}
-	if (bridge !== undefined && canonical !== undefined) {
-		if (bridge.source.name !== canonical.source.name) {
-			violations.push(
-				createPolicyViolation(
-					'bridge',
-					bridgePath,
-					'bridge frontmatter name matches its canonical twin',
-				),
-			)
-		}
-		if (bridge.source.description !== canonical.source.description) {
-			violations.push(
-				createPolicyViolation(
-					'bridge',
-					bridgePath,
-					'bridge frontmatter description matches its canonical twin',
-				),
-			)
-		}
-	}
+	const keys = new Set(bridge?.keys)
 	const normalized = content.replaceAll('\r\n', '\n')
 	const boundary = normalized.indexOf('\n---', 3)
 	const body = boundary === -1 ? normalized : normalized.slice(boundary + '\n---'.length)
-	if (!body.includes(canonicalPath)) {
-		violations.push(
-			createPolicyViolation(
-				'bridge',
-				bridgePath,
-				`bridge body names its canonical workflow: ${canonicalPath}`,
-			),
-		)
-	}
-	violations.push(...inspectSkillTemplateTODOs('bridge', bridgePath, content))
-	if (resolvePolicyDirectory(root, `${bridgeBase}/references`) !== undefined) {
-		violations.push(
-			createPolicyViolation(
-				'bridge',
-				`${bridgeBase}/references`,
-				'bridge owns no references directory',
-			),
-		)
-	}
-	return violations
+	return [
+		...(bridge === undefined
+			? [createPolicyViolation('bridge', bridgePath, 'bridge SKILL.md frontmatter parses')]
+			: bridge.keys.length !== 2 || keys.size !== 2 || !keys.has('name') || !keys.has('description')
+				? [
+						createPolicyViolation(
+							'bridge',
+							bridgePath,
+							'bridge SKILL.md frontmatter contains exactly name and description',
+						),
+					]
+				: []),
+		...(bridge !== undefined &&
+		canonical !== undefined &&
+		bridge.source.name !== canonical.source.name
+			? [
+					createPolicyViolation(
+						'bridge',
+						bridgePath,
+						'bridge frontmatter name matches its canonical twin',
+					),
+				]
+			: []),
+		...(bridge !== undefined &&
+		canonical !== undefined &&
+		bridge.source.description !== canonical.source.description
+			? [
+					createPolicyViolation(
+						'bridge',
+						bridgePath,
+						'bridge frontmatter description matches its canonical twin',
+					),
+				]
+			: []),
+		...(body.includes(canonicalPath)
+			? []
+			: [
+					createPolicyViolation(
+						'bridge',
+						bridgePath,
+						`bridge body names its canonical workflow: ${canonicalPath}`,
+					),
+				]),
+		...inspectSkillTemplateTODOs('bridge', bridgePath, content),
+		...(resolvePolicyDirectory(root, `${bridgeBase}/references`) === undefined
+			? []
+			: [
+					createPolicyViolation(
+						'bridge',
+						`${bridgeBase}/references`,
+						'bridge owns no references directory',
+					),
+				]),
+	]
 }
 
 /**
@@ -1846,32 +2980,30 @@ export function inspectSkillBridges(root: string): readonly PolicyViolation[] {
 	const bridges = readPolicyDirectories(root, SKILL_BRIDGE_ROOT)
 	const bridgeSet = new Set(bridges)
 	const canonicalSet = new Set(canonical)
-	const violations: PolicyViolation[] = []
-	for (const name of canonical) {
-		if (!bridgeSet.has(name)) {
-			violations.push(
-				createPolicyViolation(
-					'bridge',
-					`${SKILL_BRIDGE_ROOT}/${name}`,
-					'canonical skill has a matching provider bridge directory',
-				),
-			)
-		} else {
-			violations.push(...inspectBridge(root, name))
-		}
-	}
-	for (const name of bridges) {
-		if (!canonicalSet.has(name)) {
-			violations.push(
-				createPolicyViolation(
-					'bridge',
-					`${SKILL_BRIDGE_ROOT}/${name}`,
-					'provider bridge directory has a canonical skill twin',
-				),
-			)
-		}
-	}
-	return violations
+	return [
+		...canonical.flatMap((name) =>
+			bridgeSet.has(name)
+				? inspectBridge(root, name)
+				: [
+						createPolicyViolation(
+							'bridge',
+							`${SKILL_BRIDGE_ROOT}/${name}`,
+							'canonical skill has a matching provider bridge directory',
+						),
+					],
+		),
+		...bridges.flatMap((name) =>
+			canonicalSet.has(name)
+				? []
+				: [
+						createPolicyViolation(
+							'bridge',
+							`${SKILL_BRIDGE_ROOT}/${name}`,
+							'provider bridge directory has a canonical skill twin',
+						),
+					],
+		),
+	]
 }
 
 /**
@@ -1884,14 +3016,10 @@ export function readPolicyRuleMap(content: string): readonly string[] {
 	const lines = content.replaceAll('\r\n', '\n').split('\n')
 	const heading = lines.indexOf(POLICY_RULE_MAP_HEADING)
 	if (heading === -1) return []
-	const paths: string[] = []
-	for (let index = heading + 1; index < lines.length; index += 1) {
-		const line = lines[index]
-		if (line === undefined || line.startsWith('## ')) break
+	return extractPolicySection(lines, heading).flatMap((line) => {
 		const cell = line.match(/^\|\s*`([^`]+)`\s*\|/u)?.[1]
-		if (cell !== undefined) paths.push(normalizePolicyPath(cell))
-	}
-	return paths
+		return cell === undefined ? [] : [normalizePolicyPath(cell)]
+	})
 }
 
 /**
@@ -1914,20 +3042,18 @@ export function inspectPolicyRuleMap(root: string): readonly PolicyViolation[] {
 		? readFileSync(join(root, POLICY_RULE_MAP_FILE), 'utf8')
 		: ''
 	const registered = new Set(readPolicyRuleMap(content))
-	const violations: PolicyViolation[] = []
-	for (const rule of rules) {
-		if (!registered.has(rule)) {
-			violations.push(createPolicyViolation('rules', rule, 'the rule map names every rule file'))
-		}
-	}
-	for (const path of registered) {
-		if (!isPolicyFile(root, path)) {
-			violations.push(
-				createPolicyViolation('rules', path, 'every rule-map row resolves to a rule file'),
-			)
-		}
-	}
-	return violations
+	return [
+		...rules.flatMap((rule) =>
+			registered.has(rule)
+				? []
+				: [createPolicyViolation('rules', rule, 'the rule map names every rule file')],
+		),
+		...[...registered].flatMap((path) =>
+			isPolicyFile(root, path)
+				? []
+				: [createPolicyViolation('rules', path, 'every rule-map row resolves to a rule file')],
+		),
+	]
 }
 
 /**
@@ -1941,50 +3067,53 @@ export function inspectPolicyRuleMap(root: string): readonly PolicyViolation[] {
  * @returns Every unusable-name and case-collision violation in path order.
  */
 export function inspectPolicyFilenamePaths(paths: readonly string[]): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	const folded = new Map<string, string>()
-	for (const candidate of paths) {
-		const path = normalizePolicyPath(candidate)
+	// The iterator visits a hole as `undefined`, which normalization refuses, as the loop did.
+	const normalized = Iterator.from(paths).map(normalizePolicyPath).toArray()
+	// Built from the reversed list, so the first path that folds to a key is the spelling a collision reports.
+	const folded = new Map(normalized.toReversed().map((path) => [path.toLowerCase(), path]))
+	return normalized.flatMap((path) => {
 		const segment = basename(path)
 		const [stem = ''] = segment.split('.')
-		if (POLICY_RESERVED_NAMES.includes(stem.toLowerCase())) {
-			violations.push(
-				createPolicyViolation(
-					'portability',
-					path,
-					'path segments avoid the names Windows reserves',
-				),
-			)
-		}
-		if (POLICY_RESERVED_PATTERN.test(segment)) {
-			violations.push(
-				createPolicyViolation(
-					'portability',
-					path,
-					'path segments avoid the characters Windows refuses',
-				),
-			)
-		}
-		if (segment.endsWith('.') || segment.endsWith(' ')) {
-			violations.push(
-				createPolicyViolation(
-					'portability',
-					path,
-					'path segments end with neither a dot nor a space',
-				),
-			)
-		}
-		const key = path.toLowerCase()
-		const previous = folded.get(key)
-		if (previous === undefined) {
-			folded.set(key, path)
-		} else if (previous !== path) {
-			violations.push(
-				createPolicyViolation('portability', path, `path differs from ${previous} by case alone`),
-			)
-		}
-	}
-	return violations
+		const previous = folded.get(path.toLowerCase())
+		return [
+			...(POLICY_RESERVED_NAMES.includes(stem.toLowerCase())
+				? [
+						createPolicyViolation(
+							'portability',
+							path,
+							'path segments avoid the names Windows reserves',
+						),
+					]
+				: []),
+			...(POLICY_RESERVED_PATTERN.test(segment)
+				? [
+						createPolicyViolation(
+							'portability',
+							path,
+							'path segments avoid the characters Windows refuses',
+						),
+					]
+				: []),
+			...(segment.endsWith('.') || segment.endsWith(' ')
+				? [
+						createPolicyViolation(
+							'portability',
+							path,
+							'path segments end with neither a dot nor a space',
+						),
+					]
+				: []),
+			...(previous === undefined || previous === path
+				? []
+				: [
+						createPolicyViolation(
+							'portability',
+							path,
+							`path differs from ${previous} by case alone`,
+						),
+					]),
+		]
+	})
 }
 
 /**
@@ -2014,21 +3143,16 @@ export function inspectPolicyFilenames(root: string): readonly PolicyViolation[]
  * @returns Each script name and its command, in manifest order.
  */
 export function parsePolicyScripts(content: string): ReadonlyMap<string, string> {
-	const scripts = new Map<string, string>()
-	let manifest: unknown
-	try {
-		manifest = JSON.parse(content)
-	} catch {
-		return scripts
-	}
-	if (!isPolicyRecord(manifest)) return scripts
+	const manifest = parsePolicyJSON(content)
+	if (!isPolicyRecord(manifest)) return new Map()
 	const record: unknown = Object.getOwnPropertyDescriptor(manifest, 'scripts')?.value
-	if (!isPolicyRecord(record)) return scripts
-	for (const name of Object.getOwnPropertyNames(record)) {
-		const command: unknown = Object.getOwnPropertyDescriptor(record, name)?.value
-		if (typeof command === 'string') scripts.set(name, command)
-	}
-	return scripts
+	if (!isPolicyRecord(record)) return new Map()
+	return new Map(
+		Object.getOwnPropertyNames(record).flatMap((name): Array<[string, string]> => {
+			const command: unknown = Object.getOwnPropertyDescriptor(record, name)?.value
+			return typeof command === 'string' ? [[name, command]] : []
+		}),
+	)
 }
 
 /**
@@ -2040,19 +3164,64 @@ export function parsePolicyScripts(content: string): ReadonlyMap<string, string>
 export function inspectPolicyScripts(root: string): readonly PolicyViolation[] {
 	if (!isPolicyFile(root, POLICY_MANIFEST_FILE)) return []
 	const content = readFileSync(join(root, POLICY_MANIFEST_FILE), 'utf8')
-	const violations: PolicyViolation[] = []
-	for (const [name, command] of parsePolicyScripts(content)) {
-		if (POLICY_SHELL_PATTERN.test(command)) {
-			violations.push(
-				createPolicyViolation(
-					'portability',
-					POLICY_MANIFEST_FILE,
-					`manifest scripts name no .sh file: ${name}`,
-				),
-			)
-		}
-	}
-	return violations
+	return [...parsePolicyScripts(content)].flatMap(([name, command]) =>
+		POLICY_SHELL_PATTERN.test(command)
+			? [
+					createPolicyViolation(
+						'portability',
+						POLICY_MANIFEST_FILE,
+						`manifest scripts name no .sh file: ${name}`,
+					),
+				]
+			: [],
+	)
+}
+
+/**
+ * Inspects a file path population for a shell, PowerShell, Python, or batch file outside the scripts
+ * directory, and for any file inside it other than a `.sh` file.
+ *
+ * @param paths - The workspace-relative file paths to inspect.
+ * @returns One violation per refused path, in path order.
+ */
+export function inspectPolicyShellPaths(paths: readonly string[]): readonly PolicyViolation[] {
+	return paths.flatMap((path) => {
+		const lower = normalizePolicyPath(path).toLowerCase()
+		const inside = lower.startsWith(`${POLICY_SHELL_ROOT}/`)
+		const shell = POLICY_SHELL_EXTENSIONS.some((extension) => lower.endsWith(extension))
+		if (inside ? lower.endsWith('.sh') : !shell) return []
+		return [
+			createPolicyViolation(
+				'portability',
+				path,
+				inside
+					? `${POLICY_SHELL_ROOT} holds .sh files and nothing else`
+					: `shell, PowerShell, Python, and batch files sit only in ${POLICY_SHELL_ROOT}`,
+			),
+		]
+	})
+}
+
+/**
+ * Inspects the workspace-authored file population for a script no Windows host runs.
+ *
+ * @remarks
+ * Only a path that could be refused is checked against the file system: a directory named like a
+ * shell file, or a directory inside the scripts directory, is no file and is left to the other
+ * sweeps.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Every shell-file violation in path order.
+ */
+export function inspectPolicyShells(root: string): readonly PolicyViolation[] {
+	const candidates = readPolicyPaths(root).filter((path) => {
+		const lower = path.toLowerCase()
+		return (
+			lower.startsWith(`${POLICY_SHELL_ROOT}/`) ||
+			POLICY_SHELL_EXTENSIONS.some((extension) => lower.endsWith(extension))
+		)
+	})
+	return inspectPolicyShellPaths(candidates.filter((path) => isPolicyFile(root, path)))
 }
 
 /**
@@ -2091,12 +3260,7 @@ export function readPolicyProse(root: string): readonly string[] {
  */
 export function readPolicyPackage(root: string): string | undefined {
 	if (!isPolicyFile(root, POLICY_MANIFEST_FILE)) return undefined
-	let manifest: unknown
-	try {
-		manifest = JSON.parse(readFileSync(join(root, POLICY_MANIFEST_FILE), 'utf8'))
-	} catch {
-		return undefined
-	}
+	const manifest = readPolicyJSON(join(root, POLICY_MANIFEST_FILE))
 	if (!isPolicyRecord(manifest)) return undefined
 	const name: unknown = Object.getOwnPropertyDescriptor(manifest, 'name')?.value
 	if (typeof name !== 'string') return undefined
@@ -2123,14 +3287,10 @@ export function readPolicyCatalog(
 	const lines = readFileSync(join(root, path), 'utf8').replaceAll('\r\n', '\n').split('\n')
 	const heading = lines.indexOf(POLICY_CATALOG_HEADING)
 	if (heading === -1) return []
-	const names: string[] = []
-	for (let index = heading + 1; index < lines.length; index += 1) {
-		const line = lines[index]
-		if (line === undefined || line.startsWith('## ')) break
+	return extractPolicySection(lines, heading).flatMap((line) => {
 		const cell = line.match(/^\|\s*`([^`]+)`\s*\|/u)?.[1]
-		if (cell !== undefined) names.push(cell.slice(cell.lastIndexOf('/') + 1))
-	}
-	return names
+		return cell === undefined ? [] : [cell.slice(cell.lastIndexOf('/') + 1)]
+	})
 }
 
 /**
@@ -2200,31 +3360,30 @@ export function isPolicyStray(root: string, path: string): boolean {
  * order.
  */
 export function inspectPolicyProse(root: string): readonly PolicyViolation[] {
-	const violations: PolicyViolation[] = []
-	for (const path of readPolicyProse(root)) {
-		if (isPolicyStray(root, path)) {
-			violations.push(
-				createPolicyViolation(
-					'prose',
-					path,
-					"guide is the package's own, the map, or a catalog row",
-				),
-			)
-		}
-		if (isPolicyMirror(root, path)) continue
+	return readPolicyProse(root).flatMap((path) => {
+		const stray = isPolicyStray(root, path)
+			? [
+					createPolicyViolation(
+						'prose',
+						path,
+						"guide is the package's own, the map, or a catalog row",
+					),
+				]
+			: []
+		if (isPolicyMirror(root, path)) return stray
 		const prose = stripPolicyCode(readFileSync(join(root, path), 'utf8'))
-		for (const hit of textToPolicyHits(prose)) {
-			violations.push(
+		return [
+			...stray,
+			...textToPolicyHits(prose).map((hit) =>
 				createPolicyViolation(
 					'prose',
 					path,
 					`prose carries no banned term: ${hit.term.term} (${hit.term.replacement})`,
 					prose.slice(0, hit.index).split('\n').length,
 				),
-			)
-		}
-	}
-	return violations
+			),
+		]
+	})
 }
 
 /**
@@ -2241,30 +3400,25 @@ export function readPolicyTerms(content: string): readonly string[] {
 	const lines = content.replaceAll('\r\n', '\n').split('\n')
 	const heading = lines.indexOf(POLICY_TERM_HEADING)
 	if (heading === -1) return []
-	const terms: string[] = []
-	for (let index = heading + 1; index < lines.length; index += 1) {
-		const line = lines[index]
-		if (line === undefined || line.startsWith('## ')) break
+	return extractPolicySection(lines, heading).flatMap((line) => {
 		const cell = line.match(/^\|([^|]*)\|/u)?.[1]
-		if (cell === undefined) continue
-		for (const match of cell.matchAll(/`([^`]+)`/gu)) {
-			const term = match[1]
-			if (term !== undefined) terms.push(term)
-		}
-	}
-	return terms
+		return cell === undefined
+			? []
+			: [...cell.matchAll(/`([^`]+)`/gu)].flatMap((match) => match[1] ?? [])
+	})
 }
 
 /**
  * Inspects every host portability rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every rule-map, filename, and manifest-script violation.
+ * @returns Every rule-map, filename, shell-file, and manifest-script violation.
  */
 export function inspectPolicyPortability(root: string): readonly PolicyViolation[] {
 	return [
 		...inspectPolicyRuleMap(root),
 		...inspectPolicyFilenames(root),
+		...inspectPolicyShells(root),
 		...inspectPolicyScripts(root),
 	]
 }
@@ -2272,7 +3426,7 @@ export function inspectPolicyPortability(root: string): readonly PolicyViolation
 /**
  * Locates parsed exports at their physical declaration lines.
  *
- * @param path - The declaring workspace-relative path.
+ * @param written - The declaring workspace-relative path, normalized before it is read.
  * @param text - The declaration source text.
  * @param root - The workspace root used to resolve relative star exports, when supplied.
  * @param ancestors - The source paths already visited along this star-export branch.
@@ -2280,17 +3434,16 @@ export function inspectPolicyPortability(root: string): readonly PolicyViolation
  * @throws An `Error` when syntax, an export form, or a star target cannot be read.
  */
 export function readPolicyDeclarations(
-	path: string,
+	written: string,
 	text: string,
 	root?: string,
 	ancestors: readonly string[] = [],
 ): readonly PolicySurfaceDeclaration[] {
-	path = normalizePolicyPath(path)
+	const path = normalizePolicyPath(written)
 	if (ancestors.includes(path)) return []
 	const source = parseSync(path, text)
 	if (source.errors.length > 0) throw new Error(`export syntax is unreadable at ${path}`)
-	const declarations: PolicySurfaceDeclaration[] = []
-	for (const statement of source.program.body) {
+	return source.program.body.flatMap((statement): readonly PolicySurfaceDeclaration[] => {
 		const line = text.slice(0, statement.start).split(/\r\n|\n/u).length
 		if (statement.type === 'ExportAllDeclaration') {
 			if (statement.exported !== null) {
@@ -2299,8 +3452,7 @@ export function readPolicyDeclarations(
 						? statement.exported.name
 						: statement.exported.value
 				if (name === 'default') throw new Error(`default export is unsupported at ${path}:${line}`)
-				declarations.push({ name, path, line })
-				continue
+				return [{ name, path, line }]
 			}
 			const target = statement.source.value
 			const resolved = resolveLink(
@@ -2315,40 +3467,35 @@ export function readPolicyDeclarations(
 			) {
 				throw new Error(`star export target is unreadable at ${path}:${line}: ${target}`)
 			}
-			declarations.push(
-				...readPolicyDeclarations(resolved, readFileSync(join(root, resolved), 'utf8'), root, [
-					...ancestors,
-					path,
-				]),
-			)
-			continue
+			return readPolicyDeclarations(resolved, readFileSync(join(root, resolved), 'utf8'), root, [
+				...ancestors,
+				path,
+			])
 		}
 		if (statement.type === 'ExportNamedDeclaration') {
-			for (const specifier of statement.specifiers) {
+			const listed = statement.specifiers.map((specifier) => {
 				const name =
 					specifier.exported.type === 'Identifier'
 						? specifier.exported.name
 						: specifier.exported.value
 				if (name === 'default') throw new Error(`default export is unsupported at ${path}:${line}`)
-				declarations.push({
-					name,
-					path,
-					line: text.slice(0, specifier.start).split(/\r\n|\n/u).length,
-				})
-			}
+				return { name, path, line: text.slice(0, specifier.start).split(/\r\n|\n/u).length }
+			})
 			const declaration = statement.declaration
-			if (declaration === null) continue
+			if (declaration === null) return listed
 			if (declaration.type === 'VariableDeclaration') {
-				for (const variable of declaration.declarations) {
-					if (variable.id.type !== 'Identifier')
-						throw new Error(`export binding is unsupported at ${path}:${line}`)
-					declarations.push({
-						name: variable.id.name,
-						path,
-						line: text.slice(0, variable.id.start).split(/\r\n|\n/u).length,
-					})
-				}
-				continue
+				return [
+					...listed,
+					...declaration.declarations.map((variable) => {
+						if (variable.id.type !== 'Identifier')
+							throw new Error(`export binding is unsupported at ${path}:${line}`)
+						return {
+							name: variable.id.name,
+							path,
+							line: text.slice(0, variable.id.start).split(/\r\n|\n/u).length,
+						}
+					}),
+				]
 			}
 			if (
 				declaration.type === 'FunctionDeclaration' ||
@@ -2361,8 +3508,7 @@ export function readPolicyDeclarations(
 			) {
 				if (declaration.id?.type !== 'Identifier')
 					throw new Error(`export name is unreadable at ${path}:${line}`)
-				declarations.push({ name: declaration.id.name, path, line })
-				continue
+				return [...listed, { name: declaration.id.name, path, line }]
 			}
 			throw new Error(`export declaration is unsupported at ${path}:${line}: ${declaration.type}`)
 		}
@@ -2373,8 +3519,8 @@ export function readPolicyDeclarations(
 		) {
 			throw new Error(`export statement is unsupported at ${path}:${line}: ${statement.type}`)
 		}
-	}
-	return declarations
+		return []
+	})
 }
 
 /**
@@ -2414,21 +3560,21 @@ export function collectPolicyDeclarations(
  * exactly one bare `./index.scss` import, including styles extensions and themes.
  */
 export function readPolicySurface(root: string): PolicySurfacePopulation {
-	const files: Record<string, string> = {}
-	for (const path of globSync('src/**/*.ts', { cwd: root }).map(normalizePolicyPath).sort()) {
-		files[path] = readFileSync(join(root, path), 'utf8')
-	}
+	const files = Object.fromEntries(
+		globSync('src/**/*.ts', { cwd: root })
+			.map(normalizePolicyPath)
+			.sort()
+			.map((path): [string, string] => [path, readFileSync(join(root, path), 'utf8')]),
+	)
 	const barrels = Object.keys(files).filter((path) => path.endsWith('/index.ts'))
-	const targets = new Set<string>()
-	const violations: PolicyViolation[] = []
 	const sheets = new Set([
 		POLICY_SURFACE_STYLES_ENTRY,
 		...collectSheets(root).map((face) => `src/${face}/sheet.ts`),
 		'src/styles/themes/sheet.ts',
 	])
-	for (const path of sheets) {
+	const entryViolations = [...sheets].flatMap((path) => {
 		const stylesEntry = files[path]
-		if (stylesEntry === undefined) continue
+		if (stylesEntry === undefined) return []
 		const stylesSource = parseSync(path, stylesEntry)
 		const stylesStatement =
 			stylesSource.errors.length === 0 ? stylesSource.program.body[0] : undefined
@@ -2438,79 +3584,85 @@ export function readPolicySurface(root: string): PolicySurfacePopulation {
 			stylesStatement?.type === 'ImportDeclaration' &&
 			stylesStatement.specifiers.length === 0 &&
 			stylesStatement.source.value === './index.scss'
-		if (!stylesValid) {
-			const line =
-				stylesStatement === undefined
-					? 1
-					: stylesEntry.slice(0, stylesStatement.start).split(/\r\n|\n/u).length
-			violations.push(createPolicyViolation('surface', path, POLICY_SURFACE_STYLES_MESSAGE, line))
-		}
-	}
-	for (const path of barrels) {
-		const text = files[path]
-		if (text === undefined) continue
-		const source = parseSync(path, text)
-		const lines = extractSourceLines(text)
-		if (source.errors.length > 0) {
-			violations.push(
-				createPolicyViolation(
-					'surface',
-					path,
-					'surface population incomplete: barrel syntax is unreadable',
-				),
-			)
-			continue
-		}
-		for (const statement of source.program.body) {
-			const start = text.slice(0, statement.start).split(/\r\n|\n/u).length - 1
-			const end = text.slice(0, statement.end).split(/\r\n|\n/u).length - 1
-			const row = lines[start]?.code.match(POLICY_SURFACE_BARREL_PATTERN)
-			const target = row?.[1] ?? row?.[2]
-			if (
-				statement.type !== 'ExportAllDeclaration' ||
-				statement.exportKind !== 'value' ||
-				statement.exported !== null ||
-				start !== end ||
-				target === undefined
-			) {
-				violations.push(
-					createPolicyViolation(
-						'surface',
-						path,
-						'surface population incomplete: barrel requires a relative .js star export on one line',
-						start + 1,
-					),
-				)
-				continue
+		const line =
+			stylesStatement === undefined
+				? 1
+				: stylesEntry.slice(0, stylesStatement.start).split(/\r\n|\n/u).length
+		return stylesValid
+			? []
+			: [createPolicyViolation('surface', path, POLICY_SURFACE_STYLES_MESSAGE, line)]
+	})
+	// Each barrel statement answers one violation, one star-export target, or neither.
+	const results = barrels.flatMap(
+		(path): ReadonlyArray<{ readonly violation?: PolicyViolation; readonly target?: string }> => {
+			const text = files[path]
+			if (text === undefined) return []
+			const source = parseSync(path, text)
+			const lines = extractSourceLines(text)
+			if (source.errors.length > 0) {
+				return [
+					{
+						violation: createPolicyViolation(
+							'surface',
+							path,
+							'surface population incomplete: barrel syntax is unreadable',
+						),
+					},
+				]
 			}
-			const resolved = resolveLink(path, `${target.slice(0, -3)}.ts`)
-			if (
-				!hasCanonicalSegments(resolved) ||
-				!resolved.startsWith('src/') ||
-				files[resolved] === undefined
-			) {
-				violations.push(
-					createPolicyViolation(
-						'surface',
-						path,
-						`surface population incomplete: barrel target is unreadable: ${target}`,
-						start + 1,
-					),
-				)
-				continue
-			}
-			if (!resolved.endsWith('/index.ts')) targets.add(resolved)
-		}
-	}
-	const declarations: PolicySurfaceDeclaration[] = []
-	for (const path of targets) {
+			return source.program.body.map((statement) => {
+				const start = text.slice(0, statement.start).split(/\r\n|\n/u).length - 1
+				const end = text.slice(0, statement.end).split(/\r\n|\n/u).length - 1
+				const row = lines[start]?.code.match(POLICY_SURFACE_BARREL_PATTERN)
+				const target = row?.[1] ?? row?.[2]
+				if (
+					statement.type !== 'ExportAllDeclaration' ||
+					statement.exportKind !== 'value' ||
+					statement.exported !== null ||
+					start !== end ||
+					target === undefined
+				) {
+					return {
+						violation: createPolicyViolation(
+							'surface',
+							path,
+							'surface population incomplete: barrel requires a relative .js star export on one line',
+							start + 1,
+						),
+					}
+				}
+				const resolved = resolveLink(path, `${target.slice(0, -3)}.ts`)
+				if (
+					!hasCanonicalSegments(resolved) ||
+					!resolved.startsWith('src/') ||
+					files[resolved] === undefined
+				) {
+					return {
+						violation: createPolicyViolation(
+							'surface',
+							path,
+							`surface population incomplete: barrel target is unreadable: ${target}`,
+							start + 1,
+						),
+					}
+				}
+				return resolved.endsWith('/index.ts') ? {} : { target: resolved }
+			})
+		},
+	)
+	const targets = new Set(results.flatMap(({ target }) => (target === undefined ? [] : [target])))
+	const reads = [...targets].flatMap((path) => {
 		const text = files[path]
-		if (text === undefined) continue
-		const read = collectPolicyDeclarations(root, path, text)
-		declarations.push(...read.declarations)
-		if (read.violation !== undefined) violations.push(read.violation)
+		return text === undefined ? [] : [collectPolicyDeclarations(root, path, text)]
+	})
+	return {
+		declarations: reads.flatMap((read) => read.declarations),
+		violations: [
+			...entryViolations,
+			...results.flatMap(({ violation }) => (violation === undefined ? [] : [violation])),
+			...reads.flatMap((read) => (read.violation === undefined ? [] : [read.violation])),
+		],
 	}
-	return { declarations, violations }
 }
 
 /**
@@ -2518,7 +3670,9 @@ export function readPolicySurface(root: string): PolicySurfacePopulation {
  *
  * @remarks
  * Source names claimed by the target's own hosted guide are grandfathered. Setup names have no
- * grandfather. An absent installed host falls back to checkout guides only with catalog coverage.
+ * grandfather. Catalog rows come from beside the guides: when reading installed guides, from the
+ * staged catalog and never from the target's own table, which can list a package without a guide in
+ * that host. An absent installed host falls back to checkout guides only with catalog coverage.
  * Missing comparison evidence and unread barrel statements produce surface violations.
  *
  * @param root - The workspace root to inspect.
@@ -2531,7 +3685,7 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
 	const host = hosted ? installed : root
 	const catalog = hosted ? POLICY_SURFACE_CATALOG : POLICY_CATALOG_FILE
 	const directory = hosted ? `${POLICY_SURFACE_HOST}/guides` : 'guides'
-	const names = new Set([...readPolicyCatalog(host, catalog), ...readPolicyCatalog(root)])
+	const names = new Set(readPolicyCatalog(host, catalog))
 	if (!existsSync(join(host, 'guides')) || names.size === 0) {
 		return [
 			createPolicyViolation(
@@ -2541,79 +3695,92 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
 			),
 		]
 	}
-	const violations: PolicyViolation[] = []
-	for (const name of names) {
-		if (!isPolicyFile(host, `guides/${name}.md`)) {
-			violations.push(
-				createPolicyViolation(
-					'surface',
-					`${directory}/${name}.md`,
-					`surface evidence missing: catalog package ${name} has no hosted guide`,
-				),
-			)
-		}
-	}
-	const grandfather = new Set<string>()
-	const owners = new Map<string, Set<string>>()
-	for (const path of globSync('guides/*.md', { cwd: host }).map(normalizePolicyPath).sort()) {
-		const owner = basename(path, '.md')
-		if (owner === POLICY_GUIDE_MAP) continue
-		const guide = createGuide(readFileSync(join(host, path), 'utf8'))
-		if (!guide.sections().includes('Surface')) {
-			violations.push(
-				createPolicyViolation(
-					'surface',
-					`${directory}/${owner}.md`,
-					'surface evidence missing: hosted guide has no Surface section',
-				),
-			)
-			continue
-		}
-		for (const symbol of guide.surface()) {
-			if (owner === own) {
-				grandfather.add(symbol.name)
-				continue
-			}
-			const claimed = owners.get(symbol.name) ?? new Set<string>()
-			claimed.add(owner)
-			owners.set(symbol.name, claimed)
-		}
-	}
-	const population = readPolicySurface(root)
-	violations.push(...population.violations)
-	const declarations = population.declarations.filter(
-		(declaration) => !grandfather.has(declaration.name),
+	const missing = [...names].flatMap((name) =>
+		isPolicyFile(host, `guides/${name}.md`)
+			? []
+			: [
+					createPolicyViolation(
+						'surface',
+						`${directory}/${name}.md`,
+						`surface evidence missing: catalog package ${name} has no hosted guide`,
+					),
+				],
 	)
-	for (const path of globSync('tests/setup*.ts', { cwd: root }).map(normalizePolicyPath).sort()) {
-		if (
-			path.endsWith('.test.ts') ||
-			HOST_PATHS.some(
-				(vendored) =>
-					path === normalizePolicyPath(vendored) ||
-					path.startsWith(`${normalizePolicyPath(vendored)}/`),
-			)
+	// A guide without a Surface section answers its violation and no names.
+	const guides = globSync('guides/*.md', { cwd: host })
+		.map(normalizePolicyPath)
+		.sort()
+		.flatMap(
+			(
+				path,
+			): ReadonlyArray<{
+				readonly owner: string
+				readonly symbols: readonly string[]
+				readonly violation?: PolicyViolation
+			}> => {
+				const owner = basename(path, '.md')
+				if (owner === POLICY_GUIDE_MAP) return []
+				const guide = createGuide(readFileSync(join(host, path), 'utf8'))
+				return guide.sections().includes('Surface')
+					? [{ owner, symbols: guide.surface().map((symbol) => symbol.name) }]
+					: [
+							{
+								owner,
+								symbols: [],
+								violation: createPolicyViolation(
+									'surface',
+									`${directory}/${owner}.md`,
+									'surface evidence missing: hosted guide has no Surface section',
+								),
+							},
+						]
+			},
 		)
-			continue
-		const read = collectPolicyDeclarations(root, path, readFileSync(join(root, path), 'utf8'))
-		declarations.push(...read.declarations)
-		if (read.violation !== undefined) violations.push(read.violation)
-	}
-	const seen = new Set<string>()
-	for (const declaration of declarations) {
-		for (const owner of owners.get(declaration.name) ?? []) {
-			const key = `${declaration.path}\n${declaration.name}\n${owner}`
-			if (seen.has(key)) continue
-			seen.add(key)
-			violations.push(
+	const grandfather = new Set(
+		guides.filter((guide) => guide.owner === own).flatMap(({ symbols }) => symbols),
+	)
+	const claimed = Map.groupBy(
+		guides
+			.filter((guide) => guide.owner !== own)
+			.flatMap(({ owner, symbols }) => symbols.map((name) => ({ name, owner }))),
+		({ name }) => name,
+	)
+	const population = readPolicySurface(root)
+	const setups = globSync('tests/setup*.ts', { cwd: root })
+		.map(normalizePolicyPath)
+		.sort()
+		.flatMap((path) =>
+			path.endsWith('.test.ts') || matchesScaffoldSetup(path, root)
+				? []
+				: [collectPolicyDeclarations(root, path, readFileSync(join(root, path), 'utf8'))],
+		)
+	const declarations = [
+		...population.declarations.filter((declaration) => !grandfather.has(declaration.name)),
+		...setups.flatMap((read) => read.declarations),
+	]
+	const claims = declarations.flatMap((declaration) =>
+		[...new Set(claimed.get(declaration.name)?.map(({ owner }) => owner))].map((owner) => ({
+			declaration,
+			owner,
+			key: `${declaration.path}\n${declaration.name}\n${owner}`,
+		})),
+	)
+	const violations = [
+		...missing,
+		...guides.flatMap(({ violation }) => (violation === undefined ? [] : [violation])),
+		...population.violations,
+		...setups.flatMap((read) => (read.violation === undefined ? [] : [read.violation])),
+		...claims
+			.filter((claim, index) => claims.findIndex((other) => other.key === claim.key) === index)
+			.map(({ declaration, owner }) =>
 				createPolicyViolation(
 					'surface',
 					declaration.path,
 					`surface name belongs to one package: ${declaration.name} (${owner})`,
 					declaration.line,
 				),
-			)
-		}
-	}
+			),
+	]
 	return violations.sort((first, second) => {
 		if (first.path !== second.path) return first.path < second.path ? -1 : 1
 		if (first.line !== second.line) return (first.line ?? 0) - (second.line ?? 0)
@@ -2625,12 +3792,15 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
  * Inspects every policy rule across one workspace.
  *
  * @param root - The workspace root to inspect.
- * @returns Every mirror, suppression, skill, bridge, portability, prose, and surface violation.
+ * @returns Every mirror, suppression, dist import, text, skill, bridge, portability, prose, and
+ * surface violation.
  */
 export function inspectPolicyWorkspace(root: string): readonly PolicyViolation[] {
 	return [
 		...inspectPolicyMirrors(root),
 		...inspectPolicySuppressions(root),
+		...inspectPolicyDist(root),
+		...inspectPolicyText(root),
 		...inspectSkillFamily(root),
 		...inspectSkillBridges(root),
 		...inspectPolicyPortability(root),
@@ -2677,6 +3847,17 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		files: [
 			{
 				path: 'scripts/control.ts',
+				content: `// ${POLICY_SUPPRESSION_DIRECTIVE}\ndebugger\n`,
+			},
+		],
+	},
+	{
+		label: 'rejects a suppression directive in a skill script',
+		membership: 'skill scripts in the suppression population',
+		rule: 'suppression',
+		files: [
+			{
+				path: '.agents/skills/sample/scripts/control.ts',
 				content: `// ${POLICY_SUPPRESSION_DIRECTIVE}\ndebugger\n`,
 			},
 		],
@@ -2818,11 +3999,35 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		],
 	},
 	{
+		label: 'admits the distribution harness without a sibling proof',
+		membership: 'content-owned distribution setup module outside the mirror population',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupDistribution.ts', content: 'export const DISTRIBUTION = 1\n' }],
+		violations: [],
+	},
+	{
 		label: 'admits an inventory-vendored setup module without proof',
 		membership: 'host-inventory setup modules outside the mirror population',
 		rule: 'mirror',
 		files: [{ path: 'tests/setupPolicy.ts', content: 'export const POLICY = 1\n' }],
 		violations: [],
+	},
+	{
+		label: 'requires a proof for a private workspace distribution module',
+		membership: 'target-owned distribution setup module in a private workspace',
+		rule: 'mirror',
+		files: [
+			{ path: 'package.json', content: '{"private":true}\n' },
+			{ path: 'tests/setupDistribution.ts', content: 'export const DISTRIBUTION = 1\n' },
+		],
+		violations: [
+			{
+				rule: 'mirror',
+				path: 'tests/setupDistribution.ts',
+				message:
+					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+			},
+		],
 	},
 ])
 
@@ -2830,6 +4035,7 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 export const SHEET_POLICY_SELECTIONS: ReadonlyArray<
 	Pick<Blueprint, 'src' | 'styles' | 'themes'> & {
 		readonly conformance?: boolean
+		readonly tree?: boolean
 		readonly integration?: boolean
 		readonly files?: readonly PolicySource[]
 		readonly control?: {
@@ -2841,8 +4047,25 @@ export const SHEET_POLICY_SELECTIONS: ReadonlyArray<
 > = Object.freeze([
 	{ src: [], styles: true, themes: true },
 	{ src: [], styles: false, themes: true },
-	{ src: [], styles: false, themes: true, integration: true },
+	{
+		src: [],
+		styles: false,
+		themes: true,
+		integration: true,
+		control: {
+			before: "existsSync(resolveWorkspacePath('tests/setupStyles.ts'))",
+			after: 'true',
+			failure: './tests/setupStyles.ts',
+		},
+	},
 	{ src: ['core'], styles: true, themes: true },
+	{
+		src: ['core'],
+		styles: false,
+		themes: false,
+		tree: true,
+		files: [{ path: 'tests/tree.test.ts', content: 'export {}\n' }],
+	},
 	{
 		src: ['core', 'browser'],
 		styles: true,
@@ -2882,10 +4105,10 @@ export const SHEET_POLICY_SELECTIONS: ReadonlyArray<
 		styles: true,
 		themes: false,
 		integration: true,
+		files: [{ path: 'tests/setupStyles.ts', content: 'export {}\n' }],
 		control: {
-			before:
-				"setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts', './tests/setupStyles.ts']",
-			after: "setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts']",
+			before: "? ['./tests/setupStyles.ts']",
+			after: '? []',
 			failure: './tests/setupStyles.ts',
 		},
 	},
@@ -2990,6 +4213,61 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 					'skill script has a mirrored proof: tests/agents/skills/sample/scripts/lone.test.ts',
 			},
 		],
+	},
+	{
+		label: 'rejects a skill proof that imports a skill file other than its own script',
+		membership: 'relative imports of skill proofs against the script each proof mirrors',
+		rule: 'skill',
+		files: [
+			{
+				path: '.agents/skills/sample/SKILL.md',
+				content: SKILL_POLICY_TEXT + '\nRun `scripts/probe.ts`.\n',
+			},
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+			{
+				path: '.agents/skills/sample/scripts/probe.ts',
+				content: '// Usage: node .agents/skills/sample/scripts/probe.ts\n',
+			},
+			{
+				path: 'tests/agents/skills/sample/scripts/probe.test.ts',
+				content:
+					"import { read } from '../../../../../.agents/skills/other/scripts/helpers.ts'\nvoid read\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'skill',
+				path: 'tests/agents/skills/sample/scripts/probe.test.ts',
+				message:
+					'skill proof imports no skill file but its own script: .agents/skills/other/scripts/helpers.ts',
+			},
+		],
+	},
+	{
+		label: 'accepts a skill proof that imports its own script and a test setup module',
+		membership: 'relative imports of skill proofs against the script each proof mirrors',
+		rule: 'skill',
+		files: [
+			{
+				path: '.agents/skills/sample/SKILL.md',
+				content: SKILL_POLICY_TEXT + '\nRun `scripts/probe.ts`.\n',
+			},
+			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
+			{
+				path: '.agents/skills/sample/scripts/probe.ts',
+				content: '// Usage: node .agents/skills/sample/scripts/probe.ts\n',
+			},
+			{
+				path: 'tests/agents/skills/sample/scripts/probe.test.ts',
+				content: [
+					"import { read } from '../../../../../.agents/skills/sample/scripts/probe.ts'",
+					"import { runSkillScript } from '../../../../setupServer.js'",
+					'void read',
+					'void runSkillScript',
+				].join('\n'),
+			},
+		],
+		violations: [],
 	},
 	{
 		label: 'rejects an unexported value binding in a skill fence',
@@ -3708,7 +4986,7 @@ export const PROSE_POLICY_MANIFEST = '{\n\t"name": "@orkestrel/sample"\n}\n'
  * Lists the physical controls for every prose-population boundary the workspace route reaches.
  *
  * @remarks
- * Each control that attacks an exclusion also writes the arrival file, whose different term proves
+ * Each control that tests an exclusion also writes the arrival file, whose different term proves
  * the sweep ran over the control workspace rather than reporting nothing because it found nothing.
  */
 export const PROSE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
@@ -3870,6 +5148,579 @@ export const PORTABILITY_POLICY_CONTROLS: readonly PolicyControl[] = Object.free
 			},
 		],
 	},
+	...[
+		['a shell file outside scripts', 'src/worker/run.sh'],
+		['a bash file outside scripts', 'configs/setup.bash'],
+		['a PowerShell file outside scripts', 'tests/probe.ps1'],
+		['a Python file outside scripts', 'guides/build.py'],
+		['a batch file outside scripts', 'build.bat'],
+		['a command file outside scripts', '.claude/hook.cmd'],
+	].map(([label, path]): PolicyControl => ({
+		label: `rejects ${label}`,
+		membership: 'shell, PowerShell, Python, and batch extensions in the file path population',
+		rule: 'portability',
+		message: 'shell, PowerShell, Python, and batch files sit only in scripts',
+		files: [{ path: path ?? '', content: '' }],
+	})),
+	{
+		label: 'rejects a non-shell file inside scripts',
+		membership: 'every file beneath the scripts directory',
+		rule: 'portability',
+		message: 'scripts holds .sh files and nothing else',
+		files: [{ path: 'scripts/probe.ts', content: '' }],
+	},
+])
+
+/**
+ * Holds the message prefix a dist-import violation carries, written out so the controls read the
+ * production message from a second copy.
+ */
+export const DIST_POLICY_MESSAGE =
+	'tracked TypeScript imports nothing from dist, which exists only after npm run build'
+
+/**
+ * Lists the physical controls for every import into the built output the workspace route refuses
+ * and admits.
+ *
+ * @remarks
+ * Each refusal sits beside an admission drawn from outside its population, so a sweep that reports
+ * nothing because it read nothing fails a refusal. The admissions cover a specifier the rule does
+ * not read, a path that only resembles the output directory, and a directory the rule does not walk.
+ */
+export const DIST_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a static import that resolves into dist',
+		membership: 'static import specifiers of source, app, test, and config TypeScript',
+		rule: 'dist',
+		files: [
+			{
+				path: 'tests/src/server/control.ts',
+				content:
+					"import { createServer } from '../../../dist/src/server/index.js'\nvoid createServer\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'tests/src/server/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../../dist/src/server/index.js`,
+			},
+		],
+	},
+	{
+		label: 'rejects a type import that resolves into dist',
+		membership: 'static import specifiers of source, app, test, and config TypeScript',
+		rule: 'dist',
+		files: [
+			{
+				path: 'configs/control.ts',
+				content:
+					"import type { Sample } from '../dist/src/core/index.js'\nexport type Held = Sample\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'configs/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../dist/src/core/index.js`,
+			},
+		],
+	},
+	{
+		label: 'rejects a re-export that resolves into dist',
+		membership: 'export-from specifiers of source, app, test, and config TypeScript',
+		rule: 'dist',
+		files: [
+			{
+				path: 'src/core/control.ts',
+				content: "export * from '../../dist/src/core/index.js'\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'src/core/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../dist/src/core/index.js`,
+			},
+		],
+	},
+	{
+		label: 'rejects a dynamic import with a literal specifier that resolves into dist',
+		membership: 'import() expressions with a string-literal source',
+		rule: 'dist',
+		files: [
+			{
+				path: 'app/server/control.ts',
+				content: "export const load = () => import('../../dist/app/server/main.js')\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'app/server/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../dist/app/server/main.js`,
+			},
+		],
+	},
+	{
+		label: 'rejects a dynamic import whose template literal has no substitution',
+		membership: 'import() expressions with a template-literal source and no substitution',
+		rule: 'dist',
+		files: [
+			{
+				path: 'app/server/control.ts',
+				content: 'export const load = () => import(`../../dist/app/server/main.js`)\n',
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'app/server/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../dist/app/server/main.js`,
+			},
+		],
+	},
+	{
+		label: 'admits a dynamic import with a computed specifier',
+		membership: 'import() expressions with a computed source',
+		rule: 'dist',
+		files: [
+			{
+				path: 'src/core/control.ts',
+				content:
+					"const entry = '../../dist/src/core/index.js'\nexport const load = () => import(entry)\nexport const select = (name: string) => import(`../../dist/${name}.js`)\n",
+			},
+		],
+		violations: [],
+	},
+	{
+		label: 'admits a package specifier and a dist path held only as text',
+		membership: 'specifiers the rule resolves, beside strings and comments it does not read',
+		rule: 'dist',
+		files: [
+			{
+				path: 'tests/control.ts',
+				content:
+					"// import '../dist/src/core/index.js'\nimport { it } from 'vitest'\nexport const path = '../dist/src/core/index.js'\nvoid it\n",
+			},
+		],
+		violations: [],
+	},
+	{
+		label: 'admits a dist directory that is not the workspace output',
+		membership: 'relative specifiers that resolve outside the root dist directory',
+		rule: 'dist',
+		files: [
+			{
+				path: 'src/core/control.ts',
+				content:
+					"import './dist/index.js'\nimport '../distribution/index.js'\nimport '../../../sibling/dist/index.js'\n",
+			},
+		],
+		violations: [],
+	},
+	{
+		label: 'admits an import into dist from a directory the rule does not walk',
+		membership: 'TypeScript outside src, app, tests, and configs',
+		rule: 'dist',
+		files: [
+			{
+				path: 'scripts/control.ts',
+				content: "import '../dist/src/core/index.js'\n",
+			},
+		],
+		violations: [],
+	},
+	{
+		label: 'rejects a JSON import and a dotted extensionless import that resolve into dist',
+		membership:
+			'specifiers the type check reads from disk under resolveJsonModule and bundler resolution',
+		rule: 'dist',
+		files: [
+			{
+				path: 'tests/src/core/control.ts',
+				content:
+					"import meta from '../../../dist/meta.json'\nimport config from '../../../dist/configs/vite.journey.config'\nvoid meta\nvoid config\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'dist',
+				path: 'tests/src/core/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../../dist/meta.json`,
+			},
+			{
+				rule: 'dist',
+				path: 'tests/src/core/control.ts',
+				message: `${DIST_POLICY_MESSAGE}: ../../../dist/configs/vite.journey.config`,
+			},
+		],
+	},
+	{
+		label: 'admits a built asset an ambient declaration types',
+		membership: 'specifiers with a query or a non-code extension',
+		rule: 'dist',
+		files: [
+			{
+				path: 'tests/src/styles/index.test.ts',
+				content:
+					"import sheet from '../../../dist/src/styles/index.css?raw'\nimport icon from '../../../dist/src/icon.svg'\nvoid sheet\nvoid icon\n",
+			},
+		],
+		violations: [],
+	},
+])
+
+/**
+ * Holds the message prefix a text violation carries, written out so the controls read the
+ * production message from a second copy.
+ */
+export const TEXT_POLICY_MESSAGE = 'text carries no replacement, byte-order, or control character'
+
+/**
+ * Lists the physical controls for every text-integrity refusal and admission the workspace route
+ * reaches.
+ *
+ * @remarks
+ * Every character a control plants is written as a `\u` escape here, so this file carries none of
+ * the characters it tests for. Each excluded-directory control also writes the arrival file, whose
+ * refusal proves the sweep ran over the control workspace rather than reporting nothing because it
+ * found nothing. A file whose bytes are not UTF-8 cannot be written through a text fixture, so the
+ * proofs of that refusal write the bytes themselves.
+ */
+export const TEXT_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a bell control character in a source file',
+		membership: 'source files in the suppression population, C0 controls beyond the three allowed',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: "const bell = 'a\u0007b'\n" }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\u0007`,
+			},
+		],
+	},
+	{
+		label: 'rejects an escape control character in authored Markdown',
+		membership: 'authored Markdown outside the excluded directories, C0 controls',
+		rule: 'text',
+		files: [{ path: 'README.md', content: '# Front page\n\ncolor \u001B[31m\n' }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'README.md',
+				line: 3,
+				message: `${TEXT_POLICY_MESSAGE}: \\u001B`,
+			},
+		],
+	},
+	{
+		label: 'rejects a C1 control character',
+		membership: 'source files in the suppression population, C1 controls',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: "const a = 1\nconst next = 'a\u0085b'\n" }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 2,
+				message: `${TEXT_POLICY_MESSAGE}: \\u0085`,
+			},
+		],
+	},
+	{
+		label: 'rejects the delete control character',
+		membership: 'source files in the suppression population, the control above the ASCII range',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: "const del = 'a\u007Fb'\n" }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\u007F`,
+			},
+		],
+	},
+	{
+		label: 'rejects a replacement character',
+		membership: 'authored Markdown outside the excluded directories, decoded text',
+		rule: 'text',
+		files: [{ path: 'README.md', content: '# Front page\n\nbroken \uFFFD text\n' }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'README.md',
+				line: 3,
+				message: `${TEXT_POLICY_MESSAGE}: \\uFFFD`,
+			},
+		],
+	},
+	{
+		label: 'rejects a byte-order mark that opens a file',
+		membership: 'source files in the suppression population, the first character of a file',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: '\uFEFFexport {}\n' }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\uFEFF`,
+			},
+		],
+	},
+	{
+		label: 'rejects a byte-order mark inside a literal',
+		membership: 'source files in the suppression population, a character within a line',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: "const path = '\uFEFFleading.txt'\n" }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\uFEFF`,
+			},
+		],
+	},
+	{
+		label: 'names each refused character once on a line that repeats it',
+		membership: 'refused characters grouped by line, in order of first appearance',
+		rule: 'text',
+		files: [{ path: 'src/control.ts', content: "const mixed = 'a\u0007b\u0007c\u001B'\n" }],
+		violations: [
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\u0007`,
+			},
+			{
+				rule: 'text',
+				path: 'src/control.ts',
+				line: 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\u001B`,
+			},
+		],
+	},
+	{
+		label: 'accepts tab, line feed, carriage return, and intentional Unicode',
+		membership: 'the characters a text file may carry, composed and decomposed forms included',
+		rule: 'text',
+		files: [
+			{
+				path: 'src/control.ts',
+				content: "const note = 'café\tcafé — \u{1F600}'\r\n\t\n",
+			},
+			{ path: 'README.md', content: '# Front page\r\n\r\nplain é — text\n' },
+		],
+		violations: [],
+	},
+	{
+		label: 'accepts a control character below an excluded directory',
+		membership: 'Markdown below a directory name the sweep never descends into',
+		rule: 'text',
+		files: [
+			{ path: 'README.md', content: '# Front page\n\ncolor \u001B[31m\n' },
+			{ path: 'node_modules/sample/README.md', content: '# Installed\n\nbell \u0007\n' },
+		],
+		violations: [
+			{
+				rule: 'text',
+				path: 'README.md',
+				line: 3,
+				message: `${TEXT_POLICY_MESSAGE}: \\u001B`,
+			},
+		],
+	},
+	...[
+		{
+			label: 'rejects a bell control character in a skill script',
+			membership: 'skill scripts in the suppression population, C0 controls',
+			path: '.agents/skills/sample/scripts/control.ts',
+			content: "const bell = 'a\u0007b'\n",
+		},
+		{
+			label: 'rejects a bell control character in a root JSON file',
+			membership: 'root JSON files in the text population, C0 controls',
+			path: 'tsconfig.json',
+			content: '{\n\t"note": "a\u0007b"\n}\n',
+		},
+		{
+			label: 'rejects a bell control character in a root dot JSON file',
+			membership: 'root dot-prefixed JSON files in the text population, C0 controls',
+			path: '.oxlintrc.json',
+			content: '{\n\t"note": "a\u0007b"\n}\n',
+		},
+		{
+			label: 'rejects a bell control character in a JSON file below an instruction folder',
+			membership: 'JSON files below .agents, .claude, .codex, and .cursor, C0 controls',
+			path: '.claude/settings.json',
+			content: '{\n\t"note": "a\u0007b"\n}\n',
+		},
+		{
+			label: 'rejects a bell control character in a TOML role file',
+			membership: 'TOML files below .agents, .claude, .codex, and .cursor, C0 controls',
+			path: '.codex/agents/sample.toml',
+			content: 'name = "sample"\nnote = "a\u0007b"\n',
+		},
+		{
+			label: 'rejects a bell control character in a skill metadata file',
+			membership: 'YAML files below .agents, .claude, .codex, and .cursor, C0 controls',
+			path: '.agents/skills/sample/agents/openai.yaml',
+			content: "interface:\n  display_name: 'a\u0007b'\n",
+		},
+		{
+			label: 'rejects a bell control character in a Cursor rule file',
+			membership: 'MDC files below .agents, .claude, .codex, and .cursor, C0 controls',
+			path: '.cursor/rules/sample.mdc',
+			content: '---\nalwaysApply: true\n---\na\u0007b\n',
+		},
+		{
+			label: 'rejects a bell control character in the attributes file',
+			membership: 'the root .gitattributes file, C0 controls',
+			path: '.gitattributes',
+			content: '* text=auto eol=lf\n# a\u0007b\n',
+		},
+		{
+			label: 'rejects a bell control character in the formatter ignore file',
+			membership: 'the root .prettierignore file, C0 controls',
+			path: '.prettierignore',
+			content: 'dist/\n# a\u0007b\n',
+		},
+	].map(({ label, membership, path, content }): PolicyControl => ({
+		label,
+		membership,
+		rule: 'text',
+		files: [{ path, content }],
+		violations: [
+			{
+				rule: 'text',
+				path,
+				line: content.split('\n').findIndex((line) => line.includes('\u0007')) + 1,
+				message: `${TEXT_POLICY_MESSAGE}: \\u0007`,
+			},
+		],
+	})),
+	{
+		label: 'accepts a control character in JSON outside the instruction folders and the root',
+		membership: 'JSON files below src and tmp, which the text population does not reach',
+		rule: 'text',
+		files: [
+			{ path: 'README.md', content: '# Front page\n\ncolor \u001B[31m\n' },
+			{ path: 'src/data.json', content: '{\n\t"note": "a\u0007b"\n}\n' },
+			{ path: 'tmp/probe.json', content: '{\n\t"note": "a\u0007b"\n}\n' },
+		],
+		violations: [
+			{
+				rule: 'text',
+				path: 'README.md',
+				line: 3,
+				message: `${TEXT_POLICY_MESSAGE}: \\u001B`,
+			},
+		],
+	},
+])
+
+/** Pairs a setup-module import fence with the specifiers it refuses and the ones it admits. */
+export interface PolicyImportCase {
+	/** Names the text of the fence's message the lint configuration carries. */
+	readonly marker: string
+	/** Lists each module specifier with whether the fence refuses it. */
+	readonly cases: ReadonlyArray<readonly [string, boolean]>
+	/** States whether a relative specifier outside the fence is also a case that must be admitted. */
+	readonly controlled: boolean
+}
+
+/** Pairs a setup-module named-import fence with the import clauses it refuses and the ones it admits. */
+export interface PolicyNameCase {
+	/** Names the text of the fence's message the lint configuration carries. */
+	readonly marker: string
+	/** Lists the import clauses the fence refuses, each written as the text between the braces. */
+	readonly refused: readonly string[]
+	/** Lists the import clauses the fence admits, each written as the text between the braces. */
+	readonly admitted: readonly string[]
+}
+
+/**
+ * Lists the refused and admitted specifiers of every setup-module `no-restricted-imports` pattern.
+ *
+ * @remarks
+ * The isolated-pattern proof reads a case from here when a pattern's message carries the marker, and
+ * refuses a configuration that carries no pattern for a marker, so a deleted fence cannot pass by
+ * leaving nothing to test.
+ */
+export const POLICY_IMPORT_CASES: readonly PolicyImportCase[] = Object.freeze([
+	{
+		marker: 'tests/setup.ts must stay host-independent: import no node:',
+		controlled: true,
+		cases: [
+			['node:fs', true],
+			['node:fs/promises', true],
+			['node:path', true],
+			['nodes:fs', false],
+			['fs', false],
+			['vitest', false],
+			['./setupServer.js', false],
+		],
+	},
+	{
+		marker: 'tests/setup.ts must stay host-independent: import no Vue',
+		controlled: true,
+		cases: [
+			['vue', true],
+			['vue/server-renderer', true],
+			['vue?raw', true],
+			['@vue/test-utils', true],
+			['vue-router', false],
+			['vuex', false],
+			['node:fs', false],
+			['./vue.js', false],
+		],
+	},
+	{
+		marker: 'the browser and styles setup modules hold no Node',
+		controlled: true,
+		cases: [
+			['node:fs', true],
+			['node:child_process', true],
+			['nodes:fs', false],
+			['vue', false],
+			['playwright', false],
+			['./setup.js', false],
+		],
+	},
+	{
+		marker: 'configs/policy.ts imports nothing',
+		controlled: false,
+		cases: [
+			['node:fs', true],
+			['./helpers.js', true],
+			['vitest', true],
+			['@orkestrel/test', true],
+		],
+	},
+])
+
+/** Lists the refused and admitted named imports of every setup-module `no-restricted-imports` path. */
+export const POLICY_NAME_CASES: readonly PolicyNameCase[] = Object.freeze([
+	{
+		marker: 'nothing an assertion is',
+		refused: [
+			'describe',
+			'it',
+			'test',
+			'expect',
+			'describe as suite',
+			'expect, vi',
+			'type TestContext, it',
+		],
+		admitted: ['vi', 'TestRunner', 'afterEach', 'beforeAll', 'bench'],
+	},
 ])
 
 /**
@@ -3888,6 +5739,41 @@ export function collectSheets(directory: string): readonly string[] {
 		)
 		.map((entry) => entry.name)
 		.sort()
+}
+
+/**
+ * Collects the study tests a workspace holds beneath `tests/studies`.
+ * @param directory - The workspace root.
+ * @returns Sorted workspace-relative paths of the physical `*.test.ts` files, nested or direct,
+ * beneath a `tests/studies` directory whose stored name has exactly that case, outside any
+ * `node_modules` or `.git` directory, which Vitest's default exclude never collects; empty when
+ * the directory is absent, is not a directory, or holds none.
+ */
+export function collectStudies(directory: string): readonly string[] {
+	const tests = resolve(directory, 'tests')
+	if (!existsSync(tests)) return []
+	// A directory entry carries the name the host stores, so matching it keeps the selection exact-case
+	// on a host that folds case, and its type excludes a link without following it.
+	const held = readdirSync(tests, { withFileTypes: true })
+	if (!held.some((entry) => entry.name === 'studies' && entry.isDirectory())) return []
+	const studies: string[] = []
+	const pending = ['tests/studies']
+	while (pending.length > 0) {
+		const current = pending.pop() ?? ''
+		for (const entry of readdirSync(resolve(directory, current), { withFileTypes: true })) {
+			const path = `${current}/${entry.name}`
+			// Vitest's default exclude collects nothing beneath these directories.
+			if (entry.isDirectory()) {
+				if (entry.name !== 'node_modules' && entry.name !== '.git') pending.push(path)
+			} else if (
+				entry.isFile() &&
+				entry.name.endsWith('.test.ts') &&
+				lstatSync(resolve(directory, path)).nlink === 1
+			)
+				studies.push(path)
+		}
+	}
+	return studies.sort()
 }
 
 /**
@@ -3949,35 +5835,514 @@ export function collectFaceWrappers(directory: string): readonly string[] {
  * Inspects sheet setup membership and themes ordering from configuration data.
  * @param project - The resolved sheet project.
  * @param script - The optional chained styles and themes build command.
+ * @param directory - The target workspace root; defaults to the policy root.
  * @returns Missing setup paths and invalid isolation or ordering fields.
  */
-export function inspectSheetConfiguration(project: unknown, script?: string): readonly string[] {
+export function inspectSheetConfiguration(
+	project: unknown,
+	script?: string,
+	directory: string = POLICY_ROOT,
+): readonly string[] {
 	const test = readConfigRecord(readConfigRecord(project).test)
 	const setup = test.setupFiles
-	const failures: string[] = []
-	for (const path of ['./tests/setup.ts', './tests/setupBrowser.ts', './tests/setupStyles.ts'])
-		if (!Array.isArray(setup) || !setup.includes(path)) failures.push(path)
-	if (test.isolate !== false) failures.push('isolate')
-	if (
-		script !== undefined &&
+	return [
+		...[
+			'./tests/setup.ts',
+			'./tests/setupBrowser.ts',
+			...(existsSync(resolve(directory, 'tests/setupStyles.ts')) ? ['./tests/setupStyles.ts'] : []),
+		].filter((path) => !Array.isArray(setup) || !setup.includes(path)),
+		...(test.isolate !== false ? ['isolate'] : []),
+		...(script !== undefined &&
 		(!script.includes('vite.styles.config.ts') ||
 			!script.includes('vite.themes.config.ts') ||
 			script.indexOf('vite.styles.config.ts') > script.indexOf('vite.themes.config.ts'))
-	)
-		failures.push('themes order')
-	return failures
+			? ['themes order']
+			: []),
+	]
 }
 
+/** Lists source, application, test, configuration, script, and campaign paths for uniform computed-import proofs. */
+export const COMPUTED_IMPORT_PATHS: readonly string[] = Object.freeze([
+	'src/core/load.ts',
+	'src/browser/load.ts',
+	'src/server/load.ts',
+	'src/server/load.mts',
+	'src/server/load.js',
+	'src/server/load.mjs',
+	'src/server/load.cts',
+	'src/server/load.cjs',
+	'app/server/load.ts',
+	'tests/load.ts',
+	'tests/src/server/load.test.ts',
+	'configs/load.ts',
+	'scripts/load.ts',
+	'.orkestrel/sample/load.ts',
+	'.orkestrel/sample/instruments/harness/load.ts',
+	'.orkestrel/sample/instruments/harness/load.mts',
+])
+
+/** Lists nested same-face imports carrying a native collection sentinel in each source. */
+export const POLICY_VUE_RELATIVE_SOURCES: readonly PolicySource[] = Object.freeze([
+	{
+		path: 'app/vue/components/Panel.vue',
+		content: [
+			'<script lang="ts">',
+			"import * as boundary from '../composables/useTheme.js'",
+			'void boundary',
+			'debugger',
+			'</script>',
+			'',
+		].join('\n'),
+	},
+	{
+		path: 'app/vue/components/dialogs/Panel.vue',
+		content: [
+			'<script setup lang="ts">',
+			"import * as boundary from '../../composables/useTheme.js'",
+			'void boundary',
+			'debugger',
+			'</script>',
+			'',
+		].join('\n'),
+	},
+	{
+		path: 'app/vue/features/editor/dialogs/helpers.ts',
+		content: [
+			"import * as boundary from '../../../components/Toolbar.vue'",
+			'void boundary',
+			'debugger',
+			'',
+		].join('\n'),
+	},
+	{
+		path: 'app/vue/features/helpers.ts',
+		content: [
+			"import * as boundary from '../print/index.js'",
+			'void boundary',
+			'debugger',
+			'',
+		].join('\n'),
+	},
+	{
+		path: 'src/vue/features/helpers.ts',
+		content: [
+			"import * as boundary from '../print/index.js'",
+			'void boundary',
+			'debugger',
+			'',
+		].join('\n'),
+	},
+	{
+		path: 'src/vue/features/editor/helpers.ts',
+		content: [
+			"import * as boundary from '../../components/Toolbar.js'",
+			'void boundary',
+			'debugger',
+			'',
+		].join('\n'),
+	},
+])
+
+/** Supplies a valid direct Vue composable with its collection sentinel inside the exported function. */
+export const POLICY_VUE_COMPOSABLE_SOURCE: PolicySource = Object.freeze({
+	path: 'app/vue/composables/useTheme.ts',
+	content: [
+		'/** Reads the selected theme. */',
+		'export function useTheme(): string {',
+		'\tdebugger',
+		"\treturn 'light'",
+		'}',
+		'',
+	].join('\n'),
+})
+
+/** Lists lexical destinations independently of the host running the test. */
+export const POLICY_VUE_TARGET_CASES: ReadonlyArray<
+	readonly [string, string, string, string | undefined]
+> = Object.freeze([
+	[
+		'/work/app/vue/components/Panel.vue',
+		'/work',
+		'../composables/useTheme.js',
+		'app/vue/composables/useTheme.js',
+	],
+	[
+		'/work/app/vue/components/dialogs/Panel.vue',
+		'/work/',
+		'../../composables/useTheme.js',
+		'app/vue/composables/useTheme.js',
+	],
+	['/work/src/vue/features/editor/helpers.ts', '/work', '../../types.js', 'src/vue/types.js'],
+	[
+		'/work/app/vue/features/editor/dialogs/Panel.vue',
+		'/work',
+		'../../../components/Toolbar.vue',
+		'app/vue/components/Toolbar.vue',
+	],
+	['/work/app/vue/helpers.ts', '/work', '../print/index.js', 'app/print/index.js'],
+	['/work/app/vue/features/helpers.ts', '/work', '../print/index.js', 'app/vue/print/index.js'],
+	['/work/src/vue/features/helpers.ts', '/work', '../print/index.js', 'src/vue/print/index.js'],
+	['/work/app/vue/helpers.ts', '/work', '../browser?x', 'app/browser'],
+	['/work/app/vue/helpers.ts', '/work', '../browser/#fragment', 'app/browser'],
+	['/work/app/vue/helpers.ts', '/work', './entry.js?raw#fragment', 'app/vue/entry.js'],
+	['/work/app/vue/helpers.ts', '/work', './%2e%2e/entry.js', 'app/vue/%2e%2e/entry.js'],
+	['/work/app/vue/helpers.ts', '/work', '../../src/vue/helpers.js', 'src/vue/helpers.js'],
+	[
+		'/work/src/vue/nested/app/vue/helpers.ts',
+		'/work',
+		'../print/index.js',
+		'src/vue/nested/app/print/index.js',
+	],
+	['/app/vue/helpers.ts', '/', './entry.js', 'app/vue/entry.js'],
+	['C:/work/app/vue/features/helpers.ts', 'C:/work/', '../types.js', 'app/vue/types.js'],
+	['C:\\work\\app\\vue\\features\\helpers.ts', 'C:\\work\\', '../types.js', 'app/vue/types.js'],
+	['C:\\app\\vue\\helpers.ts', 'C:\\', './entry.js', 'app/vue/entry.js'],
+	[
+		'\\\\host\\share\\work\\app\\vue\\features\\helpers.ts',
+		'\\\\host\\share\\work\\',
+		'../types.js',
+		'app/vue/types.js',
+	],
+	['//host/share/app/vue/helpers.ts', '//host/share', './entry.js', 'app/vue/entry.js'],
+	['/work-other/app/vue/helpers.ts', '/work', './entry.js', undefined],
+	['C:/work-other/app/vue/helpers.ts', 'C:/work', './entry.js', undefined],
+	['c:/work/app/vue/helpers.ts', 'C:/work', './entry.js', undefined],
+	['D:/work/app/vue/helpers.ts', 'C:/work', './entry.js', undefined],
+	['//host/other/app/vue/helpers.ts', '//host/share', './entry.js', undefined],
+	['/work/app/vuex/helpers.ts', '/work', './entry.js', undefined],
+	['/work/other/app/vue/helpers.ts', '/work', './entry.js', undefined],
+	['app/vue/helpers.ts', '/work', './entry.js', undefined],
+	['/work/app/vue/helpers.ts', 'work', './entry.js', undefined],
+	['/work/../other/app/vue/helpers.ts', '/work/../other', './entry.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', '../../../print/index.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', './../types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', '.././types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', './name/../types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', './name/./types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', './name//types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', '..\\types.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', '/machine/entry.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', '@src/vue', undefined],
+	['/work/app/vue/helpers.ts', '/work', '././entry.js', undefined],
+	['/work/app/vue/helpers.ts', '/work', './.', undefined],
+	['/work/app/vue/helpers.ts', '/work', '././entry.js?raw#fragment', undefined],
+	['/work/app/vue/helpers.ts', '/work', './entry.js', 'app/vue/entry.js'],
+	['/work/app/vue/features/helpers.ts', '/work', '../entry.js', 'app/vue/entry.js'],
+	['/work/app/vue/helpers.ts', '/work', '.', 'app/vue'],
+	['/work/app/vue/helpers.ts', '/work', './', 'app/vue'],
+])
+
+/** Lists the two existing override owners without inferring faces from a filename suffix. */
+export const POLICY_VUE_FACES = Object.freeze(['src/vue', 'app/vue'] as const)
+
+/** Lists importer locations that a directly invoked Vue rule must refuse to classify. */
+export const POLICY_VUE_UNCLASSIFIED_FILES = Object.freeze([
+	'../outside/app/vue/helpers.ts',
+	'other/app/vue/helpers.ts',
+	'app/vuex/helpers.ts',
+])
+
+/** Lists native source-bearing syntax, distinguishing forms that need TypeScript parsing. */
+export const POLICY_VUE_IMPORT_FORMS = Object.freeze([
+	{ name: 'value', before: 'import * as boundary from ', after: '\nvoid boundary', typed: false },
+	{ name: 'type', before: 'import type { Boundary } from ', after: '', typed: true },
+	{ name: 'named', before: 'export { boundary } from ', after: '', typed: false },
+	{ name: 'star', before: 'export * from ', after: '', typed: false },
+	{ name: 'namedType', before: 'export type { Boundary } from ', after: '', typed: true },
+	{ name: 'starType', before: 'export type * from ', after: '', typed: true },
+	{ name: 'dynamic', before: 'void import(', after: ')', typed: false },
+])
+
+/** Lists every configured extension and both native Vue script extraction forms. */
+export const POLICY_VUE_POPULATIONS = Object.freeze([
+	{ name: 'cjs', extension: 'cjs', before: '', after: '', typed: false },
+	{ name: 'cts', extension: 'cts', before: '', after: '', typed: true },
+	{ name: 'js', extension: 'js', before: '', after: '', typed: false },
+	{ name: 'jsx', extension: 'jsx', before: '', after: '', typed: false },
+	{ name: 'mjs', extension: 'mjs', before: '', after: '', typed: false },
+	{ name: 'mts', extension: 'mts', before: '', after: '', typed: true },
+	{ name: 'ts', extension: 'ts', before: '', after: '', typed: true },
+	{ name: 'tsx', extension: 'tsx', before: '', after: '', typed: true },
+	{
+		name: 'script',
+		extension: 'vue',
+		before: '<script lang="ts">\n',
+		after: '</script>\n',
+		typed: true,
+	},
+	{
+		name: 'setup',
+		extension: 'vue',
+		before: '<script setup lang="ts">\n',
+		after: '</script>\n',
+		typed: true,
+	},
+])
+
+/** Crosses admitted nested imports and refused sibling imports with the actual syntax populations. */
+export const POLICY_VUE_IMPORT_CASES: readonly PolicyVueImportCase[] = Object.freeze(
+	POLICY_VUE_FACES.flatMap((face) =>
+		POLICY_VUE_POPULATIONS.flatMap((population) =>
+			POLICY_VUE_IMPORT_FORMS.filter((form) => !form.typed || population.typed).flatMap((form) =>
+				[false, true].map((boundary) => ({
+					path: `${face}/${boundary ? '' : 'features/editor/'}${population.name}${form.name}.${population.extension}`,
+					content:
+						population.before +
+						form.before +
+						JSON.stringify(boundary ? '../print/index.js' : '../../components/Toolbar.vue') +
+						form.after +
+						'\ndebugger\n' +
+						population.after,
+					boundary,
+					restricted: false,
+				})),
+			),
+		),
+	),
+)
+
+/** Lists relative destinations and independent raw-spelling bans under the complete configuration. */
+export const POLICY_VUE_BOUNDARY_ROWS: ReadonlyArray<readonly [string, string, boolean, boolean]> =
+	Object.freeze([
+		['helpers.ts', '../print/index.js', true, false],
+		['helpers.ts', '../src/print/index.js', true, false],
+		['helpers.ts', '../print.ext/index.js', true, false],
+		['helpers.ts', '../vuex/index.js', true, false],
+		['helpers.ts', '../corex/index.js', true, false],
+		['helpers.ts', '../browserx/index.js', true, false],
+		['helpers.ts', '../print?raw', true, false],
+		['helpers.ts', '../print#fragment', true, false],
+		['features/helpers.ts', '../print/index.js', false, false],
+		['features/helpers.ts', '../print.ext/index.js', false, false],
+		['features/editor/dialogs/helpers.ts', '../../../components/Toolbar.vue', false, false],
+		['features/editor/helpers.ts', '../../../print/index.js', true, false],
+		['features/editor/helpers.ts', '../../../../src/print/index.js', true, false],
+		['features/helpers.ts', '../types.js?raw#fragment', false, false],
+		['helpers.ts', './index.js', false, false],
+		['helpers.ts', '../../../outside/index.js', true, false],
+		['helpers.ts', '@src/core', false, false],
+		['helpers.ts', '@src/browser', false, false],
+		['helpers.ts', '@src/vue', false, false],
+		['helpers.ts', '@src/print', false, true],
+		['helpers.ts', '@src/corex', false, true],
+		['helpers.ts', '@src/', false, true],
+		['helpers.ts', '@src/server', false, true],
+		['helpers.ts', '@orkestrel/sample/server', false, true],
+		['helpers.ts', 'node:fs', false, true],
+		['helpers.ts', 'fs/promises', false, true],
+		['helpers.ts', '/machine/entry.js', false, true],
+		['helpers.ts', 'C:/machine/entry.js', false, true],
+		['helpers.ts', 'C:\\machine\\entry.js', false, true],
+		['helpers.ts', 'file:///machine/entry.js', false, true],
+		['helpers.ts', 'https://host/entry.js', false, true],
+		['helpers.ts', 'data:text/javascript,export{}', false, true],
+		['helpers.ts', '..\\print\\index.js', false, true],
+		['helpers.ts', './../types.js', true, true],
+		['helpers.ts', '.././types.js', true, true],
+		['helpers.ts', './name/../types.js', true, true],
+		['helpers.ts', './name/./types.js', true, true],
+		['helpers.ts', './name//types.js', true, true],
+		['helpers.ts', 'typescript', false, true],
+		['helpers.ts', '../server/index.js', true, true],
+		['features/helpers.ts', '../server/index.js', false, true],
+	])
+
+/** Supplies face-specific alias requirements and preserves existing application-relative admissions. */
+export const POLICY_VUE_OWNER_ROWS: Readonly<
+	Record<string, ReadonlyArray<readonly [string, string, boolean, boolean]>>
+> = Object.freeze({
+	'src/vue': [
+		['helpers.ts', '../browser?x', false, true],
+		['helpers.ts', '../browser#fragment', false, true],
+		['helpers.ts', '@app/core', false, true],
+		['features/helpers.ts', '../../../app/core/types.js', true, true],
+		['features/helpers.ts', '../../core/helpers.js', false, true],
+		['features/helpers.ts', '../../browser/helpers.js', false, true],
+		['features/helpers.ts', '../core/helpers.js', false, true],
+		['features/helpers.ts', '../browser/helpers.js', false, true],
+		['nested/app/vue/helpers.ts', '../print/index.js', false, false],
+	],
+	'app/vue': [
+		['helpers.ts', '../browser?x', false, false],
+		['helpers.ts', '../browser#fragment', false, false],
+		['helpers.ts', '../browser/index.js', false, false],
+		['features/helpers.ts', '../../browser/helpers.js', false, false],
+		['helpers.ts', '../core/index.js', false, false],
+		['helpers.ts', '../../src/core/index.js', false, false],
+		['helpers.ts', '../../src/browser/index.js', false, false],
+		['helpers.ts', '../../src/vue/index.js', false, false],
+		['helpers.ts', '@app/core', false, false],
+		['helpers.ts', '@app/browser', false, false],
+		['helpers.ts', '@app/vue', false, false],
+		['helpers.ts', '@app/print', false, true],
+		['helpers.ts', '@app/server', false, true],
+		['features/helpers.ts', '../../server/index.js', true, true],
+		['helpers.ts', '../../src/server/index.js', true, true],
+		['nested/src/vue/helpers.ts', '../print/index.js', false, false],
+	],
+})
+
+/** Materializes the boundary rows as separate collected modules without resolving their targets. */
+export const POLICY_VUE_BOUNDARY_CASES: readonly PolicyVueImportCase[] = Object.freeze([
+	...POLICY_VUE_FACES.flatMap((face) =>
+		[...POLICY_VUE_BOUNDARY_ROWS, ...(POLICY_VUE_OWNER_ROWS[face] ?? [])].map(
+			([file, source, boundary, restricted], index) => ({
+				path: `${face}/${file.replace('helpers.ts', `boundary${index}.ts`)}`,
+				content:
+					'import * as boundary from ' + JSON.stringify(source) + '\nvoid boundary\ndebugger\n',
+				boundary,
+				restricted,
+			}),
+		),
+	),
+	...POLICY_VUE_FACES.flatMap((face) => [
+		{
+			path: `${face}/leadingdotentry.ts`,
+			content: 'import * as boundary from "././entry.js"\nvoid boundary\ndebugger\n',
+			boundary: true,
+			restricted: false,
+		},
+		{
+			path: `${face}/leadingdotonly.ts`,
+			content: 'import * as boundary from "./."\nvoid boundary\ndebugger\n',
+			boundary: true,
+			restricted: false,
+		},
+		{
+			path: `${face}/leadingdotquery.ts`,
+			content: 'import * as boundary from "././entry.js?raw#fragment"\nvoid boundary\ndebugger\n',
+			boundary: true,
+			restricted: false,
+		},
+	]),
+])
+
+/** Lists nonliteral sources and source-less exports the relative rule leaves to their existing owners. */
+export const POLICY_VUE_COMPUTED_FORMS = Object.freeze([
+	'const target = "../print/index.js"; void import(target)',
+	'void import("../print/" + "index.js")',
+	'void import(`../print/index.js`)',
+	'const boundary = 1; export { boundary }',
+])
+
+/** Supplies collection sentinels for nonliteral and source-less forms in every configured population. */
+export const POLICY_VUE_COMPUTED_CASES: readonly PolicyVueImportCase[] = Object.freeze(
+	POLICY_VUE_FACES.flatMap((face) =>
+		POLICY_VUE_POPULATIONS.flatMap((population) =>
+			POLICY_VUE_COMPUTED_FORMS.map((content, index) => ({
+				path: `${face}/computed${population.name}${index}.${population.extension}`,
+				content: population.before + content + '\ndebugger\n' + population.after,
+				boundary: false,
+				restricted: false,
+			})),
+		),
+	),
+)
+
+/** Lists the measured CommonJS parser refusals by original relative filename, token, and offset. */
+export const POLICY_VUE_PARSER_ROWS: ReadonlyArray<readonly [string, string, number]> =
+	Object.freeze([
+		['cjsvalue.cjs', 'import', 0],
+		['features/editor/cjsvalue.cjs', 'import', 0],
+		['cjsnamed.cjs', 'export', 0],
+		['features/editor/cjsnamed.cjs', 'export', 0],
+		['cjsstar.cjs', 'export', 0],
+		['features/editor/cjsstar.cjs', 'export', 0],
+		['computedcjs3.cjs', 'export', 20],
+	])
+
+/** Retains each original parser-refused input on both faces with its exact expected native location. */
+export const POLICY_VUE_PARSER_CASES = Object.freeze(
+	POLICY_VUE_FACES.flatMap((face) =>
+		POLICY_VUE_PARSER_ROWS.map(([file, keyword, offset]) => {
+			const path = `${face}/${file}`
+			const source = [...POLICY_VUE_IMPORT_CASES, ...POLICY_VUE_COMPUTED_CASES].find(
+				(candidate) => candidate.path === path,
+			)
+			if (source === undefined) throw new Error(`Missing original Vue parser fixture ${path}`)
+			return {
+				...source,
+				keyword,
+				message: `Cannot use ${keyword} statement outside a module`,
+				span: { offset, length: keyword.length, line: 1, column: offset + 1 },
+			}
+		}),
+	),
+)
+
+/** Retains all other original inputs under strict rule-code and debugger-sentinel validation. */
+export const POLICY_VUE_PARSED_CASES: readonly PolicyVueImportCase[] = Object.freeze(
+	[...POLICY_VUE_IMPORT_CASES, ...POLICY_VUE_COMPUTED_CASES].filter(
+		(source) => !POLICY_VUE_PARSER_CASES.some((refused) => refused.path === source.path),
+	),
+)
+
+/** Preserves the two removed relative alternatives solely for scratch regression controls. */
+export const POLICY_VUE_ORIGINAL_RELATIVES: Readonly<Record<string, string>> = Object.freeze({
+	'src/vue': String.raw`(?:\.\./)+(?:src/)?(?:[^/.scbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$)`,
+	'app/vue': String.raw`(?:\.\./)+(?:src/|app/)?(?:[^/.sacbv][^/.]*|s|s[^/.r][^/.]*|sr|sr[^/.c][^/.]*|src[^/.][^/.]*|a|a[^/.p][^/.]*|ap|ap[^/.p][^/.]*|app[^/.][^/.]*|c|c[^/.o][^/.]*|co|co[^/.r][^/.]*|cor|cor[^/.e][^/.]*|core[^/.][^/.]*|b|b[^/.r][^/.]*|br|br[^/.o][^/.]*|bro|bro[^/.w][^/.]*|brow|brow[^/.s][^/.]*|brows|brows[^/.e][^/.]*|browse|browse[^/.r][^/.]*|browser[^/.][^/.]*|v|v[^/.u][^/.]*|vu|vu[^/.e][^/.]*|vue[^/.][^/.]*)(?:/|$)`,
+})
+
+/** Lists direct domain failures and look-alike folders that must remain unregistered. */
+export const POLICY_VUE_DOMAIN_CASES: readonly PolicyVueDomainCase[] = Object.freeze([
+	{ ...POLICY_VUE_COMPOSABLE_SOURCE, misplaced: false, malformed: false },
+	{
+		path: 'app/vue/composables/useWrong.ts',
+		content: 'export function useMode(): void { debugger }\n',
+		misplaced: false,
+		malformed: true,
+	},
+	{
+		path: 'app/vue/composables/useHidden.ts',
+		content: 'function useHidden(): void { debugger }\n',
+		misplaced: false,
+		malformed: true,
+	},
+	{
+		path: 'app/vue/composables/useMany.ts',
+		content: 'export function useMany(): void { debugger }\nexport function useOther(): void {}\n',
+		misplaced: false,
+		malformed: true,
+	},
+	{
+		path: 'app/vue/composables/useExtra.ts',
+		content: 'const extra = 1\nexport function useExtra(): void { debugger; void extra }\n',
+		misplaced: false,
+		malformed: true,
+	},
+	...[
+		'app/vue/composables/nested/useTheme.ts',
+		'app/vue/composables/nested/app/vue/composables/useTheme.ts',
+		'app/vue/composablesExtra/useTheme.ts',
+		'app/vue/other/useTheme.ts',
+		'src/vue/composables/useTheme.ts',
+		'app/vue/composables/index.ts',
+		'app/vue/composables/main.ts',
+		'app/vue/composables/UseTheme.ts',
+	].map((path) => ({
+		path,
+		content: POLICY_VUE_COMPOSABLE_SOURCE.content,
+		misplaced: true,
+		malformed: false,
+	})),
+	{
+		path: 'app/vue/composables/helpers.ts',
+		content: POLICY_VUE_COMPOSABLE_SOURCE.content,
+		misplaced: false,
+		malformed: false,
+	},
+])
+
 /**
- * Reads import restrictions and collection sentinels from the installed linter.
+ * Reads native diagnostic records through the installed linter without assigning rule codes.
  * @param directory - The fixture workspace containing the lint configuration.
- * @param paths - The fixtures carrying debugger collection sentinels.
- * @returns Diagnostic codes paired with workspace-relative paths.
+ * @param paths - The fixtures expected to produce native diagnostics.
+ * @returns Readonly native records for the caller's rule or parser validation contract.
  */
-export function readImportDiagnostics(
+export function readNativeDiagnostics(
 	directory: string,
 	paths: readonly string[],
-): ReadonlySet<string> {
+): ReadonlyArray<Readonly<Record<string, unknown>>> {
 	const manifestPath = createRequire(import.meta.url).resolve('oxlint/package.json')
 	const manifest = readConfigRecord(JSON.parse(readFileSync(manifestPath, 'utf8')))
 	const entry =
@@ -4003,18 +6368,118 @@ export function readImportDiagnostics(
 		)
 	const diagnostics = readConfigRecord(JSON.parse(result.stdout)).diagnostics
 	if (!Array.isArray(diagnostics)) throw new Error('Missing lint diagnostics')
-	const codes = new Set<string>()
-	for (const value of diagnostics) {
-		const diagnostic = readConfigRecord(value)
-		if (typeof diagnostic.code !== 'string' || typeof diagnostic.filename !== 'string')
-			throw new Error('Missing diagnostic location')
-		codes.add(
-			diagnostic.code +
+	return diagnostics.map(readConfigRecord)
+}
+
+/**
+ * Reads import restrictions and collection sentinels from the installed linter.
+ * @param directory - The fixture workspace containing the lint configuration.
+ * @param paths - The fixtures carrying debugger collection sentinels.
+ * @returns Diagnostic codes paired with workspace-relative paths.
+ */
+export function readImportDiagnostics(
+	directory: string,
+	paths: readonly string[],
+): ReadonlySet<string> {
+	const diagnostics = readNativeDiagnostics(directory, paths)
+	const codes = new Set(
+		diagnostics.map((value: unknown) => {
+			const diagnostic = readConfigRecord(value)
+			if (typeof diagnostic.code !== 'string' || typeof diagnostic.filename !== 'string')
+				throw new Error(
+					'Missing diagnostic location: ' +
+						JSON.stringify({
+							offending: value,
+							invalidDiagnostics: diagnostics.filter((candidate: unknown) => {
+								const candidateRecord = readConfigRecord(candidate)
+								return (
+									typeof candidateRecord.code !== 'string' ||
+									typeof candidateRecord.filename !== 'string'
+								)
+							}),
+						}),
+				)
+			return (
+				diagnostic.code +
 				' ' +
-				normalizePolicyFilename(realpathSync.native(directory), diagnostic.filename),
-		)
-	}
+				normalizePolicyFilename(realpathSync.native(directory), diagnostic.filename)
+			)
+		}),
+	)
 	for (const path of paths)
 		if (!codes.has('eslint(no-debugger) ' + path)) throw new Error(`Uncollected fixture ${path}`)
 	return codes
 }
+
+/**
+ * Reports whether a path is a physical directory, never a link to one.
+ *
+ * @remarks
+ * Reads the same two facts `isPhysicalDirectory` reads off an `lstat` and returns false for every
+ * inspection error, because this module is vendored byte-identical and imports nothing from the
+ * package.
+ *
+ * @param path - The absolute path to inspect.
+ * @returns True if the path is a directory and not a symbolic link; false otherwise, an unreadable
+ * path included.
+ */
+export function isPolicyDirectory(path: string): boolean {
+	try {
+		const entry = lstatSync(path)
+		return entry.isDirectory() && !entry.isSymbolicLink()
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Resolves a module specifier from this module without throwing.
+ *
+ * @param specifier - The package or subpath specifier to resolve.
+ * @returns The resolved file path, or `undefined` when the workspace installs no such package.
+ */
+export function resolvePolicyPackage(specifier: string): string | undefined {
+	try {
+		return createRequire(import.meta.url).resolve(specifier)
+	} catch {
+		return undefined
+	}
+}
+
+/** Names the workspace root, the directory above `tests/`, that the vendored proofs inspect. */
+export const POLICY_ROOT: string = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/**
+ * Holds whether the workspace publishes source from `src`; false for one with application environments alone.
+ *
+ * @remarks
+ * The `src` axis a declaration roll-up reads, derived from a recognized source environment that is
+ * a physical directory rather than from a `src` entry of any shape. A regular file, an empty
+ * directory, a directory holding no recognized environment, a symbolic link, and an entry this host
+ * refuses to inspect each leave a workspace publishing nothing, and reading the entry alone would
+ * put every one of them under the face proof. The inspection is caught rather than excused by
+ * option: `throwIfNoEntry` excuses an absent path alone and rethrows a permission refusal, and a
+ * throw at module scope is a collection error that takes a whole file down in that target rather
+ * than failing one case. This is the derivation `targetToEnvironments` uses, which filters the
+ * environment names by a contained physical directory, and it answers the same question
+ * `blueprintToScripts` answers from a blueprint's own `src` list. A workspace declaring app
+ * environments alone publishes no library, so
+ * it vendors no `configs/src/` face wrapper and has no roll-up to measure. A face proof is
+ * conditioned on this axis rather than on a face wrapper: a workspace that declares the axis and
+ * vendors no wrapper carries the defect such a proof reports, so that workspace must still fail the
+ * proof. The manifest cases read the same fact from their own `private` flag and name it
+ * `manifestPublishes` for the source that decides it there; this reads the axis on disk, so a
+ * workspace whose manifest and shape disagree fails one of the two rather than neither.
+ */
+export const POLICY_PUBLISHES: boolean = ['core', 'browser', 'server'].some((environment) =>
+	isPolicyDirectory(resolve(POLICY_ROOT, 'src', environment)),
+)
+
+/**
+ * Holds the declaration extractor's entry path, or `undefined` where the workspace installs none.
+ *
+ * @remarks
+ * A declaration roll-up loads the extractor package, which only a workspace publishing source from
+ * `src` installs. The resolution is the mechanism its proof is conditioned on.
+ */
+export const POLICY_EXTRACTOR: string | undefined = resolvePolicyPackage('@microsoft/api-extractor')

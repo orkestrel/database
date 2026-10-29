@@ -86,7 +86,7 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
 		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
-		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
+		"test:bench": "vitest bench --config vite.config.ts --no-cache --project \"probe (bench)\" --mode benchmark",
 		"prepack": "npm run build",
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
 		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
