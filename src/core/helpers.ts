@@ -18,6 +18,7 @@ import type {
 	TableSchema,
 } from './types.js'
 import {
+	attempt,
 	compileGuard,
 	isArray,
 	isBoolean,
@@ -192,7 +193,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 
 			if (leftArray && rightArray) {
 				if (currentLeft.length !== currentRight.length) return false
-				for (let index = 0; index < currentLeft.length; index += 1) {
+				for (const index of Array.prototype.keys.call(currentLeft)) {
 					const leftOwn = Object.hasOwn(currentLeft, index)
 					const rightOwn = Object.hasOwn(currentRight, index)
 					if (leftOwn !== rightOwn) return false
@@ -219,6 +220,37 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
+ * Checks whether a fixed-length wildcard segment matches a value at an offset.
+ *
+ * @remarks
+ * Compares UTF-16 code units: `single` matches any one unit, and every other segment
+ * unit matches itself. An offset that leaves the segment outside the value fails.
+ *
+ * @param value - The value to read
+ * @param segment - The segment, holding no any-run wildcard
+ * @param at - The value offset the segment starts at
+ * @param single - The single-char wildcard char
+ * @returns True if every segment unit matches the value unit at its offset; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesWildcardSegment('hello', 'l_o', 2, '_') // true
+ * ```
+ */
+export function matchesWildcardSegment(
+	value: string,
+	segment: string,
+	at: number,
+	single: string,
+): boolean {
+	return (
+		at >= 0 &&
+		at + segment.length <= value.length &&
+		segment.split('').every((unit, offset) => unit === single || unit === value[at + offset])
+	)
+}
+
+/**
  * Matches a value against a wildcard pattern in linear time — the shared, ReDoS-safe
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
@@ -227,19 +259,20 @@ export function equalsValue(left: unknown, right: unknown): boolean {
  * `.*` segments separated by literals, matched against a long non-matching input, blow
  * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it,
  * while a `LIKE` / `GLOB` pattern is a caller-supplied operand this package cannot
- * trust. So this builds no regex. It runs the classic greedy two-pointer wildcard match:
- * the `any` wildcard records its position and, on a later mismatch, backtracks only to
- * that last `any` (letting it absorb one more char) — so the work is O(value × pattern),
- * never the exponential / polynomial backtracking a regex would do. The pattern length
- * is capped at {@link MAX_PATTERN_LENGTH} (a `VALIDATION` {@link DatabaseError} over it),
- * bounding the pattern factor so a match stays linear in the value length whatever the
- * pattern.
+ * trust. This builds no regex. It splits the pattern on `any` into fixed-length
+ * segments, anchors the first at the value's start and the last at its end, and places
+ * each middle segment at its leftmost match after the one before it, which is the only
+ * placement a match needs, so the work is O(value × pattern) at worst, never the
+ * exponential / polynomial backtracking a regex would do. The pattern length is capped
+ * at {@link MAX_PATTERN_LENGTH} (a `VALIDATION` {@link DatabaseError} over it), bounding
+ * the pattern factor so a match stays linear in the value length whatever the pattern.
  *
  * The `any` wildcard matches any run (including empty); `single` matches exactly one
- * char; every other pattern char matches itself literally (a pattern `.` / `(` / `\` is
- * a literal — the regex-metacharacter hazard is gone with the regex). `any` is tested
- * before a literal match, so a value that literally contains the wildcard char never
- * shadows the wildcard. Case folding is applied to both sides when `fold` is set.
+ * UTF-16 code unit; every other pattern char matches itself literally (a pattern `.` /
+ * `(` / `\` is a literal — the regex-metacharacter hazard is gone with the regex). The
+ * pattern splits on `any` before any literal comparison, so a value that literally
+ * contains the wildcard char never shadows the wildcard. Case folding is applied to
+ * both sides when `fold` is set.
  *
  * @param value - The value to test
  * @param pattern - The wildcard pattern
@@ -264,36 +297,31 @@ export function matchesWildcardPattern(
 		)
 	}
 	const haystack = fold ? value.toLowerCase() : value
-	const needle = fold ? pattern.toLowerCase() : pattern
-	let vi = 0
-	let pi = 0
-	// The greedy backtrack point: the pattern index of the last `any` wildcard + the value
-	// index it was taken at. On a mismatch the walk resumes immediately past it and lets it absorb one more
-	// char (`mark += 1`) — O(value × pattern), never a regex's exponential backtracking.
-	let star = -1
-	let mark = 0
-	while (vi < haystack.length) {
-		const pc = pi < needle.length ? needle[pi] : undefined
-		if (pc === any) {
-			// Record the wildcard (it absorbs zero chars for now) and advance the pattern.
-			star = pi
-			mark = vi
-			pi += 1
-		} else if (pc !== undefined && (pc === single || pc === haystack[vi])) {
-			vi += 1
-			pi += 1
-		} else if (star !== -1) {
-			// Mismatch under an open `any`: let it swallow one more value char and retry.
-			pi = star + 1
-			mark += 1
-			vi = mark
-		} else {
-			return false
-		}
+	const segments = (fold ? pattern.toLowerCase() : pattern).split(any)
+	const head = segments[0] ?? ''
+	const tail = segments.at(-1) ?? ''
+	if (segments.length === 1) {
+		return haystack.length === head.length && matchesWildcardSegment(haystack, head, 0, single)
 	}
-	// The value is consumed — the leftover pattern matches iff it is all `any` wildcards.
-	while (pi < needle.length && needle[pi] === any) pi += 1
-	return pi === needle.length
+	const end = haystack.length - tail.length
+	if (
+		end < head.length ||
+		!matchesWildcardSegment(haystack, head, 0, single) ||
+		!matchesWildcardSegment(haystack, tail, end, single)
+	) {
+		return false
+	}
+	const reached = segments.slice(1, -1).reduce<number | undefined>((from, segment) => {
+		if (from === undefined) return undefined
+		const at = segment.includes(single)
+			? new Array<undefined>(Math.max(0, end - segment.length - from + 1))
+					.keys()
+					.map((offset) => from + offset)
+					.find((candidate) => matchesWildcardSegment(haystack, segment, candidate, single))
+			: haystack.indexOf(segment, from)
+		return at === undefined || at < 0 || at + segment.length > end ? undefined : at + segment.length
+	}, head.length)
+	return reached !== undefined
 }
 
 /**
@@ -420,18 +448,16 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
  * @returns True if the row satisfies the combined conditions; false otherwise
  */
 export function matchesQuery(row: Row, conditions: readonly Condition[]): boolean {
-	let result = true
-	let seeded = false
-	for (const condition of conditions) {
-		const match = matchesCondition(row, condition)
-		if (!seeded) {
-			result = match
-			seeded = true
-		} else {
-			result = condition.connector === 'or' ? result || match : result && match
-		}
-	}
-	return result
+	return (
+		Iterator.from(conditions).reduce<boolean | undefined>((previous, condition) => {
+			const match = matchesCondition(row, condition)
+			return previous === undefined
+				? match
+				: condition.connector === 'or'
+					? previous || match
+					: previous && match
+		}, undefined) ?? true
+	)
 }
 
 /**
@@ -502,21 +528,18 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
  */
 export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly Row[] {
 	validatePage(input)
-	let result = rows
 	const conditions = input?.conditions
-	if (conditions !== undefined && conditions.length > 0) {
-		result = result.filter((row) => matchesQuery(row, conditions))
-	}
+	const filtered =
+		conditions !== undefined && conditions.length > 0
+			? rows.filter((row) => matchesQuery(row, conditions))
+			: rows
 	const order = input?.order
-	if (order !== undefined && order.length > 0) {
-		result = sortRows(result, order)
-	}
+	const sorted = order !== undefined && order.length > 0 ? sortRows(filtered, order) : filtered
 	const offset = input?.offset ?? 0
 	const limit = input?.limit
-	if (offset > 0 || limit !== undefined) {
-		result = result.slice(offset, limit !== undefined ? offset + limit : undefined)
-	}
-	return result
+	return offset > 0 || limit !== undefined
+		? sorted.slice(offset, limit !== undefined ? offset + limit : undefined)
+		: sorted
 }
 
 // === Aggregation
@@ -541,22 +564,23 @@ export function computeAggregate(
 	column: FieldPath,
 ): number | undefined {
 	if (operation === 'count') return rows.length
-	const numbers: number[] = []
-	for (const row of rows) {
-		if (!isRecord(row)) continue
-		const value = parseNumber(resolveField(row, column))
-		if (value !== undefined) numbers.push(value)
-	}
+	const numbers = Iterator.from(rows)
+		.flatMap((row) => {
+			if (!isRecord(row)) return []
+			const value = parseNumber(resolveField(row, column))
+			return value === undefined ? [] : [value]
+		})
+		.toArray()
 	if (numbers.length === 0) return undefined
 	if (operation === 'sum' || operation === 'average') {
 		const total = numbers.reduce((sum, value) => sum + value, 0)
 		return operation === 'average' ? total / numbers.length : total
 	}
-	let result = operation === 'minimum' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY
-	for (const value of numbers) {
-		result = operation === 'minimum' ? Math.min(result, value) : Math.max(result, value)
-	}
-	return result
+	return numbers.reduce(
+		(result, value) =>
+			operation === 'minimum' ? Math.min(result, value) : Math.max(result, value),
+		operation === 'minimum' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY,
+	)
 }
 
 // === Keys
@@ -821,14 +845,14 @@ export function planMigration(
 	if (!isFiniteNumber(from) || !isFiniteNumber(to)) {
 		throw new DatabaseError('MIGRATION', 'Migration versions must be finite', { from, to })
 	}
-	let beforeSchema: readonly TableSchema[]
-	let targetSchema: readonly TableSchema[]
-	try {
-		beforeSchema = normalizeDriverSchema(deployed)
-		targetSchema = normalizeDriverSchema(declared)
-	} catch (error) {
-		throw new DatabaseError('MIGRATION', 'Migration schema is invalid', { cause: error })
+	const schemas = attempt(() => ({
+		before: normalizeDriverSchema(deployed),
+		target: normalizeDriverSchema(declared),
+	}))
+	if (!schemas.success) {
+		throw new DatabaseError('MIGRATION', 'Migration schema is invalid', { cause: schemas.error })
 	}
+	const { before: beforeSchema, target: targetSchema } = schemas.value
 	const deployedByName = new Map(beforeSchema.map((table) => [table.name, table]))
 	const declaredByName = new Map(targetSchema.map((table) => [table.name, table]))
 
@@ -933,14 +957,14 @@ export function projectMigrationSchema(
 	schema: readonly TableSchema[],
 	steps: readonly MigrationStep[],
 ): readonly TableSchema[] {
-	let owned: readonly TableSchema[]
-	let projectedSteps: readonly MigrationStep[]
-	try {
-		owned = normalizeDriverSchema(schema)
-		projectedSteps = cloneMigrationInput({ plan: { from: 0, to: 1, steps } }).plan.steps
-	} catch (error) {
-		throw new DatabaseError('MIGRATION', 'Migration input is invalid', { cause: error })
+	const captured = attempt(() => ({
+		owned: normalizeDriverSchema(schema),
+		steps: cloneMigrationInput({ plan: { from: 0, to: 1, steps } }).plan.steps,
+	}))
+	if (!captured.success) {
+		throw new DatabaseError('MIGRATION', 'Migration input is invalid', { cause: captured.error })
 	}
+	const { owned, steps: projectedSteps } = captured.value
 	const tables = new Map(owned.map((table) => [table.name, table]))
 	for (const step of projectedSteps) {
 		if (step.operation === 'table.add') {
@@ -1270,14 +1294,13 @@ export async function* scanDriver(
 				driver.insert('users', 'u1', { id: 'u1', name: 'Ada', age: 30 }),
 				driver.insert('users', 'u1', { id: 'u1', name: 'Grace', age: 40 }),
 			])
-			let fulfilled = 0
-			let conflicted = 0
-			for (const outcome of outcomes) {
-				if (outcome.status === 'fulfilled') fulfilled += 1
-				else if (isDatabaseError(outcome.reason) && outcome.reason.code === 'CONFLICT') {
-					conflicted += 1
-				}
-			}
+			const fulfilled = outcomes.filter((outcome) => outcome.status === 'fulfilled').length
+			const conflicted = outcomes.filter(
+				(outcome) =>
+					outcome.status === 'rejected' &&
+					isDatabaseError(outcome.reason) &&
+					outcome.reason.code === 'CONFLICT',
+			).length
 			const keys = await driver.keys('users')
 			await driver.close()
 			if (fulfilled !== 1 || conflicted !== 1 || !equalsValue(keys, ['u1'])) {
@@ -1340,34 +1363,25 @@ export async function* scanDriver(
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
 		const controller = new AbortController()
 		controller.abort('conformance abort')
-		let writeError: unknown
-		let insertError: unknown
-		let deleteError: unknown
-		try {
-			await driver.write(
+		const writeError = await captureFailure(() =>
+			driver.write(
 				'users',
 				'u2',
 				{ id: 'u2', name: 'Grace', age: 40 },
 				{ signal: controller.signal },
-			)
-		} catch (error) {
-			writeError = error
-		}
-		try {
-			await driver.insert(
+			),
+		)
+		const insertError = await captureFailure(() =>
+			driver.insert(
 				'users',
 				'u2',
 				{ id: 'u2', name: 'Grace', age: 40 },
 				{ signal: controller.signal },
-			)
-		} catch (error) {
-			insertError = error
-		}
-		try {
-			await driver.delete('users', 'u1', { signal: controller.signal })
-		} catch (error) {
-			deleteError = error
-		}
+			),
+		)
+		const deleteError = await captureFailure(() =>
+			driver.delete('users', 'u1', { signal: controller.signal }),
+		)
 		const keys = await driver.keys('users')
 		await driver.close()
 		if (
@@ -1634,18 +1648,16 @@ export async function* scanDriver(
 				}
 				break migratePhase
 			}
-			let caught: unknown
-			try {
-				await driver.migrate({
+			const migrate = driver.migrate.bind(driver)
+			const caught = await captureFailure(() =>
+				migrate({
 					plan: {
 						from: 0,
 						to: 1,
 						steps: [{ operation: 'table.remove', table: 'ghost' }],
 					},
-				})
-			} catch (error) {
-				caught = error
-			}
+				}),
+			)
 			await driver.close()
 			if (!isDatabaseError(caught) || caught.code !== 'MIGRATION') {
 				yield {
@@ -1900,4 +1912,21 @@ export async function auditDriver(
 	const findings: ConformanceFinding[] = []
 	for await (const finding of scanDriver(factory)) findings.push(finding)
 	return findings
+}
+
+/**
+ * Captures the exact rejection or synchronous throw from a driver conformance operation.
+ *
+ * @example
+ * ```ts
+ * await captureFailure(() => Promise.reject('refused')) // 'refused'
+ * ```
+ */
+export async function captureFailure(operation: () => Promise<unknown>): Promise<unknown> {
+	try {
+		await operation()
+		return undefined
+	} catch (error) {
+		return error
+	}
 }

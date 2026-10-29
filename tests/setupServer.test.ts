@@ -1,16 +1,21 @@
-import type { Diagnostic } from '@orkestrel/probe/server'
-import type { ESTree } from 'vite'
-import type { ParsedModule } from './setupServer.js'
-import type { ScratchInterface } from '@orkestrel/test/server'
-import type { TableSchema } from '@src/core'
 import { basename, dirname, join, posix } from 'node:path'
 import { createJSONDriver, createSQLiteDriver } from '@src/server'
 import { createMemoryDriver } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { existsSync, readFileSync } from 'node:fs'
 import { captureError, requireValue } from '@orkestrel/test'
 import {
+	WORKSPACE_ROOT,
+	GUIDE,
+	FIRST_FENCE,
+	SECOND_FENCE,
+	BROKEN_FENCE,
+	TRANSACTION_SCHEMA,
+	readEntryModule,
+	readNamedExports,
+	readDiagnostics,
+	readScratchParent,
+	readScratchNames,
 	attributeGuideFences,
 	checkCompilerDiagnostics,
 	checkEntryDiagnostics,
@@ -60,98 +65,6 @@ import {
 // that spawns two, so each such block states a budget sized for a contended host rather than
 // leaning on the project's 5 s default, which a loaded host clears by too little to distinguish
 // contention from a defect.
-
-/** This workspace's own root, the project whose declared aliases one case reads. */
-const WORKSPACE_ROOT = fileURLToPath(new URL('../', import.meta.url))
-
-/** One guide document whose fence bodies sit on lines this file states outright. */
-const GUIDE_LINES = [
-	'# The database guide',
-	'',
-	'```ts',
-	'const first: number = 1',
-	'```',
-	'',
-	'```ts',
-	'const second: number = 1',
-	'```',
-	'',
-]
-const GUIDE = GUIDE_LINES.join('\n')
-const FIRST_FENCE = 'const first: number = 1\n'
-const SECOND_FENCE = 'const second: number = 1\n'
-const BROKEN_FENCE = "const second: number = 'text'\n"
-
-/** The schema the transaction-wrapper cases open a real SQLite driver over. */
-const TRANSACTION_SCHEMA: readonly TableSchema[] = [
-	{
-		name: 'users',
-		primary: 'id',
-		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-		indexes: [],
-	},
-]
-
-/** A real temporary project plus the module the parser leaves are driven over. */
-interface EntryModuleInterface {
-	readonly parsed: ParsedModule
-	readonly scratch: ScratchInterface
-}
-
-/** Write a real temporary project and parse one of its modules off disk. */
-function readEntryModule(
-	files: Readonly<Record<string, string>>,
-	entry: string,
-): EntryModuleInterface {
-	const project = tempTypeScriptProject(files)
-	const path = join(project.scratch.path, entry)
-	return {
-		parsed: readModuleStatements(path),
-		scratch: project.scratch,
-	}
-}
-
-/** Read one module's named-export statements, in source order. */
-function readNamedExports(
-	statements: readonly ESTree.Statement[],
-): readonly ESTree.ExportNamedDeclaration[] {
-	const named: ESTree.ExportNamedDeclaration[] = []
-	for (const statement of statements) {
-		if (statement.type === 'ExportNamedDeclaration') named.push(statement)
-	}
-	return named
-}
-
-/** Compile one real source file at a project root and return what the compiler reported. */
-function readDiagnostics(source: string): {
-	readonly diagnostics: readonly Diagnostic[]
-	readonly path: string
-	readonly root: string
-	readonly scratch: ScratchInterface
-} {
-	const project = tempTypeScriptProject({ 'index.ts': source })
-	const root = project.scratch.path
-	const path = join(root, 'index.ts')
-	return {
-		diagnostics: readProjectDiagnostics(project.config, [path], {}),
-		path,
-		root,
-		scratch: project.scratch,
-	}
-}
-
-/** Probe the host's temporary-directory parent through a helper that reports its own path. */
-function readScratchParent(): string {
-	const storage = tempDatabasePath()
-	const parent = dirname(dirname(storage.path))
-	storage.cleanup()
-	return parent
-}
-
-/** List the scratch directories a prefix owns under a probed parent. */
-function readScratchNames(parent: string, prefix: string): readonly string[] {
-	return readdirSync(parent).filter((name) => name.startsWith(prefix))
-}
 
 describe('scanModuleSource', () => {
 	it('separates an ES module from a script and reports the refusal the parser gives', () => {

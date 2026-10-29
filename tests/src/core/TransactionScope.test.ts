@@ -1,7 +1,8 @@
+import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import { isDatabaseError } from '@src/core'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
-import { IteratorSource } from '../../setup.js'
+import { DatabaseSwitch, IteratorSource } from '../../setup.js'
 
 // `TransactionScope` (`src/core/TransactionScope.ts`) is the interned lifetime boundary
 // one transaction callback runs inside. It is reached in production through
@@ -16,12 +17,7 @@ describe('accepting and check', () => {
 		expect(() => scope.check()).not.toThrow()
 		scope.stop()
 		expect(scope.accepting).toBe(false)
-		let error: unknown
-		try {
-			scope.check()
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => scope.check())
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
 	})
 })
@@ -37,13 +33,13 @@ describe('track', () => {
 	it('rejects CONFLICT after stop without running the operation', async () => {
 		const scope = new TransactionScope()
 		scope.stop()
-		let ran = false
+		const ran = new DatabaseSwitch()
 		const rejected = scope.track(async () => {
-			ran = true
+			ran.enable()
 			return 1
 		})
 		await expect(rejected).rejects.toMatchObject({ code: 'CONFLICT' })
-		expect(ran).toBe(false)
+		expect(ran.active).toBe(false)
 	})
 
 	it('captures a synchronous throw from the operation as a rejection', async () => {
@@ -60,40 +56,40 @@ describe('track', () => {
 	it('contains work the callback never awaited', async () => {
 		const scope = new TransactionScope()
 		const release = Promise.withResolvers<void>()
-		let settled = false
+		const settled = new DatabaseSwitch()
 		void scope.track(async () => {
 			await release.promise
-			settled = true
+			settled.enable()
 		})
 		scope.stop()
 		const drained = scope.drain()
-		expect(settled).toBe(false)
+		expect(settled.active).toBe(false)
 		release.resolve()
 		await expect(drained).resolves.toBeUndefined()
-		expect(settled).toBe(true)
+		expect(settled.active).toBe(true)
 	})
 
 	it('drains an operation another tracked operation admitted before the boundary', async () => {
 		const scope = new TransactionScope()
 		const release = Promise.withResolvers<void>()
-		let nested = false
+		const nested = new DatabaseSwitch()
 		// Entered from inside the outer operation, while the scope still accepts. The
 		// outer promise settles first, so drain re-reads the set rather than reading
 		// it once and settling early.
 		const outer = scope.track(async () => {
 			void scope.track(async () => {
 				await release.promise
-				nested = true
+				nested.enable()
 			})
 			return 'outer'
 		})
 		await expect(outer).resolves.toBe('outer')
 		scope.stop()
 		const drained = scope.drain()
-		expect(nested).toBe(false)
+		expect(nested.active).toBe(false)
 		release.resolve()
 		await expect(drained).resolves.toBeUndefined()
-		expect(nested).toBe(true)
+		expect(nested.active).toBe(true)
 	})
 })
 
@@ -130,13 +126,10 @@ describe('drain', () => {
 describe('stream', () => {
 	it('applies the boundary per continuation and leaves an idle iterator unpinned', async () => {
 		const values = [1, 2, 3]
-		let index = 0
+		const iteratorValues = values.values()
 		const source = new IteratorSource<number>({
 			async next() {
-				if (index >= values.length) return { done: true, value: undefined }
-				const value = values[index]
-				index += 1
-				return { done: false, value: value ?? 0 }
+				return iteratorValues.next()
 			},
 		})
 		const scope = new TransactionScope()

@@ -264,14 +264,15 @@ export function matchesAggregateExactly(
 export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage): boolean {
 	if (!isString(declared)) return false
 	const type = declared.toUpperCase()
-	let affinity: 'INTEGER' | 'TEXT' | 'BLOB' | 'REAL' | 'NUMERIC'
-	if (type.includes('INT')) affinity = 'INTEGER'
-	else if (type.includes('CHAR') || type.includes('CLOB') || type.includes('TEXT'))
-		affinity = 'TEXT'
-	else if (type === '' || type.includes('BLOB')) affinity = 'BLOB'
-	else if (type.includes('REAL') || type.includes('FLOA') || type.includes('DOUB'))
-		affinity = 'REAL'
-	else affinity = 'NUMERIC'
+	const affinity = type.includes('INT')
+		? 'INTEGER'
+		: type.includes('CHAR') || type.includes('CLOB') || type.includes('TEXT')
+			? 'TEXT'
+			: type === '' || type.includes('BLOB')
+				? 'BLOB'
+				: type.includes('REAL') || type.includes('FLOA') || type.includes('DOUB')
+					? 'REAL'
+					: 'NUMERIC'
 	if (storage === 'integer' || storage === 'boolean') return affinity === 'INTEGER'
 	if (storage === 'text' || storage === 'json') return affinity === 'TEXT'
 	if (storage === 'blob') return affinity === 'BLOB'

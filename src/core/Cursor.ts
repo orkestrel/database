@@ -19,6 +19,7 @@ export class Cursor<T = Row> implements CursorInterface<T> {
 	#index = -1
 	#value: T | undefined
 	#closed = false
+	#initial: boolean
 
 	constructor(
 		keys: readonly Key[],
@@ -26,12 +27,14 @@ export class Cursor<T = Row> implements CursorInterface<T> {
 		update: (key: Key, changes: Partial<T>) => Promise<boolean>,
 		remove: (key: Key) => Promise<boolean>,
 		track: <R>(operation: () => Promise<R>) => Promise<R>,
+		initial = false,
 	) {
 		this.#keys = keys
 		this.#read = read
 		this.#update = update
 		this.#remove = remove
 		this.#track = track
+		this.#initial = initial
 	}
 
 	get value(): T | undefined {
@@ -47,6 +50,16 @@ export class Cursor<T = Row> implements CursorInterface<T> {
 	}
 
 	next(): Promise<void> {
+		if (this.#initial) {
+			const initial = this.#queue(() => this.#advance())
+			initial.then(
+				() => {
+					this.#initial = false
+				},
+				() => {},
+			)
+			return initial
+		}
 		return this.#track(() => this.#queue(() => this.#advance()))
 	}
 

@@ -3,7 +3,7 @@ import { stringShape } from '@orkestrel/contract'
 import { createIndexedDBDriver } from '@src/browser'
 import { collect } from '@orkestrel/test'
 import { afterEach, describe, expect, it } from 'vitest'
-import { tableSchemas } from '../../setup.js'
+import { DatabaseFixture, tableSchemas } from '../../setup.js'
 import { deleteDatabase, mintDatabase } from '../../setupBrowser.js'
 
 // `createIndexedDBDriver` (`src/browser/factories.ts`) in real Chromium: the
@@ -13,18 +13,18 @@ import { deleteDatabase, mintDatabase } from '../../setupBrowser.js'
 // round-trip + scan) and through the core `createDatabase` stack it is built to
 // feed.
 
-let name = ''
+const name = new DatabaseFixture<string>()
 
 afterEach(async () => {
-	if (name) await deleteDatabase(name)
-	name = ''
+	if (name.current !== undefined) await deleteDatabase(name.value)
+	name.clear()
 })
 
 describe('createIndexedDBDriver', () => {
 	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
-		name = mintDatabase('database-idbdriver-factory')
-		await deleteDatabase(name)
-		const driver = createIndexedDBDriver(name)
+		name.hold(mintDatabase('database-idbdriver-factory'))
+		await deleteDatabase(name.value)
+		const driver = createIndexedDBDriver(name.value)
 		await driver.open(tableSchemas('items'))
 		await driver.write('items', 'a', { id: 'a', n: 1 })
 		await driver.write('items', 'b', { id: 'b', n: 2 })
@@ -35,10 +35,10 @@ describe('createIndexedDBDriver', () => {
 	})
 
 	it('drives the core createDatabase stack (a typed-row round-trip over IndexedDB)', async () => {
-		name = mintDatabase('database-idbdriver-stack')
-		await deleteDatabase(name)
+		name.hold(mintDatabase('database-idbdriver-stack'))
+		await deleteDatabase(name.value)
 		const db = createDatabase({
-			driver: createIndexedDBDriver(name),
+			driver: createIndexedDBDriver(name.value),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
 		const users = db.table('users')

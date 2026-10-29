@@ -1,4 +1,6 @@
 export * from './types.js'
+export * from './SQLiteTransaction.js'
+export * from './JSONTransaction.js'
 export * from './compilers.js'
 export * from './constants.js'
 export * from './factories.js'

@@ -27,9 +27,10 @@ import {
 	projectMigrationSchema,
 	validatePage,
 } from '@src/core'
-import { isArray, isRecord } from '@orkestrel/contract'
+import { attempt, isArray, isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { JSONTransaction } from '../JSONTransaction.js'
 import { matchesAbsentPath } from '../helpers.js'
 
 /**
@@ -81,10 +82,7 @@ export class JSONDriver implements DriverInterface {
 	// The token and candidate are present only while one isolated transaction
 	// callback owns the writer. Root operations conflict instead of reaching
 	// speculative state; the scoped capability checks the token on every call.
-	#transaction: object | undefined
-	#candidate: MemoryDriver | undefined
-	#candidateIdentities: Map<string, object> | undefined
-	#candidateSchema: readonly TableSchema[] | undefined
+	readonly #transactions = new Set<JSONTransaction>()
 
 	constructor(path: string) {
 		this.#path = path
@@ -251,45 +249,7 @@ export class JSONDriver implements DriverInterface {
 
 	async #open(declared: readonly TableSchema[]): Promise<void> {
 		const parsed = await this.#document()
-		let stored: DriverMetadata | undefined
-		let tables: Readonly<Record<string, unknown>>
-		if (parsed === undefined) {
-			const fresh: Record<string, unknown> = {}
-			for (const table of declared) fresh[table.name] = []
-			tables = fresh
-		} else {
-			if (
-				!isRecord(parsed) ||
-				!Object.hasOwn(parsed, 'tables') ||
-				Object.keys(parsed).some((key) => key !== 'tables' && key !== 'metadata')
-			) {
-				throw new DatabaseError('DRIVER', 'Stored JSON database document is invalid', {
-					path: this.#path,
-					aspect: 'document',
-				})
-			}
-			if (!isRecord(parsed.tables)) {
-				throw new DatabaseError('DRIVER', 'Stored JSON tables are invalid', {
-					path: this.#path,
-					aspect: 'tables',
-				})
-			}
-			tables = parsed.tables
-			if (Object.hasOwn(parsed, 'metadata')) {
-				try {
-					stored = cloneDriverMetadata(parsed.metadata)
-				} catch {
-					const cause = new DatabaseError('VALIDATION', 'Stored JSON metadata failed validation', {
-						path: 'metadata',
-					})
-					throw new DatabaseError('DRIVER', 'Stored JSON metadata is invalid', {
-						path: this.#path,
-						aspect: 'metadata',
-						cause,
-					})
-				}
-			}
-		}
+		const [stored, tables] = this.#decodeDocument(parsed, declared)
 		const schema = normalizeDriverSchema(stored?.schema ?? declared)
 		const names = new Set(schema.map((table) => table.name))
 		for (const table of schema) {
@@ -354,35 +314,23 @@ export class JSONDriver implements DriverInterface {
 	async #transact<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R> {
 		this.#root()
 		const candidate = await this.#clone()
-		const token = {}
-		this.#transaction = token
-		this.#candidate = candidate
-		this.#candidateIdentities = new Map(this.#identities)
-		this.#candidateSchema = this.#schema
+		const token = new JSONTransaction(candidate, this.#schema, this.#identities)
+		this.#transactions.add(token)
 		try {
 			const value = await scope(this.#capability(token))
-			const schema = this.#candidateSchema
-			const identities = this.#candidateIdentities
-			if (schema === undefined || identities === undefined) {
-				throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
-			}
-			this.#candidate = undefined
-			this.#candidateIdentities = undefined
-			this.#candidateSchema = undefined
+			const schema = token.schema
+			const identities = token.identities
+			token.stop()
 			const metadata = await candidate.metadata()
 			await this.#serialize(undefined, candidate, schema, metadata)
 			this.#memory = candidate
-			this.#identities = identities
+			this.#identities = new Map(identities)
 			this.#schema = schema
 			this.#metadata = metadata === undefined ? undefined : cloneDriverMetadata(metadata)
 			return value
 		} finally {
-			if (this.#transaction === token) {
-				this.#transaction = undefined
-				this.#candidate = undefined
-				this.#candidateIdentities = undefined
-				this.#candidateSchema = undefined
-			}
+			token.stop()
+			this.#transactions.delete(token)
 		}
 	}
 
@@ -460,7 +408,7 @@ export class JSONDriver implements DriverInterface {
 		this.#metadata = metadata === undefined ? undefined : cloneDriverMetadata(metadata)
 	}
 
-	#capability(token: object): StorageInterface {
+	#capability(token: JSONTransaction): StorageInterface {
 		return {
 			read: this.#readCandidate.bind(this, token),
 			write: this.#writeCandidate.bind(this, token),
@@ -475,12 +423,12 @@ export class JSONDriver implements DriverInterface {
 		}
 	}
 
-	async #readCandidate(token: object, table: string, key: Key): Promise<Row | undefined> {
+	async #readCandidate(token: JSONTransaction, table: string, key: Key): Promise<Row | undefined> {
 		return this.#requireCandidate(token).read(table, key)
 	}
 
 	async #writeCandidate(
-		token: object,
+		token: JSONTransaction,
 		table: string,
 		key: Key,
 		row: Row,
@@ -490,7 +438,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	async #insertCandidate(
-		token: object,
+		token: JSONTransaction,
 		table: string,
 		key: Key,
 		row: Row,
@@ -500,7 +448,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	async #deleteCandidate(
-		token: object,
+		token: JSONTransaction,
 		table: string,
 		key: Key,
 		options?: OperationOptions,
@@ -508,50 +456,46 @@ export class JSONDriver implements DriverInterface {
 		return this.#requireCandidate(token).delete(table, key, options)
 	}
 
-	async #keysCandidate(token: object, table: string): Promise<readonly Key[]> {
+	async #keysCandidate(token: JSONTransaction, table: string): Promise<readonly Key[]> {
 		return this.#requireCandidate(token).keys(table)
 	}
 
-	#scanCandidate(token: object, table: string): AsyncIterable<Row> {
+	#scanCandidate(token: JSONTransaction, table: string): AsyncIterable<Row> {
 		const source = this.#requireCandidate(token).scan(table)
 		return new DriverIterator(source[Symbol.asyncIterator](), () => {
 			this.#requireCandidate(token)
 		})
 	}
 
-	async #clearCandidate(token: object, table: string): Promise<void> {
+	async #clearCandidate(token: JSONTransaction, table: string): Promise<void> {
 		await this.#requireCandidate(token).clear(table)
 	}
 
-	async #migrateCandidate(token: object, input: MigrationInput): Promise<void> {
+	async #migrateCandidate(token: JSONTransaction, input: MigrationInput): Promise<void> {
 		const memory = this.#requireCandidate(token)
-		const schema = this.#candidateSchema
-		const identities = this.#candidateIdentities
-		if (schema === undefined || identities === undefined) {
-			throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
-		}
+		const schema = token.schema
+		const identities = token.identities
 		const owned = cloneMigrationInput(input)
 		const projected = this.#projectIdentities(identities, owned.plan.steps)
-		this.#candidateSchema = await this.#apply(memory, schema, owned)
-		this.#candidateIdentities = projected
+		token.project(await this.#apply(memory, schema, owned), projected)
 	}
 
-	async #metadataCandidate(token: object): Promise<DriverMetadata | undefined> {
+	async #metadataCandidate(token: JSONTransaction): Promise<DriverMetadata | undefined> {
 		const metadata = await this.#requireCandidate(token).metadata()
 		return metadata === undefined ? undefined : cloneDriverMetadata(metadata)
 	}
 
-	async #stampCandidate(token: object, metadata: DriverMetadata): Promise<void> {
+	async #stampCandidate(token: JSONTransaction, metadata: DriverMetadata): Promise<void> {
 		const memory = this.#requireCandidate(token)
 		const owned = cloneDriverMetadata(metadata)
 		await memory.stamp(owned)
 	}
 
-	#requireCandidate(token: object): MemoryDriver {
-		if (this.#transaction !== token || this.#candidate === undefined) {
+	#requireCandidate(token: JSONTransaction): MemoryDriver {
+		if (!this.#transactions.has(token)) {
 			throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
 		}
-		return this.#candidate
+		return token.memory
 	}
 
 	#alignIdentities(schema: readonly TableSchema[]): Map<string, object> {
@@ -575,7 +519,7 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	#root(): void {
-		if (this.#transaction !== undefined) {
+		if (this.#transactions.size !== 0) {
 			throw new DatabaseError('CONFLICT', 'A transaction is active on this driver')
 		}
 	}
@@ -587,23 +531,71 @@ export class JSONDriver implements DriverInterface {
 	// return for it, so reading only ENOENT made the same tree open on one host and
 	// fail closed on another. Every existing unreadable or syntactically invalid file
 	// still fails closed, which is what this branch is for.
-	async #document(): Promise<unknown> {
-		let raw: string
-		try {
-			raw = await readFile(this.#path, 'utf-8')
-		} catch (error) {
-			if (matchesAbsentPath(error)) return undefined
-			throw new DatabaseError('DRIVER', 'Failed to read the JSON database file', {
+	#decodeDocument(
+		parsed: unknown,
+		declared: readonly TableSchema[],
+	): readonly [DriverMetadata | undefined, Readonly<Record<string, unknown>>] {
+		if (parsed === undefined) {
+			return [
+				undefined,
+				Object.fromEntries(Iterator.from(declared).map((table) => [table.name, []])),
+			]
+		}
+		if (
+			!isRecord(parsed) ||
+			!Object.hasOwn(parsed, 'tables') ||
+			Object.keys(parsed).some((key) => key !== 'tables' && key !== 'metadata')
+		) {
+			throw new DatabaseError('DRIVER', 'Stored JSON database document is invalid', {
 				path: this.#path,
-				cause: error,
+				aspect: 'document',
 			})
 		}
+		if (!isRecord(parsed.tables)) {
+			throw new DatabaseError('DRIVER', 'Stored JSON tables are invalid', {
+				path: this.#path,
+				aspect: 'tables',
+			})
+		}
+		const tables = parsed.tables
+		if (Object.hasOwn(parsed, 'metadata')) {
+			try {
+				return [cloneDriverMetadata(parsed.metadata), tables]
+			} catch {
+				const cause = new DatabaseError('VALIDATION', 'Stored JSON metadata failed validation', {
+					path: 'metadata',
+				})
+				throw new DatabaseError('DRIVER', 'Stored JSON metadata is invalid', {
+					path: this.#path,
+					aspect: 'metadata',
+					cause,
+				})
+			}
+		}
+		return [undefined, tables]
+	}
+
+	async #document(): Promise<unknown> {
+		const raw = await this.#readDocument()
+		if (raw === undefined) return undefined
 		try {
 			return JSON.parse(raw)
 		} catch {
 			throw new DatabaseError('DRIVER', 'Stored JSON database is invalid JSON', {
 				path: this.#path,
 				aspect: 'syntax',
+			})
+		}
+	}
+
+	async #readDocument(): Promise<string | undefined> {
+		try {
+			return await readFile(this.#path, 'utf-8')
+		} catch (error) {
+			if (matchesAbsentPath(error)) return undefined
+			throw new DatabaseError('DRIVER', 'Failed to read the JSON database file', {
+				path: this.#path,
+				cause: error,
 			})
 		}
 	}
@@ -660,9 +652,9 @@ export class JSONDriver implements DriverInterface {
 	// Queue a nontransactional operation behind #chain.
 	async #enqueue<R>(operation: () => Promise<R>, signal?: AbortSignal): Promise<R> {
 		checkAbort(signal)
-		let started = false
+		const cleanup = new AbortController()
 		const next = this.#chain.then(async () => {
-			started = true
+			cleanup.abort()
 			checkAbort(signal)
 			return operation()
 		})
@@ -671,12 +663,10 @@ export class JSONDriver implements DriverInterface {
 			() => {},
 		)
 		if (signal === undefined) return next
-		const cleanup = new AbortController()
 		return new Promise<R>((resolve, reject) => {
 			signal.addEventListener(
 				'abort',
 				() => {
-					if (started) return
 					try {
 						checkAbort(signal)
 					} catch (error) {
@@ -809,7 +799,6 @@ export class JSONDriver implements DriverInterface {
 		this.#flushCount += 1
 		const temp = `${this.#path}.${process.pid}.${this.#flushCount}.tmp`
 		const payload = owned === undefined ? { tables } : { metadata: owned, tables }
-		let dispatched = false
 		try {
 			await mkdir(dirname(this.#path), { recursive: true })
 			const serialized = JSON.stringify(payload, null, 2)
@@ -820,39 +809,39 @@ export class JSONDriver implements DriverInterface {
 				signal,
 			})
 			checkAbort(signal)
-			dispatched = true
+		} catch (error) {
+			const aborted = attempt(() => checkAbort(signal))
+			await this.#persistFailure(aborted.success ? error : aborted.error, temp)
+		}
+		try {
 			await rename(temp, this.#path)
 		} catch (error) {
-			let cause: unknown = error
-			if (!dispatched) {
-				try {
-					checkAbort(signal)
-				} catch (abort) {
-					cause = abort
-				}
-			}
-			try {
-				await rm(temp, { force: true })
-			} catch (cleanup) {
-				// A temp file that cannot exist was never left behind, so removing it did
-				// not fail in the sense this branch reports. `force` already absorbs
-				// ENOENT; ENOTDIR reaches here when the write failed before the temp was
-				// created because its parent is not a directory, and reporting `temp` and
-				// `cleanup` there would name residue that is not on disk.
-				if (!matchesAbsentPath(cleanup)) {
-					throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
-						path: this.#path,
-						temp,
-						cause,
-						cleanup,
-					})
-				}
-			}
-			if (isDatabaseError(cause) && cause.code === 'ABORTED') throw cause
-			throw new DatabaseError('DRIVER', 'Failed to persist the database file', {
-				path: this.#path,
-				cause,
-			})
+			await this.#persistFailure(error, temp)
 		}
+	}
+
+	async #persistFailure(cause: unknown, temp: string): Promise<never> {
+		try {
+			await rm(temp, { force: true })
+		} catch (cleanup) {
+			// A temp file that cannot exist was never left behind, so removing it did
+			// not fail in the sense this branch reports. `force` already absorbs
+			// ENOENT; ENOTDIR reaches here when the write failed before the temp was
+			// created because its parent is not a directory, and reporting `temp` and
+			// `cleanup` there would name residue that is not on disk.
+			if (!matchesAbsentPath(cleanup)) {
+				throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
+					path: this.#path,
+					temp,
+					cause,
+					cleanup,
+				})
+			}
+		}
+		if (isDatabaseError(cause) && cause.code === 'ABORTED') throw cause
+		throw new DatabaseError('DRIVER', 'Failed to persist the database file', {
+			path: this.#path,
+			cause,
+		})
 	}
 }

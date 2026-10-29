@@ -7,6 +7,7 @@ import {
 import { isContractError } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
+import { emptyValue } from '../../setup.js'
 
 describe('cloneDriverMetadata', () => {
 	it('returns a distinct normalized deeply frozen snapshot isolated from its source', () => {
@@ -70,7 +71,7 @@ describe('cloneDriverMetadata', () => {
 	it('contains cycles and functions without leaking a raw Contract error', () => {
 		const cyclic: Record<string, unknown> = { version: 1, schema: [] }
 		cyclic.self = cyclic
-		const inputs: readonly unknown[] = [cyclic, { version: 1, schema: [], extra: () => undefined }]
+		const inputs: readonly unknown[] = [cyclic, { version: 1, schema: [], extra: emptyValue }]
 
 		for (const input of inputs) {
 			const error = captureError(() => cloneDriverMetadata(input))

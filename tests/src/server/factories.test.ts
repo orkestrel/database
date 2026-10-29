@@ -1,10 +1,10 @@
 import { createDatabase } from '@src/core'
 import { stringShape } from '@orkestrel/contract'
 import { createJSONDriver, createSQLiteDriver } from '@src/server'
-import { collect } from '@orkestrel/test'
+import { collect, createTeardown } from '@orkestrel/test'
 import { afterEach, describe, expect, it } from 'vitest'
 import { tableSchemas } from '../../setup.js'
-import { driverSchema, tempDatabasePath } from '../../setupServer.js'
+import { databasePath, driverSchema } from '../../setupServer.js'
 
 // The server driver factories (`src/server/factories.ts`) — that each returns a working
 // instance of `DriverInterface`. The full behavior of what they build is covered in
@@ -13,21 +13,13 @@ import { driverSchema, tempDatabasePath } from '../../setupServer.js'
 // core `createDatabase` stack it exists to feed. This mirrors
 // `tests/src/core/factories.test.ts` and `tests/src/browser/factories.test.ts`.
 
-const cleanups: Array<() => void> = []
+const teardown = createTeardown()
 
-afterEach(() => {
-	while (cleanups.length > 0) cleanups.pop()?.()
-})
-
-function databasePath(): string {
-	const { path, cleanup } = tempDatabasePath()
-	cleanups.push(cleanup)
-	return path
-}
+afterEach(() => teardown.destroy())
 
 describe('createJSONDriver', () => {
 	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
-		const driver = createJSONDriver(databasePath())
+		const driver = createJSONDriver(databasePath(teardown))
 		await driver.open(tableSchemas('items'))
 		await driver.write('items', 'a', { id: 'a', n: 1 })
 		await driver.write('items', 'b', { id: 'b', n: 2 })
@@ -38,7 +30,7 @@ describe('createJSONDriver', () => {
 	})
 
 	it('drives the core createDatabase stack and persists across a reopen', async () => {
-		const path = databasePath()
+		const path = databasePath(teardown)
 		const tables = { users: { id: stringShape(), name: stringShape() } }
 		const first = createDatabase({ driver: createJSONDriver(path), tables })
 		await first.table('users').set({ id: 'u1', name: 'Ada' })
@@ -76,7 +68,7 @@ describe('createSQLiteDriver', () => {
 	})
 
 	it('honours a supplied path and persists across a reopen', async () => {
-		const path = databasePath()
+		const path = databasePath(teardown)
 		const tables = { users: { id: stringShape(), name: stringShape() } }
 		const first = createDatabase({ driver: createSQLiteDriver({ path }), tables })
 		await first.table('users').set({ id: 'u1', name: 'Ada' })

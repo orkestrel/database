@@ -1,10 +1,10 @@
-import type { StorageInterface } from '@src/core'
-import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
+import { captureError } from '@orkestrel/test'
+import { optionalShape, stringShape } from '@orkestrel/contract'
 import { createMemoryDriver, isDatabaseError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { DatabaseTransaction } from '../../../src/core/DatabaseTransaction.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
-import { tableSchemas } from '../../setup.js'
+import { COLUMNS, DatabaseCounter, tableSchemas, transactionView } from '../../setup.js'
 
 // `DatabaseTransaction` (`src/core/DatabaseTransaction.ts`) is the interned table-only
 // view a transaction callback receives as its `DatabaseStorageInterface`. In production
@@ -12,23 +12,6 @@ import { tableSchemas } from '../../setup.js'
 // `MemoryDriver` and a real `TransactionScope`, so the view's own contract — the scope
 // check on `table`, and the scope-bound `Table` it constructs — is pinned without a
 // database transaction around it.
-
-const COLUMNS = { users: { id: stringShape(), name: stringShape(), age: integerShape() } }
-
-async function transactionView(): Promise<{
-	readonly view: DatabaseTransaction<typeof COLUMNS>
-	readonly scope: TransactionScope
-	readonly driver: StorageInterface
-}> {
-	const driver = createMemoryDriver()
-	await driver.open(tableSchemas('users'))
-	const scope = new TransactionScope()
-	return {
-		view: new DatabaseTransaction(driver, COLUMNS, {}, undefined, undefined, scope),
-		scope,
-		driver,
-	}
-}
 
 describe('table()', () => {
 	it('returns a typed table bound to the transaction driver', async () => {
@@ -49,12 +32,7 @@ describe('table()', () => {
 	it('throws CONFLICT once the scope has settled', async () => {
 		const { view, scope } = await transactionView()
 		scope.stop()
-		let error: unknown
-		try {
-			view.table('users')
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => view.table('users'))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
 	})
 
@@ -71,12 +49,7 @@ describe('table()', () => {
 			undefined,
 			new TransactionScope(),
 		)
-		let error: unknown
-		try {
-			open.table('posts')
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => open.table('posts'))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('NOT_FOUND')
 	})
 
@@ -112,14 +85,14 @@ describe('the scoped table it builds', () => {
 		const driver = createMemoryDriver()
 		await driver.open(tableSchemas('events'))
 		const columns = { events: { id: optionalShape(stringShape()), kind: stringShape() } }
-		let minted = 0
+		const minted = new DatabaseCounter()
 		const view = new DatabaseTransaction(
 			driver,
 			columns,
 			{},
 			() => {
-				minted += 1
-				return `generated-${minted}`
+				minted.next()
+				return `generated-${minted.count}`
 			},
 			undefined,
 			new TransactionScope(),

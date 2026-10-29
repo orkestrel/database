@@ -1,5 +1,6 @@
 import type {
 	AggregateOperation,
+	ColumnSchema,
 	ColumnStorage,
 	Condition,
 	MigrationStep,
@@ -8,7 +9,6 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
-import type { SQLiteValue } from '@orkestrel/sqlite'
 import type { CompiledSQL } from './types.js'
 import { DatabaseError, findColumn, validatePage } from '@src/core'
 import { isString } from '@orkestrel/contract'
@@ -109,8 +109,7 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 // engine's `matchesQuery` exactly (NOT SQL's AND-over-OR precedence), so a
 // native read and an engine read agree on every query (the parity test). Branches
 // are centralized and public — no operator logic buried in closures.
-// This module speaks pure strings/values only. Its SQLiteValue import is
-// type-only and cannot couple the emitted JavaScript to the native package.
+// This module speaks pure strings and values without loading the native package.
 
 /**
  * Compiles one condition to its `<column> <operator>` SQL fragment and the parameters
@@ -192,17 +191,16 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 	// array (a nested path) — disambiguates a present JSON `null` from an
 	// absent path under `equals` / `not` (see the truth table above).
 	const jsonType = !isString(condition.column) ? compileJSONTypeSQL(condition.column) : ''
-	let sql: string
-	let values: readonly unknown[]
 	switch (condition.operator) {
-		case 'equals':
+		case 'equals': {
 			if (nullOperand && nested) {
 				return { sql: jsonType + " = 'null'", parameters: [] }
 			}
-			sql = column + ' = ?'
-			values = [first]
-			break
-		case 'not':
+			const sql = column + ' = ?'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'not': {
 			if (nullOperand) {
 				if (nested) {
 					return {
@@ -215,37 +213,45 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 				// scalar) — the engine's `not null` matches unconditionally.
 				return { sql: '1', parameters: [] }
 			}
-			sql = '(' + column + ' != ? OR ' + column + ' IS NULL)'
-			values = [first]
-			break
-		case 'above':
-			sql = column + ' > ?'
-			values = [first]
-			break
-		case 'below':
-			sql = '(' + column + ' < ? OR ' + column + ' IS NULL)'
-			values = [first]
-			break
-		case 'from':
-			sql = column + ' >= ?'
-			values = [first]
-			break
-		case 'to':
-			sql = '(' + column + ' <= ? OR ' + column + ' IS NULL)'
-			values = [first]
-			break
-		case 'between':
-			sql = column + ' BETWEEN ? AND ?'
-			values = [first, second]
-			break
-		case 'like':
-			sql = column + ' LIKE ?'
-			values = [first]
-			break
-		case 'glob':
-			sql = column + ' GLOB ?'
-			values = [first]
-			break
+			const sql = '(' + column + ' != ? OR ' + column + ' IS NULL)'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'above': {
+			const sql = column + ' > ?'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'below': {
+			const sql = '(' + column + ' < ? OR ' + column + ' IS NULL)'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'from': {
+			const sql = column + ' >= ?'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'to': {
+			const sql = '(' + column + ' <= ? OR ' + column + ' IS NULL)'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'between': {
+			const sql = column + ' BETWEEN ? AND ?'
+			const values = [first, second]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'like': {
+			const sql = column + ' LIKE ?'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'glob': {
+			const sql = column + ' GLOB ?'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
+		}
 		case 'starts': {
 			// Case-sensitive, exact compile (replaces the old LIKE-based one, which
 			// was ASCII-only case-INsensitive — a mismatch with the engine's
@@ -258,9 +264,10 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
 			}
 			const length = Array.from(text).length
-			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)'
-			values = [first]
-			break
+			const sql =
+				'(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
 		}
 		case 'ends': {
 			// Mirror of `starts`: `substr(<col>, -N)` (SQLite's 2-arg form counts
@@ -270,18 +277,20 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
 			}
 			const length = Array.from(text).length
-			sql = '(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)'
-			values = [first]
-			break
+			const sql =
+				'(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)'
+			const values = [first]
+			return compileBoundSQL(sql, values, nested, declared)
 		}
-		case 'any':
+		case 'any': {
 			if (condition.values.length === 0) return { sql: '0', parameters: [] }
-			sql = column + ' IN (' + condition.values.map(() => '?').join(', ') + ')'
-			values = condition.values
-			break
-		case 'none':
+			const sql = column + ' IN (' + condition.values.map(() => '?').join(', ') + ')'
+			const values = condition.values
+			return compileBoundSQL(sql, values, nested, declared)
+		}
+		case 'none': {
 			if (condition.values.length === 0) return { sql: '1', parameters: [] }
-			sql =
+			const sql =
 				'(' +
 				column +
 				' NOT IN (' +
@@ -289,13 +298,31 @@ export function compileConditionSQL(condition: Condition, schema: TableSchema): 
 				') OR ' +
 				column +
 				' IS NULL)'
-			values = condition.values
-			break
+			const values = condition.values
+			return compileBoundSQL(sql, values, nested, declared)
+		}
 		case 'absent':
 			return { sql: column + ' IS NULL', parameters: [] }
 		case 'present':
 			return { sql: column + ' IS NOT NULL', parameters: [] }
 	}
+}
+
+/**
+ * Encodes condition operands for a SQL fragment using their declared or inferred storage.
+ *
+ * @example
+ * ```ts
+ * compileBoundSQL('"age" > ?', [18], false, undefined)
+ * // { sql: '"age" > ?', parameters: ['18'] }
+ * ```
+ */
+export function compileBoundSQL(
+	sql: string,
+	values: readonly unknown[],
+	nested: boolean,
+	declared: ColumnSchema | undefined,
+): CompiledSQL {
 	return {
 		sql,
 		parameters: values.map((value) => {
@@ -333,15 +360,17 @@ export function compileWhereSQL(
 	const [first, ...remaining] = conditions
 	if (first === undefined) return { sql: '', parameters: [] }
 	const head = compileConditionSQL(first, schema)
-	let clause = head.sql
-	const parameters: SQLiteValue[] = [...head.parameters]
-	for (const condition of remaining) {
+	const fragments = remaining.map((condition) => {
 		const next = compileConditionSQL(condition, schema)
 		const operator = condition.connector === 'or' ? 'OR' : 'AND'
-		clause = '(' + clause + ' ' + operator + ' ' + next.sql + ')'
-		parameters.push(...next.parameters)
+		return { sql: ' ' + operator + ' ' + next.sql + ')', parameters: next.parameters }
+	})
+	const opening = '('.repeat(fragments.length)
+	const tail = fragments.map((part) => part.sql).join('')
+	return {
+		sql: 'WHERE ' + opening + head.sql + tail,
+		parameters: [...head.parameters, ...fragments.flatMap((part) => part.parameters)],
 	}
-	return { sql: 'WHERE ' + clause, parameters }
 }
 
 /**

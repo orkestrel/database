@@ -1,4 +1,5 @@
-import type { ColumnSchema, TableSchema } from '@src/core'
+import { BOOLEAN, JSON_COLUMN, INTEGER, REAL, TEXT, BLOB } from '../../setupServer.js'
+import type { ColumnSchema } from '@src/core'
 import { isDatabaseError } from '@src/core'
 import {
 	decodeRow,
@@ -16,44 +17,8 @@ import {
 	quoteIdentifier,
 } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import { captureError } from '@orkestrel/test'
 import { buildCondition as cond } from '../../setup.js'
-
-const BOOLEAN: ColumnSchema = {
-	name: 'value',
-	storage: 'boolean',
-	optional: false,
-	nullable: false,
-}
-const JSON_COLUMN: ColumnSchema = {
-	name: 'value',
-	storage: 'json',
-	optional: false,
-	nullable: false,
-}
-const INTEGER: ColumnSchema = {
-	name: 'value',
-	storage: 'integer',
-	optional: false,
-	nullable: false,
-}
-const REAL: ColumnSchema = {
-	name: 'value',
-	storage: 'real',
-	optional: false,
-	nullable: false,
-}
-const TEXT: ColumnSchema = {
-	name: 'value',
-	storage: 'text',
-	optional: false,
-	nullable: false,
-}
-const BLOB: ColumnSchema = {
-	name: 'value',
-	storage: 'blob',
-	optional: false,
-	nullable: false,
-}
 
 // The SQLite ↔ JS codecs as pure functions (no DB needed): the SQL
 // identifier containment (`quoteIdentifier`), persisted SQLite index naming,
@@ -138,18 +103,7 @@ describe('encodeValue / decodeValue — round-trips', () => {
 })
 
 describe('encodeRow / decodeRow — over a schema', () => {
-	const SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'name', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-			{ name: 'active', storage: 'boolean', optional: false, nullable: false },
-			{ name: 'meta', storage: 'json', optional: false, nullable: true },
-		],
-		indexes: [],
-	}
+	const SCHEMA = CODEC_SCHEMA
 
 	it('encodes only the schema columns, dropping extra row keys', () => {
 		const encoded = encodeRow(
@@ -190,12 +144,9 @@ describe('extractValues', () => {
 	})
 
 	it('throws a DRIVER error naming an absent declared column', () => {
-		let caught: unknown
-		try {
+		const caught = captureError(() => {
 			extractValues({ id: 'u1' }, ['id', 'name'], 'users')
-		} catch (error) {
-			caught = error
-		}
+		})
 		expect(isDatabaseError(caught) ? caught.code : 'not-database').toBe('DRIVER')
 		expect(isDatabaseError(caught) ? caught.context : undefined).toEqual({
 			table: 'users',
@@ -215,18 +166,7 @@ describe('deriveSQLiteIndexName — collision-free, deterministic', () => {
 })
 
 describe('matchesConditionExactly', () => {
-	const SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'name', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: true },
-			{ name: 'active', storage: 'boolean', optional: false, nullable: true },
-			{ name: 'meta', storage: 'json', optional: false, nullable: true },
-		],
-		indexes: [],
-	}
+	const SCHEMA = CONDITION_SCHEMA
 
 	it('is false for a nested FieldPath (array column)', () => {
 		expect(matchesConditionExactly(cond(['meta', 'score'], 'above', [1]), SCHEMA)).toBe(false)
@@ -311,16 +251,7 @@ describe('matchesConditionExactly', () => {
 })
 
 describe('matchesOrderExactly', () => {
-	const SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: true },
-			{ name: 'meta', storage: 'json', optional: false, nullable: true },
-		],
-		indexes: [],
-	}
+	const SCHEMA = ORDER_SCHEMA
 
 	it('is false for an optional or nullable scalar column', () => {
 		expect(matchesOrderExactly({ column: 'age', direction: 'ascending' }, SCHEMA)).toBe(false)
@@ -336,16 +267,7 @@ describe('matchesOrderExactly', () => {
 })
 
 describe('matchesQueryExactly', () => {
-	const SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-			{ name: 'meta', storage: 'json', optional: false, nullable: true },
-		],
-		indexes: [],
-	}
+	const SCHEMA = QUERY_SCHEMA
 
 	it('is true when every condition and order term is exact (limit/offset never affect it)', () => {
 		expect(
@@ -379,18 +301,7 @@ describe('matchesQueryExactly', () => {
 })
 
 describe('matchesAggregateExactly', () => {
-	const SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-			{ name: 'score', storage: 'real', optional: true, nullable: false },
-			{ name: 'limit', storage: 'integer', optional: false, nullable: true },
-			{ name: 'rank', storage: 'integer', optional: true, nullable: true },
-		],
-		indexes: [],
-	}
+	const SCHEMA = AGGREGATE_SCHEMA
 
 	it('executes count natively because it ignores the column', () => {
 		expect(matchesAggregateExactly('count', ['nested'], SCHEMA)).toBe(true)
@@ -468,3 +379,10 @@ describe('matchesAbsentPath', () => {
 		}
 	})
 })
+import {
+	CODEC_SCHEMA,
+	CONDITION_SCHEMA,
+	ORDER_SCHEMA,
+	QUERY_SCHEMA,
+	AGGREGATE_SCHEMA,
+} from '../../setupServer.js'

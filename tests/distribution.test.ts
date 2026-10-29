@@ -8,7 +8,7 @@ import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
-import { isArray, isObject, isString } from '@orkestrel/contract'
+import { attempt, isArray, isObject, isString } from '@orkestrel/contract'
 import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
@@ -37,7 +37,10 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from the workspace under proof, so a consumer of the packed artifact is
 // checked by the same compiler that workspace's own `check` script runs.
-const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
+const TSC = join(
+	dirname(createRequire(join(ROOT, 'package.json')).resolve('typescript/package.json')),
+	'bin/tsc',
+)
 // Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
 // batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
 // rather than an exit code a caller can read. Every following argument is a literal or
@@ -64,6 +67,44 @@ const PING = ['ping', '--fetch-retries=0', '--fetch-timeout=5000', '--loglevel=s
 const ESM_DRIVER = 'drive.mjs'
 const CJS_DRIVER = 'drive.cjs'
 const CONSUMER_MANIFEST = `{ "name": "distribution-consumer", "private": true, "type": "module" }\n`
+const ERROR_DRIVER_SOURCE = `import assert from 'node:assert/strict'
+import { cpSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+const require = createRequire(import.meta.url)
+const installed = dirname(require.resolve('@orkestrel/database/package.json'))
+cpSync(installed, join(dirname(installed), 'database-copy'), { recursive: true })
+const modules = [
+	await import('@orkestrel/database'),
+	require('@orkestrel/database'),
+	await import('@orkestrel/database-copy'),
+	require('@orkestrel/database-copy'),
+]
+const brand = Symbol.for('@orkestrel/database.DatabaseError')
+assert.equal(new Set(modules.map((entry) => entry.DatabaseError)).size, modules.length)
+assert.notEqual(modules[0].DatabaseError, modules[1].DatabaseError)
+assert.notEqual(modules[0].DatabaseError, modules[2].DatabaseError)
+for (const creator of modules) {
+	const original = new creator.DatabaseError('CONFLICT', 'failure', { table: 'users' })
+	class DerivedError extends creator.DatabaseError {}
+	const derived = new DerivedError('NOT_FOUND', 'missing')
+	derived.name = 'RenamedSubclass'
+	assert.deepEqual(Object.getOwnPropertyDescriptor(original, brand), {
+		value: original, enumerable: false, writable: false, configurable: false,
+	})
+	const plain = {}
+	Object.defineProperty(plain, brand, { value: plain })
+	const unbranded = Object.assign(new Error('look-alike'), { name: 'DatabaseError', code: 'CONFLICT' })
+	for (const observer of modules) {
+		assert.equal(observer.isDatabaseError(original), true)
+		assert.equal(observer.isDatabaseError(derived), true)
+		assert.equal(observer.isDatabaseError(unbranded), false)
+		assert.equal(observer.isDatabaseError(new Proxy(original, {})), false)
+		assert.equal(observer.isDatabaseError(plain), false)
+	}
+}
+process.stdout.write('branded-errors\\n')
+`
 const ESM_DRIVER_SOURCE = `const entry = await import(process.argv[2])
 process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 `
@@ -199,11 +240,8 @@ function isNames(value: unknown): value is readonly string[] {
 function isPackageTarget(target: string): boolean {
 	if (!target.startsWith('./')) return false
 	for (const segment of target.slice(2).split(/[\\/]/u)) {
-		let decoded = segment
-		try {
-			decoded = decodeURIComponent(segment)
-		} catch {}
-		const normalized = decoded.toLowerCase()
+		const decoded = attempt(() => decodeURIComponent(segment))
+		const normalized = (decoded.success ? decoded.value : segment).toLowerCase()
 		if (normalized === '.' || normalized === '..' || normalized === 'node_modules') return false
 	}
 	return true
@@ -290,12 +328,18 @@ function matchesFile(path: string): boolean {
 // the containing condition or fallback list unresolved, so the walk continues.
 function targetToDeclaration(target: string, installed: string): string | undefined {
 	if (!isPackageTarget(target)) return undefined
-	let declaration = target
-	if (target.endsWith('.cjs')) declaration = `${target.slice(0, -4)}.d.cts`
-	else if (target.endsWith('.mjs')) declaration = `${target.slice(0, -4)}.d.mts`
-	else if (target.endsWith('.js')) declaration = `${target.slice(0, -3)}.d.ts`
-	else if (!isDeclaration(target)) return undefined
-	return matchesFile(join(installed, declaration)) ? declaration : undefined
+	const declaration = target.endsWith('.cjs')
+		? `${target.slice(0, -4)}.d.cts`
+		: target.endsWith('.mjs')
+			? `${target.slice(0, -4)}.d.mts`
+			: target.endsWith('.js')
+				? `${target.slice(0, -3)}.d.ts`
+				: isDeclaration(target)
+					? target
+					: undefined
+	return declaration !== undefined && matchesFile(join(installed, declaration))
+		? declaration
+		: undefined
 }
 
 // The declaration TypeScript resolves through one importing format's conditions.
@@ -325,23 +369,23 @@ function resolveDeclaration(
 // The nearest package scope that decides a `.d.ts` declaration's module format. A
 // physical nested manifest starts a scope even when it omits `type` or cannot be
 // parsed. A directory at that spelling is not a manifest, so the walk continues.
-function readPackageType(installed: string, target: string): unknown {
-	let directory = dirname(join(installed, target))
-	while (true) {
-		const path = join(directory, 'package.json')
-		if (matchesFile(path)) {
-			try {
-				const manifest = readJson(path)
-				return isRecord(manifest) ? manifest.type : undefined
-			} catch {
-				return undefined
-			}
+function readPackageType(
+	installed: string,
+	target: string,
+	directory = dirname(join(installed, target)),
+): unknown {
+	const path = join(directory, 'package.json')
+	if (matchesFile(path)) {
+		try {
+			const manifest = readJson(path)
+			return isRecord(manifest) ? manifest.type : undefined
+		} catch {
+			return undefined
 		}
-		if (directory === installed) return undefined
-		const parent = dirname(directory)
-		if (parent === directory) return undefined
-		directory = parent
 	}
+	if (directory === installed) return undefined
+	const parent = dirname(directory)
+	return parent === directory ? undefined : readPackageType(installed, target, parent)
 }
 
 function resolvesBrowser(entry: unknown): boolean {
@@ -873,6 +917,15 @@ function requireStage(context: TestContext): Stage {
 }
 
 describe('installed package consumer', () => {
+	it('recognizes branded errors across module formats and independent package copies [requires the registry]', (context) => {
+		const stage = requireStage(context)
+		const path = join(stage.consumer, 'errors.ts')
+		writeFile(path, ERROR_DRIVER_SOURCE)
+		const result = runNode([path], stage.consumer)
+		expect(readOutput(result)).toBe('branded-errors')
+		expect(result.status).toBe(0)
+	})
+
 	it('packs one archive and installs it in isolation [requires the registry]', (context) => {
 		const stage = requireStage(context)
 		expect(stage.archives).toHaveLength(1)

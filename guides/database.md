@@ -83,14 +83,17 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Classes
 
-| Class             | Kind  | Summary                                                                                                                                                |
-| ----------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Database`        | class | Exposes a typed view over one shared internal lifecycle and storage context.                                                                           |
-| `DriverIterator`  | class | Forms the internal continuation boundary for a root driver async iterator.                                                                             |
-| `MemoryDriver`    | class | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                      |
-| `JSONDriver`      | class | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                          |
-| `SQLiteDriver`    | class | Implements the `DriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper. |
-| `IndexedDBDriver` | class | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.               |
+| Class               | Kind  | Summary                                                                                                                                                |
+| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Database`          | class | Exposes a typed view over one shared internal lifecycle and storage context.                                                                           |
+| `DriverIterator`    | class | Forms the internal continuation boundary for a root driver async iterator.                                                                             |
+| `MemoryDriver`      | class | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                      |
+| `JSONDriver`        | class | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                          |
+| `SQLiteDriver`      | class | Implements the `DriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper. |
+| `IndexedDBDriver`   | class | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.               |
+| `StreamPage`        | class | Tracks the matching-row position of one streaming page.                                                                                                |
+| `JSONTransaction`   | class | Owns the isolated memory store and schema of one JSON transaction.                                                                                     |
+| `SQLiteTransaction` | class | Owns the candidate schema and table identities of one SQLite transaction.                                                                              |
 
 ### Server
 
@@ -135,6 +138,7 @@ None of these import a SQLite package; they speak strings and values only.
 | `schemaToTable`           | function | Projects a `TableSchema` to its `CREATE TABLE IF NOT EXISTS` statement.                                                                                                                                                                                                                                                          |
 | `schemaToIndexes`         | function | Projects a `TableSchema` to its declared SQLite indexes.                                                                                                                                                                                                                                                                         |
 | `stepToSQL`               | function | Projects one `MigrationStep` to SQLite DDL.                                                                                                                                                                                                                                                                                      |
+| `compileBoundSQL`         | function | Encodes condition operands for a SQL fragment using their declared or inferred storage.                                                                                                                                                                                                                                          |
 
 ### Browser
 
@@ -159,6 +163,13 @@ lossy.
 | ----------------- | -------- | ----------------------------------------------------- |
 | `DatabaseError`   | class    | Represents an error thrown by the database layer.     |
 | `isDatabaseError` | function | Narrows an unknown caught value to a `DatabaseError`. |
+
+The constructor installs an own, non-enumerable, non-writable
+`Symbol.for('@orkestrel/database.DatabaseError')` property whose value is the
+error itself. `isDatabaseError` accepts branded subclasses across package copies
+and ESM/CJS entries without requiring an exact `name`. It validates the declared
+code and optional context, and refuses unbranded look-alikes, transparent proxies,
+and plain objects carrying only the brand.
 
 ### Query engine
 
@@ -223,6 +234,7 @@ Pure helpers behind the query engine's pattern matching.
 | ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloneDriverMetadata`    | function | Clones unknown driver metadata into a distinct deeply frozen snapshot.                                                                          |
 | `matchesWildcardPattern` | function | Matches a value against a wildcard pattern in linear time — the shared, ReDoS-safe engine behind `matchesLikePattern` and `matchesGlobPattern`. |
+| `matchesWildcardSegment` | function | Checks whether a fixed-length wildcard segment matches a value at an offset.                                                                    |
 | `matchesLikePattern`     | function | Matches a value against a SQL `LIKE` pattern, folding case.                                                                                     |
 | `matchesGlobPattern`     | function | Matches a value against a `GLOB` pattern, preserving case.                                                                                      |
 | `isDriverMetadata`       | function | Checks whether a value is persisted driver metadata.                                                                                            |
@@ -235,6 +247,7 @@ Pure helpers behind the query engine's pattern matching.
 | `isKey`                  | function | Checks whether a value is a usable database key.                                                                                                |
 | `cloneDriverSchema`      | function | Clones unknown driver schema into a distinct deeply frozen snapshot.                                                                            |
 | `cloneMigrationInput`    | function | Clones unknown migration input into a distinct deeply frozen snapshot.                                                                          |
+| `captureFailure`         | function | Captures the exact rejection or synchronous throw from a driver conformance operation.                                                          |
 
 ### Constants
 
@@ -295,6 +308,43 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `TableInterface`           | interface | `{ emitter, name, primary, contract } plus get, resolve, has, keys, records, count, aggregate, scan, set, add, update, remove, clear, query, cursor`                                                                                                                  | Exposes typed keyed CRUD plus fluent query and cursor access.                                                                                                                                                                                                                                                                                                                                                   |
 | `QueryInterface`           | interface | `{} plus condition, order, filter, limit, offset, collect, find, count, stream, aggregate`                                                                                                                                                                            | Builds a read through a fluent chain.                                                                                                                                                                                                                                                                                                                                                                           |
 | `CursorInterface`          | interface | `{ value, index, done } plus next, update, remove, close`                                                                                                                                                                                                             | Walks a table's rows forward for bulk in-place mutation.                                                                                                                                                                                                                                                                                                                                                        |
+
+### Operation state
+
+`StreamPage(offset)` owns one stream's matching-row position. `next()` advances
+that position and returns whether it exceeds the offset; `count` reports the
+number of matching rows after the offset.
+
+The server transaction entities hold each transaction's candidate schema and
+table identities. `SQLiteTransaction(schema, identities)` copies the initial
+maps; `project(schema, identities)` replaces the candidate state.
+`JSONTransaction(memory, schema, identities)` owns the candidate memory driver;
+its `project` replaces the schema and identities, and `stop()` invalidates the
+`memory` getter with `CONFLICT`. Their `schema` and `identities` getters expose
+readonly views. Drivers retain these entities in transaction registries until
+settlement.
+
+```ts
+import { captureFailure, MemoryDriver, StreamPage } from '@orkestrel/database'
+import { compileBoundSQL, JSONTransaction, SQLiteTransaction } from '@orkestrel/database/server'
+
+const page = new StreamPage(1)
+page.next() // false
+page.next() // true
+page.count // 1
+
+const sqlite = new SQLiteTransaction(new Map(), new Map())
+sqlite.project([], new Map())
+sqlite.schema.size // 0
+
+const json = new JSONTransaction(new MemoryDriver(), [], new Map())
+json.project([], new Map())
+json.stop()
+await captureFailure(async () => json.memory) // DatabaseError with code CONFLICT
+
+compileBoundSQL('"age" > ?', [18], false, undefined)
+// { sql: '"age" > ?', parameters: ['18'] }
+```
 
 ## Methods
 

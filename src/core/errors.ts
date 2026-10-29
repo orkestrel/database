@@ -1,5 +1,5 @@
 import type { DatabaseErrorCode } from './types.js'
-import { isInstance } from '@orkestrel/contract'
+import { holds, INTRINSICS, isFunction, isInstance, isObject } from '@orkestrel/contract'
 
 // Invalid operations and programmer errors `throw`, always a
 // `DatabaseError` carrying a machine-readable `code` so a `catch` branches on
@@ -32,6 +32,7 @@ export class DatabaseError extends Error {
 		context?: Readonly<Record<string, unknown>>,
 	) {
 		super(message)
+		INTRINSICS.define(this, Symbol.for('@orkestrel/database.DatabaseError'), { value: this })
 		this.name = 'DatabaseError'
 		this.code = code
 		if (context !== undefined) this.context = context
@@ -40,6 +41,11 @@ export class DatabaseError extends Error {
 
 /**
  * Narrows an unknown caught value to a {@link DatabaseError}.
+ *
+ * @remarks
+ * Accepts branded instances and subclasses across package copies and module formats.
+ * Requires the declared code and context shape. Refuses look-alikes and transparent
+ * proxies without requiring an exact `name`.
  *
  * @param value - The value to test (typically a `catch` binding)
  * @returns True if `value` is a {@link DatabaseError}; false otherwise
@@ -54,5 +60,23 @@ export class DatabaseError extends Error {
  * ```
  */
 export function isDatabaseError(value: unknown): value is DatabaseError {
-	return isInstance(value, DatabaseError)
+	return holds(() => {
+		if (!isInstance(value, Error) || INTRINSICS.prototype(value) === Error.prototype) return false
+		const brand = INTRINSICS.describe(value, Symbol.for('@orkestrel/database.DatabaseError'))
+		if (brand === undefined || brand.value !== value) return false
+		const code: unknown = INTRINSICS.reflect.read(value, 'code')
+		if (
+			code !== 'CLOSED' &&
+			code !== 'NOT_FOUND' &&
+			code !== 'CONFLICT' &&
+			code !== 'VALIDATION' &&
+			code !== 'ABORTED' &&
+			code !== 'MIGRATION' &&
+			code !== 'CONFORMANCE' &&
+			code !== 'DRIVER'
+		)
+			return false
+		const context: unknown = INTRINSICS.reflect.read(value, 'context')
+		return context === undefined || isObject(context) || isFunction(context)
+	})
 }

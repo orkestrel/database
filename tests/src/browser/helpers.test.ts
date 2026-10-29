@@ -1,4 +1,5 @@
-import type { TableSchema } from '@src/core'
+import { NULLABLE_SCHEMA, NULLABLE_INDEXES } from '../../setupBrowser.js'
+import { PLANNER_SCHEMA as SCHEMA, PLANNER_INDEXES as INDEXES } from '../../setupBrowser.js'
 import type { IndexedDBErrorCode } from '@orkestrel/indexeddb'
 import { IndexedDBError } from '@orkestrel/indexeddb'
 import {
@@ -17,25 +18,6 @@ import { buildCondition } from '../../setup.js'
 // returned range's bounds; the contract is that a plan only ever NARROWS to a
 // superset, so here we pin which operators / columns push to which range, and
 // which fall back to a full scan.
-
-// A schema with a string primary key, a couple of typed (orderable) columns, and
-// the non-orderable types pushdown must refuse (boolean / json).
-const SCHEMA: TableSchema = {
-	name: 'users',
-	primary: 'id',
-	columns: [
-		{ name: 'id', storage: 'text', optional: false, nullable: false },
-		{ name: 'age', storage: 'integer', optional: false, nullable: false },
-		{ name: 'score', storage: 'real', optional: false, nullable: false },
-		{ name: 'name', storage: 'text', optional: false, nullable: false },
-		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
-		{ name: 'payload', storage: 'json', optional: false, nullable: true },
-	],
-	indexes: [['age']],
-}
-
-// The single-column secondary indexes that physically exist (named by column).
-const INDEXES: readonly string[] = ['age']
 
 describe('selectPlan — pushable operators on the primary key', () => {
 	it('equals → primary store, IDBKeyRange.only', () => {
@@ -327,16 +309,6 @@ describe('conditionToRange', () => {
 describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a secondary index)', () => {
 	// A schema mirroring the audit reproduction: `age` is a NULLABLE integer with
 	// its own single-column secondary index.
-	const NULLABLE_SCHEMA: TableSchema = {
-		name: 'people',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: true },
-		],
-		indexes: [['age']],
-	}
-	const NULLABLE_INDEXES: readonly string[] = ['age']
 
 	it('below on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
 		const plan = selectPlan(

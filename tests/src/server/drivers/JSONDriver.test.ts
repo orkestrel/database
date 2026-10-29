@@ -1,11 +1,4 @@
-import type {
-	DatabaseEventMap,
-	QueryInput,
-	DriverMetadata,
-	MigrationInput,
-	TableSchema,
-	StorageInterface,
-} from '@src/core'
+import type { DatabaseEventMap, QueryInput, TableSchema, StorageInterface } from '@src/core'
 import { conformDriver, createDatabase, isDatabaseError, planMigration } from '@src/core'
 import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
@@ -13,8 +6,20 @@ import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition } from '../../../setup.js'
-import { driverSchema, replaceTransactionFailure, tempDatabasePath } from '../../../setupServer.js'
+import {
+	buildCondition,
+	DatabaseFixture,
+	DatabaseSwitch,
+	DatabaseCounter,
+	createHostileMetadata,
+	createHostileMigration,
+} from '../../../setup.js'
+import type { JSONTestStorage } from '../../../setupServer.js'
+import {
+	JSON_SCHEMA as SCHEMA,
+	replaceTransactionFailure,
+	tempDatabasePath,
+} from '../../../setupServer.js'
 
 // The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
 // schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
@@ -40,31 +45,31 @@ describe('driver conformance — JSONDriver', () => {
 // column on load) — see `driverSchema` in setupServer
 // (`.claude/rules/tests.md` § Shared test infrastructure). The JSON battery
 // uses the default single `['name']` index on `users`.
-const SCHEMA = driverSchema()
-
-let path = ''
-let cleanup = (): void => {}
-let driver = new JSONDriver('placeholder')
+const fixture = new DatabaseFixture<JSONTestStorage>()
 
 // A fresh temp path per test; the driver is opened on it. The path is reused across
 // reopen cases (a new driver on the same file) to prove persistence.
 beforeEach(async () => {
 	const temp = tempDatabasePath()
-	path = temp.path
-	cleanup = temp.cleanup
-	driver = new JSONDriver(path)
-	await driver.open(SCHEMA)
+	fixture.hold({ ...temp, driver: new JSONDriver(temp.path) })
+	await fixture.value.driver.open(SCHEMA)
 })
 
 afterEach(async () => {
-	await driver.close()
-	cleanup()
+	await fixture.value.driver.close()
+	fixture.value.cleanup()
+	fixture.clear()
 })
 
 describe('JSONDriver — keyed CRUD', () => {
 	it('writes and reads a row back over a temp file', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		expect(await driver.read('users', 'u1')).toEqual({
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
@@ -73,9 +78,19 @@ describe('JSONDriver — keyed CRUD', () => {
 	})
 
 	it('upserts an existing key', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: false })
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada Lovelace', age: 37, active: true })
-		expect(await driver.read('users', 'u1')).toEqual({
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: false,
+		})
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada Lovelace',
+			age: 37,
+			active: true,
+		})
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada Lovelace',
 			age: 37,
@@ -85,13 +100,13 @@ describe('JSONDriver — keyed CRUD', () => {
 
 	it('serializes simultaneous same-key inserts into one success and one conflict', async () => {
 		const outcomes = await Promise.allSettled([
-			driver.insert('users', 'u1', {
+			fixture.value.driver.insert('users', 'u1', {
 				id: 'u1',
 				name: 'Ada',
 				age: 36,
 				active: true,
 			}),
-			driver.insert('users', 'u1', {
+			fixture.value.driver.insert('users', 'u1', {
 				id: 'u1',
 				name: 'Overwrite',
 				age: 99,
@@ -107,13 +122,13 @@ describe('JSONDriver — keyed CRUD', () => {
 					outcome.reason.code === 'CONFLICT',
 			),
 		).toHaveLength(1)
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.keys('users')).toEqual(['u1'])
 		expect(await reopened.read('users', 'u1')).toEqual({
@@ -126,40 +141,64 @@ describe('JSONDriver — keyed CRUD', () => {
 	})
 
 	it('returns undefined reading a missing key', async () => {
-		expect(await driver.read('users', 'nope')).toBeUndefined()
+		expect(await fixture.value.driver.read('users', 'nope')).toBeUndefined()
 	})
 
 	it('reports whether a delete removed a row, and the row is gone', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		expect(await driver.delete('users', 'u1')).toBe(true)
-		expect(await driver.delete('users', 'u1')).toBe(false)
-		expect(await driver.read('users', 'u1')).toBeUndefined()
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await fixture.value.driver.delete('users', 'u1')).toBe(true)
+		expect(await fixture.value.driver.delete('users', 'u1')).toBe(false)
+		expect(await fixture.value.driver.read('users', 'u1')).toBeUndefined()
 	})
 
 	it('clears a table', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
-		await driver.clear('users')
-		expect(await driver.keys('users')).toEqual([])
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Bo',
+			age: 22,
+			active: false,
+		})
+		await fixture.value.driver.clear('users')
+		expect(await fixture.value.driver.keys('users')).toEqual([])
 	})
 
 	it('keys a table by its non-id primary column', async () => {
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		expect(await driver.keys('posts')).toEqual(['intro'])
-		expect(await driver.read('posts', 'intro')).toEqual({ slug: 'intro', title: 'Intro' })
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		expect(await fixture.value.driver.keys('posts')).toEqual(['intro'])
+		expect(await fixture.value.driver.read('posts', 'intro')).toEqual({
+			slug: 'intro',
+			title: 'Intro',
+		})
 	})
 
 	it('round-trips a nested object through a json column', async () => {
 		const meta = { tags: ['a', 'b'], info: { score: 9, ok: true } }
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true, meta })
-		expect((await driver.read('users', 'u1'))?.meta).toEqual(meta)
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+			meta,
+		})
+		expect((await fixture.value.driver.read('users', 'u1'))?.meta).toEqual(meta)
 	})
 })
 
 describe('JSONDriver — Database integration', () => {
 	it('shares imported schema, guards before paging, and preserves primary identity across reopen', async () => {
 		const database = createDatabase({
-			driver,
+			driver: fixture.value.driver,
 			tables: { users: { id: stringShape(), name: stringShape({ min: 1 }) } },
 			version: 1,
 		})
@@ -168,8 +207,8 @@ describe('JSONDriver — Database integration', () => {
 		})
 		const users = database.table('users')
 		await database.open()
-		await driver.write('users', 'a', { id: 'a', name: '' })
-		await driver.write('users', 'b', { id: 'b', name: 'Valid' })
+		await fixture.value.driver.write('users', 'a', { id: 'a', name: '' })
+		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Valid' })
 		await logs.table('logs').set({ id: 'l1', message: 'started' })
 
 		expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
@@ -185,7 +224,7 @@ describe('JSONDriver — Database integration', () => {
 		expect(await users.get('b')).toEqual({ id: 'b', name: 'Valid' })
 		await database.close()
 
-		const reopenedDriver = createJSONDriver(path)
+		const reopenedDriver = createJSONDriver(fixture.value.path)
 		const reopened = createDatabase({
 			driver: reopenedDriver,
 			tables: { users: { id: stringShape(), name: stringShape({ min: 1 }) } },
@@ -206,30 +245,70 @@ describe('JSONDriver — Database integration', () => {
 
 describe('JSONDriver — KEY order (inherited from MemoryDriver)', () => {
 	it('lists keys in key order though inserted out of order', async () => {
-		await driver.write('users', 'u3', { id: 'u3', name: 'Edsger', age: 50, active: true })
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
-		expect(await driver.keys('users')).toEqual(['u1', 'u2', 'u3'])
+		await fixture.value.driver.write('users', 'u3', {
+			id: 'u3',
+			name: 'Edsger',
+			age: 50,
+			active: true,
+		})
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Bo',
+			age: 22,
+			active: false,
+		})
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1', 'u2', 'u3'])
 	})
 
 	it('scans rows in key order though inserted out of order', async () => {
-		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
-		await driver.write('users', 'u3', { id: 'u3', name: 'Edsger', age: 50, active: true })
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Bo',
+			age: 22,
+			active: false,
+		})
+		await fixture.value.driver.write('users', 'u3', {
+			id: 'u3',
+			name: 'Edsger',
+			age: 50,
+			active: true,
+		})
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
 		const scanned = []
-		for await (const row of driver.scan('users')) scanned.push(row.id)
+		for await (const row of fixture.value.driver.scan('users')) scanned.push(row.id)
 		expect(scanned).toEqual(['u1', 'u2', 'u3'])
 	})
 })
 
 describe('JSONDriver — persistence across reopen', () => {
 	it('survives a close and reopen on the same file', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		await driver.close()
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Bo',
+			age: 22,
+			active: false,
+		})
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		await fixture.value.driver.close()
 
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.read('users', 'u1')).toEqual({
 			id: 'u1',
@@ -259,33 +338,48 @@ describe('JSONDriver — persistence across reopen', () => {
 
 describe('JSONDriver — snapshot rollback re-flushes', () => {
 	it('restores both memory and the file to the captured state', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await driver.snapshot()
-		// Mutate after the snapshot — these writes also rewrote the file.
-		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await driver.write('users', 'u2', { id: 'u2', name: 'Ghost', age: 1, active: false })
-		await driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
-		await rollback()
-
-		// In memory, the state is back to the snapshot.
-		expect(await driver.read('users', 'u1')).toEqual({
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		expect(await driver.read('users', 'u2')).toBeUndefined()
-		expect(await driver.keys('posts')).toEqual(['intro'])
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const rollback = await fixture.value.driver.snapshot()
+		// Mutate after the snapshot — these writes also rewrote the file.
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Changed',
+			age: 99,
+			active: false,
+		})
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Ghost',
+			age: 1,
+			active: false,
+		})
+		await fixture.value.driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
+		await rollback()
 
-		await driver.write('users', 'u1', {
+		// In memory, the state is back to the snapshot.
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await fixture.value.driver.read('users', 'u2')).toBeUndefined()
+		expect(await fixture.value.driver.keys('posts')).toEqual(['intro'])
+
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Changed Again',
 			age: 100,
 			active: false,
 		})
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
@@ -294,7 +388,7 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 
 		// And the FILE was re-flushed: a fresh driver on the path reads the restored
 		// state, not the post-snapshot mutations.
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.read('users', 'u1')).toEqual({
 			id: 'u1',
@@ -308,14 +402,14 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 	})
 
 	it('captures at its exact writer-queue position', async () => {
-		const first = driver.write('users', 'u1', {
+		const first = fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'First',
 			age: 1,
 			active: true,
 		})
-		const snapshot = driver.snapshot()
-		const second = driver.write('users', 'u2', {
+		const snapshot = fixture.value.driver.snapshot()
+		const second = fixture.value.driver.write('users', 'u2', {
 			id: 'u2',
 			name: 'Second',
 			age: 2,
@@ -324,13 +418,18 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 		const rollback = await snapshot
 		await Promise.all([first, second])
 		await rollback()
-		expect(await driver.keys('users')).toEqual(['u1'])
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1'])
 	})
 
 	it('restores through the current memory instance after a transaction replacement', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		const rollback = await driver.snapshot(['users', 'users', 'missing'])
-		await driver.transaction(async (storage) => {
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		const rollback = await fixture.value.driver.snapshot(['users', 'users', 'missing'])
+		await fixture.value.driver.transaction(async (storage) => {
 			await storage.write('users', 'u1', {
 				id: 'u1',
 				name: 'Transaction',
@@ -345,25 +444,25 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 			})
 		})
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		expect(await driver.read('users', 'u2')).toBeUndefined()
+		expect(await fixture.value.driver.read('users', 'u2')).toBeUndefined()
 	})
 
 	it('adapts captured rows to the current schema and retains current metadata', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 			meta: null,
 		})
-		await driver.stamp?.({ version: 1, schema: SCHEMA })
-		const rollback = await driver.snapshot(['users'])
+		await fixture.value.driver.stamp?.({ version: 1, schema: SCHEMA })
+		const rollback = await fixture.value.driver.snapshot(['users'])
 		const users = SCHEMA.find((table) => table.name === 'users')
 		const posts = SCHEMA.find((table) => table.name === 'posts')
 		if (users === undefined || posts === undefined) throw new Error('Expected driver schema')
@@ -389,8 +488,8 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 			posts,
 		]
 		const plan = planMigration(SCHEMA, current, 1, 2)
-		await driver.migrate?.({ plan, metadata: { version: 2, schema: current } })
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.migrate?.({ plan, metadata: { version: 2, schema: current } })
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Changed',
 			age: 99,
@@ -398,24 +497,37 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 			note: 'present',
 		})
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: current })
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+		})
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: current })
 
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Changed Again',
 			age: 100,
 			note: null,
 		})
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: current })
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+		})
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: current })
 	})
 
 	it('skips removed captures and preserves tables added after capture', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await driver.snapshot()
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const rollback = await fixture.value.driver.snapshot()
 		const users = SCHEMA.find((table) => table.name === 'users')
 		if (users === undefined) throw new Error('Expected users schema')
 		const logs: TableSchema = {
@@ -425,68 +537,68 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 			indexes: [],
 		}
 		const current = [users, logs]
-		await driver.migrate?.({
+		await fixture.value.driver.migrate?.({
 			plan: planMigration(SCHEMA, current, 1, 2),
 			metadata: { version: 2, schema: current },
 		})
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Changed',
 			age: 37,
 			active: false,
 		})
-		await driver.write('logs', 'l1', { id: 'l1' })
+		await fixture.value.driver.write('logs', 'l1', { id: 'l1' })
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		await expect(driver.keys('posts')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-		expect(await driver.read('logs', 'l1')).toEqual({ id: 'l1' })
+		await expect(fixture.value.driver.keys('posts')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+		expect(await fixture.value.driver.read('logs', 'l1')).toEqual({ id: 'l1' })
 	})
 
 	it('rejects capture and rollback admission while a transaction is active', async () => {
-		const rollback = await driver.snapshot()
-		await driver.transaction(async () => {
-			await expect(driver.snapshot()).rejects.toMatchObject({ code: 'CONFLICT' })
+		const rollback = await fixture.value.driver.snapshot()
+		await fixture.value.driver.transaction(async () => {
+			await expect(fixture.value.driver.snapshot()).rejects.toMatchObject({ code: 'CONFLICT' })
 			await expect(rollback()).rejects.toMatchObject({ code: 'CONFLICT' })
 		})
 	})
 
 	it('keeps root and file unchanged after rollback persistence failure and permits retry', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
 			active: true,
 		})
-		const rollback = await driver.snapshot(['users'])
-		await driver.write('users', 'u1', {
+		const rollback = await fixture.value.driver.snapshot(['users'])
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Current',
 			age: 2,
 			active: false,
 		})
-		const currentFile = await readFile(path, 'utf-8')
-		const blocker = `${path}.${process.pid}.3.tmp`
+		const currentFile = await readFile(fixture.value.path, 'utf-8')
+		const blocker = `${fixture.value.path}.${process.pid}.3.tmp`
 		await mkdir(blocker)
 		await expect(rollback()).rejects.toMatchObject({
 			code: 'DRIVER',
-			context: { path, temp: blocker },
+			context: { path: fixture.value.path, temp: blocker },
 		})
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Current',
 			age: 2,
 			active: false,
 		})
-		expect(await readFile(path, 'utf-8')).toBe(currentFile)
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(currentFile)
 
 		await rm(blocker, { recursive: true })
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
@@ -495,14 +607,14 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 	})
 
 	it('treats an explicit unknown-only capture as a repeatable no-op', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
 			active: true,
 		})
-		const rollback = await driver.snapshot(['missing', 'missing'])
-		await driver.write('users', 'u1', {
+		const rollback = await fixture.value.driver.snapshot(['missing', 'missing'])
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Current',
 			age: 2,
@@ -510,13 +622,13 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 		})
 		await rollback()
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Current',
 			age: 2,
 			active: false,
 		})
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(isRecord(parsed) && isRecord(parsed.tables) ? parsed.tables.users : undefined).toEqual([
 			{ id: 'u1', name: 'Current', age: 2, active: false },
 		])
@@ -525,14 +637,14 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 	it('skips a same-name table removed and re-added inside a committed transaction', async () => {
 		const users = SCHEMA.find((table) => table.name === 'users')
 		if (users === undefined) throw new Error('Expected users schema')
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
 			active: true,
 		})
-		const rollback = await driver.snapshot(['users'])
-		await driver.transaction(async (storage) => {
+		const rollback = await fixture.value.driver.snapshot(['users'])
+		await fixture.value.driver.transaction(async (storage) => {
 			await storage.migrate?.({
 				plan: {
 					from: 1,
@@ -552,14 +664,14 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 		})
 
 		await rollback()
-		expect(await driver.keys('users')).toEqual(['u2'])
-		expect(await driver.read('users', 'u2')).toEqual({
+		expect(await fixture.value.driver.keys('users')).toEqual(['u2'])
+		expect(await fixture.value.driver.read('users', 'u2')).toEqual({
 			id: 'u2',
 			name: 'Replacement',
 			age: 2,
 			active: false,
 		})
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.keys('users')).toEqual(['u2'])
 		await reopened.close()
@@ -576,34 +688,34 @@ describe('JSONDriver — snapshot rollback re-flushes', () => {
 					}
 				: table,
 		)
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
 			active: true,
 		})
-		const rollback = await driver.snapshot(['users'])
-		await driver.write('users', 'u1', {
+		const rollback = await fixture.value.driver.snapshot(['users'])
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Current',
 			age: 2,
 			active: false,
 		})
-		const currentFile = await readFile(path, 'utf-8')
-		await driver.open(incompatible)
+		const currentFile = await readFile(fixture.value.path, 'utf-8')
+		await fixture.value.driver.open(incompatible)
 
 		await expect(rollback()).rejects.toMatchObject({ code: 'MIGRATION' })
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Current',
 			age: 2,
 			active: false,
 		})
-		expect(await readFile(path, 'utf-8')).toBe(currentFile)
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(currentFile)
 
-		await driver.open(SCHEMA)
+		await fixture.value.driver.open(SCHEMA)
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Captured',
 			age: 1,
@@ -810,9 +922,14 @@ describe('JSONDriver — durable recovery boundary', () => {
 	})
 
 	it('round-trips the documented file shape { tables: { [name]: rows } }', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.close()
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		await fixture.value.driver.close()
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			tables: {
@@ -825,7 +942,12 @@ describe('JSONDriver — durable recovery boundary', () => {
 
 describe('JSONDriver — migrate', () => {
 	it('persists a column.remove step to the file across close and reopen', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
 		const before = SCHEMA
 		const after = SCHEMA.map((table) =>
 			table.name === 'users'
@@ -833,11 +955,15 @@ describe('JSONDriver — migrate', () => {
 				: table,
 		)
 		const plan = planMigration(before, after)
-		await driver.migrate?.({ plan })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', active: true })
-		await driver.close()
+		await fixture.value.driver.migrate?.({ plan })
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			active: true,
+		})
+		await fixture.value.driver.close()
 
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', active: true })
 		await reopened.close()
@@ -851,8 +977,8 @@ describe('JSONDriver — migrate', () => {
 			indexes: [],
 		}
 		const plan = planMigration(SCHEMA, [...SCHEMA, extra])
-		await driver.migrate?.({ plan })
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.migrate?.({ plan })
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({ tables: { users: [], posts: [], tags: [] } })
 	})
@@ -862,8 +988,8 @@ describe('JSONDriver — migrate', () => {
 			SCHEMA,
 			SCHEMA.filter((table) => table.name !== 'posts'),
 		)
-		await driver.migrate?.({ plan })
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.migrate?.({ plan })
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({ tables: { users: [] } })
 	})
@@ -880,7 +1006,7 @@ describe('JSONDriver — migrate', () => {
 			],
 			[],
 		)
-		const error = await driver.migrate?.({ plan }).catch((caught: unknown) => caught)
+		const error = await fixture.value.driver.migrate?.({ plan }).catch((caught: unknown) => caught)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 	})
 
@@ -890,24 +1016,24 @@ describe('JSONDriver — migrate', () => {
 			columns: [...table.columns].reverse(),
 			indexes: [...table.indexes].reverse(),
 		}))
-		await driver.migrate?.({
+		await fixture.value.driver.migrate?.({
 			plan: { from: 1, to: 2, steps: [] },
 			metadata: { version: 2, schema: reordered },
 		})
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: reordered })
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: reordered })
 	})
 
 	it('rejects an unsafe required column before rows, schema, metadata, or file change', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		await driver.stamp?.({ version: 1, schema: SCHEMA })
-		const beforeFile = await readFile(path, 'utf-8')
+		await fixture.value.driver.stamp?.({ version: 1, schema: SCHEMA })
+		const beforeFile = await readFile(fixture.value.path, 'utf-8')
 		await expect(
-			driver.migrate?.({
+			fixture.value.driver.migrate?.({
 				plan: {
 					from: 1,
 					to: 2,
@@ -929,18 +1055,18 @@ describe('JSONDriver — migrate', () => {
 			code: 'MIGRATION',
 			context: { table: 'users', column: 'required' },
 		})
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		expect(await driver.metadata?.()).toEqual({ version: 1, schema: SCHEMA })
-		expect(await readFile(path, 'utf-8')).toBe(beforeFile)
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 1, schema: SCHEMA })
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(beforeFile)
 	})
 
 	it('publishes migrated rows, schema, and metadata together or leaves all three unchanged', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
@@ -948,22 +1074,22 @@ describe('JSONDriver — migrate', () => {
 		})
 		const declared = SCHEMA.filter((table) => table.name !== 'posts')
 		const plan = planMigration(SCHEMA, declared, 1, 2)
-		await rm(path, { force: true })
-		await mkdir(path)
+		await rm(fixture.value.path, { force: true })
+		await mkdir(fixture.value.path)
 		await expect(
-			driver.migrate?.({ plan, metadata: { version: 2, schema: declared } }),
+			fixture.value.driver.migrate?.({ plan, metadata: { version: 2, schema: declared } }),
 		).rejects.toMatchObject({ code: 'DRIVER' })
-		expect(await driver.metadata?.()).toBeUndefined()
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.metadata?.()).toBeUndefined()
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
 
-		await rm(path, { force: true, recursive: true })
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		await rm(fixture.value.path, { force: true, recursive: true })
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toEqual({
 			tables: {
 				users: [{ id: 'u1', name: 'Ada', age: 36, active: true }],
@@ -975,39 +1101,39 @@ describe('JSONDriver — migrate', () => {
 
 describe('JSONDriver — stream', () => {
 	it('yields condition-matched rows honoring a limit, from the file-backed store', async () => {
-		await driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
-		await driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
-		await driver.write('users', 'c', { id: 'c', name: 'Ada', age: 40, active: true })
+		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
+		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
+		await fixture.value.driver.write('users', 'c', { id: 'c', name: 'Ada', age: 40, active: true })
 		const input: QueryInput = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
 		const rows = []
-		for await (const row of driver.stream('users', input)) rows.push(row)
+		for await (const row of fixture.value.driver.stream('users', input)) rows.push(row)
 		expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
 
 		const limited = []
-		for await (const row of driver.stream('users', { limit: 1 })) limited.push(row)
+		for await (const row of fixture.value.driver.stream('users', { limit: 1 })) limited.push(row)
 		expect(limited).toHaveLength(1)
 	})
 
 	it('rejects invalid direct paging and accepts a zero limit', async () => {
-		await driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
-		expect(() => driver.stream('users', { offset: -1 })).toThrow(
+		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
+		expect(() => fixture.value.driver.stream('users', { offset: -1 })).toThrow(
 			'Query offset must be a nonnegative integer',
 		)
-		expect(await collect(driver.stream('users', { limit: 0 }))).toEqual([])
+		expect(await collect(fixture.value.driver.stream('users', { limit: 0 }))).toEqual([])
 	})
 })
 
 describe('JSONDriver — transaction', () => {
 	it('terminalizes root scan and stream continuations resumed inside a transaction', async () => {
-		await driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
-		await driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
-		await driver.write('users', 'c', { id: 'c', name: 'Cy', age: 40, active: true })
-		const scan = driver.scan('users')[Symbol.asyncIterator]()
-		const stream = driver.stream('users', {})[Symbol.asyncIterator]()
+		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
+		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
+		await fixture.value.driver.write('users', 'c', { id: 'c', name: 'Cy', age: 40, active: true })
+		const scan = fixture.value.driver.scan('users')[Symbol.asyncIterator]()
+		const stream = fixture.value.driver.stream('users', {})[Symbol.asyncIterator]()
 		expect((await scan.next()).done).toBe(false)
 		expect((await stream.next()).done).toBe(false)
 
-		await driver.transaction(async (transaction) => {
+		await fixture.value.driver.transaction(async (transaction) => {
 			for (const iterator of [scan, stream]) {
 				await expect(iterator.next()).rejects.toMatchObject({
 					code: 'CONFLICT',
@@ -1024,16 +1150,16 @@ describe('JSONDriver — transaction', () => {
 			expect((await transaction.read('users', 'd'))?.name).toBe('Di')
 		})
 
-		expect((await driver.read('users', 'd'))?.name).toBe('Di')
-		await driver.write('users', 'e', { id: 'e', name: 'Eve', age: 55, active: true })
-		expect((await driver.read('users', 'e'))?.name).toBe('Eve')
+		expect((await fixture.value.driver.read('users', 'd'))?.name).toBe('Di')
+		await fixture.value.driver.write('users', 'e', { id: 'e', name: 'Eve', age: 55, active: true })
+		expect((await fixture.value.driver.read('users', 'e'))?.name).toBe('Eve')
 	})
 
 	it('does not report rollback when a wrapper replaces the post-native rejection', async () => {
 		const replacement = new Error('post-rollback wrapper failure')
 		const scope = new Error('scope failed')
 		const database = createDatabase({
-			driver: replaceTransactionFailure(driver, replacement),
+			driver: replaceTransactionFailure(fixture.value.driver, replacement),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
 		const events = createRecorders<DatabaseEventMap, 'rollback'>(database.emitter, ['rollback'])
@@ -1048,15 +1174,20 @@ describe('JSONDriver — transaction', () => {
 			context: { transaction: scope, cause: replacement },
 		})
 		expect(events.rollback.count).toBe(0)
-		expect(await driver.read('users', 'u1')).toBeUndefined()
+		expect(await fixture.value.driver.read('users', 'u1')).toBeUndefined()
 	})
 
 	it('isolates scoped work, supports read-after-write, and publishes atomically on fulfillment', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Original', age: 30, active: true })
-		const before = await readFile(path, 'utf-8')
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Original',
+			age: 30,
+			active: true,
+		})
+		const before = await readFile(fixture.value.path, 'utf-8')
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		const running = driver.transaction(async (transaction) => {
+		const running = fixture.value.driver.transaction(async (transaction) => {
 			await transaction.write('users', 'u1', {
 				id: 'u1',
 				name: 'Changed',
@@ -1074,14 +1205,21 @@ describe('JSONDriver — transaction', () => {
 			await release.promise
 		})
 		await entered.promise
-		expect(await readFile(path, 'utf-8')).toBe(before)
-		await expect(driver.read('users', 'u1')).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(before)
+		await expect(fixture.value.driver.read('users', 'u1')).rejects.toMatchObject({
+			code: 'CONFLICT',
+		})
 		await expect(
-			driver.write('users', 'outside', { id: 'outside', name: 'Outside', age: 1, active: false }),
+			fixture.value.driver.write('users', 'outside', {
+				id: 'outside',
+				name: 'Outside',
+				age: 1,
+				active: false,
+			}),
 		).rejects.toMatchObject({ code: 'CONFLICT' })
 		release.resolve()
 		await running
-		const raw = await readFile(path, 'utf-8')
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			tables: {
@@ -1095,11 +1233,16 @@ describe('JSONDriver — transaction', () => {
 	})
 
 	it('discards rows and metadata when the scope rejects', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Original', age: 30, active: true })
-		const before = await readFile(path, 'utf-8')
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Original',
+			age: 30,
+			active: true,
+		})
+		const before = await readFile(fixture.value.path, 'utf-8')
 		const reason = new Error('rollback')
 		await expect(
-			driver.transaction(async (transaction) => {
+			fixture.value.driver.transaction(async (transaction) => {
 				await transaction.write('users', 'u1', {
 					id: 'u1',
 					name: 'Changed',
@@ -1120,20 +1263,20 @@ describe('JSONDriver — transaction', () => {
 				throw reason
 			}),
 		).rejects.toBe(reason)
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Original',
 			age: 30,
 			active: true,
 		})
-		expect(await driver.read('users', 'u2')).toBeUndefined()
-		expect(await driver.metadata?.()).toBeUndefined()
-		expect(await readFile(path, 'utf-8')).toBe(before)
+		expect(await fixture.value.driver.read('users', 'u2')).toBeUndefined()
+		expect(await fixture.value.driver.metadata?.()).toBeUndefined()
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(before)
 	})
 
 	it('commits candidate inserts, schema migration, and metadata in one file replacement', async () => {
 		const declared = SCHEMA.filter((table) => table.name !== 'posts')
-		await driver.transaction(async (transaction) => {
+		await fixture.value.driver.transaction(async (transaction) => {
 			await transaction.insert('users', 'u1', {
 				id: 'u1',
 				name: 'Ada',
@@ -1146,8 +1289,8 @@ describe('JSONDriver — transaction', () => {
 			})
 			expect(await transaction.metadata?.()).toEqual({ version: 2, schema: declared })
 		})
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: declared })
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: declared })
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toEqual({
 			metadata: { version: 2, schema: declared },
 			tables: {
@@ -1158,7 +1301,7 @@ describe('JSONDriver — transaction', () => {
 
 	it('owns scoped stamp and migrate metadata before caller mutation can cross an await', async () => {
 		const plan = planMigration(SCHEMA, SCHEMA, 1, 2)
-		await driver.transaction(async (transaction) => {
+		await fixture.value.driver.transaction(async (transaction) => {
 			const stampSchema = SCHEMA.map((table) => ({ ...table }))
 			const stampInput = { version: 1, schema: stampSchema }
 			const stamping = transaction.stamp?.(stampInput)
@@ -1192,8 +1335,8 @@ describe('JSONDriver — transaction', () => {
 			expect(migrated.schema).not.toBe(stamped.schema)
 		})
 
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: SCHEMA })
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: SCHEMA })
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toMatchObject({ metadata: { version: 2, schema: SCHEMA } })
 	})
 
@@ -1202,9 +1345,9 @@ describe('JSONDriver — transaction', () => {
 			readonly transaction: StorageInterface
 			readonly iterator: AsyncIterator<unknown>
 		}>()
-		await driver.transaction(async (transaction) => {
+		await fixture.value.driver.transaction(async (transaction) => {
 			await expect(
-				driver.transaction(async () => {
+				fixture.value.driver.transaction(async () => {
 					throw new Error('nested scope ran')
 				}),
 			).rejects.toMatchObject({ code: 'CONFLICT' })
@@ -1223,19 +1366,24 @@ describe('JSONDriver — transaction', () => {
 			code: 'CONFLICT',
 		})
 		await expect(stale.iterator.next()).rejects.toMatchObject({ code: 'CONFLICT' })
-		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 22, active: false })
-		expect(await driver.keys('users')).toEqual(['u1', 'u2'])
+		await fixture.value.driver.write('users', 'u2', {
+			id: 'u2',
+			name: 'Bo',
+			age: 22,
+			active: false,
+		})
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1', 'u2'])
 	})
 
 	it('invalidates the capability before asynchronous publication completes', async () => {
 		const returned = Promise.withResolvers<void>()
-		let captured: StorageInterface | undefined
-		let completed = false
-		const running = driver
+		const captured = Promise.withResolvers<StorageInterface>()
+		const completed = new DatabaseSwitch()
+		const running = fixture.value.driver
 			.transaction(async (transaction) => {
-				captured = transaction
+				captured.resolve(transaction)
 				const payload = 'x'.repeat(65_536)
-				for (let index = 0; index < 32; index += 1) {
+				for (const index of Array.from({ length: 32 }).keys()) {
 					await transaction.write('users', `u${index}`, {
 						id: `u${index}`,
 						name: `User ${index}`,
@@ -1245,22 +1393,22 @@ describe('JSONDriver — transaction', () => {
 				returned.resolve()
 			})
 			.finally(() => {
-				completed = true
+				completed.enable()
 			})
 
 		await returned.promise
 		await Promise.resolve()
 		await Promise.resolve()
-		expect(completed).toBe(false)
-		const stale = captured
+		expect(completed.active).toBe(false)
+		const stale = await captured.promise
 		if (stale === undefined) throw new Error('Expected captured transaction capability')
 		await expect(stale.write('users', 'late', { id: 'late', name: 'Late' })).rejects.toMatchObject({
 			code: 'CONFLICT',
 		})
 		await running
-		expect(await driver.read('users', 'late')).toBeUndefined()
+		expect(await fixture.value.driver.read('users', 'late')).toBeUndefined()
 
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.read('users', 'late')).toBeUndefined()
 		expect(await reopened.keys('users')).toHaveLength(32)
@@ -1269,46 +1417,42 @@ describe('JSONDriver — transaction', () => {
 
 	it('rejects stale scoped metadata work before inspecting hostile inputs', async () => {
 		const captured = Promise.withResolvers<StorageInterface>()
-		await driver.transaction(async (transaction) => {
+		await fixture.value.driver.transaction(async (transaction) => {
 			captured.resolve(transaction)
 		})
 		const stale = await captured.promise
 
-		let stampReads = 0
-		const stampMeta: DriverMetadata = {
-			get version(): number {
-				stampReads += 1
-				throw new Error('stale stamp metadata was inspected')
-			},
-			schema: SCHEMA,
-		}
+		const stampReads = new DatabaseCounter()
+		const stampMeta = createHostileMetadata(
+			stampReads,
+			SCHEMA,
+			'stale stamp metadata was inspected',
+		)
 		const stamping = stale.stamp?.(stampMeta)
 		if (stamping === undefined) throw new Error('Expected scoped stamp capability')
 		await expect(stamping).rejects.toMatchObject({ code: 'CONFLICT' })
-		expect(stampReads).toBe(0)
+		expect(stampReads.count).toBe(0)
 
-		let migrateReads = 0
-		const migrateInput: MigrationInput = {
-			plan: planMigration(SCHEMA, SCHEMA, 1, 2),
-			get metadata(): DriverMetadata {
-				migrateReads += 1
-				throw new Error('stale migrate metadata was inspected')
-			},
-		}
+		const migrateReads = new DatabaseCounter()
+		const migrateInput = createHostileMigration(
+			migrateReads,
+			planMigration(SCHEMA, SCHEMA, 1, 2),
+			'stale migrate metadata was inspected',
+		)
 		const migrating = stale.migrate?.(migrateInput)
 		if (migrating === undefined) throw new Error('Expected scoped migrate capability')
 		await expect(migrating).rejects.toMatchObject({ code: 'CONFLICT' })
-		expect(migrateReads).toBe(0)
+		expect(migrateReads.count).toBe(0)
 	})
 
 	it('orders work queued before and after acquisition without clobbering acknowledged writes', async () => {
-		const before = driver.write('users', 'before', {
+		const before = fixture.value.driver.write('users', 'before', {
 			id: 'before',
 			name: 'Before',
 			age: 1,
 			active: true,
 		})
-		const transaction = driver.transaction(async (scoped) => {
+		const transaction = fixture.value.driver.transaction(async (scoped) => {
 			expect(await scoped.read('users', 'before')).toBeDefined()
 			await scoped.write('users', 'inside', {
 				id: 'inside',
@@ -1317,25 +1461,25 @@ describe('JSONDriver — transaction', () => {
 				active: true,
 			})
 		})
-		const after = driver.write('users', 'after', {
+		const after = fixture.value.driver.write('users', 'after', {
 			id: 'after',
 			name: 'After',
 			age: 3,
 			active: true,
 		})
 		await Promise.all([before, transaction, after])
-		expect(await driver.keys('users')).toEqual(['after', 'before', 'inside'])
+		expect(await fixture.value.driver.keys('users')).toEqual(['after', 'before', 'inside'])
 	})
 
 	it('queues open behind an earlier transaction and reloads the persisted deployed schema', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Before',
 			age: 1,
 			active: true,
 		})
-		await driver.stamp?.({ version: 1, schema: SCHEMA })
-		const transaction = driver.transaction(async (scoped) => {
+		await fixture.value.driver.stamp?.({ version: 1, schema: SCHEMA })
+		const transaction = fixture.value.driver.transaction(async (scoped) => {
 			expect(await scoped.read('users', 'u1')).toBeDefined()
 			await scoped.insert('users', 'u2', {
 				id: 'u2',
@@ -1344,12 +1488,12 @@ describe('JSONDriver — transaction', () => {
 				active: true,
 			})
 		})
-		const opening = driver.open(SCHEMA.filter((table) => table.name === 'posts'))
+		const opening = fixture.value.driver.open(SCHEMA.filter((table) => table.name === 'posts'))
 		await Promise.all([transaction, opening])
 
-		expect(await driver.keys('users')).toEqual(['u1', 'u2'])
-		expect(await driver.keys('posts')).toEqual([])
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1', 'u2'])
+		expect(await fixture.value.driver.keys('posts')).toEqual([])
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toEqual({
 			metadata: { version: 1, schema: SCHEMA },
 			tables: {
@@ -1395,15 +1539,15 @@ describe('JSONDriver — transaction', () => {
 
 describe('JSONDriver — metadata persistence', () => {
 	it('is undefined on a fresh store', async () => {
-		expect(await driver.metadata?.()).toBeUndefined()
+		expect(await fixture.value.driver.metadata?.()).toBeUndefined()
 	})
 
 	it('stamps and persists metadata across close and reopen', async () => {
 		const metadata = { version: 2, schema: SCHEMA }
-		await driver.stamp?.(metadata)
-		await driver.close()
+		await fixture.value.driver.stamp?.(metadata)
+		await fixture.value.driver.close()
 
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		const restored = await reopened.metadata?.()
 		if (restored === undefined) throw new Error('Expected restored metadata')
@@ -1418,7 +1562,7 @@ describe('JSONDriver — metadata persistence', () => {
 	it('snapshots root stamp ingress synchronously and returns distinct deeply frozen copies', async () => {
 		const schema = SCHEMA.map((table) => ({ ...table }))
 		const input = { version: 2, schema }
-		const stamping = driver.stamp?.(input)
+		const stamping = fixture.value.driver.stamp?.(input)
 		if (stamping === undefined) throw new Error('Expected root stamp capability')
 		const sourceTable = schema[0]
 		if (sourceTable === undefined) throw new Error('Expected stamp metadata table')
@@ -1426,8 +1570,8 @@ describe('JSONDriver — metadata persistence', () => {
 		sourceTable.name = 'mutated'
 		await stamping
 
-		const first = await driver.metadata?.()
-		const second = await driver.metadata?.()
+		const first = await fixture.value.driver.metadata?.()
+		const second = await fixture.value.driver.metadata?.()
 		if (first === undefined || second === undefined) {
 			throw new Error('Expected stamped metadata copies')
 		}
@@ -1450,9 +1594,9 @@ describe('JSONDriver — metadata persistence', () => {
 		expect(Object.isFrozen(firstTable.indexes)).toBe(true)
 		expect(Object.isFrozen(firstIndex)).toBe(true)
 		expect(Reflect.set(firstTable, 'name', 'changed')).toBe(false)
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: SCHEMA })
+		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: SCHEMA })
 
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toMatchObject({ metadata: { version: 2, schema: SCHEMA } })
 	})
 
@@ -1460,7 +1604,7 @@ describe('JSONDriver — metadata persistence', () => {
 		const schema = SCHEMA.map((table) => ({ ...table }))
 		const metadata = { version: 2, schema }
 		const plan = planMigration(SCHEMA, SCHEMA, 1, 2)
-		const migrating = driver.migrate?.({ plan, metadata })
+		const migrating = fixture.value.driver.migrate?.({ plan, metadata })
 		if (migrating === undefined) throw new Error('Expected root migrate capability')
 		const sourceTable = schema[0]
 		if (sourceTable === undefined) throw new Error('Expected migrate metadata table')
@@ -1468,26 +1612,26 @@ describe('JSONDriver — metadata persistence', () => {
 		sourceTable.name = 'mutated'
 		await migrating
 
-		const stored = await driver.metadata?.()
+		const stored = await fixture.value.driver.metadata?.()
 		if (stored === undefined) throw new Error('Expected migrated metadata')
 		expect(stored).toEqual({ version: 2, schema: SCHEMA })
 		expect(Object.isFrozen(stored)).toBe(true)
 		expect(Object.isFrozen(stored.schema)).toBe(true)
 		expect(Object.isFrozen(stored.schema[0])).toBe(true)
-		const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
 		expect(parsed).toMatchObject({ metadata: { version: 2, schema: SCHEMA } })
 	})
 
 	it('loads an old-shape file without metadata and keeps tables intact', async () => {
-		await mkdir(dirname(path), { recursive: true })
+		await mkdir(dirname(fixture.value.path), { recursive: true })
 		await writeFile(
-			path,
+			fixture.value.path,
 			JSON.stringify({
 				tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
 			}),
 			'utf-8',
 		)
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.metadata?.()).toBeUndefined()
 		expect(await reopened.read('users', 'u1')).toEqual({
@@ -1533,7 +1677,7 @@ describe('JSONDriver — metadata persistence', () => {
 	])(
 		'fails closed on metadata with a $label and keeps durable bytes exact',
 		async ({ metadata }) => {
-			await mkdir(dirname(path), { recursive: true })
+			await mkdir(dirname(fixture.value.path), { recursive: true })
 			const contents = JSON.stringify({
 				metadata,
 				tables: {
@@ -1541,26 +1685,31 @@ describe('JSONDriver — metadata persistence', () => {
 					posts: [],
 				},
 			})
-			await writeFile(path, contents, 'utf-8')
-			const reopened = createJSONDriver(path)
+			await writeFile(fixture.value.path, contents, 'utf-8')
+			const reopened = createJSONDriver(fixture.value.path)
 			const error = await reopened.open(SCHEMA).catch((caught: unknown) => caught)
 			expect(error).toMatchObject({
 				code: 'DRIVER',
 				message: 'Stored JSON metadata is invalid',
-				context: { path, aspect: 'metadata', cause: { code: 'VALIDATION' } },
+				context: { path: fixture.value.path, aspect: 'metadata', cause: { code: 'VALIDATION' } },
 			})
 			expect(JSON.stringify(error)).not.toContain('payload-secret')
-			expect(await readFile(path, 'utf-8')).toBe(contents)
+			expect(await readFile(fixture.value.path, 'utf-8')).toBe(contents)
 			await expect(reopened.keys('users')).rejects.toMatchObject({ code: 'NOT_FOUND' })
 			await reopened.close()
 		},
 	)
 
 	it('serializes the exact { metadata, tables } shape once stamped', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
 		const metadata = { version: 1, schema: SCHEMA }
-		await driver.stamp?.(metadata)
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.stamp?.(metadata)
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			metadata,
@@ -1569,8 +1718,13 @@ describe('JSONDriver — metadata persistence', () => {
 	})
 
 	it('serializes without a metadata key while unstamped', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			tables: { users: [{ id: 'u1', name: 'Ada', age: 36, active: true }], posts: [] },
@@ -1581,9 +1735,9 @@ describe('JSONDriver — metadata persistence', () => {
 
 describe('JSONDriver — versioned Database reopen', () => {
 	it('hydrates the deployed schema, removes a table atomically, and makes equal-version reopen a no-op', async () => {
-		await driver.close()
+		await fixture.value.driver.close()
 		const version1 = createDatabase({
-			driver: createJSONDriver(path),
+			driver: createJSONDriver(fixture.value.path),
 			tables: {
 				users: { id: stringShape(), name: stringShape() },
 				audit: { id: stringShape(), event: stringShape() },
@@ -1596,13 +1750,13 @@ describe('JSONDriver — versioned Database reopen', () => {
 		await version1.close()
 
 		const version2 = createDatabase({
-			driver: createJSONDriver(path),
+			driver: createJSONDriver(fixture.value.path),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 2,
 		})
 		await version2.open()
 		expect(await version2.table('users').get('u1')).toEqual({ id: 'u1', name: 'Ada' })
-		const migrated = await readFile(path, 'utf-8')
+		const migrated = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(migrated)
 		expect(parsed).toMatchObject({
 			metadata: { version: 2 },
@@ -1615,13 +1769,13 @@ describe('JSONDriver — versioned Database reopen', () => {
 		await version2.close()
 
 		const same = createDatabase({
-			driver: createJSONDriver(path),
+			driver: createJSONDriver(fixture.value.path),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 			version: 2,
 		})
 		await same.open()
 		await same.close()
-		expect(await readFile(path, 'utf-8')).toBe(migrated)
+		expect(await readFile(fixture.value.path, 'utf-8')).toBe(migrated)
 	})
 })
 
@@ -1671,11 +1825,10 @@ describe('JSONDriver — driver error seam', () => {
 	})
 
 	it('reports distinct persistence and cleanup faults while restoring memory and recovering', async () => {
-		const temp = `${path}.${process.pid}.1.tmp`
+		const temp = `${fixture.value.path}.${process.pid}.1.tmp`
 		await mkdir(temp)
-		let error: unknown
 		try {
-			error = await driver
+			const error = await fixture.value.driver
 				.write('users', 'u1', {
 					id: 'u1',
 					name: 'Ada',
@@ -1684,7 +1837,7 @@ describe('JSONDriver — driver error seam', () => {
 				})
 				.catch((caught: unknown) => caught)
 			expect(isDatabaseError(error) ? error.code : 'not-database').toBe('DRIVER')
-			expect(isDatabaseError(error) ? error.context?.path : undefined).toBe(path)
+			expect(isDatabaseError(error) ? error.context?.path : undefined).toBe(fixture.value.path)
 			expect(isDatabaseError(error) ? error.context?.temp : undefined).toBe(temp)
 			const cause = isDatabaseError(error) ? error.context?.cause : undefined
 			const cleanupError = isDatabaseError(error) ? error.context?.cleanup : undefined
@@ -1693,46 +1846,56 @@ describe('JSONDriver — driver error seam', () => {
 			expect(cause).not.toBe(cleanupError)
 			expect(error).not.toBe(cause)
 			expect(error).not.toBe(cleanupError)
-			expect(await driver.read('users', 'u1')).toBeUndefined()
+			expect(await fixture.value.driver.read('users', 'u1')).toBeUndefined()
 		} finally {
 			await rm(temp, { force: true, recursive: true })
 		}
 
-		await driver.write('users', 'u2', {
+		await fixture.value.driver.write('users', 'u2', {
 			id: 'u2',
 			name: 'Recovered',
 			age: 37,
 			active: true,
 		})
-		expect(await driver.read('users', 'u2')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u2')).toEqual({
 			id: 'u2',
 			name: 'Recovered',
 			age: 37,
 			active: true,
 		})
-		await driver.close()
+		await fixture.value.driver.close()
 	})
 })
 
 describe('JSONDriver — scoped snapshot', () => {
 	it('restores only the snapshotted table on rollback, in memory and in the file', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await driver.snapshot(['users'])
-
-		await driver.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
-		await rollback()
-
-		expect(await driver.read('users', 'u1')).toEqual({
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		expect(await driver.keys('posts')).toEqual(['extra', 'intro'])
+		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
+		const rollback = await fixture.value.driver.snapshot(['users'])
 
-		const raw = await readFile(path, 'utf-8')
+		await fixture.value.driver.write('users', 'u1', {
+			id: 'u1',
+			name: 'Changed',
+			age: 99,
+			active: false,
+		})
+		await fixture.value.driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
+		await rollback()
+
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
+			id: 'u1',
+			name: 'Ada',
+			age: 36,
+			active: true,
+		})
+		expect(await fixture.value.driver.keys('posts')).toEqual(['extra', 'intro'])
+
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			tables: {
@@ -1748,14 +1911,14 @@ describe('JSONDriver — scoped snapshot', () => {
 
 describe('JSONDriver — atomic flush', () => {
 	it('rejects an aborted queued write promptly and never starts it later', async () => {
-		const first = driver.write('users', 'u1', {
+		const first = fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
 		const controller = new AbortController()
-		const queued = driver.write(
+		const queued = fixture.value.driver.write(
 			'users',
 			'u2',
 			{ id: 'u2', name: 'Bo', age: 22, active: false },
@@ -1764,18 +1927,18 @@ describe('JSONDriver — atomic flush', () => {
 		controller.abort('stop queued write')
 		await expect(queued).rejects.toMatchObject({ code: 'ABORTED' })
 		await first
-		expect(await driver.keys('users')).toEqual(['u1'])
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1'])
 	})
 
 	it('rolls speculative memory back before rejecting an active staging abort', async () => {
-		await driver.write('users', 'u1', {
+		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Before',
 			age: 36,
 			active: true,
 		})
 		const controller = new AbortController()
-		const writing = driver.write(
+		const writing = fixture.value.driver.write(
 			'users',
 			'u1',
 			{
@@ -1791,33 +1954,33 @@ describe('JSONDriver — atomic flush', () => {
 			{ signal: controller.signal },
 		)
 		await expect(writing).rejects.toMatchObject({ code: 'ABORTED' })
-		expect(await driver.read('users', 'u1')).toEqual({
+		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
 			id: 'u1',
 			name: 'Before',
 			age: 36,
 			active: true,
 		})
-		const entries = await readdir(dirname(path))
+		const entries = await readdir(dirname(fixture.value.path))
 		expect(entries.some((entry) => entry.endsWith('.tmp'))).toBe(false)
 	})
 
 	it('serializes concurrent writers without letting an older snapshot clobber a later row', async () => {
 		await Promise.all([
-			driver.write('users', 'u1', {
+			fixture.value.driver.write('users', 'u1', {
 				id: 'u1',
 				name: 'Ada',
 				age: 36,
 				active: true,
 				meta: { payload: 'x'.repeat(1024 * 1024) },
 			}),
-			driver.write('users', 'u2', {
+			fixture.value.driver.write('users', 'u2', {
 				id: 'u2',
 				name: 'Bo',
 				age: 22,
 				active: false,
 			}),
 		])
-		const reopened = createJSONDriver(path)
+		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.keys('users')).toEqual(['u1', 'u2'])
 		await reopened.close()
@@ -1826,11 +1989,16 @@ describe('JSONDriver — atomic flush', () => {
 	it('leaves no leftover temp files after a burst of writes, and the file always parses', async () => {
 		const ids = Array.from({ length: 20 }, (_, index) => `u${String(index).padStart(2, '0')}`)
 		for (const [index, id] of ids.entries()) {
-			await driver.write('users', id, { id, name: `User ${index}`, age: 20 + index, active: true })
+			await fixture.value.driver.write('users', id, {
+				id,
+				name: `User ${index}`,
+				age: 20 + index,
+				active: true,
+			})
 		}
-		const entries = await readdir(dirname(path))
+		const entries = await readdir(dirname(fixture.value.path))
 		expect(entries.some((entry) => entry.endsWith('.tmp'))).toBe(false)
-		const raw = await readFile(path, 'utf-8')
+		const raw = await readFile(fixture.value.path, 'utf-8')
 		const parsed: unknown = JSON.parse(raw)
 		expect(parsed).toEqual({
 			tables: {

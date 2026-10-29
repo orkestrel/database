@@ -10,6 +10,7 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type {
+	IndexedDBCursorInterface,
 	IndexedDBDatabaseInterface,
 	IndexedDBStoreInterface,
 	IndexedDBTransactionStoreInterface,
@@ -25,6 +26,7 @@ import {
 	cloneMigrationInput,
 	compareValues,
 	DatabaseError,
+	StreamPage,
 	equalsValue,
 	extractKey,
 	isKey,
@@ -132,21 +134,7 @@ export class IndexedDBDriver implements DriverInterface {
 			// in place — so a reopen with a reduced schema replaces the map
 			// wholesale instead of retaining ghost tables the caller no longer
 			// declared.
-			const bootstrap = createIndexedDBDatabase({
-				name: this.#name,
-				stores: { [METADATA_STORE]: {} },
-			})
-			let persisted: DriverMetadata | undefined
-			let stores: readonly string[] = []
-			let version = 0
-			try {
-				await bootstrap.connect()
-				stores = bootstrap.stores
-				version = bootstrap.version
-				persisted = await this.#load(bootstrap)
-			} finally {
-				bootstrap.close()
-			}
+			const [stores, version, persisted] = await this.#bootstrap()
 			if (persisted !== undefined) {
 				for (const table of persisted.schema) {
 					if (!stores.includes(table.name)) {
@@ -214,12 +202,12 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
-		let present = false
+		const result = Promise.withResolvers<boolean>()
 		await this.#mutate(table, options, async (store) => {
-			present = await store.has(key)
+			result.resolve(await store.has(key))
 			await store.remove(key)
 		})
-		return present
+		return result.promise
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
@@ -512,16 +500,11 @@ export class IndexedDBDriver implements DriverInterface {
 			const conditions = input.conditions ?? []
 			const offset = input.offset ?? 0
 			const limit = input.limit
-			let skipped = 0
-			let yielded = 0
+			const page = new StreamPage(offset)
 			for (const row of await this.#candidates(store, schema, plan)) {
-				if (limit !== undefined && yielded >= limit) break
+				if (limit !== undefined && page.count >= limit) break
 				if (!matchesQuery(row, conditions)) continue
-				if (skipped < offset) {
-					skipped += 1
-					continue
-				}
-				yielded += 1
+				if (!page.next()) continue
 				yield row
 			}
 		} catch (error) {
@@ -542,7 +525,7 @@ export class IndexedDBDriver implements DriverInterface {
 		const signal = options?.signal
 		checkAbort(signal)
 		const cleanup = new AbortController()
-		let aborted = false
+		const abort = new AbortController()
 		try {
 			await this.#require().write(table, async (transaction) => {
 				checkAbort(signal)
@@ -552,7 +535,7 @@ export class IndexedDBDriver implements DriverInterface {
 						if (!transaction.active) return
 						try {
 							transaction.abort()
-							aborted = true
+							abort.abort()
 						} catch {}
 					},
 					{ once: true, signal: cleanup.signal },
@@ -561,7 +544,7 @@ export class IndexedDBDriver implements DriverInterface {
 				await scope(transaction.store(table))
 			})
 		} catch (error) {
-			if (aborted) checkAbort(signal)
+			if (abort.signal.aborted) checkAbort(signal)
 			throw this.#wrap(error)
 		} finally {
 			cleanup.abort()
@@ -578,13 +561,13 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	async #load(database: IndexedDBDatabaseInterface): Promise<DriverMetadata | undefined> {
-		let present = false
-		let value: unknown
+		const result = Promise.withResolvers<readonly [boolean, unknown]>()
 		await database.read(METADATA_STORE, async (transaction) => {
 			const store = transaction.store(METADATA_STORE)
-			present = await store.has('metadata')
-			if (present) value = await store.get('metadata')
+			const present = await store.has('metadata')
+			result.resolve([present, present ? await store.get('metadata') : undefined])
 		})
+		const [present, value] = await result.promise
 		if (!present) return undefined
 		try {
 			return cloneDriverMetadata(value)
@@ -746,23 +729,7 @@ export class IndexedDBDriver implements DriverInterface {
 					break
 				case 'column.remove': {
 					const store = context.stores.store(step.table)
-					let cursor = await store.cursor()
-					while (cursor !== null) {
-						const row = cursor.value
-						if (row === undefined) {
-							throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
-								table: step.table,
-							})
-						}
-						const [migrated] = migrateRows([row], [step])
-						if (migrated === undefined) {
-							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
-								table: step.table,
-							})
-						}
-						await cursor.update(migrated)
-						cursor = await cursor.continue()
-					}
+					await this.#rewriteCursor(await store.cursor(), step)
 					break
 				}
 				case 'column.add':
@@ -777,6 +744,40 @@ export class IndexedDBDriver implements DriverInterface {
 				},
 				'metadata',
 			)
+		}
+	}
+
+	async #rewriteCursor(
+		cursor: IndexedDBCursorInterface | null,
+		step: Extract<MigrationStep, { readonly operation: 'column.remove' }>,
+	): Promise<void> {
+		if (cursor === null) return
+		const row = cursor.value
+		if (row === undefined) {
+			throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
+				table: step.table,
+			})
+		}
+		const [migrated] = migrateRows([row], [step])
+		if (migrated === undefined) {
+			throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+				table: step.table,
+			})
+		}
+		await cursor.update(migrated)
+		return this.#rewriteCursor(await cursor.continue(), step)
+	}
+
+	async #bootstrap(): Promise<readonly [readonly string[], number, DriverMetadata | undefined]> {
+		const bootstrap = createIndexedDBDatabase({
+			name: this.#name,
+			stores: { [METADATA_STORE]: {} },
+		})
+		try {
+			await bootstrap.connect()
+			return [bootstrap.stores, bootstrap.version, await this.#load(bootstrap)]
+		} finally {
+			bootstrap.close()
 		}
 	}
 }

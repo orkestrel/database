@@ -11,7 +11,15 @@ import type {
 	StorageInterface,
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
-import { isArray, isBigInt, isError, isInteger, isNumber, isString } from '@orkestrel/contract'
+import {
+	attempt,
+	isArray,
+	isBigInt,
+	isError,
+	isInteger,
+	isNumber,
+	isString,
+} from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import type { SQLiteDriverOptions } from '../types.js'
 import {
@@ -23,6 +31,7 @@ import {
 	checkAbort,
 	DatabaseError,
 	DriverIterator,
+	StreamPage,
 	filterRows,
 	equalsValue,
 	extractKey,
@@ -56,6 +65,7 @@ import {
 	matchesSQLiteAffinity,
 	quoteIdentifier,
 } from '../helpers.js'
+import { SQLiteTransaction } from '../SQLiteTransaction.js'
 import { METADATA_TABLE } from '../constants.js'
 
 /**
@@ -112,9 +122,7 @@ export class SQLiteDriver implements DriverInterface {
 	#database: SQLiteDatabaseInterface | undefined
 	#schema = new Map<string, TableSchema>()
 	#identities = new Map<string, object>()
-	#transaction: object | undefined
-	#candidateSchema: Map<string, TableSchema> | undefined
-	#candidateIdentities: Map<string, object> | undefined
+	readonly #transactions = new Set<SQLiteTransaction>()
 
 	constructor(options: SQLiteDriverOptions = {}) {
 		this.#path = options.path ?? ':memory:'
@@ -337,38 +345,22 @@ export class SQLiteDriver implements DriverInterface {
 		this.#root()
 		const database = this.#require()
 		this.#guard(() => database.begin())
-		const token = {}
-		this.#transaction = token
-		this.#candidateSchema = new Map(this.#schema)
-		this.#candidateIdentities = new Map(this.#identities)
+		const token = new SQLiteTransaction(this.#schema, this.#identities)
+		this.#transactions.add(token)
 		try {
-			let value: R
-			try {
-				value = await scope(this.#capability(token))
-			} catch (error) {
-				this.#guard(() => database.rollback())
-				throw error
-			}
+			const value = await this.#invokeTransaction(scope, token, database)
 			try {
 				this.#guard(() => database.commit())
 			} catch (error) {
 				if (database.transacting) this.#guard(() => database.rollback())
 				throw error
 			}
-			const schema = this.#candidateSchema
-			const identities = this.#candidateIdentities
-			if (schema === undefined || identities === undefined) {
-				throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
-			}
-			this.#schema = schema
-			this.#identities = identities
+			this.#requireTransaction(token)
+			this.#schema = new Map(token.schema)
+			this.#identities = new Map(token.identities)
 			return value
 		} finally {
-			if (this.#transaction === token) {
-				this.#transaction = undefined
-				this.#candidateSchema = undefined
-				this.#candidateIdentities = undefined
-			}
+			this.#transactions.delete(token)
 		}
 	}
 
@@ -658,17 +650,12 @@ export class SQLiteDriver implements DriverInterface {
 		}
 		const offset = input.offset ?? 0
 		const limit = input.limit
-		let skipped = 0
-		let yielded = 0
+		const page = new StreamPage(offset)
 		for await (const row of this.#scan(table)) {
-			if (limit !== undefined && yielded >= limit) return
+			if (limit !== undefined && page.count >= limit) return
 			if (conditions.length > 0 && !matchesQuery(row, conditions)) continue
-			if (skipped < offset) {
-				skipped += 1
-				continue
-			}
+			if (!page.next()) continue
 			yield row
-			yielded += 1
 		}
 	}
 
@@ -869,16 +856,15 @@ export class SQLiteDriver implements DriverInterface {
 				aspect: 'metadata',
 			})
 		}
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(text)
-		} catch (error) {
+		const decoded = attempt<unknown>(() => JSON.parse(text))
+		if (!decoded.success) {
 			throw new DatabaseError('DRIVER', 'Stored SQLite metadata JSON is invalid', {
 				table: METADATA_TABLE,
 				aspect: 'metadata',
-				cause: error,
+				cause: decoded.error,
 			})
 		}
+		const parsed = decoded.value
 		if (!isArray(parsed)) {
 			throw new DatabaseError('DRIVER', 'Stored SQLite metadata schema is invalid', {
 				table: METADATA_TABLE,
@@ -916,7 +902,20 @@ export class SQLiteDriver implements DriverInterface {
 			.execute([metadata.version, JSON.stringify(metadata.schema)])
 	}
 
-	#capability(token: object): StorageInterface {
+	async #invokeTransaction<R>(
+		scope: (storage: StorageInterface) => Promise<R>,
+		token: SQLiteTransaction,
+		database: SQLiteDatabaseInterface,
+	): Promise<R> {
+		try {
+			return await scope(this.#capability(token))
+		} catch (error) {
+			this.#guard(() => database.rollback())
+			throw error
+		}
+	}
+
+	#capability(token: SQLiteTransaction): StorageInterface {
 		return {
 			read: this.#readTransaction.bind(this, token),
 			write: this.#writeTransaction.bind(this, token),
@@ -931,13 +930,17 @@ export class SQLiteDriver implements DriverInterface {
 		}
 	}
 
-	async #readTransaction(token: object, table: string, key: Key): Promise<Row | undefined> {
+	async #readTransaction(
+		token: SQLiteTransaction,
+		table: string,
+		key: Key,
+	): Promise<Row | undefined> {
 		this.#requireTransaction(token)
 		return this.#read(table, key)
 	}
 
 	async #writeTransaction(
-		token: object,
+		token: SQLiteTransaction,
 		table: string,
 		key: Key,
 		row: Row,
@@ -948,7 +951,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	async #insertTransaction(
-		token: object,
+		token: SQLiteTransaction,
 		table: string,
 		key: Key,
 		row: Row,
@@ -959,7 +962,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	async #deleteTransaction(
-		token: object,
+		token: SQLiteTransaction,
 		table: string,
 		key: Key,
 		options?: OperationOptions,
@@ -968,31 +971,28 @@ export class SQLiteDriver implements DriverInterface {
 		return this.#delete(table, key, options)
 	}
 
-	async #keysTransaction(token: object, table: string): Promise<readonly Key[]> {
+	async #keysTransaction(token: SQLiteTransaction, table: string): Promise<readonly Key[]> {
 		this.#requireTransaction(token)
 		return this.#keys(table)
 	}
 
-	#scanTransaction(token: object, table: string): AsyncIterable<Row> {
+	#scanTransaction(token: SQLiteTransaction, table: string): AsyncIterable<Row> {
 		return new DriverIterator(this.#scan(table)[Symbol.asyncIterator](), () => {
 			this.#requireTransaction(token)
 		})
 	}
 
-	async #clearTransaction(token: object, table: string): Promise<void> {
+	async #clearTransaction(token: SQLiteTransaction, table: string): Promise<void> {
 		this.#requireTransaction(token)
 		await this.#clear(table)
 	}
 
-	async #migrateTransaction(token: object, input: MigrationInput): Promise<void> {
+	async #migrateTransaction(token: SQLiteTransaction, input: MigrationInput): Promise<void> {
 		this.#requireTransaction(token)
 		const database = this.#require()
 		const owned = cloneMigrationInput(input)
-		const candidate = this.#candidateSchema
-		const identities = this.#candidateIdentities
-		if (candidate === undefined || identities === undefined) {
-			throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
-		}
+		const candidate = token.schema
+		const identities = token.identities
 		const projected = projectMigrationSchema([...candidate.values()], owned.plan.steps)
 		const projectedIdentities = this.#projectIdentities(identities, owned.plan.steps)
 		if (
@@ -1021,28 +1021,27 @@ export class SQLiteDriver implements DriverInterface {
 				throw error
 			}
 		})
-		this.#candidateSchema = new Map(projected.map((table) => [table.name, table]))
-		this.#candidateIdentities = projectedIdentities
+		token.project(projected, projectedIdentities)
 	}
 
-	async #metadataTransaction(token: object): Promise<DriverMetadata | undefined> {
+	async #metadataTransaction(token: SQLiteTransaction): Promise<DriverMetadata | undefined> {
 		this.#requireTransaction(token)
 		return this.#metadata()
 	}
 
-	async #stampTransaction(token: object, metadata: DriverMetadata): Promise<void> {
+	async #stampTransaction(token: SQLiteTransaction, metadata: DriverMetadata): Promise<void> {
 		this.#requireTransaction(token)
 		await this.#stamp(metadata)
 	}
 
-	#requireTransaction(token: object): void {
-		if (this.#transaction !== token) {
+	#requireTransaction(token: SQLiteTransaction): void {
+		if (!this.#transactions.has(token)) {
 			throw new DatabaseError('CONFLICT', 'Transaction scope has settled')
 		}
 	}
 
 	#root(): void {
-		if (this.#transaction !== undefined) {
+		if (this.#transactions.size !== 0) {
 			throw new DatabaseError('CONFLICT', 'A transaction is active on this driver')
 		}
 	}
@@ -1109,7 +1108,8 @@ export class SQLiteDriver implements DriverInterface {
 	// Require the database open and resolve a declared table's schema.
 	#table(name: string): TableSchema {
 		this.#require()
-		const schema = (this.#candidateSchema ?? this.#schema).get(name)
+		const [transaction] = this.#transactions
+		const schema = (transaction?.schema ?? this.#schema).get(name)
 		if (schema === undefined) {
 			throw new DatabaseError('NOT_FOUND', `Table '${name}' is not in the schema`, { table: name })
 		}

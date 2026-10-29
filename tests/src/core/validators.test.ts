@@ -1,3 +1,4 @@
+import { COLUMN, TABLE, STEP, PLAN, METADATA } from '../../setup.js'
 import {
 	isColumnSchema,
 	isDriverMetadata,
@@ -9,17 +10,6 @@ import {
 	isTableSchema,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-
-const COLUMN = { name: 'id', storage: 'text', optional: false, nullable: false }
-const TABLE = {
-	name: 'users',
-	primary: 'id',
-	columns: [COLUMN],
-	indexes: [['id']],
-}
-const STEP = { operation: 'column.remove', table: 'users', column: 'legacy' }
-const PLAN = { from: 1, to: 2, steps: [STEP] }
-const METADATA = { version: 2, schema: [TABLE] }
 
 describe('database boundary validators', () => {
 	it('accepts every valid declaration level', () => {

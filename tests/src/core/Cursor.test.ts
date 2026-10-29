@@ -1,28 +1,31 @@
-import type { CursorInterface, DriverInterface, Row, TableInterface } from '@src/core'
-import type { CursorUserRow } from '../../setup.js'
+import type { Row } from '@src/core'
+import type { CursorUsers as Users, UserCursor } from '../../setup.js'
 import { createMemoryDriver } from '@src/core'
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Cursor } from '../../../src/core/Cursor.js'
-import { createMemoryAdapter, seedCursorDatabase } from '../../setup.js'
-
-type Users = TableInterface<CursorUserRow>
-type UserCursor = CursorInterface<CursorUserRow>
+import {
+	DatabaseCounter,
+	DatabaseFixture,
+	DatabaseSwitch,
+	createMemoryAdapter,
+	seedCursorDatabase,
+} from '../../setup.js'
 
 describe('Cursor — position', () => {
-	let users: Users
+	const users = new DatabaseFixture<Users>()
 	beforeAll(async () => {
-		users = (await seedCursorDatabase()).users
+		users.hold((await seedCursorDatabase()).users)
 	})
 
 	it('opens positioned at the first row (index 0, not done)', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		expect(cursor.index).toBe(0)
 		expect(cursor.done).toBe(false)
 		expect(cursor.value?.id).toBe('u1')
 	})
 
 	it('advances forward through the key snapshot with next', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		const seen: string[] = []
 		while (!cursor.done) {
 			if (cursor.value) seen.push(cursor.value.id)
@@ -32,7 +35,7 @@ describe('Cursor — position', () => {
 	})
 
 	it('is done with an undefined value after the last key', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		await cursor.next()
 		await cursor.next()
 		expect(cursor.done).toBe(false)
@@ -43,78 +46,79 @@ describe('Cursor — position', () => {
 })
 
 describe('Cursor — mutation', () => {
-	let users: Users
+	const users = new DatabaseFixture<Users>()
+	afterEach(() => users.clear())
 	beforeEach(async () => {
-		users = (await seedCursorDatabase()).users
+		users.hold((await seedCursorDatabase()).users)
 	})
 
 	it('updates the row at the current position in place', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		await cursor.update({ role: 'member' })
 		expect(cursor.value?.role).toBe('member')
 		expect(cursor.value?.id).toBe('u1')
-		expect((await users.get('u1'))?.role).toBe('member')
+		expect((await users.value.get('u1'))?.role).toBe('member')
 	})
 
 	it('rejects changing the current row primary without moving or mutating it', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		await expect(cursor.update({ id: 'u9', role: 'member' })).rejects.toMatchObject({
 			code: 'VALIDATION',
 		})
 		expect(cursor.value?.id).toBe('u1')
-		expect((await users.get('u1'))?.role).toBe('admin')
-		expect(await users.get('u9')).toBeUndefined()
+		expect((await users.value.get('u1'))?.role).toBe('admin')
+		expect(await users.value.get('u9')).toBeUndefined()
 	})
 
 	it('removes the row at the current position and clears the value', async () => {
-		const cursor = await users.cursor()
+		const cursor = await users.value.cursor()
 		await cursor.remove()
 		expect(cursor.value).toBeUndefined()
-		expect(await users.has('u1')).toBe(false)
-		expect(await users.count()).toBe(2)
+		expect(await users.value.has('u1')).toBe(false)
+		expect(await users.value.count()).toBe(2)
 	})
 
 	it('iterates, removing some and updating others in one pass', async () => {
-		const cursor = await users.cursor()
-		let visited = 0
+		const cursor = await users.value.cursor()
+		const visited = new DatabaseCounter()
 		while (!cursor.done) {
-			visited += 1
+			visited.next()
 			if (cursor.value && cursor.value.age < 18) await cursor.remove()
 			else await cursor.update({ role: 'member' })
 			await cursor.next()
 		}
-		expect(visited).toBe(3)
-		expect(await users.has('u2')).toBe(false)
-		expect((await users.get('u1'))?.role).toBe('member')
-		expect(await users.count()).toBe(2)
+		expect(visited.count).toBe(3)
+		expect(await users.value.has('u2')).toBe(false)
+		expect((await users.value.get('u1'))?.role).toBe('member')
+		expect(await users.value.count()).toBe(2)
 	})
 })
 
 describe('Cursor — serialization and lifetime', () => {
 	it('invokes the runner synchronously once per promise operation, including after close', async () => {
-		let runs = 0
-		let reads = 0
+		const runs = new DatabaseCounter()
+		const reads = new DatabaseCounter()
 		const cursor = new Cursor<Row>(
 			[],
 			async () => {
-				reads += 1
+				reads.next()
 				return undefined
 			},
 			async () => false,
 			async () => false,
 			(operation) => {
-				runs += 1
+				runs.next()
 				return operation()
 			},
 		)
 		cursor.close()
-		expect(runs).toBe(0)
+		expect(runs.count).toBe(0)
 		const next = cursor.next()
 		const update = cursor.update({})
 		const remove = cursor.remove()
-		expect(runs).toBe(3)
+		expect(runs.count).toBe(3)
 		await expect(Promise.all([next, update, remove])).resolves.toHaveLength(3)
-		expect(reads).toBe(0)
+		expect(reads.count).toBe(0)
 	})
 
 	it('serializes overlapping next calls against consecutive keys', async () => {
@@ -195,7 +199,7 @@ describe('Cursor — serialization and lifetime', () => {
 
 	it('continues queued work after a caller operation rejects', async () => {
 		const reason = new Error('update failed')
-		let fails = true
+		const fails = new DatabaseSwitch(true)
 		const rows: Readonly<Record<string, Row>> = {
 			u1: { id: 'u1' },
 			u2: { id: 'u2' },
@@ -204,8 +208,8 @@ describe('Cursor — serialization and lifetime', () => {
 			['u1', 'u2'],
 			async (key) => rows[String(key)],
 			async () => {
-				if (fails) {
-					fails = false
+				if (fails.active) {
+					fails.disable()
 					throw reason
 				}
 				return true
@@ -247,23 +251,23 @@ describe('Cursor — serialization and lifetime', () => {
 	it('lets a dispatched update settle but skips its reread and queued remove after close', async () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let reads = 0
-		let updates = 0
-		let removes = 0
+		const reads = new DatabaseCounter()
+		const updates = new DatabaseCounter()
+		const removes = new DatabaseCounter()
 		const cursor = new Cursor<Row>(
 			['u1'],
 			async () => {
-				reads += 1
+				reads.next()
 				return { id: 'u1' }
 			},
 			async () => {
-				updates += 1
+				updates.next()
 				entered.resolve()
 				await release.promise
 				return true
 			},
 			async () => {
-				removes += 1
+				removes.next()
 				return true
 			},
 			(operation) => operation(),
@@ -275,9 +279,9 @@ describe('Cursor — serialization and lifetime', () => {
 		cursor.close()
 		release.resolve()
 		await expect(Promise.all([update, remove])).resolves.toHaveLength(2)
-		expect(updates).toBe(1)
-		expect(reads).toBe(1)
-		expect(removes).toBe(0)
+		expect(updates.count).toBe(1)
+		expect(reads.count).toBe(1)
+		expect(removes.count).toBe(0)
 		expect(cursor.value).toBeUndefined()
 	})
 })
@@ -316,11 +320,10 @@ describe('Cursor — transaction continuations', () => {
 		const memory = createMemoryDriver()
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let blocking = false
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const blocking = new DatabaseSwitch()
+		const driver = createMemoryAdapter(memory, {
 			async write(table, key, row, options) {
-				if (blocking) {
+				if (blocking.active) {
 					entered.resolve()
 					await release.promise
 				}
@@ -328,9 +331,9 @@ describe('Cursor — transaction continuations', () => {
 				if (typeof normalized.name === 'string') normalized.name = normalized.name.trim()
 				await memory.write(table, key, normalized, options)
 			},
-		}
+		})
 		const { db, users } = await seedCursorDatabase(driver)
-		blocking = true
+		blocking.enable()
 		const captured = Promise.withResolvers<UserCursor>()
 		const operation = Promise.withResolvers<Promise<void>>()
 		const running = db.transaction(async (transaction) => {

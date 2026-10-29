@@ -31,6 +31,7 @@ import {
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 import { ScopedIterator } from './ScopedIterator.js'
+import { StreamPage } from './StreamPage.js'
 
 /**
  * Exposes typed keyed CRUD plus fluent query and cursor access over a driver.
@@ -190,11 +191,7 @@ export class Table<T = Row> implements TableInterface<T> {
 			const candidate: QueryInput = conditions === undefined ? {} : { conditions }
 			const native = await this.#driver.records?.(this.#name, candidate)
 			const rows = native ?? filterRows(await this.#collect(), conditions ?? [])
-			let count = 0
-			for (const row of rows) {
-				if (this.#guard(row)) count += 1
-			}
-			return count
+			return Iterator.from(rows).reduce((count, row) => count + (this.#guard(row) ? 1 : 0), 0)
 		})
 	}
 
@@ -334,16 +331,15 @@ export class Table<T = Row> implements TableInterface<T> {
 	cursor(): Promise<CursorInterface<T>> {
 		return this.#track(async () => {
 			await this.#ready()
-			let initializing = true
 			const cursor = new Cursor<T>(
 				await this.#driver.keys(this.#name),
 				(key) => this.#readCursor(key),
 				(key, changes) => this.#updateCursor(key, changes),
 				(key) => this.#deleteCursor(key),
-				(operation) => (initializing ? operation() : this.#track(operation)),
+				(operation) => this.#track(operation),
+				true,
 			)
 			await cursor.next()
-			initializing = false
 			return cursor
 		})
 	}
@@ -354,8 +350,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		const conditions = input?.conditions
 		const offset = input?.offset ?? 0
 		const limit = input?.limit
-		let matched = 0
-		let yielded = 0
+		const page = new StreamPage(offset)
 		const source =
 			this.#driver.stream === undefined
 				? this.#driver.scan(this.#name)
@@ -365,7 +360,7 @@ export class Table<T = Row> implements TableInterface<T> {
 			while (true) {
 				await this.#ready()
 				checkAbort(options?.signal)
-				if (limit !== undefined && yielded >= limit) return
+				if (limit !== undefined && page.count >= limit) return
 				const step = await iterator.next()
 				await this.#ready()
 				checkAbort(options?.signal)
@@ -376,12 +371,7 @@ export class Table<T = Row> implements TableInterface<T> {
 				}
 				const narrowed = this.#cast(row)
 				if (narrowed === undefined) continue
-				if (matched < offset) {
-					matched += 1
-					continue
-				}
-				matched += 1
-				yielded += 1
+				if (!page.next()) continue
 				yield narrowed
 			}
 		} finally {

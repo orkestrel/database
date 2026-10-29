@@ -2,7 +2,6 @@ import type {
 	ColumnMap,
 	DatabaseEventMap,
 	DatabaseInterface,
-	DriverInterface,
 	CursorInterface,
 	MigrationInput,
 	QueryInterface,
@@ -11,7 +10,7 @@ import type {
 	TableInterface,
 	TableSchema,
 } from '@src/core'
-import type { UserRow } from '../../setup.js'
+import type { DatabaseEvent, MigrateEvent, UserRow } from '../../setup.js'
 import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { createRecorder, createRecorders } from '@orkestrel/test'
@@ -19,6 +18,11 @@ import { describe, expect, it } from 'vitest'
 import {
 	createConstrainedUsersDatabase as userDatabase,
 	createMemoryAdapter,
+	DatabaseCounter,
+	DatabaseSwitch,
+	ReopenDriverFixture,
+	DATABASE_EVENTS,
+	MIGRATE_EVENTS,
 	createReconciliationDriver,
 	IteratorSource,
 	RecordingIterator,
@@ -49,14 +53,13 @@ describe('Database lifecycle', () => {
 		const memory = createMemoryDriver()
 		const failure = new Error('first open failed')
 		const opens: Array<readonly TableSchema[]> = []
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			async open(schema) {
 				opens.push(schema)
 				if (opens.length === 1) throw failure
 				await memory.open(schema)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -75,23 +78,8 @@ describe('Database lifecycle', () => {
 	})
 
 	it('does not republish open when reconciliation retries after physical open succeeded', async () => {
-		const memory = createMemoryDriver()
-		let schema: readonly TableSchema[] = []
-		let metadata = 0
-		let opens = 0
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
-			async open(declared) {
-				opens += 1
-				schema = declared
-				await memory.open(declared)
-			},
-			async metadata() {
-				metadata += 1
-				return { version: metadata === 1 ? 2 : 1, schema }
-			},
-			async stamp() {},
-		}
+		const fixture = new ReopenDriverFixture()
+		const driver = fixture.driver
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -103,7 +91,7 @@ describe('Database lifecycle', () => {
 		expect(db.status).toBe('open')
 		expect(events.open.calls).toEqual([[]])
 		await expect(db.open()).resolves.toBeUndefined()
-		expect(opens).toBe(2)
+		expect(fixture.opens).toBe(2)
 		expect(events.open.calls).toEqual([[]])
 	})
 
@@ -348,9 +336,8 @@ describe('transactions', () => {
 			driver: createMemoryDriver(),
 			tables: { events: { id: optionalShape(stringShape()), kind: stringShape() } },
 		})
-		let key: string | number | undefined
-		await db.transaction(async (transaction) => {
-			key = await transaction.table('events').set({ kind: 'click' })
+		const key = await db.transaction(async (transaction) => {
+			return transaction.table('events').set({ kind: 'click' })
 		})
 		expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 		if (key === undefined) throw new Error('Expected a generated key')
@@ -404,18 +391,17 @@ describe('transactions', () => {
 		const memory = createMemoryDriver()
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let blocked = true
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const blocked = new DatabaseSwitch(true)
+		const driver = createMemoryAdapter(memory, {
 			async write(table, key, row, options) {
-				if (blocked) {
-					blocked = false
+				if (blocked.active) {
+					blocked.disable()
 					entered.resolve()
 					await release.promise
 				}
 				await memory.write(table, key, row, options)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -424,16 +410,16 @@ describe('transactions', () => {
 		const writing = users.set({ id: 'u1', name: 'Ada' })
 		await entered.promise
 		const reason = new Error('transaction failed')
-		let started = false
+		const started = new DatabaseSwitch()
 		const running = db.transaction(async () => {
-			started = true
+			started.enable()
 			throw reason
 		})
-		expect(started).toBe(false)
+		expect(started.active).toBe(false)
 		release.resolve()
 		await writing
 		await expect(running).rejects.toBe(reason)
-		expect(started).toBe(true)
+		expect(started.active).toBe(true)
 		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada' })
 	})
 
@@ -442,12 +428,11 @@ describe('transactions', () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const closes = createRecorder<[]>()
-		let blocked = true
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const blocked = new DatabaseSwitch(true)
+		const driver = createMemoryAdapter(memory, {
 			async write(table, key, row, options) {
-				if (blocked) {
-					blocked = false
+				if (blocked.active) {
+					blocked.disable()
 					entered.resolve()
 					await release.promise
 				}
@@ -457,7 +442,7 @@ describe('transactions', () => {
 				closes.handler()
 				await memory.close()
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -478,14 +463,13 @@ describe('transactions', () => {
 	it('admits each root iterator continuation and cleans a rejected source exactly once', async () => {
 		const memory = createMemoryDriver()
 		const cleanups = createRecorder<[]>()
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			stream(table) {
 				return new IteratorSource(
 					new RecordingIterator(memory.scan(table)[Symbol.asyncIterator](), cleanups.handler),
 				)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -555,18 +539,17 @@ describe('transactions', () => {
 		const memory = createMemoryDriver()
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let held = true
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const held = new DatabaseSwitch(true)
+		const driver = createMemoryAdapter(memory, {
 			async read(table, key) {
-				if (held) {
-					held = false
+				if (held.active) {
+					held.disable()
 					entered.resolve()
 					await release.promise
 				}
 				return memory.read(table, key)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
@@ -620,24 +603,23 @@ describe('transactions', () => {
 		const memory = createMemoryDriver()
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let blocking = false
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const blocking = new DatabaseSwitch()
+		const driver = createMemoryAdapter(memory, {
 			async write(table, key, row, options) {
-				if (blocking) {
+				if (blocking.active) {
 					entered.resolve()
 					await release.promise
 				}
 				await memory.write(table, key, row, options)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
 		})
 		const users = db.table('users')
 		await users.set({ id: 'u1', name: 'Ada', age: 36 })
-		blocking = true
+		blocking.enable()
 		const scoped = Promise.withResolvers<TableInterface<UserRow>>()
 		const reason = Symbol('synchronous callback failure')
 		const running = db.transaction((transaction) => {
@@ -693,16 +675,6 @@ describe('transaction() abort signal (snapshot floor)', () => {
 // keeps only the names its scenarios observe). Each list carries its own exact union rather
 // than `keyof DatabaseEventMap`, because a name in the type argument that the array omits
 // reads `undefined` at runtime under a non-optional recorder type.
-type DatabaseEvent = 'open' | 'close' | 'transaction' | 'commit' | 'rollback'
-const DATABASE_EVENTS: readonly DatabaseEvent[] = [
-	'open',
-	'close',
-	'transaction',
-	'commit',
-	'rollback',
-]
-type MigrateEvent = 'migrate'
-const MIGRATE_EVENTS: readonly MigrateEvent[] = ['migrate']
 
 describe('Database — emitter (push observation surface)', () => {
 	it('fires open once on lazy first-use connect and then fires terminal close', async () => {
@@ -757,15 +729,14 @@ describe('Database — emitter (push observation surface)', () => {
 		const memory = createMemoryDriver()
 		const failure = new Error('rollback failed')
 		const reason = new Error('scope failed')
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			async snapshot() {
 				await memory.snapshot()
 				return async () => {
 					throw failure
 				}
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
@@ -789,8 +760,7 @@ describe('Database — emitter (push observation surface)', () => {
 		const memory = createMemoryDriver()
 		const cleanup = new Error('native cleanup failed')
 		const reason = new Error('native scope failed')
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			async transaction(scope) {
 				const rollback = await memory.snapshot()
 				try {
@@ -800,7 +770,7 @@ describe('Database — emitter (push observation surface)', () => {
 					throw cleanup
 				}
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
@@ -964,12 +934,11 @@ describe('migrate()', () => {
 	it('checks the abort signal at entry; driver.migrate is never called, no event fires', async () => {
 		const memory = createMemoryDriver()
 		const calls: MigrationInput[] = []
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			async migrate(plan) {
 				calls.push(plan)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -987,15 +956,14 @@ describe('migrate()', () => {
 	it('fails closed after apply rejection and allows an explicit migration retry', async () => {
 		const memory = createMemoryDriver()
 		const failure = new Error('apply failed')
-		let applies = 0
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const applies = new DatabaseCounter()
+		const driver = createMemoryAdapter(memory, {
 			async migrate(input) {
-				applies += 1
-				if (applies === 1) throw failure
+				applies.next()
+				if (applies.count === 1) throw failure
 				await memory.migrate?.(input)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape() } },
@@ -1015,7 +983,7 @@ describe('migrate()', () => {
 		await expect(users.keys()).rejects.toBe(failure)
 
 		const plan = await db.migrate([])
-		expect(applies).toBe(2)
+		expect(applies.count).toBe(2)
 		expect(db.status).toBe('open')
 		expect(events.open.calls).toEqual([[]])
 		expect(events.migrate.calls).toEqual([[plan]])

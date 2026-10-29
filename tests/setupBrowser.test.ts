@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mintDatabase } from './setupBrowser.js'
+import { mintDatabase, readCounter } from './setupBrowser.js'
 
 // The browser test setup module's proof (`tests/setupBrowser.ts`). Its subject is the exported
 // test infrastructure the `src:browser` suites are driven over.
@@ -14,11 +14,6 @@ import { mintDatabase } from './setupBrowser.js'
 //
 // Each expectation arrives by a route `tests/setupBrowser.ts` does not share. Uniqueness is read
 // as set membership across a batch rather than as a counter value.
-
-/** Read the trailing counter segment a `mintDatabase` result carries. */
-function readCounter(name: string): number {
-	return Number(name.slice(name.lastIndexOf('-') + 1))
-}
 
 describe('mintDatabase', () => {
 	it('returns a name no earlier call returned', () => {

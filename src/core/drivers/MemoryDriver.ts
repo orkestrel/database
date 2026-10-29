@@ -24,6 +24,7 @@ import {
 	validatePage,
 } from '../helpers.js'
 import { isKey } from '../validators.js'
+import { StreamPage } from '../StreamPage.js'
 
 /**
  * Implements the reference {@link DriverInterface} — nested maps, no I/O.
@@ -366,21 +367,16 @@ export class MemoryDriver implements DriverInterface {
 		const conditions = input.conditions
 		const offset = input.offset ?? 0
 		const limit = input.limit
-		let skipped = 0
-		let yielded = 0
+		const page = new StreamPage(offset)
 		for (const key of this.#ordered(table)) {
-			if (limit !== undefined && yielded >= limit) return
+			if (limit !== undefined && page.count >= limit) return
 			const row = store.get(key)
 			if (row === undefined) continue
 			if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
 				continue
 			}
-			if (skipped < offset) {
-				skipped += 1
-				continue
-			}
+			if (!page.next()) continue
 			yield structuredClone(row)
-			yielded += 1
 		}
 	}
 

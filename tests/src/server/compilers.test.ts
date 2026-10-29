@@ -1,6 +1,9 @@
-import type { QueryInput, TableSchema } from '@src/core'
+import { INDEXED_SCHEMA } from '../../setupServer.js'
+import { COMPILER_SCHEMA as SCHEMA, compile } from '../../setupServer.js'
+import type { QueryInput } from '@src/core'
 import {
 	compileAggregateSQL,
+	compileBoundSQL,
 	compileColumnSQL,
 	compileFieldSQL,
 	compileQuerySQL,
@@ -26,20 +29,22 @@ import { buildCondition as cond } from '../../setup.js'
 // the final tie-break determinant — unless the primary is already one of the
 // explicit terms.
 
-const SCHEMA: TableSchema = {
-	name: 'users',
-	primary: 'id',
-	columns: [
-		{ name: 'id', storage: 'text', optional: false, nullable: false },
-		{ name: 'name', storage: 'text', optional: false, nullable: false },
-		{ name: 'age', storage: 'integer', optional: false, nullable: false },
-		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
-		{ name: 'meta', storage: 'json', optional: false, nullable: true },
-	],
-	indexes: [],
-}
-
 describe('SQL declaration compilers', () => {
+	it('binds declared JSON operands and nested scalar operands independently', () => {
+		expect(compileBoundSQL('?', [true], true, undefined)).toEqual({
+			sql: '?',
+			parameters: [1],
+		})
+		expect(
+			compileBoundSQL('?', [{ value: 1 }], false, {
+				name: 'payload',
+				storage: 'json',
+				optional: false,
+				nullable: false,
+			}),
+		).toEqual({ sql: '?', parameters: ['{"value":1}'] })
+	})
+
 	it('maps every portable column storage to its exact SQLite type', () => {
 		expect(compileColumnSQL('text')).toBe('TEXT')
 		expect(compileColumnSQL('json')).toBe('TEXT')
@@ -70,17 +75,6 @@ describe('SQL declaration compilers', () => {
 })
 
 describe('schema and migration compilers', () => {
-	const INDEXED_SCHEMA: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'name', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-		],
-		indexes: [['name'], ['name', 'age']],
-	}
-
 	it('compiles the exact table and index declarations', () => {
 		expect(schemaToTable(INDEXED_SCHEMA)).toBe(
 			'CREATE TABLE IF NOT EXISTS "users" ("id" TEXT NOT NULL, "name" TEXT NOT NULL, "age" INTEGER NOT NULL, PRIMARY KEY ("id"))',
@@ -121,11 +115,6 @@ describe('schema and migration compilers', () => {
 		])
 	})
 })
-
-function compile(input: QueryInput): { sql: string; parameters: readonly unknown[] } {
-	const result = compileQuerySQL(input, SCHEMA)
-	return { sql: result.sql, parameters: result.parameters }
-}
 
 describe('compileQuerySQL — operators', () => {
 	it('compiles equals to `= ?` with the encoded operand', () => {

@@ -1,6 +1,16 @@
-import type { ColumnSchema, DriverInterface, Key, MigrationStep, Row, TableSchema } from '@src/core'
+import type { ColumnSchema, MigrationStep, TableSchema } from '@src/core'
+import {
+	CONDITION_ROW,
+	QUERY_ROW,
+	PAGE_ROWS,
+	AGGREGATE_ROWS,
+	VALID_SCHEMA,
+	MIGRATION_USERS,
+	FILTER_ROWS,
+} from '../../setup.js'
 import {
 	applyQuery,
+	captureFailure,
 	auditDriver,
 	bindRowKey,
 	checkAbort,
@@ -31,6 +41,7 @@ import {
 	sortRows,
 	validatePage,
 	matchesWildcardPattern,
+	matchesWildcardSegment,
 } from '@src/core'
 import {
 	arrayShape,
@@ -49,11 +60,34 @@ import {
 } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { buildCondition } from '../../setup.js'
+import {
+	buildCondition,
+	schema,
+	createReferenceLeakingDriver,
+	createDescendingKeyDriver,
+	createMismatchedMetadataDriver,
+	createWholeSnapshotDriver,
+	createDoublyBrokenDriver,
+	createCrashingDriver,
+} from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
 // — the connector is irrelevant for a single-condition match (it only matters
 // when folding a list).
+
+describe('captureFailure', () => {
+	it('preserves synchronous throws and rejections and returns absence on fulfillment', async () => {
+		const reason = Symbol('failure')
+		expect(await captureFailure(() => Promise.reject(reason))).toBe(reason)
+		expect(
+			await captureFailure(() => {
+				throw reason
+			}),
+		).toBe(reason)
+		expect(await captureFailure(() => Promise.resolve('success'))).toBeUndefined()
+		expect(await captureFailure(() => Promise.reject(undefined))).toBeUndefined()
+	})
+})
 
 describe('validatePage', () => {
 	it.each([
@@ -69,12 +103,7 @@ describe('validatePage', () => {
 		'rejects invalid $field page value $value without JSON null coercion',
 		({ field, value, diagnostic }) => {
 			const input = field === 'limit' ? { limit: value } : { offset: value }
-			let error: unknown
-			try {
-				validatePage(input)
-			} catch (caught) {
-				error = caught
-			}
+			const error = captureError(() => validatePage(input))
 
 			expect(error).toMatchObject({
 				code: 'VALIDATION',
@@ -159,7 +188,7 @@ describe('compareValues', () => {
 })
 
 describe('matchesCondition', () => {
-	const row = { name: 'Alice', age: 30, tag: null }
+	const row = CONDITION_ROW
 
 	it('handles comparison operators', () => {
 		expect(matchesCondition(row, buildCondition('age', 'equals', [30]))).toBe(true)
@@ -310,6 +339,24 @@ describe('matchesGlobPattern', () => {
 	})
 })
 
+describe('matchesWildcardSegment', () => {
+	it('matches each unit literally or through the single wildcard at the offset', () => {
+		expect(matchesWildcardSegment('hello', 'l_o', 2, '_')).toBe(true)
+		expect(matchesWildcardSegment('hello', 'l_o', 1, '_')).toBe(false)
+		expect(matchesWildcardSegment('hello', '', 5, '_')).toBe(true)
+	})
+
+	it('fails an offset that leaves the segment outside the value', () => {
+		expect(matchesWildcardSegment('hello', 'lo', 4, '_')).toBe(false)
+		expect(matchesWildcardSegment('hello', 'he', -1, '_')).toBe(false)
+	})
+
+	it('compares UTF-16 code units, so the single wildcard spans one unit of an astral character', () => {
+		expect(matchesWildcardSegment('😀', '_', 1, '_')).toBe(true)
+		expect(matchesWildcardSegment('😀', '__', 1, '_')).toBe(false)
+	})
+})
+
 describe('matchesWildcardPattern — the linear, ReDoS-safe engine', () => {
 	it('matches generically with the injected wildcard chars + fold flag', () => {
 		expect(matchesWildcardPattern('abc', 'a%', '%', '_', false)).toBe(true)
@@ -353,7 +400,7 @@ describe('matchesWildcardPattern — the linear, ReDoS-safe engine', () => {
 })
 
 describe('matchesQuery', () => {
-	const row = { age: 30, role: 'admin' }
+	const row = QUERY_ROW
 
 	it('matches every row on an empty condition list', () => {
 		expect(matchesQuery(row, [])).toBe(true)
@@ -396,12 +443,7 @@ describe('sortRows', () => {
 })
 
 describe('applyQuery', () => {
-	const rows = [
-		{ id: 'a', n: 1 },
-		{ id: 'b', n: 2 },
-		{ id: 'c', n: 3 },
-		{ id: 'd', n: 4 },
-	]
+	const rows = PAGE_ROWS
 
 	it('filters, sorts, then pages', () => {
 		const result = applyQuery(rows, {
@@ -429,7 +471,7 @@ describe('applyQuery', () => {
 })
 
 describe('computeAggregate', () => {
-	const rows = [{ amount: 10 }, { amount: '20' }, { amount: 'x' }, { other: 1 }]
+	const rows = AGGREGATE_ROWS
 
 	it('counts every row', () => {
 		expect(computeAggregate(rows, 'count', 'amount')).toBe(4)
@@ -541,12 +583,7 @@ describe('shapeToColumnSchema', () => {
 })
 
 describe('isDriverMetadata', () => {
-	const validSchema: TableSchema = {
-		name: 'users',
-		primary: 'id',
-		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-		indexes: [['id']],
-	}
+	const validSchema = VALID_SCHEMA
 
 	it('accepts a well-formed DriverMetadata', () => {
 		expect(isDriverMetadata({ version: 1, schema: [validSchema] })).toBe(true)
@@ -672,17 +709,6 @@ describe('normalizeDriverSchema', () => {
 		})
 	})
 })
-
-// Local schema-literal builder — kept file-local since only this file diffs
-// TableSchema literals directly (`.claude/rules/tests.md` § Shared test
-// infrastructure: extract after it serves a second file).
-function schema(overrides: Partial<TableSchema> & { name: string }): TableSchema {
-	const columns: readonly ColumnSchema[] = [
-		{ name: 'id', storage: 'text', optional: false, nullable: false },
-		...(overrides.columns ?? []),
-	]
-	return { primary: 'id', indexes: [], ...overrides, columns }
-}
 
 describe('planMigration', () => {
 	it('adds a declared table missing from deployed', () => {
@@ -884,11 +910,7 @@ describe('planMigration', () => {
 })
 
 describe('projectMigrationSchema', () => {
-	const users = schema({
-		name: 'users',
-		columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
-		indexes: [['name']],
-	})
+	const users = MIGRATION_USERS
 
 	it('projects ordered table, column, and index transitions to a fresh valid schema', () => {
 		const result = projectMigrationSchema(
@@ -1106,7 +1128,7 @@ describe('equalsValue', () => {
 })
 
 describe('filterRows', () => {
-	const rows = [{ age: 30 }, { age: 12 }, { age: 45 }]
+	const rows = FILTER_ROWS
 
 	it('matches every row on an empty condition list', () => {
 		expect(filterRows(rows, [])).toBe(rows)
@@ -1117,85 +1139,6 @@ describe('filterRows', () => {
 		expect(result.map((row) => row.age)).toEqual([30, 45])
 	})
 })
-
-function createReferenceLeakingDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	const stored = new Map<Key, Row>()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		async write(table: string, key: Key, row: Row): Promise<void> {
-			await inner.write(table, key, row)
-			stored.set(key, row)
-		},
-		insert: (table, key, row) => inner.insert(table, key, row),
-		async read(table: string, key: Key): Promise<Row | undefined> {
-			if (stored.has(key)) return stored.get(key)
-			return inner.read(table, key)
-		},
-		delete: (table, key) => inner.delete(table, key),
-		keys: (table) => inner.keys(table),
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: () => inner.snapshot(),
-	}
-}
-
-function createDescendingKeyDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
-		async keys(table: string): Promise<readonly Key[]> {
-			return [...(await inner.keys(table))].reverse()
-		},
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: () => inner.snapshot(),
-	}
-}
-
-function createMismatchedMetadataDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
-		keys: (table) => inner.keys(table),
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: (tables) => inner.snapshot(tables),
-		async metadata() {
-			return { version: 99, schema: [] }
-		},
-		async stamp() {
-			// Deliberately ignores the stamped value.
-		},
-	}
-}
-
-function createWholeSnapshotDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
-		keys: (table) => inner.keys(table),
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: () => inner.snapshot(),
-	}
-}
 
 describe('conformDriver', () => {
 	it('resolves for a conformant driver (the reference memory driver)', async () => {
@@ -1222,49 +1165,8 @@ describe('conformDriver', () => {
 // A driver wrapper violating TWO independent invariants: copy-out isolation
 // (phase c) AND reversed key order (phase e) — auditDriver must report BOTH,
 // while conformDriver (fail-fast) must report only the first (copy-out).
-function createDoublyBrokenDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	const stored = new Map<Key, Row>()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		async write(table: string, key: Key, row: Row): Promise<void> {
-			await inner.write(table, key, row)
-			stored.set(key, row) // stores the reference directly (breaks copy-in/copy-out)
-		},
-		insert: (table, key, row) => inner.insert(table, key, row),
-		async read(table: string, key: Key): Promise<Row | undefined> {
-			if (stored.has(key)) return stored.get(key)
-			return inner.read(table, key)
-		},
-		delete: (table, key) => inner.delete(table, key),
-		async keys(table: string): Promise<readonly Key[]> {
-			return [...(await inner.keys(table))].reverse()
-		},
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: (tables) => inner.snapshot(tables),
-	}
-}
 
 // A driver whose scan throws an unexpected plain Error mid-phase.
-function createCrashingDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
-		keys: (table) => inner.keys(table),
-		scan(): AsyncIterable<Row> {
-			throw new Error('scan exploded')
-		},
-		clear: (table) => inner.clear(table),
-		snapshot: (tables) => inner.snapshot(tables),
-	}
-}
 
 describe('scanDriver', () => {
 	it('yields no findings for a conformant driver (the reference memory driver)', async () => {

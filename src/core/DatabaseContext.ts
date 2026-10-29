@@ -13,6 +13,7 @@ import type {
 	StorageInterface,
 	TableSchema,
 } from './types.js'
+import { attempt, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import { checkAbort, equalsValue, normalizeDriverSchema, planMigration } from './helpers.js'
@@ -34,7 +35,7 @@ export class DatabaseContext implements AdmissionInterface {
 	readonly #emitter: Emitter<DatabaseEventMap>
 	readonly #operations = new Set<Promise<unknown>>()
 	#schema: readonly TableSchema[] = []
-	#transaction: object | undefined
+	readonly #transactions = new Set<TransactionScope>()
 	#status: DatabaseStatus = 'idle'
 	#ready: Promise<void> | undefined
 	#failure: { readonly error: unknown } | undefined
@@ -67,7 +68,7 @@ export class DatabaseContext implements AdmissionInterface {
 	}
 
 	get accepting(): boolean {
-		return this.#status !== 'closed' && this.#transaction === undefined
+		return this.#status !== 'closed' && this.#transactions.size === 0
 	}
 
 	get status(): DatabaseStatus {
@@ -84,7 +85,7 @@ export class DatabaseContext implements AdmissionInterface {
 				name: this.#name,
 			})
 		}
-		if (this.#ready !== undefined || this.#transaction !== undefined) {
+		if (this.#ready !== undefined || this.#transactions.size !== 0) {
 			throw new DatabaseError(
 				'CONFLICT',
 				`Database '${this.#name}' cannot import tables after opening has started`,
@@ -158,12 +159,8 @@ export class DatabaseContext implements AdmissionInterface {
 		} catch (error) {
 			return Promise.reject(error)
 		}
-		let promise: Promise<R>
-		try {
-			promise = operation()
-		} catch (error) {
-			promise = Promise.reject(error)
-		}
+		const outcome = attempt(operation)
+		const promise = outcome.success ? outcome.value : Promise.reject<R>(outcome.error)
 		this.#operations.add(promise)
 		promise.then(
 			() => {
@@ -182,44 +179,40 @@ export class DatabaseContext implements AdmissionInterface {
 	): Promise<R> {
 		checkAbort(options?.signal)
 		this.#admit()
-		const token = {}
-		this.#transaction = token
+		const lifetime = new TransactionScope()
+		this.#transactions.add(lifetime)
 		try {
 			await this.#drain()
 			await this.connect()
 			if (this.#driver.transaction !== undefined) {
-				const rejection: { rejected: boolean; error: unknown; marker: object } = {
-					rejected: false,
-					error: undefined,
-					marker: {},
-				}
+				const rejection = new AbortController()
 				try {
 					const value = await this.#driver.transaction(async (storage) => {
 						this.#emitter.emit('transaction')
-						const outcome = await scope(storage, new TransactionScope())
+						const outcome = await scope(storage, lifetime)
 						if (!outcome.success) {
-							rejection.rejected = true
-							rejection.error = outcome.error
-							throw rejection.marker
+							rejection.abort(outcome)
+							throw rejection.signal
 						}
 						return outcome.value
 					})
 					this.#emitter.emit('commit')
 					return value
 				} catch (error) {
-					if (rejection.rejected) {
-						if (Object.is(error, rejection.marker)) {
-							this.#emitter.emit('rollback', rejection.error)
-							throw rejection.error
+					const failure: unknown = rejection.signal.reason
+					if (rejection.signal.aborted && isRecord(failure) && failure.success === false) {
+						if (Object.is(error, rejection.signal)) {
+							this.#emitter.emit('rollback', failure.error)
+							throw failure.error
 						}
-						throw this.#rollbackError(rejection.error, error)
+						throw this.#rollbackError(failure.error, error)
 					}
 					throw error
 				}
 			}
 			const rollback = await this.#driver.snapshot()
 			this.#emitter.emit('transaction')
-			const outcome = await scope(this.#driver, new TransactionScope())
+			const outcome = await scope(this.#driver, lifetime)
 			if (outcome.success) {
 				this.#emitter.emit('commit')
 				return outcome.value
@@ -232,7 +225,7 @@ export class DatabaseContext implements AdmissionInterface {
 			this.#emitter.emit('rollback', outcome.error)
 			throw outcome.error
 		} finally {
-			if (this.#transaction === token) this.#transaction = undefined
+			this.#transactions.delete(lifetime)
 		}
 	}
 
@@ -271,7 +264,7 @@ export class DatabaseContext implements AdmissionInterface {
 				name: this.#name,
 			})
 		}
-		if (this.#transaction !== undefined) {
+		if (this.#transactions.size !== 0) {
 			throw new DatabaseError('CONFLICT', `Database '${this.#name}' has an active transaction`, {
 				name: this.#name,
 			})
@@ -280,7 +273,7 @@ export class DatabaseContext implements AdmissionInterface {
 	}
 
 	#outside(): void {
-		if (this.#transaction !== undefined) {
+		if (this.#transactions.size !== 0) {
 			throw new DatabaseError('CONFLICT', `Database '${this.#name}' has an active transaction`, {
 				name: this.#name,
 			})

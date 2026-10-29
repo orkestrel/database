@@ -1,5 +1,6 @@
-import type { QueryInput, DriverInterface, Key, TableEventMap } from '@src/core'
-import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
+import type { TableEvent } from '../../setup.js'
+import type { QueryInput, Key, TableEventMap } from '@src/core'
+import { captureFailure, createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import {
 	integerShape,
 	literalShape,
@@ -10,11 +11,14 @@ import {
 import { collect, createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
-	createConstrainedUsersDatabase,
 	createMemoryAdapter,
 	createRecordingDriver,
 	createUserRow,
-	INTEGRATION_TABLES,
+	HOOK_TABLES,
+	TABLE_EVENTS,
+	DatabaseCounter,
+	userTable,
+	createSeededUsersTable,
 	RECORDING_AGGREGATE,
 	RECORDING_ROW,
 } from '../../setup.js'
@@ -29,23 +33,6 @@ import {
 
 // A small typed table whose columns carry guard constraints (`min`), so coercion
 // and the post-parse VALIDATION path are both exercised.
-function userTable() {
-	return createConstrainedUsersDatabase().users
-}
-
-async function createSeededUsersTable() {
-	const db = createDatabase({
-		driver: createMemoryDriver(),
-		tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
-	})
-	const users = db.table('users')
-	await users.set([
-		{ id: 'u1', name: 'Ada', age: 36 },
-		{ id: 'u2', name: 'Bo', age: 41 },
-		{ id: 'u3', name: 'Cy', age: 22 },
-	])
-	return users
-}
 
 describe('Table — identity', () => {
 	it('exposes name, primary, and the compiled contract', () => {
@@ -174,11 +161,11 @@ describe('Table — keyed CRUD (single)', () => {
 	})
 
 	it('uses the configured generator as the authoritative override', async () => {
-		let n = 0
+		const n = new DatabaseCounter()
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: { events: { id: optionalShape(stringShape()), kind: stringShape() } },
-			generator: () => `k${++n}`,
+			generator: () => `k${n.next()}`,
 		})
 		const events = db.table('events')
 		const key = await events.set({ kind: 'click' })
@@ -187,14 +174,14 @@ describe('Table — keyed CRUD (single)', () => {
 	})
 
 	it('keeps an explicit primary without invoking the configured generator', async () => {
-		let count = 0
+		const count = new DatabaseCounter()
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: {
 				events: { id: optionalShape(nullableShape(stringShape())), kind: stringShape() },
 			},
 			generator: () => {
-				count += 1
+				count.next()
 				return 'generated'
 			},
 		})
@@ -203,7 +190,7 @@ describe('Table — keyed CRUD (single)', () => {
 		await expect(events.set({ id: null, kind: 'invalid' })).rejects.toMatchObject({
 			code: 'VALIDATION',
 		})
-		expect(count).toBe(0)
+		expect(count.count).toBe(0)
 	})
 
 	it('uses a custom generator for a numeric primary', async () => {
@@ -250,19 +237,19 @@ describe('Table — keyed CRUD (single)', () => {
 	})
 
 	it('does not retry or fall back after a constant-generator add collision', async () => {
-		let count = 0
+		const count = new DatabaseCounter()
 		const db = createDatabase({
 			driver: createMemoryDriver(),
 			tables: { events: { id: optionalShape(stringShape()), kind: stringShape() } },
 			generator: () => {
-				count += 1
+				count.next()
 				return 'constant'
 			},
 		})
 		const events = db.table('events')
 		expect(await events.add({ kind: 'first' })).toBe('constant')
 		await expect(events.add({ kind: 'second' })).rejects.toMatchObject({ code: 'CONFLICT' })
-		expect(count).toBe(2)
+		expect(count.count).toBe(2)
 		expect(await events.keys()).toEqual(['constant'])
 		expect(await events.get('constant')).toEqual({ id: 'constant', kind: 'first' })
 	})
@@ -349,14 +336,13 @@ describe('Table — batch write abort signal (`.claude/rules/patterns.md` § Bat
 		const controller = new AbortController()
 		const release = Promise.withResolvers<void>()
 		const reason = new Error('open aborted the caller')
-		const driver: DriverInterface = {
-			...createMemoryAdapter(memory),
+		const driver = createMemoryAdapter(memory, {
 			async open(schema) {
 				controller.abort(reason)
 				await release.promise
 				await memory.open(schema)
 			},
-		}
+		})
 		const db = createDatabase({
 			driver,
 			tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
@@ -378,8 +364,7 @@ describe('Table — batch write abort signal (`.claude/rules/patterns.md` § Bat
 		// `#each` proceeds to the next item — abort from inside the listener to land
 		// squarely in the between-items gate without any mocks.
 		users.emitter.on('write', () => controller.abort('stop after first'))
-		let error: unknown
-		try {
+		const error = await captureFailure(async () => {
 			await users.set(
 				[
 					{ id: 'u1', name: 'Ada', age: 36 },
@@ -387,9 +372,7 @@ describe('Table — batch write abort signal (`.claude/rules/patterns.md` § Bat
 				],
 				{ signal: controller.signal },
 			)
-		} catch (caught) {
-			error = caught
-		}
+		})
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
 		// The first item is already applied — no rollback (`.claude/rules/patterns.md`
 		// § Batch operations).
@@ -591,15 +574,12 @@ describe('Table — scan (lazy streaming)', () => {
 		const users = await createSeededUsersTable()
 		const controller = new AbortController()
 		const seen: string[] = []
-		let error: unknown
-		try {
+		const error = await captureFailure(async () => {
 			for await (const row of users.scan(undefined, { signal: controller.signal })) {
 				seen.push(row.id)
 				controller.abort('aborted')
 			}
-		} catch (caught) {
-			error = caught
-		}
+		})
 		expect(seen).toEqual(['u1'])
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
@@ -623,7 +603,7 @@ describe('Table — scan (lazy streaming)', () => {
 	it('refines a native stream and strips paging before dispatch', async () => {
 		const streamCalls: QueryInput[] = []
 		const memory = createMemoryDriver()
-		const driver: DriverInterface = {
+		const driver = createMemoryAdapter(memory, {
 			async open(schema) {
 				await memory.open(schema)
 			},
@@ -658,7 +638,7 @@ describe('Table — scan (lazy streaming)', () => {
 				streamCalls.push(input)
 				yield { id: 'native', name: 'Native', age: 7 }
 			},
-		}
+		})
 		const users = createDatabase({ driver, tables: HOOK_TABLES }).table('users')
 		const input: QueryInput = {
 			conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
@@ -716,7 +696,6 @@ describe('Table — query / cursor accessors', () => {
 // FALLS BACK to the engine. `createRecordingDriver` (tests/setup.ts) is a real
 // Memory-backed driver that stores rows yet short-circuits the two
 // hooks to recognizable sentinels and records what it was handed.
-const HOOK_TABLES = { users: INTEGRATION_TABLES.users }
 
 describe('Table — native hook dispatch', () => {
 	it('records prefers the driver hook over the scan engine', async () => {
@@ -840,8 +819,6 @@ describe('Table — native hook dispatch', () => {
 // keeps only the names its scenarios observe). The list carries its own exact union rather
 // than `keyof TableEventMap`, because a name in the type argument that the array omits reads
 // `undefined` at runtime under a non-optional recorder type.
-type TableEvent = 'write' | 'remove' | 'clear'
-const TABLE_EVENTS: readonly TableEvent[] = ['write', 'remove', 'clear']
 
 describe('Table — emitter (push observation surface)', () => {
 	it('set / add / update each fire one write carrying the key', async () => {

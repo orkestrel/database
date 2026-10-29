@@ -9,6 +9,7 @@ import type {
 	TableInterface,
 } from './types.js'
 import { computeAggregate, validatePage } from './helpers.js'
+import { StreamPage } from './StreamPage.js'
 
 /**
  * Builds a read against one table through a fluent chain.
@@ -104,25 +105,11 @@ export class Query<T = Row> implements QueryInterface<T> {
 			)
 			return
 		}
-		const offset = this.#offset ?? 0
-		let matched = 0
-		let yielded = 0
+		const page = new StreamPage(this.#offset ?? 0)
 		for await (const row of this.#table.scan({ conditions: this.#conditions }, options)) {
-			if (this.#limit !== undefined && yielded >= this.#limit) break
-			let matches = true
-			for (const predicate of this.#filters) {
-				if (!predicate(row)) {
-					matches = false
-					break
-				}
-			}
-			if (!matches) continue
-			if (matched < offset) {
-				matched += 1
-				continue
-			}
-			matched += 1
-			yielded += 1
+			if (this.#limit !== undefined && page.count >= this.#limit) break
+			if (!Iterator.from(this.#filters).every((predicate) => predicate(row))) continue
+			if (!page.next()) continue
 			yield row
 		}
 	}
@@ -139,9 +126,10 @@ export class Query<T = Row> implements QueryInterface<T> {
 	}
 
 	#filtered(rows: readonly T[]): readonly T[] {
-		let result = rows
-		for (const predicate of this.#filters) result = result.filter(predicate)
-		return result
+		return Iterator.from(this.#filters).reduce(
+			(result, predicate) => result.filter(predicate),
+			rows,
+		)
 	}
 
 	#page(rows: readonly T[]): readonly T[] {

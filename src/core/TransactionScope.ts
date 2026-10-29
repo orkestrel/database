@@ -1,4 +1,6 @@
 import type { AdmissionInterface } from './types.js'
+import type { Result } from '@orkestrel/contract'
+import { attempt } from '@orkestrel/contract'
 import { DatabaseError } from './errors.js'
 import { ScopedIterator } from './ScopedIterator.js'
 
@@ -14,8 +16,7 @@ import { ScopedIterator } from './ScopedIterator.js'
 export class TransactionScope implements AdmissionInterface {
 	readonly #operations = new Set<Promise<unknown>>()
 	#accepting = true
-	#failed = false
-	#error: unknown
+	#failure: Result<never> | undefined
 
 	get accepting(): boolean {
 		return this.#accepting
@@ -33,12 +34,8 @@ export class TransactionScope implements AdmissionInterface {
 		} catch (error) {
 			return Promise.reject(error)
 		}
-		let promise: Promise<R>
-		try {
-			promise = operation()
-		} catch (error) {
-			promise = Promise.reject(error)
-		}
+		const outcome = attempt(operation)
+		const promise = outcome.success ? outcome.value : Promise.reject<R>(outcome.error)
 		this.#operations.add(promise)
 		promise.then(
 			() => {
@@ -46,10 +43,7 @@ export class TransactionScope implements AdmissionInterface {
 			},
 			(error: unknown) => {
 				this.#operations.delete(promise)
-				if (!this.#failed) {
-					this.#failed = true
-					this.#error = error
-				}
+				this.#failure ??= { success: false, error }
 			},
 		)
 		return promise
@@ -67,6 +61,6 @@ export class TransactionScope implements AdmissionInterface {
 		while (this.#operations.size > 0) {
 			await Promise.allSettled(this.#operations)
 		}
-		if (this.#failed) throw this.#error
+		if (this.#failure !== undefined && !this.#failure.success) throw this.#failure.error
 	}
 }

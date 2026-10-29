@@ -1,6 +1,6 @@
 import type { DriverMetadata } from '@src/core'
 import { compileGuard, integerShape, stringShape } from '@orkestrel/contract'
-import { createDatabase, createMemoryDriver } from '@src/core'
+import { createMemoryDriver } from '@src/core'
 import { collect, createRecorder, requireValue } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
@@ -10,7 +10,6 @@ import {
 	createCursorDatabase,
 	createMemoryAdapter,
 	createReconciliationDriver,
-	createRecordingDriver,
 	createUserRow,
 	CURSOR_COLUMNS,
 	CURSOR_ROWS,
@@ -19,6 +18,9 @@ import {
 	RECORDING_AGGREGATE,
 	RECORDING_ROW,
 	RecordingIterator,
+	recordUsersTable,
+	seedConstrainedUsers,
+	seedRankRows,
 	seedCursorDatabase,
 	seedUsersTable,
 	tableSchemas,
@@ -39,39 +41,6 @@ import {
 // fixture's writes are read back through the WRAPPED driver rather than through the handle the
 // fixture returned, so nothing the wrapper holds itself can satisfy the assertion. A condition
 // literal is judged by the rows a real query returns rather than by its own fields.
-
-/** Seed the canonical trio into a real constrained `users` table. */
-async function seedConstrainedUsers() {
-	const { users } = createConstrainedUsersDatabase()
-	await users.set(userRows())
-	return users
-}
-
-/** Seed a real `rank` table spanning the parity helper's `below 10` boundary. */
-async function seedRankRows() {
-	const db = createDatabase({
-		driver: createMemoryDriver(),
-		tables: { rows: { id: stringShape(), rank: integerShape() } },
-	})
-	const rows = db.table('rows')
-	await rows.set([
-		{ id: 'r3', rank: 3 },
-		{ id: 'r1', rank: 9 },
-		{ id: 'r2', rank: 10 },
-		{ id: 'r4', rank: 41 },
-	])
-	return rows
-}
-
-/** Stand up a real `users` table over one of the recording driver's two aggregate modes. */
-function recordUsersTable(aggregatesUndefined: boolean) {
-	const recording = createRecordingDriver(aggregatesUndefined)
-	const db = createDatabase({
-		driver: recording.driver,
-		tables: { users: INTEGRATION_TABLES.users },
-	})
-	return { recording, users: db.table('users') }
-}
 
 describe('INTEGRATION_TABLES', () => {
 	it('declares the users table and no other', () => {
@@ -342,15 +311,9 @@ describe('createReconciliationDriver', () => {
 describe('IteratorSource', () => {
 	it('iterates exactly what the supplied iterator yields', async () => {
 		const values = [1, 2, 3]
-		let index = 0
+		const iterator = values.values()
 		const source = new IteratorSource<number>({
-			next: () => {
-				const value = values[index]
-				index += 1
-				return Promise.resolve(
-					value === undefined ? { done: true, value: undefined } : { done: false, value },
-				)
-			},
+			next: () => Promise.resolve(iterator.next()),
 		})
 		expect(await collect(source)).toEqual(values)
 	})

@@ -1,6 +1,8 @@
-import type { DriverInterface, TableSchema } from '@src/core'
+import type { UserRow } from '../../../setup.js'
+import type { DriverInterface, TableSchema, TableInterface } from '@src/core'
 import {
 	applyQuery,
+	captureFailure,
 	conformDriver,
 	createDatabase,
 	createMemoryDriver,
@@ -12,7 +14,14 @@ import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { buildCondition, tableSchemas } from '../../../setup.js'
+import {
+	buildCondition,
+	tableSchemas,
+	DatabaseCounter,
+	DatabaseFixture,
+	completeFixture,
+	createAbortingRow,
+} from '../../../setup.js'
 import { deleteDatabase, putIndexedDBValue, mintDatabase } from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
@@ -21,16 +30,17 @@ import { deleteDatabase, putIndexedDBValue, mintDatabase } from '../../../setupB
 // secondary index creation, and the native records / count / stream pushdown
 // hooks.
 
-let counter = 0
-let name = ''
-let driver: DriverInterface
+const counter = new DatabaseCounter()
+const name = new DatabaseFixture<string>()
+const driver = new DatabaseFixture<DriverInterface>()
 
 beforeEach(async () => {
-	counter += 1
-	name = `database-idbdriver-${counter}`
-	await deleteDatabase(name)
-	driver = createIndexedDBDriver(name)
-	await driver.open(tableSchemas('users'))
+	counter.next()
+	name.hold(`database-idbdriver-${counter.count}`)
+	await deleteDatabase(name.value)
+	driver.clear()
+	driver.hold(createIndexedDBDriver(name.value))
+	await driver.value.open(tableSchemas('users'))
 })
 
 describe('IndexedDBDriver — abort while the shared lazy open is blocked', () => {
@@ -49,12 +59,7 @@ describe('IndexedDBDriver — abort while the shared lazy open is blocked', () =
 		const writing = users.set({ id: 'u1', name: 'Ada' }, { signal: controller.signal })
 		await changed.promise
 		controller.abort('stop waiting')
-		let error: unknown
-		try {
-			error = await writing.catch((caught: unknown) => caught)
-		} finally {
-			blocker.close()
-		}
+		const error = await writing.catch((caught: unknown) => caught).finally(() => blocker.close())
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
 		await database.open()
 		expect(await users.get('u1')).toBeUndefined()
@@ -64,8 +69,10 @@ describe('IndexedDBDriver — abort while the shared lazy open is blocked', () =
 })
 
 afterEach(async () => {
-	await driver.close()
-	await deleteDatabase(name)
+	await driver.value.close()
+	await deleteDatabase(name.value)
+	driver.clear()
+	name.clear()
 })
 
 // The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
@@ -81,110 +88,98 @@ describe('driver conformance — IndexedDBDriver', () => {
 
 describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 	it('reads back what it writes; misses are undefined / false', async () => {
-		await driver.write('users', 'u1', { id: 'u1', n: 1 })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
-		expect(await driver.read('users', 'missing')).toBeUndefined()
-		expect(await driver.delete('users', 'missing')).toBe(false)
-		expect(await driver.delete('users', 'u1')).toBe(true)
-		expect(await driver.read('users', 'u1')).toBeUndefined()
+		await driver.value.write('users', 'u1', { id: 'u1', n: 1 })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
+		expect(await driver.value.read('users', 'missing')).toBeUndefined()
+		expect(await driver.value.delete('users', 'missing')).toBe(false)
+		expect(await driver.value.delete('users', 'u1')).toBe(true)
+		expect(await driver.value.read('users', 'u1')).toBeUndefined()
 	})
 
 	it('atomically inserts one row when the same key is submitted concurrently', async () => {
 		const outcomes = await Promise.all([
-			driver.insert('users', 'u1', { id: 'u1', name: 'Ada' }).then(
+			driver.value.insert('users', 'u1', { id: 'u1', name: 'Ada' }).then(
 				() => 'fulfilled',
 				(error: unknown) => (isDatabaseError(error) ? error.code : 'unexpected'),
 			),
-			driver.insert('users', 'u1', { id: 'u1', name: 'Grace' }).then(
+			driver.value.insert('users', 'u1', { id: 'u1', name: 'Grace' }).then(
 				() => 'fulfilled',
 				(error: unknown) => (isDatabaseError(error) ? error.code : 'unexpected'),
 			),
 		])
 		expect([...outcomes].sort()).toEqual(['CONFLICT', 'fulfilled'])
-		expect(await driver.keys('users')).toEqual(['u1'])
-		expect(['Ada', 'Grace']).toContain((await driver.read('users', 'u1'))?.name)
+		expect(await driver.value.keys('users')).toEqual(['u1'])
+		expect(['Ada', 'Grace']).toContain((await driver.value.read('users', 'u1'))?.name)
 	})
 
 	it('rejects pre-aborted and actively aborted inserts without storing a row', async () => {
 		const before = new AbortController()
 		before.abort('stop before insert')
 		await expect(
-			driver.insert('users', 'before', { id: 'before' }, { signal: before.signal }),
+			driver.value.insert('users', 'before', { id: 'before' }, { signal: before.signal }),
 		).rejects.toMatchObject({ code: 'ABORTED' })
-		expect(await driver.read('users', 'before')).toBeUndefined()
+		expect(await driver.value.read('users', 'before')).toBeUndefined()
 
 		const active = new AbortController()
-		const row = {
-			id: 'active',
-			get payload(): string {
-				active.abort('stop active insert')
-				return 'value'
-			},
-		}
+		const row = createAbortingRow(active, 'stop active insert')
 		await expect(
-			driver.insert('users', 'active', row, { signal: active.signal }),
+			driver.value.insert('users', 'active', row, { signal: active.signal }),
 		).rejects.toMatchObject({ code: 'ABORTED' })
-		expect(await driver.read('users', 'active')).toBeUndefined()
+		expect(await driver.value.read('users', 'active')).toBeUndefined()
 	})
 
 	it('lists keys and scans in key order, and clears', async () => {
-		await driver.write('users', 'a', { id: 'a' })
-		await driver.write('users', 'b', { id: 'b' })
-		expect(await driver.keys('users')).toEqual(['a', 'b'])
-		expect((await collect(driver.scan('users'))).map((row) => row.id)).toEqual(['a', 'b'])
-		await driver.clear('users')
-		expect(await driver.keys('users')).toEqual([])
+		await driver.value.write('users', 'a', { id: 'a' })
+		await driver.value.write('users', 'b', { id: 'b' })
+		expect(await driver.value.keys('users')).toEqual(['a', 'b'])
+		expect((await collect(driver.value.scan('users'))).map((row) => row.id)).toEqual(['a', 'b'])
+		await driver.value.clear('users')
+		expect(await driver.value.keys('users')).toEqual([])
 	})
 
 	it('aborts an active write transaction and rolls the row back', async () => {
 		const controller = new AbortController()
-		const row = {
-			id: 'active',
-			get payload(): string {
-				controller.abort('stop active write')
-				return 'value'
-			},
-		}
-		const writing = driver.write('users', 'active', row, { signal: controller.signal })
+		const row = createAbortingRow(controller, 'stop active write')
+		const writing = driver.value.write('users', 'active', row, { signal: controller.signal })
 		await expect(writing).rejects.toMatchObject({ code: 'ABORTED' })
-		expect(await driver.read('users', 'active')).toBeUndefined()
+		expect(await driver.value.read('users', 'active')).toBeUndefined()
 	})
 
 	it('leaves a row intact when delete is aborted before native dispatch', async () => {
 		// The public driver surface exposes no lifecycle point between delete's
 		// presence read and remove request. Keep this proof deterministic rather
 		// than inferring an active boundary from a timer or payload size.
-		await driver.write('users', 'u1', { id: 'u1', n: 1 })
+		await driver.value.write('users', 'u1', { id: 'u1', n: 1 })
 		const controller = new AbortController()
 		controller.abort('stop before delete')
-		await expect(driver.delete('users', 'u1', { signal: controller.signal })).rejects.toMatchObject(
-			{
-				code: 'ABORTED',
-			},
-		)
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
+		await expect(
+			driver.value.delete('users', 'u1', { signal: controller.signal }),
+		).rejects.toMatchObject({
+			code: 'ABORTED',
+		})
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
 	})
 
 	it('does not let a late abort convert a completed transaction success', async () => {
 		const controller = new AbortController()
-		await driver.write('users', 'u1', { id: 'u1', n: 1 }, { signal: controller.signal })
+		await driver.value.write('users', 'u1', { id: 'u1', n: 1 }, { signal: controller.signal })
 		controller.abort('too late')
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })
 	})
 
 	it('creates a new store on reopen with more tables (auto-managed version)', async () => {
-		await driver.open(tableSchemas('users', 'posts'))
-		await driver.write('posts', 'p1', { id: 'p1', title: 'Hello' })
-		expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
+		await driver.value.open(tableSchemas('users', 'posts'))
+		await driver.value.write('posts', 'p1', { id: 'p1', title: 'Hello' })
+		expect(await driver.value.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
 	})
 
 	it('opens only the persisted deployed schema before migration', async () => {
 		const users = tableSchemas('users')
 		const metadata = { version: 1, schema: users }
-		await driver.stamp?.(metadata)
-		await driver.close()
+		await driver.value.stamp?.(metadata)
+		await driver.value.close()
 
-		const reopened = createIndexedDBDriver(name)
+		const reopened = createIndexedDBDriver(name.value)
 		await reopened.open(tableSchemas('users', 'posts'))
 		const planned =
 			reopened.records === undefined
@@ -194,7 +189,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		const stored = await reopened.metadata?.()
 
 		const wrapper = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {} },
 		})
 		await wrapper.connect()
@@ -209,19 +204,19 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 
 	it('fails closed when persisted stores are missing and retries after external repair', async () => {
 		const schema = tableSchemas('users', 'posts')
-		await driver.open(schema)
-		await driver.stamp?.({ version: 1, schema })
-		await driver.close()
+		await driver.value.open(schema)
+		await driver.value.stamp?.({ version: 1, schema })
+		await driver.value.close()
 
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {}, posts: {} },
 		})
 		await inspected.connect()
 		const version = inspected.version
 		inspected.close()
 		const damaged = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 1,
 			stores: { __metadata__: {}, users: {}, posts: {}, audit: {} },
 			upgrade: (context) => {
@@ -234,22 +229,22 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		const damagedVersion = damaged.version
 		damaged.close()
 
-		await expect(driver.open(schema)).rejects.toMatchObject({
+		await expect(driver.value.open(schema)).rejects.toMatchObject({
 			code: 'DRIVER',
 			message: 'Stored IndexedDB store is missing',
 			context: {
-				name,
+				name: name.value,
 				store: 'users',
 				aspect: 'missing',
 			},
 		})
-		await expect(driver.metadata?.()).rejects.toMatchObject({
+		await expect(driver.value.metadata?.()).rejects.toMatchObject({
 			code: 'CLOSED',
 			context: { name },
 		})
 
 		const physical = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: damagedVersion,
 			stores: { __metadata__: {}, audit: {} },
 		})
@@ -261,7 +256,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		physical.close()
 
 		const repaired = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: damagedVersion + 1,
 			stores: {
 				__metadata__: {},
@@ -273,11 +268,11 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 		const repairedVersion = repaired.version
 		repaired.close()
 
-		await driver.open(schema)
-		await driver.write('users', 'u1', { id: 'u1', repaired: true })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', repaired: true })
+		await driver.value.open(schema)
+		await driver.value.write('users', 'u1', { id: 'u1', repaired: true })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', repaired: true })
 		const reopened = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: repairedVersion,
 			stores: { __metadata__: {}, users: {}, posts: {}, audit: {} },
 		})
@@ -289,20 +284,20 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 
 	it('pins persisted reopening to the observed version across a competing versionchange', async () => {
 		const schema = tableSchemas('users')
-		await driver.stamp?.({ version: 1, schema })
-		await driver.close()
+		await driver.value.stamp?.({ version: 1, schema })
+		await driver.value.close()
 
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {} },
 		})
 		await inspected.connect()
 		const version = inspected.version
 		inspected.close()
 
-		const opening = driver.open(schema).catch((caught: unknown) => caught)
+		const opening = driver.value.open(schema).catch((caught: unknown) => caught)
 		const external = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 1,
 			stores: { __metadata__: {}, users: {}, external: {} },
 		})
@@ -314,16 +309,16 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 			code: 'DRIVER',
 			context: { cause: { code: 'OPEN' } },
 		})
-		await expect(driver.metadata?.()).rejects.toMatchObject({
+		await expect(driver.value.metadata?.()).rejects.toMatchObject({
 			code: 'CLOSED',
 			context: { name },
 		})
 
-		await driver.open(schema)
-		await driver.write('users', 'u1', { id: 'u1', resumed: true })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', resumed: true })
+		await driver.value.open(schema)
+		await driver.value.write('users', 'u1', { id: 'u1', resumed: true })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', resumed: true })
 		const reopened = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: changedVersion,
 			stores: { __metadata__: {}, users: {}, external: {} },
 		})
@@ -334,34 +329,34 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 	})
 
 	it('rolls back to a whole-store snapshot atomically', async () => {
-		await driver.write('users', 'a', { id: 'a', n: 1 })
-		const rollback = await driver.snapshot()
-		await driver.write('users', 'a', { id: 'a', n: 2 })
-		await driver.write('users', 'b', { id: 'b' })
-		expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 2 })
+		await driver.value.write('users', 'a', { id: 'a', n: 1 })
+		const rollback = await driver.value.snapshot()
+		await driver.value.write('users', 'a', { id: 'a', n: 2 })
+		await driver.value.write('users', 'b', { id: 'b' })
+		expect(await driver.value.read('users', 'a')).toEqual({ id: 'a', n: 2 })
 		await rollback()
-		expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
-		expect(await driver.read('users', 'b')).toBeUndefined()
+		expect(await driver.value.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+		expect(await driver.value.read('users', 'b')).toBeUndefined()
 	})
 
 	it('rolls back only the named tables in a scoped snapshot', async () => {
-		await driver.open(tableSchemas('users', 'posts'))
-		await driver.write('users', 'a', { id: 'a', n: 1 })
-		await driver.write('posts', 'p1', { id: 'p1', title: 'Hello' })
-		const rollback = await driver.snapshot(['users'])
-		await driver.write('users', 'a', { id: 'a', n: 2 })
-		await driver.write('posts', 'p1', { id: 'p1', title: 'Changed' })
+		await driver.value.open(tableSchemas('users', 'posts'))
+		await driver.value.write('users', 'a', { id: 'a', n: 1 })
+		await driver.value.write('posts', 'p1', { id: 'p1', title: 'Hello' })
+		const rollback = await driver.value.snapshot(['users'])
+		await driver.value.write('users', 'a', { id: 'a', n: 2 })
+		await driver.value.write('posts', 'p1', { id: 'p1', title: 'Changed' })
 		await rollback()
 		// Scoped table restored...
-		expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+		expect(await driver.value.read('users', 'a')).toEqual({ id: 'a', n: 1 })
 		// ...but the untouched table keeps its post-snapshot mutation.
-		expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Changed' })
+		expect(await driver.value.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Changed' })
 	})
 
 	it('persists across close and reopen', async () => {
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
-		await driver.close()
-		const reopened = createIndexedDBDriver(name)
+		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada' })
+		await driver.value.close()
+		const reopened = createIndexedDBDriver(name.value)
 		await reopened.open(tableSchemas('users'))
 		expect(await reopened.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
 		await reopened.close()
@@ -479,66 +474,56 @@ describe('IndexedDBDriver — Database integration', () => {
 
 describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	it('rejects invalid direct paging and accepts a zero limit', async () => {
-		const records = driver.records
-		const stream = driver.stream
+		const records = driver.value.records
+		const stream = driver.value.stream
 		if (records === undefined) throw new Error('Expected records capability')
 		if (stream === undefined) throw new Error('Expected stream capability')
-		await expect(records.call(driver, 'users', { limit: -1 })).rejects.toMatchObject({
+		await expect(records.call(driver.value, 'users', { limit: -1 })).rejects.toMatchObject({
 			code: 'VALIDATION',
 			context: { field: 'limit', value: -1 },
 		})
-		expect(() => stream.call(driver, 'users', { offset: Number.NaN })).toThrow(
+		expect(() => stream.call(driver.value, 'users', { offset: Number.NaN })).toThrow(
 			expect.objectContaining({
 				code: 'VALIDATION',
 				context: { field: 'offset', value: 'NaN' },
 			}),
 		)
-		expect(await records.call(driver, 'users', { limit: 0 })).toEqual([])
-		expect(await collect(stream.call(driver, 'users', { limit: 0 }))).toEqual([])
+		expect(await records.call(driver.value, 'users', { limit: 0 })).toEqual([])
+		expect(await collect(stream.call(driver.value, 'users', { limit: 0 }))).toEqual([])
 	})
 
 	// A real database over the IndexedDB driver, with a single-column secondary
 	// index on `age` (so age queries push to a key-range) and none on `name` (so
 	// name queries fall back to a scan + the engine). Behavior is asserted through
 	// the observable Table API — rows / counts must be correct regardless of path.
-	const PEOPLE: ReadonlyArray<{
-		readonly id: string
-		readonly name: string
-		readonly age: number
-	}> = [
-		{ id: 'u1', name: 'Ada', age: 36 },
-		{ id: 'u2', name: 'Bo', age: 22 },
-		{ id: 'u3', name: 'Cy', age: 41 },
-		{ id: 'u4', name: 'Di', age: 22 },
-		{ id: 'u5', name: 'Eve', age: 55 },
-	]
 
-	let dbName = ''
-	let people = createDatabase({
-		driver: createIndexedDBDriver('unused'),
-		tables: { people: { id: stringShape(), name: stringShape(), age: integerShape() } },
-	}).table('people')
+	const dbName = new DatabaseFixture<string>()
+	const people = new DatabaseFixture<TableInterface<UserRow>>()
 
 	beforeEach(async () => {
-		dbName = mintDatabase('database-idb-pushdown')
-		await deleteDatabase(dbName)
+		dbName.clear()
+		dbName.hold(mintDatabase('database-idb-pushdown'))
+		await deleteDatabase(dbName.value)
 		const db = createDatabase({
-			driver: createIndexedDBDriver(dbName),
+			driver: createIndexedDBDriver(dbName.value),
 			tables: { people: { id: stringShape(), name: stringShape(), age: integerShape() } },
 			indexes: { people: [['age']] },
 		})
-		people = db.table('people')
-		await people.set([...PEOPLE])
+		people.hold(db.table('people'))
+		await people.value.set([...PEOPLE])
 	})
 
+	afterEach(() => people.clear())
+
 	afterEach(async () => {
-		await deleteDatabase(dbName)
+		await deleteDatabase(dbName.value)
+		dbName.clear()
 	})
 
 	it('an indexed-column range query returns the right filtered, ordered, paged rows', async () => {
 		// age >= 36, descending by age — pushes to the `age` index range, then the
 		// engine orders + pages. Expect Eve(55), Cy(41), Ada(36) → drop the first.
-		const rows = await people
+		const rows = await people.value
 			.query()
 			.condition({ column: 'age', operator: 'from', values: [36], connector: 'and' })
 			.order({ column: 'age', direction: 'descending' })
@@ -549,14 +534,14 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	})
 
 	it('returns every match for an indexed equality and table count agrees', async () => {
-		const rows = await people
+		const rows = await people.value
 			.query()
 			.condition({ column: 'age', operator: 'equals', values: [22], connector: 'and' })
 			.collect()
 		expect(rows.map((row) => row.id).sort()).toEqual(['u2', 'u4'])
 		// A single pushable equality → the native key-range count path.
 		expect(
-			await people
+			await people.value
 				.query()
 				.condition({ column: 'age', operator: 'equals', values: [22], connector: 'and' })
 				.count(),
@@ -565,13 +550,13 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 
 	it('a non-indexed-column query still returns correct rows (scan + engine)', async () => {
 		// `name` has no index → full scan, the engine applies `starts`.
-		const rows = await people
+		const rows = await people.value
 			.query()
 			.condition({ column: 'name', operator: 'starts', values: ['A'], connector: 'and' })
 			.collect()
 		expect(rows).toEqual([{ id: 'u1', name: 'Ada', age: 36 }])
 		expect(
-			await people
+			await people.value
 				.query()
 				.condition({ column: 'name', operator: 'ends', values: ['e'], connector: 'and' })
 				.count(),
@@ -580,7 +565,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 
 	it('a multi-condition query (indexed + extra predicate) returns exact rows + count', async () => {
 		// age >= 22 (pushes to the index, a superset) AND name not 'Bo' (engine refines).
-		const query = people
+		const query = people.value
 			.query()
 			.condition({ column: 'age', operator: 'from', values: [22], connector: 'and' })
 			.condition({ column: 'name', operator: 'not', values: ['Bo'], connector: 'and' })
@@ -590,7 +575,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	})
 
 	it('an unconditional count uses the native store count', async () => {
-		expect(await people.query().count()).toBe(PEOPLE.length)
+		expect(await people.value.query().count()).toBe(PEOPLE.length)
 	})
 
 	it('matches Memory across records, count, and stream for non-finite indexed operands', async () => {
@@ -608,9 +593,9 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 		]
 		for (const condition of conditions) {
 			const input = { conditions: [condition] }
-			expect(await people.records(input)).toEqual(await reference.records(input))
-			expect(await people.count(input)).toBe(await reference.count(input))
-			expect(await collect(people.scan(input))).toEqual(await collect(reference.scan(input)))
+			expect(await people.value.records(input)).toEqual(await reference.records(input))
+			expect(await people.value.count(input)).toBe(await reference.count(input))
+			expect(await collect(people.value.scan(input))).toEqual(await collect(reference.scan(input)))
 		}
 		await memory.close()
 	})
@@ -620,7 +605,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 			buildCondition('age', 'from', [40]),
 			buildCondition('name', 'equals', ['Bo'], 'or'),
 		]
-		const rows = await people
+		const rows = await people.value
 			.query()
 			.condition({ column: 'age', operator: 'from', values: [40], connector: 'and' })
 			.condition({ column: 'name', operator: 'equals', values: ['Bo'], connector: 'or' })
@@ -637,10 +622,11 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 	})
 
 	it('a nested FieldPath condition full-scans (never treated as a flat key)', async () => {
-		dbName = mintDatabase('database-idb-nested')
-		await deleteDatabase(dbName)
+		dbName.clear()
+		dbName.hold(mintDatabase('database-idb-nested'))
+		await deleteDatabase(dbName.value)
 		const db = createDatabase({
-			driver: createIndexedDBDriver(dbName),
+			driver: createIndexedDBDriver(dbName.value),
 			tables: {
 				items: { id: stringShape(), payload: jsonShape() },
 			},
@@ -665,7 +651,7 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 
 	it('stream is lazy and honors early break (offset/limit counting)', async () => {
 		const seen: string[] = []
-		for await (const row of people
+		for await (const row of people.value
 			.query()
 			.condition({ column: 'age', operator: 'from', values: [0], connector: 'and' })
 			.stream()) {
@@ -678,10 +664,10 @@ describe('IndexedDBDriver — native records / count / stream pushdown', () => {
 
 describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	it('metadata is undefined until stamped, and round-trips exactly on stamp', async () => {
-		expect(await driver.metadata?.()).toBeUndefined()
+		expect(await driver.value.metadata?.()).toBeUndefined()
 		const metadata = { version: 1, schema: tableSchemas('users') }
-		await driver.stamp?.(metadata)
-		expect(await driver.metadata?.()).toEqual(metadata)
+		await driver.value.stamp?.(metadata)
+		expect(await driver.value.metadata?.()).toEqual(metadata)
 	})
 
 	it.each([
@@ -781,9 +767,9 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 
 	it('metadata persists across close and reopen (same database name)', async () => {
 		const metadata = { version: 2, schema: tableSchemas('users') }
-		await driver.stamp?.(metadata)
-		await driver.close()
-		const reopened = createIndexedDBDriver(name)
+		await driver.value.stamp?.(metadata)
+		await driver.value.close()
+		const reopened = createIndexedDBDriver(name.value)
 		await reopened.open(tableSchemas('users'))
 		expect(await reopened.metadata?.()).toEqual(metadata)
 		await reopened.close()
@@ -791,21 +777,21 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 
 	it('accepts reorder-only migration metadata', async () => {
 		const canonical = tableSchemas('users', 'posts')
-		await driver.open(canonical)
+		await driver.value.open(canonical)
 		const reordered = [...canonical].reverse()
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: { from: 1, to: 2, steps: [] },
 			metadata: { version: 2, schema: reordered },
 		})
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: reordered })
+		expect(await driver.value.metadata?.()).toEqual({ version: 2, schema: reordered })
 	})
 
 	it('rejects an unsafe required column before rows, schema, and metadata change', async () => {
 		const before = tableSchemas('users')
-		await driver.write('users', 'u1', { id: 'u1' })
-		await driver.stamp?.({ version: 1, schema: before })
+		await driver.value.write('users', 'u1', { id: 'u1' })
+		await driver.value.stamp?.({ version: 1, schema: before })
 		await expect(
-			driver.migrate?.({
+			driver.value.migrate?.({
 				plan: {
 					from: 1,
 					to: 2,
@@ -827,8 +813,8 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			code: 'MIGRATION',
 			context: { table: 'users', column: 'required' },
 		})
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
-		expect(await driver.metadata?.()).toEqual({ version: 1, schema: before })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1' })
+		expect(await driver.value.metadata?.()).toEqual({ version: 1, schema: before })
 
 		const safe: readonly TableSchema[] = [
 			{
@@ -842,7 +828,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			},
 		]
 		await expect(
-			driver.migrate?.({
+			driver.value.migrate?.({
 				plan: {
 					from: 1,
 					to: 2,
@@ -866,14 +852,14 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 
 	it('the reserved metadata store is excluded from a whole-store snapshot rollback', async () => {
 		const first = { version: 1, schema: tableSchemas('users') }
-		await driver.stamp?.(first)
-		const rollback = await driver.snapshot()
+		await driver.value.stamp?.(first)
+		const rollback = await driver.value.snapshot()
 		const second = { version: 2, schema: tableSchemas('users') }
-		await driver.stamp?.(second)
+		await driver.value.stamp?.(second)
 		await rollback()
 		// The whole-store rollback restored table data but must NOT have touched
 		// the reserved metadata store — the newer stamp survives.
-		expect(await driver.metadata?.()).toEqual(second)
+		expect(await driver.value.metadata?.()).toEqual(second)
 	})
 
 	it('reconciles a real Database table removal and preserves a same-version reopen', async () => {
@@ -896,59 +882,64 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			tables: { users },
 			version: 2,
 		})
-		let preserved: unknown
-		let stores: readonly string[] = []
-		let stamped: unknown
-		let version = 0
-		let reopened: unknown
-		let storesAgain: readonly string[] = []
-		let stampedAgain: unknown
-		let versionAgain = 0
-		try {
-			await v1.table('users').set({ id: 'u1', name: 'Ada' })
-			await v1.table('audit').set({ id: 'a1', message: 'created' })
-			await v1.close()
-			await v2.open()
-			preserved = await v2.table('users').get('u1')
-			await v2.close()
+		const result = await completeFixture(
+			async () => {
+				await v1.table('users').set({ id: 'u1', name: 'Ada' })
+				await v1.table('audit').set({ id: 'a1', message: 'created' })
+				await v1.close()
+				await v2.open()
+				const preserved = await v2.table('users').get('u1')
+				await v2.close()
 
-			const inspected = createIndexedDBDatabase({
-				name: versioned,
-				stores: { __metadata__: {}, users: {} },
-			})
-			await inspected.connect()
-			stores = inspected.stores
-			stamped = await inspected.store('__metadata__').get('metadata')
-			version = inspected.version
-			inspected.close()
+				const inspected = createIndexedDBDatabase({
+					name: versioned,
+					stores: { __metadata__: {}, users: {} },
+				})
+				await inspected.connect()
+				const stores = inspected.stores
+				const stamped = await inspected.store('__metadata__').get('metadata')
+				const version = inspected.version
+				inspected.close()
 
-			await again.open()
-			reopened = await again.table('users').get('u1')
-			await again.close()
+				await again.open()
+				const reopened = await again.table('users').get('u1')
+				await again.close()
 
-			const repeated = createIndexedDBDatabase({
-				name: versioned,
-				stores: { __metadata__: {}, users: {} },
-			})
-			await repeated.connect()
-			storesAgain = repeated.stores
-			stampedAgain = await repeated.store('__metadata__').get('metadata')
-			versionAgain = repeated.version
-			repeated.close()
-		} finally {
-			await v1.close()
-			await v2.close()
-			await again.close()
-			await deleteDatabase(versioned)
-		}
+				const repeated = createIndexedDBDatabase({
+					name: versioned,
+					stores: { __metadata__: {}, users: {} },
+				})
+				await repeated.connect()
+				const storesAgain = repeated.stores
+				const stampedAgain = await repeated.store('__metadata__').get('metadata')
+				const versionAgain = repeated.version
+				repeated.close()
+				return {
+					preserved,
+					stores,
+					stamped,
+					version,
+					reopened,
+					storesAgain,
+					stampedAgain,
+					versionAgain,
+				}
+			},
+			async () => {
+				await v1.close()
+				await v2.close()
+				await again.close()
+				await deleteDatabase(versioned)
+			},
+		)
 
-		expect(preserved).toEqual({ id: 'u1', name: 'Ada' })
-		expect(stores).not.toContain('audit')
-		expect(stamped).toMatchObject({ version: 2 })
-		expect(reopened).toEqual({ id: 'u1', name: 'Ada' })
-		expect(storesAgain).toEqual(stores)
-		expect(stampedAgain).toEqual(stamped)
-		expect(versionAgain).toBe(version)
+		expect(result.preserved).toEqual({ id: 'u1', name: 'Ada' })
+		expect(result.stores).not.toContain('audit')
+		expect(result.stamped).toMatchObject({ version: 2 })
+		expect(result.reopened).toEqual({ id: 'u1', name: 'Ada' })
+		expect(result.storesAgain).toEqual(result.stores)
+		expect(result.stampedAgain).toEqual(result.stamped)
+		expect(result.versionAgain).toBe(result.version)
 	})
 
 	it('reconciles a real Database table addition while preserving deployed rows', async () => {
@@ -966,41 +957,41 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			tables: { users, posts },
 			version: 2,
 		})
-		let preserved: unknown
-		let added: unknown
-		let stores: readonly string[] = []
-		let stamped: unknown
-		try {
-			await v1.table('users').set({ id: 'u1', name: 'Ada' })
-			await v1.close()
-			await v2.open()
-			await v2.table('posts').set({ id: 'p1', title: 'First' })
-			preserved = await v2.table('users').get('u1')
-			added = await v2.table('posts').get('p1')
-			await v2.close()
+		const result = await completeFixture(
+			async () => {
+				await v1.table('users').set({ id: 'u1', name: 'Ada' })
+				await v1.close()
+				await v2.open()
+				await v2.table('posts').set({ id: 'p1', title: 'First' })
+				const preserved = await v2.table('users').get('u1')
+				const added = await v2.table('posts').get('p1')
+				await v2.close()
 
-			const inspected = createIndexedDBDatabase({
-				name: versioned,
-				stores: { __metadata__: {}, users: {}, posts: {} },
-			})
-			await inspected.connect()
-			stores = inspected.stores
-			stamped = await inspected.store('__metadata__').get('metadata')
-			inspected.close()
-		} finally {
-			await v1.close()
-			await v2.close()
-			await deleteDatabase(versioned)
-		}
+				const inspected = createIndexedDBDatabase({
+					name: versioned,
+					stores: { __metadata__: {}, users: {}, posts: {} },
+				})
+				await inspected.connect()
+				const stores = inspected.stores
+				const stamped = await inspected.store('__metadata__').get('metadata')
+				inspected.close()
+				return { preserved, added, stores, stamped }
+			},
+			async () => {
+				await v1.close()
+				await v2.close()
+				await deleteDatabase(versioned)
+			},
+		)
 
-		expect(preserved).toEqual({ id: 'u1', name: 'Ada' })
-		expect(added).toEqual({ id: 'p1', title: 'First' })
-		expect(stores).toContain('posts')
-		expect(stamped).toMatchObject({ version: 2 })
+		expect(result.preserved).toEqual({ id: 'u1', name: 'Ada' })
+		expect(result.added).toEqual({ id: 'p1', title: 'First' })
+		expect(result.stores).toContain('posts')
+		expect(result.stamped).toMatchObject({ version: 2 })
 	})
 
 	it('table.add creates a usable store by using migrate', async () => {
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1017,25 +1008,25 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		await driver.write('posts', 'p1', { id: 'p1', title: 'Hello' })
-		expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
+		await driver.value.write('posts', 'p1', { id: 'p1', title: 'Hello' })
+		expect(await driver.value.read('posts', 'p1')).toEqual({ id: 'p1', title: 'Hello' })
 	})
 
 	it('table.remove drops a store by using migrate', async () => {
-		await driver.open(tableSchemas('users', 'posts'))
-		await driver.write('posts', 'p1', { id: 'p1' })
-		await driver.migrate?.({
+		await driver.value.open(tableSchemas('users', 'posts'))
+		await driver.value.write('posts', 'p1', { id: 'p1' })
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
 				steps: [{ operation: 'table.remove', table: 'posts' }],
 			},
 		})
-		await expect(driver.read('posts', 'p1')).rejects.toThrow('posts')
+		await expect(driver.value.read('posts', 'p1')).rejects.toThrow('posts')
 	})
 
 	it('replays table.add then table.remove in order without leaving a store', async () => {
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1053,9 +1044,9 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		await expect(driver.read('posts', 'p1')).rejects.toThrow('posts')
+		await expect(driver.value.read('posts', 'p1')).rejects.toThrow('posts')
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {} },
 		})
 		await inspected.connect()
@@ -1079,9 +1070,9 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			],
 			indexes: [['age']],
 		}
-		await driver.open([deployed])
-		await driver.write('users', 'old', { id: 'old' })
-		await driver.migrate?.({
+		await driver.value.open([deployed])
+		await driver.value.write('users', 'old', { id: 'old' })
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1091,16 +1082,16 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		expect(await driver.read('users', 'old')).toBeUndefined()
-		await driver.write('users', 'new', { id: 'new', age: 41 })
-		const rows = await driver.records?.('users', {
+		expect(await driver.value.read('users', 'old')).toBeUndefined()
+		await driver.value.write('users', 'new', { id: 'new', age: 41 })
+		const rows = await driver.value.records?.('users', {
 			conditions: [buildCondition('age', 'equals', [41])],
 		})
 		expect(rows?.map((row) => row.id)).toEqual(['new'])
 	})
 
 	it('replays index.add then index.remove in order on a newly added table', async () => {
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1123,7 +1114,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			},
 		})
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {}, posts: {} },
 		})
 		await inspected.connect()
@@ -1133,7 +1124,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('replays table.add then index.add with the final index present and usable', async () => {
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1154,13 +1145,13 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		await driver.write('posts', 'p1', { id: 'p1', rank: 7 })
-		const rows = await driver.records?.('posts', {
+		await driver.value.write('posts', 'p1', { id: 'p1', rank: 7 })
+		const rows = await driver.value.records?.('posts', {
 			conditions: [buildCondition('rank', 'equals', [7])],
 		})
 		expect(rows?.map((row) => row.id)).toEqual(['p1'])
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: {
 				__metadata__: {},
 				users: {},
@@ -1182,9 +1173,9 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			],
 			indexes: [],
 		}
-		await driver.open([deployed])
-		await driver.write('users', 'u1', { id: 'u1', legacy: 'old' })
-		await driver.migrate?.({
+		await driver.value.open([deployed])
+		await driver.value.write('users', 'u1', { id: 'u1', legacy: 'old' })
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
@@ -1198,23 +1189,23 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
-		await driver.write('users', 'u2', { id: 'u2', legacy: 2 })
-		await driver.migrate?.({
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1' })
+		await driver.value.write('users', 'u2', { id: 'u2', legacy: 2 })
+		await driver.value.migrate?.({
 			plan: {
 				from: 1,
 				to: 2,
 				steps: [{ operation: 'index.add', table: 'users', index: ['legacy'] }],
 			},
 		})
-		const rows = await driver.records?.('users', {
+		const rows = await driver.value.records?.('users', {
 			conditions: [buildCondition('legacy', 'equals', [2])],
 		})
 		expect(rows?.map((row) => row.id)).toEqual(['u2'])
 	})
 
 	it('index.add on an existing store becomes visible (secondary-index read works)', async () => {
-		await driver.open([
+		await driver.value.open([
 			{
 				name: 'users',
 				primary: 'id',
@@ -1225,27 +1216,28 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				indexes: [],
 			},
 		])
-		await driver.write('users', 'u1', { id: 'u1', age: 30 })
-		await driver.write('users', 'u2', { id: 'u2', age: 41 })
-		await driver.migrate?.({
+		await driver.value.write('users', 'u1', { id: 'u1', age: 30 })
+		await driver.value.write('users', 'u2', { id: 'u2', age: 41 })
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
 				steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
 			},
 		})
-		await driver.close()
+		await driver.value.close()
 		// Read the live IDBIndex through a fresh wrapper connection over the SAME
 		// database — a non-tautological existence proof of the created index.
 		const wrapper = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { users: { indexes: [{ name: 'age', path: 'age' }] } },
 		})
 		await wrapper.connect()
 		expect((await wrapper.store('users').index('age').get(41))?.id).toBe('u2')
 		wrapper.close()
-		driver = createIndexedDBDriver(name)
-		await driver.open(tableSchemas('users'))
+		driver.clear()
+		driver.hold(createIndexedDBDriver(name.value))
+		await driver.value.open(tableSchemas('users'))
 	})
 
 	it('a column.remove migration rewrites stored rows (verified post-reconnect)', async () => {
@@ -1263,24 +1255,25 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			...deployed,
 			columns: deployed.columns.filter((column) => column.name !== 'legacy'),
 		}
-		await driver.open([deployed])
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
-		await driver.migrate?.({
+		await driver.value.open([deployed])
+		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+		await driver.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
 				steps: [{ operation: 'column.remove', table: 'users', column: 'legacy' }],
 			},
 		})
-		const migrated = await driver.read('users', 'u1')
+		const migrated = await driver.value.read('users', 'u1')
 		expect(migrated).toEqual({ id: 'u1', name: 'Ada' })
-		await driver.close()
-		const reopened = createIndexedDBDriver(name)
+		await driver.value.close()
+		const reopened = createIndexedDBDriver(name.value)
 		await reopened.open([declared])
 		expect(await reopened.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada' })
 		await reopened.close()
-		driver = createIndexedDBDriver(name)
-		await driver.open(tableSchemas('users'))
+		driver.clear()
+		driver.hold(createIndexedDBDriver(name.value))
+		await driver.value.open(tableSchemas('users'))
 	})
 
 	it('a column.remove migration fails closed on a non-record stored value', async () => {
@@ -1294,18 +1287,18 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			],
 			indexes: [],
 		}
-		await driver.open([deployed])
-		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
-		await driver.close()
+		await driver.value.open([deployed])
+		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', legacy: true })
+		await driver.value.close()
 		const seeded = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { users: {} },
 		})
 		await seeded.connect()
 		await putIndexedDBValue(seeded.database, 'users', 'x', 42)
 		seeded.close()
 
-		const corrupted = createIndexedDBDriver(name)
+		const corrupted = createIndexedDBDriver(name.value)
 		await corrupted.open([deployed])
 		const error = await corrupted
 			.migrate?.({
@@ -1318,27 +1311,28 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			.catch((caught: unknown) => caught)
 		expect(error).toMatchObject({ code: 'MIGRATION' })
 		await corrupted.close()
-		driver = createIndexedDBDriver(name)
-		await driver.open(tableSchemas('users'))
+		driver.clear()
+		driver.hold(createIndexedDBDriver(name.value))
+		await driver.value.open(tableSchemas('users'))
 	})
 
 	it('reconnects a yielded wrapper before reading its version for migration', async () => {
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, users: {} },
 		})
 		await inspected.connect()
 		const version = inspected.version
 		inspected.close()
 		const external = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 1,
 			stores: { __metadata__: {}, users: {}, external: {} },
 		})
 		await external.connect()
 		external.close()
 
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 1,
 				to: 2,
@@ -1351,20 +1345,20 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				],
 			},
 		})
-		await driver.write('users', 'u1', { id: 'u1', added: 'ready' })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', added: 'ready' })
+		await driver.value.write('users', 'u1', { id: 'u1', added: 'ready' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', added: 'ready' })
 	})
 
 	it('reopening with a reduced schema drops ghost tables (unresolvable, no stale pushdown)', async () => {
-		await driver.open(tableSchemas('users', 'posts'))
-		await driver.write('posts', 'p1', { id: 'p1' })
+		await driver.value.open(tableSchemas('users', 'posts'))
+		await driver.value.write('posts', 'p1', { id: 'p1' })
 		// Reopen with ONLY 'users' declared — the ghost 'posts' table must not
 		// remain resolvable by planning (`#table` / `records` / `stream`).
-		await driver.open(tableSchemas('users'))
+		await driver.value.open(tableSchemas('users'))
 		const ghostRecords =
-			driver.records === undefined
+			driver.value.records === undefined
 				? Promise.resolve(undefined)
-				: driver.records('posts', { conditions: [] })
+				: driver.value.records('posts', { conditions: [] })
 		await expect(ghostRecords).rejects.toThrow('posts')
 	})
 
@@ -1378,14 +1372,14 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 			],
 			indexes: [['age']],
 		}
-		await driver.open([deployed])
-		await driver.write('users', 'u1', { id: 'u1', age: 30 })
+		await driver.value.open([deployed])
+		await driver.value.write('users', 'u1', { id: 'u1', age: 30 })
 		const metadata = { version: 1, schema: [deployed] }
-		await driver.stamp?.(metadata)
+		await driver.value.stamp?.(metadata)
 		// One versionchange creates a store and index before a duplicate-index
 		// fault aborts the whole upgrade, including its metadata stamp.
 		await expect(
-			driver.migrate?.({
+			driver.value.migrate?.({
 				plan: {
 					from: 1,
 					to: 2,
@@ -1415,24 +1409,24 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 					],
 				},
 			}),
-		).rejects.toThrow(`Upgrade of '${name}' failed`)
+		).rejects.toThrow(`Upgrade of '${name.value}' failed`)
 		// The driver reconnects at the exact pre-migration state.
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
-		expect(await driver.metadata?.()).toEqual(metadata)
-		await expect(driver.read('posts', 'p1')).rejects.toThrow('posts')
-		await driver.write('users', 'u2', { id: 'u2', age: 40 })
-		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2', age: 40 })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
+		expect(await driver.value.metadata?.()).toEqual(metadata)
+		await expect(driver.value.read('posts', 'p1')).rejects.toThrow('posts')
+		await driver.value.write('users', 'u2', { id: 'u2', age: 40 })
+		expect(await driver.value.read('users', 'u2')).toEqual({ id: 'u2', age: 40 })
 		// A subsequent valid migration proves the failed candidate was discarded.
-		await driver.migrate?.({
+		await driver.value.migrate?.({
 			plan: {
 				from: 1,
 				to: 2,
 				steps: [{ operation: 'index.add', table: 'users', index: ['id'] }],
 			},
 		})
-		await driver.close()
+		await driver.value.close()
 		const wrapper = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: {
 				users: {
 					indexes: [{ name: 'id', path: 'id' }],
@@ -1443,8 +1437,9 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		expect(wrapper.stores).not.toContain('posts')
 		expect((await wrapper.store('users').index('id').get('u2'))?.id).toBe('u2')
 		wrapper.close()
-		driver = createIndexedDBDriver(name)
-		await driver.open(tableSchemas('users'))
+		driver.clear()
+		driver.hold(createIndexedDBDriver(name.value))
+		await driver.value.open(tableSchemas('users'))
 	})
 
 	it('recovers its pre-migration schema after a real duplicate-index upgrade failure', async () => {
@@ -1492,24 +1487,21 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('an unknown-table migration step throws MIGRATION without consuming a version', async () => {
-		await driver.write('users', 'u1', { id: 'u1' })
-		let caught: unknown
-		try {
-			await driver.migrate?.({
+		await driver.value.write('users', 'u1', { id: 'u1' })
+		const caught = await captureFailure(async () => {
+			await driver.value.migrate?.({
 				plan: {
 					from: 0,
 					to: 1,
 					steps: [{ operation: 'table.remove', table: 'ghost' }],
 				},
 			})
-		} catch (error) {
-			caught = error
-		}
+		})
 		expect(isDatabaseError(caught) && caught.code === 'MIGRATION').toBe(true)
 		// The connection is still usable — no version bump was wasted.
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
-		await driver.write('users', 'u2', { id: 'u2' })
-		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1' })
+		await driver.value.write('users', 'u2', { id: 'u2' })
+		expect(await driver.value.read('users', 'u2')).toEqual({ id: 'u2' })
 	})
 })
 
@@ -1520,45 +1512,37 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 	// naive index-range read would silently drop it (no index entry exists for an
 	// absent field). `records` / `count` / `stream` must all agree with a plain
 	// engine-over-scan.
-	const SCHEMA: TableSchema = {
-		name: 'people',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: true },
-		],
-		indexes: [['age']],
-	}
-	const ROWS: ReadonlyArray<{ readonly id: string; readonly age?: number }> = [
-		{ id: 'a', age: 10 },
-		{ id: 'b' },
-	]
+	const SCHEMA = ABSENT_SCHEMA
+	const ROWS = ABSENT_ROWS
 
-	let dbName = ''
-	let repro: DriverInterface = createIndexedDBDriver('unused')
+	const dbName = new DatabaseFixture<string>()
+	const repro = new DatabaseFixture<DriverInterface>()
 
 	beforeEach(async () => {
-		dbName = mintDatabase('database-idb-repro')
-		await deleteDatabase(dbName)
-		repro = createIndexedDBDriver(dbName)
-		await repro.open([SCHEMA])
-		for (const row of ROWS) await repro.write('people', row.id, { ...row })
+		dbName.clear()
+		dbName.hold(mintDatabase('database-idb-repro'))
+		await deleteDatabase(dbName.value)
+		repro.hold(createIndexedDBDriver(dbName.value))
+		await repro.value.open([SCHEMA])
+		for (const row of ROWS) await repro.value.write('people', row.id, { ...row })
 	})
 
 	afterEach(async () => {
-		await repro.close()
-		await deleteDatabase(dbName)
+		await repro.value.close()
+		repro.clear()
+		await deleteDatabase(dbName.value)
+		dbName.clear()
 	})
 
 	it("records: to(100) includes row 'b' (its absent age ranks below 100 under the engine's order)", async () => {
-		const rows = await repro.records?.('people', {
+		const rows = await repro.value.records?.('people', {
 			conditions: [buildCondition('age', 'to', [100])],
 		})
 		expect(rows?.map((row) => row.id).sort()).toEqual(['a', 'b'])
 	})
 
 	it("records: below(100) includes row 'b'", async () => {
-		const rows = await repro.records?.('people', {
+		const rows = await repro.value.records?.('people', {
 			conditions: [buildCondition('age', 'below', [100])],
 		})
 		expect(rows?.map((row) => row.id).sort()).toEqual(['a', 'b'])
@@ -1566,29 +1550,31 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 
 	it("stream: to(100) / below(100) both yield row 'b'", async () => {
 		const toRows =
-			repro.stream === undefined
+			repro.value.stream === undefined
 				? []
 				: await collect(
-						repro.stream('people', { conditions: [buildCondition('age', 'to', [100])] }),
+						repro.value.stream('people', { conditions: [buildCondition('age', 'to', [100])] }),
 					)
 		const belowRows =
-			repro.stream === undefined
+			repro.value.stream === undefined
 				? []
 				: await collect(
-						repro.stream('people', { conditions: [buildCondition('age', 'below', [100])] }),
+						repro.value.stream('people', { conditions: [buildCondition('age', 'below', [100])] }),
 					)
 		expect(toRows.map((row) => row.id).sort()).toEqual(['a', 'b'])
 		expect(belowRows.map((row) => row.id).sort()).toEqual(['a', 'b'])
 	})
 
 	it('matches a plain engine-over-scan for both operators (superset contract holds)', async () => {
-		const scanned = await collect(repro.scan('people'))
+		const scanned = await collect(repro.value.scan('people'))
 		const expectedTo = applyQuery(scanned, { conditions: [buildCondition('age', 'to', [100])] })
 		const expectedBelow = applyQuery(scanned, {
 			conditions: [buildCondition('age', 'below', [100])],
 		})
-		const to = await repro.records?.('people', { conditions: [buildCondition('age', 'to', [100])] })
-		const below = await repro.records?.('people', {
+		const to = await repro.value.records?.('people', {
+			conditions: [buildCondition('age', 'to', [100])],
+		})
+		const below = await repro.value.records?.('people', {
 			conditions: [buildCondition('age', 'below', [100])],
 		})
 		expect(to?.map((row) => row.id).sort()).toEqual(expectedTo.map((row) => row.id).sort())
@@ -1597,51 +1583,50 @@ describe('IndexedDBDriver — the audit reproduction (below/to over a nullable i
 })
 
 describe('IndexedDBDriver — reversed between bounds', () => {
-	const SCHEMA: TableSchema = {
-		name: 'people',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'age', storage: 'integer', optional: false, nullable: false },
-		],
-		indexes: [['age']],
-	}
+	const SCHEMA = REVERSED_SCHEMA
 
-	let dbName = ''
-	let reversed: DriverInterface = createIndexedDBDriver('unused')
+	const dbName = new DatabaseFixture<string>()
+	const reversed = new DatabaseFixture<DriverInterface>()
 
 	beforeEach(async () => {
-		dbName = mintDatabase('database-idb-reversed')
-		await deleteDatabase(dbName)
-		reversed = createIndexedDBDriver(dbName)
-		await reversed.open([SCHEMA])
-		await reversed.write('people', 'a', { id: 'a', age: 10 })
-		await reversed.write('people', 'b', { id: 'b', age: 20 })
+		dbName.clear()
+		dbName.hold(mintDatabase('database-idb-reversed'))
+		await deleteDatabase(dbName.value)
+		reversed.hold(createIndexedDBDriver(dbName.value))
+		await reversed.value.open([SCHEMA])
+		await reversed.value.write('people', 'a', { id: 'a', age: 10 })
+		await reversed.value.write('people', 'b', { id: 'b', age: 20 })
 	})
 
 	afterEach(async () => {
-		await reversed.close()
-		await deleteDatabase(dbName)
+		await reversed.value.close()
+		reversed.clear()
+		await deleteDatabase(dbName.value)
+		dbName.clear()
 	})
 
 	it('a reversed same-type between (id) returns empty and never throws', async () => {
 		await expect(
-			reversed.records?.('people', { conditions: [buildCondition('id', 'between', ['z', 'a'])] }),
+			reversed.value.records?.('people', {
+				conditions: [buildCondition('id', 'between', ['z', 'a'])],
+			}),
 		).resolves.toEqual([])
 	})
 
 	it('a reversed mixed-value between (age, numeric) returns empty and never throws', async () => {
 		await expect(
-			reversed.records?.('people', { conditions: [buildCondition('age', 'between', [100, 1])] }),
+			reversed.value.records?.('people', {
+				conditions: [buildCondition('age', 'between', [100, 1])],
+			}),
 		).resolves.toEqual([])
 	})
 
 	it('stream over a reversed between yields nothing and never throws', async () => {
 		const rows =
-			reversed.stream === undefined
+			reversed.value.stream === undefined
 				? []
 				: await collect(
-						reversed.stream('people', {
+						reversed.value.stream('people', {
 							conditions: [buildCondition('age', 'between', [100, 1])],
 						}),
 					)
@@ -1651,79 +1636,79 @@ describe('IndexedDBDriver — reversed between bounds', () => {
 
 describe('IndexedDBDriver — snapshot point-in-time consistency', () => {
 	it('snapshot([]) is a no-op capture/restore (no stores named)', async () => {
-		const rollback = await driver.snapshot([])
-		await driver.write('users', 'a', { id: 'a' })
+		const rollback = await driver.value.snapshot([])
+		await driver.value.write('users', 'a', { id: 'a' })
 		await rollback()
 		// Nothing was captured, so nothing is restored — the write survives.
-		expect(await driver.read('users', 'a')).toEqual({ id: 'a' })
+		expect(await driver.value.read('users', 'a')).toEqual({ id: 'a' })
 	})
 
 	it('a whole-store snapshot still round-trips exactly (capture now runs in ONE read transaction)', async () => {
-		await driver.write('users', 'a', { id: 'a', n: 1 })
-		await driver.write('users', 'b', { id: 'b', n: 2 })
-		const rollback = await driver.snapshot()
-		await driver.write('users', 'a', { id: 'a', n: 99 })
-		await driver.delete('users', 'b')
-		await driver.write('users', 'c', { id: 'c', n: 3 })
+		await driver.value.write('users', 'a', { id: 'a', n: 1 })
+		await driver.value.write('users', 'b', { id: 'b', n: 2 })
+		const rollback = await driver.value.snapshot()
+		await driver.value.write('users', 'a', { id: 'a', n: 99 })
+		await driver.value.delete('users', 'b')
+		await driver.value.write('users', 'c', { id: 'c', n: 3 })
 		await rollback()
-		expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
-		expect(await driver.read('users', 'b')).toEqual({ id: 'b', n: 2 })
-		expect(await driver.read('users', 'c')).toBeUndefined()
+		expect(await driver.value.read('users', 'a')).toEqual({ id: 'a', n: 1 })
+		expect(await driver.value.read('users', 'b')).toEqual({ id: 'b', n: 2 })
+		expect(await driver.value.read('users', 'c')).toBeUndefined()
 	})
 })
 
 describe('IndexedDBDriver — schema-aware snapshot', () => {
 	it('treats an explicit unknown-only capture as a repeatable no-op', async () => {
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot(['missing', 'missing'])
-		await driver.write('users', 'u1', { id: 'u1', value: 'current' })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot(['missing', 'missing'])
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'current' })
 		await rollback()
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
 	})
 
 	it('replays exactly while preserving a later table and current metadata', async () => {
 		const before = tableSchemas('users')
 		const current = tableSchemas('users', 'logs')
-		await driver.stamp?.({ version: 1, schema: before })
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot()
-		await driver.migrate?.({
+		await driver.value.stamp?.({ version: 1, schema: before })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.migrate?.({
 			plan: planMigration(before, current, 1, 2),
 			metadata: { version: 2, schema: current },
 		})
-		await driver.write('users', 'u1', { id: 'u1', value: 'changed' })
-		await driver.write('users', 'u2', { id: 'u2' })
-		await driver.write('logs', 'l1', { id: 'l1', value: 'current' })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'changed' })
+		await driver.value.write('users', 'u2', { id: 'u2' })
+		await driver.value.write('logs', 'l1', { id: 'l1', value: 'current' })
 
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
-		expect(await driver.read('users', 'u2')).toBeUndefined()
-		expect(await driver.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
-		expect(await driver.metadata?.()).toEqual({ version: 2, schema: current })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
+		expect(await driver.value.read('users', 'u2')).toBeUndefined()
+		expect(await driver.value.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
+		expect(await driver.value.metadata?.()).toEqual({ version: 2, schema: current })
 
-		await driver.write('users', 'u1', { id: 'u1', value: 'changed again' })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'changed again' })
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
-		expect(await driver.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
+		expect(await driver.value.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
 	})
 
 	it('skips a captured table removed after capture', async () => {
 		const schema = tableSchemas('users')
-		await driver.write('users', 'u1', { id: 'u1' })
-		const rollback = await driver.snapshot()
-		await driver.migrate?.({ plan: planMigration(schema, []) })
+		await driver.value.write('users', 'u1', { id: 'u1' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.migrate?.({ plan: planMigration(schema, []) })
 		await rollback()
-		if (driver.records === undefined) throw new Error('Expected IndexedDB records hook')
-		await expect(driver.records('users', {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+		if (driver.value.records === undefined) throw new Error('Expected IndexedDB records hook')
+		await expect(driver.value.records('users', {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
 	})
 
 	it('skips a same-name table removed and re-added by one ordered migration', async () => {
 		const [users] = tableSchemas('users')
 		if (users === undefined) throw new Error('Expected users schema')
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot()
-		await driver.migrate?.({
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.migrate?.({
 			plan: {
 				from: 1,
 				to: 2,
@@ -1733,27 +1718,27 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 				],
 			},
 		})
-		await driver.write('users', 'u2', { id: 'u2', value: 'replacement' })
+		await driver.value.write('users', 'u2', { id: 'u2', value: 'replacement' })
 		await rollback()
-		expect(await driver.keys('users')).toEqual(['u2'])
-		expect(await driver.read('users', 'u2')).toEqual({ id: 'u2', value: 'replacement' })
+		expect(await driver.value.keys('users')).toEqual(['u2'])
+		expect(await driver.value.read('users', 'u2')).toEqual({ id: 'u2', value: 'replacement' })
 	})
 
 	it('does not publish a replacement identity when the native upgrade fails', async () => {
 		const schema = tableSchemas('audit', 'users')
 		const [audit, users] = schema
 		if (audit === undefined || users === undefined) throw new Error('Expected driver schema')
-		await driver.open(schema)
-		await driver.close()
+		await driver.value.open(schema)
+		await driver.value.close()
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 		})
 		await inspected.connect()
 		const version = inspected.version
 		inspected.close()
 		const physical = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 1,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 			upgrade: (context) => {
@@ -1765,13 +1750,13 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 		})
 		await physical.connect()
 		physical.close()
-		await driver.open(schema)
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot(['users'])
-		await driver.write('users', 'u1', { id: 'u1', value: 'current' })
+		await driver.value.open(schema)
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot(['users'])
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'current' })
 
 		await expect(
-			driver.migrate?.({
+			driver.value.migrate?.({
 				plan: {
 					from: 1,
 					to: 2,
@@ -1784,7 +1769,7 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			}),
 		).rejects.toMatchObject({ code: 'MIGRATION' })
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
 	})
 
 	it('adapts captured rows through a compatible column removal', async () => {
@@ -1801,13 +1786,13 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			...before,
 			columns: before.columns.filter((column) => column.name !== 'legacy'),
 		}
-		await driver.open([before])
-		await driver.write('users', 'u1', { id: 'u1', legacy: 'captured' })
-		const rollback = await driver.snapshot()
-		await driver.migrate?.({ plan: planMigration([before], [current]) })
-		await driver.write('users', 'u1', { id: 'u1', value: 'current' })
+		await driver.value.open([before])
+		await driver.value.write('users', 'u1', { id: 'u1', legacy: 'captured' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.migrate?.({ plan: planMigration([before], [current]) })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'current' })
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1' })
 	})
 
 	it('rejects incompatible replay before mutation and remains retryable', async () => {
@@ -1830,39 +1815,39 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 			...before,
 			columns: before.columns.filter((column) => column.name !== 'value'),
 		}
-		await driver.open([before])
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot()
-		await driver.write('users', 'u1', { id: 'u1', value: 'current' })
-		await driver.open([incompatible])
+		await driver.value.open([before])
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'current' })
+		await driver.value.open([incompatible])
 
 		await expect(rollback()).rejects.toMatchObject({ code: 'MIGRATION' })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
 
-		await driver.open([compatible])
+		await driver.value.open([compatible])
 		await rollback()
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1' })
 	})
 
 	it('rolls every store back when a later native restore fails and retries after repair', async () => {
 		const schema = tableSchemas('audit', 'users')
-		await driver.open(schema)
-		await driver.write('audit', 'a1', { id: 'a1', value: 'captured' })
-		await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-		const rollback = await driver.snapshot()
-		await driver.write('audit', 'a1', { id: 'a1', value: 'current' })
-		await driver.write('users', 'u1', { id: 'u1', value: 'current' })
-		await driver.close()
+		await driver.value.open(schema)
+		await driver.value.write('audit', 'a1', { id: 'a1', value: 'captured' })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'captured' })
+		const rollback = await driver.value.snapshot()
+		await driver.value.write('audit', 'a1', { id: 'a1', value: 'current' })
+		await driver.value.write('users', 'u1', { id: 'u1', value: 'current' })
+		await driver.value.close()
 
 		const inspected = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 		})
 		await inspected.connect()
 		const version = inspected.version
 		inspected.close()
 		const incompatible = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 1,
 			stores: { __metadata__: {}, audit: {}, users: { path: 'id' } },
 			upgrade: (context) => {
@@ -1872,15 +1857,15 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 		})
 		await incompatible.connect()
 		incompatible.close()
-		await driver.open(schema)
+		await driver.value.open(schema)
 
 		await expect(rollback()).rejects.toBeDefined()
-		expect(await driver.read('audit', 'a1')).toEqual({ id: 'a1', value: 'current' })
-		expect(await driver.read('users', 'u1')).toBeUndefined()
-		await driver.close()
+		expect(await driver.value.read('audit', 'a1')).toEqual({ id: 'a1', value: 'current' })
+		expect(await driver.value.read('users', 'u1')).toBeUndefined()
+		await driver.value.close()
 
 		const repaired = createIndexedDBDatabase({
-			name,
+			name: name.value,
 			version: version + 2,
 			stores: { __metadata__: {}, audit: {}, users: {} },
 			upgrade: (context) => {
@@ -1890,18 +1875,17 @@ describe('IndexedDBDriver — schema-aware snapshot', () => {
 		})
 		await repaired.connect()
 		repaired.close()
-		await driver.open(schema)
+		await driver.value.open(schema)
 		await rollback()
-		expect(await driver.read('audit', 'a1')).toEqual({ id: 'a1', value: 'captured' })
-		expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
+		expect(await driver.value.read('audit', 'a1')).toEqual({ id: 'a1', value: 'captured' })
+		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
 	})
 })
 
 describe('IndexedDBDriver — error taxonomy mapping (integration)', () => {
 	it('a mid-upgrade UPGRADE fault surfaces as a MIGRATION DatabaseError (not a raw IndexedDBError)', async () => {
-		let caught: unknown
-		try {
-			await driver.migrate?.({
+		const caught = await captureFailure(async () => {
+			await driver.value.migrate?.({
 				plan: {
 					from: 0,
 					to: 1,
@@ -1913,34 +1897,29 @@ describe('IndexedDBDriver — error taxonomy mapping (integration)', () => {
 					],
 				},
 			})
-		} catch (error) {
-			caught = error
-		}
+		})
 		expect(isDatabaseError(caught)).toBe(true)
 		expect(isDatabaseError(caught) && caught.code).toBe('MIGRATION')
 	})
 
 	it('an operation after close() throws the driver-own CLOSED DatabaseError (never a raw backend error)', async () => {
-		await driver.close()
-		let caught: unknown
-		try {
-			await driver.read('users', 'u1')
-		} catch (error) {
-			caught = error
-		}
+		await driver.value.close()
+		const caught = await captureFailure(async () => {
+			await driver.value.read('users', 'u1')
+		})
 		expect(isDatabaseError(caught)).toBe(true)
 		expect(isDatabaseError(caught) && caught.code).toBe('CLOSED')
 		// Reconnect so the shared `afterEach` can close/delete cleanly.
-		driver = createIndexedDBDriver(name)
-		await driver.open(tableSchemas('users'))
+		driver.clear()
+		driver.hold(createIndexedDBDriver(name.value))
+		await driver.value.open(tableSchemas('users'))
 	})
 })
 
 describe('IndexedDBDriver — reserved __metadata__ table name guard', () => {
 	it('open() throws a VALIDATION DatabaseError when a declared table is named __metadata__', async () => {
 		const guarded = createIndexedDBDriver(mintDatabase('database-idb-metadata-guard'))
-		let caught: unknown
-		try {
+		const caught = await captureFailure(async () => {
 			await guarded.open([
 				{
 					name: '__metadata__',
@@ -1949,77 +1928,68 @@ describe('IndexedDBDriver — reserved __metadata__ table name guard', () => {
 					indexes: [],
 				},
 			])
-		} catch (error) {
-			caught = error
-		}
+		})
 		expect(isDatabaseError(caught)).toBe(true)
 		expect(isDatabaseError(caught) && caught.code).toBe('VALIDATION')
 	})
 })
 
 describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compound index)', () => {
-	const SCHEMA: TableSchema = {
-		name: 'items',
-		primary: 'id',
-		columns: [
-			{ name: 'id', storage: 'text', optional: false, nullable: false },
-			{ name: 'a', storage: 'text', optional: false, nullable: false },
-			{ name: 'b', storage: 'text', optional: false, nullable: false },
-			{ name: 'a_b', storage: 'text', optional: false, nullable: false },
-		],
-		indexes: [['a_b'], ['a', 'b']],
-	}
+	const SCHEMA = COLLISION_SCHEMA
 
-	let dbName = ''
-	let collision: DriverInterface = createIndexedDBDriver('unused')
+	const dbName = new DatabaseFixture<string>()
+	const collision = new DatabaseFixture<DriverInterface>()
 
 	beforeEach(async () => {
-		dbName = mintDatabase('database-idb-collision')
-		await deleteDatabase(dbName)
-		collision = createIndexedDBDriver(dbName)
+		dbName.clear()
+		dbName.hold(mintDatabase('database-idb-collision'))
+		await deleteDatabase(dbName.value)
+		collision.hold(createIndexedDBDriver(dbName.value))
 	})
 
 	afterEach(async () => {
-		await collision.close()
-		await deleteDatabase(dbName)
+		await collision.value.close()
+		collision.clear()
+		await deleteDatabase(dbName.value)
+		dbName.clear()
 	})
 
 	it('opens fine with both a single-column "a_b" index and a compound ["a","b"] index', async () => {
-		await expect(collision.open([SCHEMA])).resolves.toBeUndefined()
+		await expect(collision.value.open([SCHEMA])).resolves.toBeUndefined()
 	})
 
 	it('a pushdown on "a_b" uses the single-column index, not the compound one', async () => {
-		await collision.open([SCHEMA])
-		await collision.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'match' })
-		await collision.write('items', 'i2', { id: 'i2', a: 'match', b: 'other', a_b: 'other' })
-		const rows = await collision.records?.('items', {
+		await collision.value.open([SCHEMA])
+		await collision.value.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'match' })
+		await collision.value.write('items', 'i2', { id: 'i2', a: 'match', b: 'other', a_b: 'other' })
+		const rows = await collision.value.records?.('items', {
 			conditions: [buildCondition('a_b', 'equals', ['match'])],
 		})
 		expect(rows?.map((row) => row.id)).toEqual(['i1'])
 	})
 
 	it('migrate can add and remove each index independently', async () => {
-		await collision.open([{ ...SCHEMA, indexes: [] }])
-		await collision.migrate?.({
+		await collision.value.open([{ ...SCHEMA, indexes: [] }])
+		await collision.value.migrate?.({
 			plan: {
 				from: 0,
 				to: 1,
 				steps: [{ operation: 'index.add', table: 'items', index: ['a_b'] }],
 			},
 		})
-		await collision.migrate?.({
+		await collision.value.migrate?.({
 			plan: {
 				from: 1,
 				to: 2,
 				steps: [{ operation: 'index.add', table: 'items', index: ['a', 'b'] }],
 			},
 		})
-		await collision.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'z' })
-		const bySingle = await collision.records?.('items', {
+		await collision.value.write('items', 'i1', { id: 'i1', a: 'x', b: 'y', a_b: 'z' })
+		const bySingle = await collision.value.records?.('items', {
 			conditions: [buildCondition('a_b', 'equals', ['z'])],
 		})
 		expect(bySingle?.map((row) => row.id)).toEqual(['i1'])
-		await collision.migrate?.({
+		await collision.value.migrate?.({
 			plan: {
 				from: 2,
 				to: 3,
@@ -2031,9 +2001,16 @@ describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compoun
 		})
 		// Both indexes gone — the column is no longer pushable, but the table
 		// still reads correctly through a full scan.
-		const afterRemove = await collision.records?.('items', {
+		const afterRemove = await collision.value.records?.('items', {
 			conditions: [buildCondition('a_b', 'equals', ['z'])],
 		})
 		expect(afterRemove?.map((row) => row.id)).toEqual(['i1'])
 	})
 })
+import {
+	PEOPLE,
+	ABSENT_SCHEMA,
+	ABSENT_ROWS,
+	REVERSED_SCHEMA,
+	COLLISION_SCHEMA,
+} from '../../../setupBrowser.js'

@@ -1,11 +1,17 @@
-import type { Result } from '@orkestrel/contract'
-import type { StorageInterface, TableSchema } from '@src/core'
-import { createRecorder } from '@orkestrel/test'
-import { createMemoryDriver, isDatabaseError } from '@src/core'
+import type { TableSchema } from '@src/core'
+import { captureError, createRecorder } from '@orkestrel/test'
+import { captureFailure, createMemoryDriver, isDatabaseError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { DatabaseContext } from '../../../src/core/DatabaseContext.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
-import { createReconciliationDriver, tableSchemas } from '../../setup.js'
+import {
+	contextFor,
+	succeeding,
+	failing,
+	DatabaseSwitch,
+	createReconciliationDriver,
+	tableSchemas,
+} from '../../setup.js'
 
 // `DatabaseContext` (`src/core/DatabaseContext.ts`) owns the shared lifecycle every
 // typed `Database` view sits on: schema registration and its merge, admission and
@@ -15,21 +21,6 @@ import { createReconciliationDriver, tableSchemas } from '../../setup.js'
 // the seams a view does not expose — a second `register` after opening, and a `track`
 // admitted while a transaction holds the boundary. The DRIVER wrapping of a failed
 // rollback stays in `Database.test.ts`, which already drives that seam end to end.
-
-function contextFor(...names: readonly string[]): DatabaseContext {
-	const context = new DatabaseContext({ driver: createMemoryDriver(), tables: {} })
-	context.register(tableSchemas(...names))
-	return context
-}
-
-/** The scope shape `DatabaseContext.transaction` expects: a `Result` per attempt. */
-function succeeding<R>(value: R): (storage: StorageInterface) => Promise<Result<R, unknown>> {
-	return async () => ({ success: true, value })
-}
-
-function failing(error: unknown): (storage: StorageInterface) => Promise<Result<never, unknown>> {
-	return async () => ({ success: false, error })
-}
 
 describe('register', () => {
 	it('merges an identical table declaration without conflict', () => {
@@ -48,36 +39,21 @@ describe('register', () => {
 				indexes: [],
 			},
 		]
-		let error: unknown
-		try {
-			context.register(conflicting)
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => context.register(conflicting))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('VALIDATION')
 	})
 
 	it('throws CONFLICT once opening has started', async () => {
 		const context = contextFor('users')
 		await context.open()
-		let error: unknown
-		try {
-			context.register(tableSchemas('posts'))
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => context.register(tableSchemas('posts')))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
 	})
 
 	it('throws CLOSED after close', async () => {
 		const context = contextFor('users')
 		await context.close()
-		let error: unknown
-		try {
-			context.register(tableSchemas('posts'))
-		} catch (cause) {
-			error = cause
-		}
+		const error = captureError(() => context.register(tableSchemas('posts')))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CLOSED')
 	})
 })
@@ -164,16 +140,16 @@ describe('admission', () => {
 	it('drains root work admitted before close', async () => {
 		const context = contextFor('users')
 		const release = Promise.withResolvers<void>()
-		let settled = false
+		const settled = new DatabaseSwitch()
 		void context.track(async () => {
 			await release.promise
-			settled = true
+			settled.enable()
 		})
 		const closing = context.close()
-		expect(settled).toBe(false)
+		expect(settled.active).toBe(false)
 		release.resolve()
 		await closing
-		expect(settled).toBe(true)
+		expect(settled.active).toBe(true)
 	})
 })
 
@@ -227,17 +203,17 @@ describe('transaction', () => {
 
 	it('checks a pre-aborted signal once, at entry', async () => {
 		const context = contextFor('users')
-		let entered = false
+		const entered = new DatabaseSwitch()
 		await expect(
 			context.transaction(
 				async () => {
-					entered = true
+					entered.enable()
 					return { success: true, value: 1 }
 				},
 				{ signal: AbortSignal.abort() },
 			),
 		).rejects.toMatchObject({ code: 'ABORTED' })
-		expect(entered).toBe(false)
+		expect(entered.active).toBe(false)
 	})
 
 	it('hands the scope a fresh TransactionScope per attempt', async () => {
@@ -261,24 +237,14 @@ describe('migrate', () => {
 		const { driver } = createReconciliationDriver({ metadata: false, stamp: false })
 		const context = new DatabaseContext({ driver, tables: {} })
 		context.register(tableSchemas('users'))
-		let error: unknown
-		try {
-			await context.migrate([])
-		} catch (cause) {
-			error = cause
-		}
+		const error = await captureFailure(() => context.migrate([]))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 	})
 
 	it('throws CONFLICT once the database has opened', async () => {
 		const context = contextFor('users')
 		await context.open()
-		let error: unknown
-		try {
-			await context.migrate([])
-		} catch (cause) {
-			error = cause
-		}
+		const error = await captureFailure(() => context.migrate([]))
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFLICT')
 	})
 
@@ -312,12 +278,7 @@ describe('version reconciliation', () => {
 		})
 		const context = new DatabaseContext({ driver, tables: {}, version: 2 })
 		context.register(tableSchemas('users'))
-		let error: unknown
-		try {
-			await context.open()
-		} catch (cause) {
-			error = cause
-		}
+		const error = await captureFailure(() => context.open())
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 	})
 
@@ -329,12 +290,7 @@ describe('version reconciliation', () => {
 		})
 		const context = new DatabaseContext({ driver, tables: {}, version: 2 })
 		context.register(tableSchemas('users'))
-		let error: unknown
-		try {
-			await context.open()
-		} catch (cause) {
-			error = cause
-		}
+		const error = await captureFailure(() => context.open())
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
 	})
 

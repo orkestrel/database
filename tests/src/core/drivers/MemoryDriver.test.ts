@@ -3,7 +3,7 @@ import { conformDriver, createMemoryDriver, isDatabaseError, planMigration } fro
 import { isRecord } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { tableSchemas } from '../../../setup.js'
+import { emptyRows, createUnclonableMetadata, tableSchemas } from '../../../setup.js'
 
 // The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
 // schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
@@ -232,7 +232,7 @@ describe('MemoryDriver', () => {
 			const conditions: readonly Condition[] = [
 				{ column: 'n', operator: 'above', values: [1], connector: 'and' },
 			]
-			const rows = await collect(driver.stream?.('t', { conditions }) ?? (async function* () {})())
+			const rows = await collect(driver.stream?.('t', { conditions }) ?? emptyRows())
 			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
 		})
 
@@ -243,9 +243,7 @@ describe('MemoryDriver', () => {
 			await driver.write('t', 'b', { id: 'b' })
 			await driver.write('t', 'c', { id: 'c' })
 			await driver.write('t', 'd', { id: 'd' })
-			const rows = await collect(
-				driver.stream?.('t', { offset: 1, limit: 2 }) ?? (async function* () {})(),
-			)
+			const rows = await collect(driver.stream?.('t', { offset: 1, limit: 2 }) ?? emptyRows())
 			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
 		})
 
@@ -270,8 +268,7 @@ describe('MemoryDriver', () => {
 			await driver.write('t', 'b', { id: 'b', n: 2 })
 			await driver.write('t', 'a', { id: 'a', n: 1 })
 			const rows = await collect(
-				driver.stream?.('t', { order: [{ column: 'n', direction: 'descending' }] }) ??
-					(async function* () {})(),
+				driver.stream?.('t', { order: [{ column: 'n', direction: 'descending' }] }) ?? emptyRows(),
 			)
 			expect(rows.map((row) => row.id)).toEqual(['a', 'b'])
 		})
@@ -280,7 +277,7 @@ describe('MemoryDriver', () => {
 			const driver = createMemoryDriver()
 			await driver.open(tableSchemas('t'))
 			await driver.write('t', 'a', { id: 'a', n: 1 })
-			const [row] = await collect(driver.stream?.('t', {}) ?? (async function* () {})())
+			const [row] = await collect(driver.stream?.('t', {}) ?? emptyRows())
 			if (row) row.n = 999
 			expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
 		})
@@ -305,7 +302,7 @@ describe('MemoryDriver', () => {
 		it('yields nothing for an empty declared table and rejects an unknown table', async () => {
 			const driver = createMemoryDriver()
 			await driver.open(tableSchemas('users'))
-			expect(await collect(driver.stream?.('users', {}) ?? (async function* () {})())).toEqual([])
+			expect(await collect(driver.stream?.('users', {}) ?? emptyRows())).toEqual([])
 			await expect(
 				collect(driver.stream?.('missing', {}) ?? driver.scan('missing')),
 			).rejects.toMatchObject({
@@ -393,12 +390,7 @@ describe('MemoryDriver', () => {
 			const before = { version: 1, schema: tableSchemas('users') }
 			await driver.stamp?.(before)
 			const fault = new Error('metadata cannot be cloned')
-			const metadata = {
-				get version(): number {
-					throw fault
-				},
-				schema: [],
-			}
+			const metadata = createUnclonableMetadata(fault)
 			const plan: Migration = {
 				from: 1,
 				to: 2,

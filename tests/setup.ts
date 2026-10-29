@@ -2,9 +2,18 @@
 // Vitest project (`setupFiles[0]`). Keep this file free of `node:*` and of
 // `document` / `window`: node-only helpers live in `setupServer.ts`.
 
+import type { Result } from '@orkestrel/contract'
+import { DatabaseContext } from '../src/core/DatabaseContext.js'
+import { DatabaseTransaction } from '../src/core/DatabaseTransaction.js'
+import { TransactionScope } from '../src/core/TransactionScope.js'
 import type {
+	StorageInterface,
+	AdmissionInterface,
 	AggregateOperation,
+	ColumnSchema,
+	Key,
 	ColumnMap,
+	CursorInterface,
 	Condition,
 	ConditionOperator,
 	ConditionConnector,
@@ -13,6 +22,7 @@ import type {
 	DriverInterface,
 	DriverMetadata,
 	MigrationInput,
+	Migration,
 	Row,
 	RowOf,
 	TableInterface,
@@ -20,7 +30,7 @@ import type {
 } from '@src/core'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
-import { integerShape, literalShape, stringShape } from '@orkestrel/contract'
+import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
 import { createDatabase, createMemoryDriver } from '@src/core'
 
 // ── Database test fixtures ────────────────────────────────────────────────────
@@ -235,9 +245,10 @@ export async function seedCursorDatabase(driver?: DriverInterface) {
  */
 export function createMemoryAdapter(
 	memory: DriverInterface = createMemoryDriver(),
+	overrides: Partial<DriverInterface> = {},
 ): DriverInterface {
 	return {
-		open: (schema) => memory.open(schema),
+		open: (tables) => memory.open(tables),
 		close: () => memory.close(),
 		read: (table, key) => memory.read(table, key),
 		write: (table, key, row, options) => memory.write(table, key, row, options),
@@ -247,6 +258,7 @@ export function createMemoryAdapter(
 		scan: (table) => memory.scan(table),
 		clear: (table) => memory.clear(table),
 		snapshot: (tables) => memory.snapshot(tables),
+		...overrides,
 	}
 }
 
@@ -270,40 +282,7 @@ export function createReconciliationDriver(options: ReconciliationDriverOptions)
 	readonly stampCalls: readonly DriverMetadata[]
 	readonly migrateCalls: readonly MigrationInput[]
 } {
-	const memory = createMemoryDriver()
-	const metadataCalls: number[] = []
-	const stampCalls: DriverMetadata[] = []
-	const migrateCalls: MigrationInput[] = []
-	let stored = options.initial
-	const driver: DriverInterface = {
-		...createMemoryAdapter(memory),
-		...(options.metadata
-			? {
-					async metadata() {
-						metadataCalls.push(1)
-						return stored
-					},
-				}
-			: {}),
-		...(options.stamp
-			? {
-					async stamp(next: DriverMetadata) {
-						stampCalls.push(next)
-						stored = next
-					},
-				}
-			: {}),
-		...(options.migrate
-			? {
-					async migrate(input: MigrationInput) {
-						migrateCalls.push(input)
-						await memory.migrate?.(input)
-						if (input.metadata !== undefined) stored = input.metadata
-					},
-				}
-			: {}),
-	}
-	return { driver, metadataCalls, stampCalls, migrateCalls }
+	return new ReconciliationFixture(options)
 }
 
 /** Wraps one supplied AsyncIterator as a reusable host-independent AsyncIterable. */
@@ -391,48 +370,578 @@ export function createRecordingDriver(aggregatesUndefined = false): {
 	readonly recordsCalls: readonly QueryInput[]
 	readonly aggregateCalls: readonly RecordingAggregate[]
 } {
-	const memory = createMemoryDriver()
-	const recordsCalls: QueryInput[] = []
-	const aggregateCalls: RecordingAggregate[] = []
-	const driver: RecordingDriverInterface = {
-		async open(schema) {
-			await memory.open(schema)
+	return new RecordingDriverFixture(aggregatesUndefined)
+}
+
+/** Owns the metadata state and observations of one reconciliation fixture. */
+export class ReconciliationFixture {
+	readonly #memory = createMemoryDriver()
+	readonly #driver: DriverInterface
+	readonly #metadataCalls: number[] = []
+	readonly #stampCalls: DriverMetadata[] = []
+	readonly #migrateCalls: MigrationInput[] = []
+	#stored: DriverMetadata | undefined
+
+	constructor(options: ReconciliationDriverOptions) {
+		this.#stored = options.initial
+		this.#driver = createMemoryAdapter(this.#memory, {
+			...(options.metadata ? { metadata: this.#metadata.bind(this) } : {}),
+			...(options.stamp ? { stamp: this.#stamp.bind(this) } : {}),
+			...(options.migrate ? { migrate: this.#migrate.bind(this) } : {}),
+		})
+	}
+
+	get driver(): DriverInterface {
+		return this.#driver
+	}
+
+	get metadataCalls(): readonly number[] {
+		return this.#metadataCalls
+	}
+	get stampCalls(): readonly DriverMetadata[] {
+		return this.#stampCalls
+	}
+	get migrateCalls(): readonly MigrationInput[] {
+		return this.#migrateCalls
+	}
+
+	async #metadata(): Promise<DriverMetadata | undefined> {
+		this.#metadataCalls.push(1)
+		return this.#stored
+	}
+
+	async #stamp(next: DriverMetadata): Promise<void> {
+		this.#stampCalls.push(next)
+		this.#stored = next
+	}
+
+	async #migrate(input: MigrationInput): Promise<void> {
+		this.#migrateCalls.push(input)
+		await this.#memory.migrate?.(input)
+		if (input.metadata !== undefined) this.#stored = input.metadata
+	}
+}
+
+/** Owns the call observations of a native-hook dispatch fixture. */
+export class RecordingDriverFixture {
+	readonly #memory = createMemoryDriver()
+	readonly #driver: RecordingDriverInterface
+	readonly #undefined: boolean
+	readonly #records: QueryInput[] = []
+	readonly #aggregates: RecordingAggregate[] = []
+
+	constructor(aggregatesUndefined: boolean) {
+		this.#undefined = aggregatesUndefined
+		this.#driver = {
+			...createMemoryAdapter(this.#memory, { snapshot: () => this.#memory.snapshot() }),
+			records: this.#recordsCall.bind(this),
+			aggregate: this.#aggregateCall.bind(this),
+		}
+	}
+
+	get driver(): RecordingDriverInterface {
+		return this.#driver
+	}
+
+	get recordsCalls(): readonly QueryInput[] {
+		return this.#records
+	}
+	get aggregateCalls(): readonly RecordingAggregate[] {
+		return this.#aggregates
+	}
+
+	async #recordsCall(_table: string, input: QueryInput): Promise<readonly Row[]> {
+		this.#records.push(input)
+		return [{ ...RECORDING_ROW }]
+	}
+
+	async #aggregateCall(
+		_table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		this.#aggregates.push({ operation, column, input })
+		return this.#undefined ? undefined : RECORDING_AGGREGATE
+	}
+}
+
+/** Counts protocol transitions within one test scenario. */
+export class DatabaseCounter {
+	#count = 0
+
+	get count(): number {
+		return this.#count
+	}
+
+	next(): number {
+		this.#count += 1
+		return this.#count
+	}
+}
+
+/** Owns a scenario's switch across its asynchronous callbacks. */
+export class DatabaseSwitch {
+	#active: boolean
+
+	constructor(active = false) {
+		this.#active = active
+	}
+	get active(): boolean {
+		return this.#active
+	}
+	enable(): void {
+		this.#active = true
+	}
+	disable(): void {
+		this.#active = false
+	}
+}
+
+/** Holds the fixture that setup binds and teardown releases. */
+export class DatabaseFixture<T> {
+	#value: T | undefined
+
+	get current(): T | undefined {
+		return this.#value
+	}
+
+	get value(): T {
+		if (this.#value === undefined) throw new Error('The database fixture is not bound')
+		return this.#value
+	}
+
+	hold(value: T): void {
+		if (this.#value !== undefined) throw new Error('The database fixture is already bound')
+		this.#value = value
+	}
+
+	clear(): void {
+		this.#value = undefined
+	}
+}
+
+export const COLUMNS = {
+	users: { id: stringShape(), name: stringShape(), age: integerShape() },
+}
+
+export async function transactionView(): Promise<{
+	readonly view: DatabaseTransaction<typeof COLUMNS>
+	readonly scope: TransactionScope
+	readonly driver: StorageInterface
+}> {
+	const driver = createMemoryDriver()
+	await driver.open(tableSchemas('users'))
+	const scope = new TransactionScope()
+	return {
+		view: new DatabaseTransaction(driver, COLUMNS, {}, undefined, undefined, scope),
+		scope,
+		driver,
+	}
+}
+
+export function contextFor(...names: readonly string[]): DatabaseContext {
+	const context = new DatabaseContext({ driver: createMemoryDriver(), tables: {} })
+	context.register(tableSchemas(...names))
+	return context
+}
+
+/** Describes the result returned by a fixture's transaction callback. */
+export type TransactionResult<R> = (storage: StorageInterface) => Promise<Result<R, unknown>>
+
+/** Returns a transaction scope that succeeds with the supplied value. */
+export function succeeding<R>(value: R): TransactionResult<R> {
+	return async () => ({ success: true, value })
+}
+
+export function failing(error: unknown): TransactionResult<never> {
+	return async () => ({ success: false, error })
+}
+
+/** Resolves the readiness of an already connected transaction. */
+export function ready(): Promise<void> {
+	return Promise.resolve()
+}
+
+/** Creates the structural admission literal used by the guide proof. */
+export function createAdmissionBoundary(): AdmissionInterface {
+	return { accepting: true, track: (operation) => operation() }
+}
+
+/** Yields no rows for an absent optional stream. */
+export async function* emptyRows(): AsyncGenerator<Row> {}
+
+/** Creates metadata whose version accessor throws the supplied reason. */
+export function createUnclonableMetadata(
+	fault: unknown,
+	declared: readonly TableSchema[] = [],
+): DriverMetadata {
+	return {
+		get version(): number {
+			throw fault
 		},
-		async close() {
-			await memory.close()
-		},
-		async read(table, key) {
-			return memory.read(table, key)
-		},
-		async write(table, key, row, options) {
-			await memory.write(table, key, row, options)
-		},
-		async insert(table, key, row, options) {
-			await memory.insert(table, key, row, options)
-		},
-		async delete(table, key, options) {
-			return memory.delete(table, key, options)
-		},
-		async keys(table) {
-			return memory.keys(table)
-		},
-		scan(table) {
-			return memory.scan(table)
-		},
-		async clear(table) {
-			await memory.clear(table)
-		},
-		async snapshot() {
-			return memory.snapshot()
-		},
-		async records(_table, input) {
-			recordsCalls.push(input)
-			return [{ ...RECORDING_ROW }]
-		},
-		async aggregate(_table, operation, column, input) {
-			aggregateCalls.push({ operation, column, input })
-			return aggregatesUndefined ? undefined : RECORDING_AGGREGATE
+		schema: declared,
+	}
+}
+
+/** Returns an inert value for a non-serializable function fixture. */
+export function emptyValue(): undefined {
+	return undefined
+}
+
+/** Returns a fixture result after its resources finish closing. */
+export async function completeFixture<T>(
+	operation: () => Promise<T>,
+	cleanup: () => Promise<void>,
+): Promise<T> {
+	try {
+		return await operation()
+	} finally {
+		await cleanup()
+	}
+}
+
+/** Creates a row whose payload read aborts its native transaction. */
+export function createAbortingRow(controller: AbortController, reason: string): Row {
+	return {
+		id: 'active',
+		get payload(): string {
+			controller.abort(reason)
+			return 'value'
 		},
 	}
-	return { driver, recordsCalls, aggregateCalls }
 }
+
+/** Seeds the canonical trio into a real constrained `users` table. */
+export async function seedConstrainedUsers() {
+	const { users } = createConstrainedUsersDatabase()
+	await users.set(userRows())
+	return users
+}
+
+/** Seeds a real `rank` table spanning the parity helper's `below 10` boundary. */
+export async function seedRankRows() {
+	const db = createDatabase({
+		driver: createMemoryDriver(),
+		tables: { rows: { id: stringShape(), rank: integerShape() } },
+	})
+	const rows = db.table('rows')
+	await rows.set([
+		{ id: 'r3', rank: 3 },
+		{ id: 'r1', rank: 9 },
+		{ id: 'r2', rank: 10 },
+		{ id: 'r4', rank: 41 },
+	])
+	return rows
+}
+
+/** Creates a real `users` table over one of the recording driver's two aggregate modes. */
+export function recordUsersTable(aggregatesUndefined: boolean) {
+	const recording = createRecordingDriver(aggregatesUndefined)
+	const db = createDatabase({
+		driver: recording.driver,
+		tables: { users: INTEGRATION_TABLES.users },
+	})
+	return { recording, users: db.table('users') }
+}
+
+export const columns = {
+	id: stringShape(),
+	name: stringShape(),
+	age: integerShape(),
+	role: literalShape(['admin', 'member', 'guest']),
+}
+
+// The table's row type is inferred from its columns — no hand-written alias.
+export async function seeded() {
+	return seedUsersTable(columns, (users) =>
+		users.set([
+			{ id: 'u1', name: 'Ada', age: 36, role: 'admin' },
+			{ id: 'u2', name: 'Bo', age: 17, role: 'guest' },
+			{ id: 'u3', name: 'Cy', age: 41, role: 'member' },
+			{ id: 'u4', name: 'Di', age: 23, role: 'member' },
+		]),
+	)
+}
+
+export type Users = Awaited<ReturnType<typeof seeded>>
+
+export async function createNestedPeopleTable() {
+	const db = createDatabase({
+		driver: createMemoryDriver(),
+		tables: {
+			people: {
+				id: stringShape(),
+				profile: objectShape({ name: stringShape(), age: integerShape() }),
+			},
+		},
+	})
+	const people = db.table('people')
+	await people.set({ id: 'p1', profile: { name: 'Ada', age: 36 } })
+	await people.set({ id: 'p2', profile: { name: 'Bo', age: 17 } })
+	await people.set({ id: 'p3', profile: { name: 'Cy', age: 41 } })
+	return people
+}
+
+export function schema(overrides: Partial<TableSchema> & { name: string }): TableSchema {
+	const declared: readonly ColumnSchema[] = [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		...(overrides.columns ?? []),
+	]
+	return { primary: 'id', indexes: [], ...overrides, columns: declared }
+}
+
+export function createReferenceLeakingDriver(): DriverInterface {
+	return new ReferenceDriverFixture(false).driver
+}
+
+export function createDescendingKeyDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		async keys(table: string): Promise<readonly Key[]> {
+			return [...(await inner.keys(table))].reverse()
+		},
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: () => inner.snapshot(),
+	}
+}
+
+export function createMismatchedMetadataDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: (tables) => inner.snapshot(tables),
+		async metadata() {
+			return { version: 99, schema: [] }
+		},
+		async stamp() {
+			// Deliberately ignores the stamped value.
+		},
+	}
+}
+
+export function createWholeSnapshotDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan: (table) => inner.scan(table),
+		clear: (table) => inner.clear(table),
+		snapshot: () => inner.snapshot(),
+	}
+}
+
+export function createDoublyBrokenDriver(): DriverInterface {
+	return new ReferenceDriverFixture(true).driver
+}
+
+export function createCrashingDriver(): DriverInterface {
+	const inner = createMemoryDriver()
+	return {
+		open: (tables) => inner.open(tables),
+		close: () => inner.close(),
+		read: (table, key) => inner.read(table, key),
+		write: (table, key, row) => inner.write(table, key, row),
+		insert: (table, key, row) => inner.insert(table, key, row),
+		delete: (table, key) => inner.delete(table, key),
+		keys: (table) => inner.keys(table),
+		scan(): AsyncIterable<Row> {
+			throw new Error('scan exploded')
+		},
+		clear: (table) => inner.clear(table),
+		snapshot: (tables) => inner.snapshot(tables),
+	}
+}
+
+export type CursorUsers = TableInterface<CursorUserRow>
+export type UserCursor = CursorInterface<CursorUserRow>
+
+export type DatabaseEvent = 'open' | 'close' | 'transaction' | 'commit' | 'rollback'
+export const DATABASE_EVENTS: readonly DatabaseEvent[] = [
+	'open',
+	'close',
+	'transaction',
+	'commit',
+	'rollback',
+]
+export type MigrateEvent = 'migrate'
+export const MIGRATE_EVENTS: readonly MigrateEvent[] = ['migrate']
+
+/** Owns a physical-open fixture whose metadata becomes compatible on retry. */
+export class ReopenDriverFixture {
+	readonly #memory = createMemoryDriver()
+	#schema: readonly TableSchema[] = []
+	#metadata = 0
+	#opens = 0
+
+	get opens(): number {
+		return this.#opens
+	}
+
+	get driver(): DriverInterface {
+		return createMemoryAdapter(this.#memory, {
+			open: this.#open.bind(this),
+			metadata: this.#readMetadata.bind(this),
+			async stamp() {},
+		})
+	}
+
+	async #open(declared: readonly TableSchema[]): Promise<void> {
+		this.#opens += 1
+		this.#schema = declared
+		await this.#memory.open(declared)
+	}
+
+	async #readMetadata(): Promise<DriverMetadata> {
+		this.#metadata += 1
+		return { version: this.#metadata === 1 ? 2 : 1, schema: this.#schema }
+	}
+}
+
+export function userTable() {
+	return createConstrainedUsersDatabase().users
+}
+
+export async function createSeededUsersTable() {
+	const db = createDatabase({
+		driver: createMemoryDriver(),
+		tables: { users: { id: stringShape(), name: stringShape(), age: integerShape() } },
+	})
+	const users = db.table('users')
+	await users.set([
+		{ id: 'u1', name: 'Ada', age: 36 },
+		{ id: 'u2', name: 'Bo', age: 41 },
+		{ id: 'u3', name: 'Cy', age: 22 },
+	])
+	return users
+}
+
+export const HOOK_TABLES = { users: INTEGRATION_TABLES.users }
+
+export type TableEvent = 'write' | 'remove' | 'clear'
+
+export const TABLE_EVENTS: readonly TableEvent[] = ['write', 'remove', 'clear']
+
+/** Creates metadata that records and rejects a version read. */
+export function createHostileMetadata(
+	reads: DatabaseCounter,
+	declared: readonly TableSchema[],
+	message: string,
+): DriverMetadata {
+	return {
+		get version(): number {
+			reads.next()
+			throw new Error(message)
+		},
+		schema: declared,
+	}
+}
+
+/** Creates migration input that records and rejects a metadata read. */
+export function createHostileMigration(
+	reads: DatabaseCounter,
+	plan: Migration,
+	message: string,
+): MigrationInput {
+	return {
+		plan,
+		get metadata(): DriverMetadata {
+			reads.next()
+			throw new Error(message)
+		},
+	}
+}
+
+/** Owns the reference leakage that the conformance fixtures deliberately expose. */
+export class ReferenceDriverFixture {
+	readonly #memory = createMemoryDriver()
+	readonly #stored = new Map<Key, Row>()
+	readonly #descending: boolean
+
+	constructor(descending: boolean) {
+		this.#descending = descending
+	}
+
+	get driver(): DriverInterface {
+		return createMemoryAdapter(this.#memory, {
+			write: this.#write.bind(this),
+			read: this.#read.bind(this),
+			keys: this.#keys.bind(this),
+			snapshot: (tables) => this.#memory.snapshot(this.#descending ? tables : undefined),
+		})
+	}
+
+	async #write(table: string, key: Key, row: Row): Promise<void> {
+		await this.#memory.write(table, key, row)
+		this.#stored.set(key, row)
+	}
+
+	async #read(table: string, key: Key): Promise<Row | undefined> {
+		if (this.#stored.has(key)) return this.#stored.get(key)
+		return this.#memory.read(table, key)
+	}
+
+	async #keys(table: string): Promise<readonly Key[]> {
+		const keys = await this.#memory.keys(table)
+		return this.#descending ? [...keys].reverse() : keys
+	}
+}
+
+export const COLUMN = { name: 'id', storage: 'text', optional: false, nullable: false }
+export const TABLE = {
+	name: 'users',
+	primary: 'id',
+	columns: [COLUMN],
+	indexes: [['id']],
+}
+export const STEP = { operation: 'column.remove', table: 'users', column: 'legacy' }
+export const PLAN = { from: 1, to: 2, steps: [STEP] }
+export const METADATA = { version: 2, schema: [TABLE] }
+
+export const CONDITION_ROW = { name: 'Alice', age: 30, tag: null }
+
+export const QUERY_ROW = { age: 30, role: 'admin' }
+
+export const PAGE_ROWS = [
+	{ id: 'a', n: 1 },
+	{ id: 'b', n: 2 },
+	{ id: 'c', n: 3 },
+	{ id: 'd', n: 4 },
+]
+
+export const AGGREGATE_ROWS = [{ amount: 10 }, { amount: '20' }, { amount: 'x' }, { other: 1 }]
+
+export const VALID_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+	indexes: [['id']],
+}
+
+export const MIGRATION_USERS = schema({
+	name: 'users',
+	columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
+	indexes: [['name']],
+})
+
+export const FILTER_ROWS = [{ age: 30 }, { age: 12 }, { age: 45 }]

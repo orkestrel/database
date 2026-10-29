@@ -55,6 +55,7 @@ await new GuideCommand({
 	const { computeSymbolKey, createGuide, findMissingSymbols, normalizeDirectories } =
 		await import('@orkestrel/guide')
 	const { requireValue } = await import('@orkestrel/test')
+	const { createAdmissionBoundary } = await import('./setup.js')
 	const {
 		auditDriver,
 		cloneDriverMetadata,
@@ -447,10 +448,7 @@ await new GuideCommand({
 		// behaviour. `tests/src/core/DatabaseContext.test.ts` and `tests/src/core/TransactionScope.test.ts`
 		// drive the real implementors of this boundary.
 		it('the admission boundary reports accepting and returns the tracked result (guides/database.md:1472-1473)', async () => {
-			const boundary: AdmissionInterface = {
-				accepting: true,
-				track: (operation) => operation(),
-			}
+			const boundary: AdmissionInterface = createAdmissionBoundary()
 			expect(boundary.accepting).toBe(true)
 			expect(await boundary.track(async () => 42)).toBe(42)
 		})

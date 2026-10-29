@@ -1,3 +1,22 @@
+import type { ColumnSchema } from '@src/core'
+import type { DatabaseInterface, IndexMap, RowOf, TableInterface } from '@src/core'
+import { createDatabase, createMemoryDriver } from '@src/core'
+import {
+	booleanShape,
+	integerShape,
+	jsonShape,
+	nullableShape,
+	numberShape,
+	optionalShape,
+	stringShape,
+} from '@orkestrel/contract'
+import type { AggregateOperation, QueryInput, Row } from '@src/core'
+import type { FieldPath } from '@orkestrel/contract'
+import { applyQuery } from '@src/core'
+import { collect } from '@orkestrel/test'
+import type { JSONDriver } from '@src/server'
+import type { TeardownInterface } from '@orkestrel/test'
+import { fileURLToPath } from 'node:url'
 // Server-test setup — node-only helpers, loaded after `setup.ts` for the node
 // `src:server` test project. `node:fs` / `node:path` imports belong here, never
 // in `setup.ts`, which browser projects also load. Anchor every path to a
@@ -12,10 +31,10 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { computeSymbolKey } from '@orkestrel/guide'
 import { createRequire } from 'node:module'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
-import { createSQLiteDriver } from '@src/server'
+import { compileQuerySQL, createSQLiteDriver } from '@src/server'
 import { createScratch } from '@orkestrel/test/server'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { parseProjectConfig, scanDiagnostics } from '@orkestrel/probe/server'
 import { parseSync } from 'vite'
 import { spawnSync } from 'node:child_process'
@@ -25,7 +44,10 @@ import { spawnSync } from 'node:child_process'
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from this module, so the compiler that reads a guide fence and an entry
 // barrel is the one this workspace's own `check` script runs.
-const COMPILER = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+const COMPILER = join(
+	dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+	'bin/tsc',
+)
 // The source extensions a relative specifier resolves through, in resolution order.
 // A published specifier spells its target `.js`; the file beside it is `.ts`.
 const SOURCE_EXTENSIONS: readonly string[] = ['.ts', '.tsx', '.mts', '.cts']
@@ -540,19 +562,25 @@ export function locateGuideFences(
 	fences: readonly string[],
 	directory: string,
 ): readonly GuideFenceModule[] {
-	const modules: GuideFenceModule[] = []
-	let cursor = 0
-	for (const [index, source] of fences.entries()) {
-		const position = document.indexOf(source, cursor)
-		if (position < 0) {
-			throw new Error(`Unable to locate executable fence ${index + 1} in the guide source`)
-		}
-		const line = document.slice(0, position).split('\n').length
-		const path = join(directory, `fence-${String(index + 1).padStart(2, '0')}.ts`)
-		modules.push({ ordinal: index + 1, line, path, source })
-		cursor = position + source.length
-	}
-	return modules
+	return Iterator.from(fences.entries()).reduce<{
+		readonly cursor: number
+		readonly modules: readonly GuideFenceModule[]
+	}>(
+		(previous, [index, source]) => {
+			const cursor = previous.cursor
+			const position = document.indexOf(source, cursor)
+			if (position < 0) {
+				throw new Error(`Unable to locate executable fence ${index + 1} in the guide source`)
+			}
+			const line = document.slice(0, position).split(/\r\n|\n/u).length
+			const path = join(directory, `fence-${String(index + 1).padStart(2, '0')}.ts`)
+			return {
+				cursor: position + source.length,
+				modules: [...previous.modules, { ordinal: index + 1, line, path, source }],
+			}
+		},
+		{ cursor: 0, modules: [] },
+	).modules
 }
 
 /**
@@ -594,15 +622,14 @@ export function formatGuideFenceDiagnostic(
 	fence: GuideFenceModule,
 	root: string,
 ): string {
-	let line = fence.line
-	let location = ''
 	const point = diagnostic.range?.start
 	if (diagnostic.path !== undefined && point !== undefined) {
 		const file = resolve(root, diagnostic.path)
-		if (file === resolve(fence.path)) line += point.line
-		location = ` [${relative(root, file)}:${point.line + 1}:${point.character + 1}]`
+		const line = fence.line + (file === resolve(fence.path) ? point.line : 0)
+		const location = ` [${relative(root, file)}:${point.line + 1}:${point.character + 1}]`
+		return `Fence ${fence.ordinal} (guide line ${line})${location}: ${diagnostic.message}`
 	}
-	return `Fence ${fence.ordinal} (guide line ${line})${location}: ${diagnostic.message}`
+	return `Fence ${fence.ordinal} (guide line ${fence.line}): ${diagnostic.message}`
 }
 
 /**
@@ -885,3 +912,1117 @@ export function driverSchema(options?: {
 		},
 	]
 }
+
+// This workspace's root.
+export const WORKSPACE_ROOT = fileURLToPath(new URL('../', import.meta.url))
+
+// Guide fence coordinates used by the setup proof.
+export const GUIDE_LINES = [
+	'# The database guide',
+	'',
+	'```ts',
+	'const first: number = 1',
+	'```',
+	'',
+	'```ts',
+	'const second: number = 1',
+	'```',
+	'',
+]
+export const GUIDE = GUIDE_LINES.join('\n')
+export const FIRST_FENCE = 'const first: number = 1\n'
+export const SECOND_FENCE = 'const second: number = 1\n'
+export const BROKEN_FENCE = "const second: number = 'text'\n"
+
+// Schema for the transaction wrapper proof.
+export const TRANSACTION_SCHEMA: readonly TableSchema[] = [
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+		indexes: [],
+	},
+]
+
+/** Describes a temporary project and its parsed module. */
+export interface EntryModuleInterface {
+	readonly parsed: ParsedModule
+	readonly scratch: ScratchInterface
+}
+
+/** Creates a real temporary project and parse one of its modules off disk. */
+export function readEntryModule(
+	files: Readonly<Record<string, string>>,
+	entry: string,
+): EntryModuleInterface {
+	const project = tempTypeScriptProject(files)
+	const path = join(project.scratch.path, entry)
+	return {
+		parsed: readModuleStatements(path),
+		scratch: project.scratch,
+	}
+}
+
+/** Reads one module's named-export statements, in source order. */
+export function readNamedExports(
+	statements: readonly ESTree.Statement[],
+): readonly ESTree.ExportNamedDeclaration[] {
+	const named: ESTree.ExportNamedDeclaration[] = []
+	for (const statement of statements) {
+		if (statement.type === 'ExportNamedDeclaration') named.push(statement)
+	}
+	return named
+}
+
+/** Compiles one real source file at a project root and return what the compiler reported. */
+export function readDiagnostics(source: string): {
+	readonly diagnostics: readonly Diagnostic[]
+	readonly path: string
+	readonly root: string
+	readonly scratch: ScratchInterface
+} {
+	const project = tempTypeScriptProject({ 'index.ts': source })
+	const root = project.scratch.path
+	const path = join(root, 'index.ts')
+	return {
+		diagnostics: readProjectDiagnostics(project.config, [path], {}),
+		path,
+		root,
+		scratch: project.scratch,
+	}
+}
+
+/** Probes the host's temporary-directory parent through a helper that reports its own path. */
+export function readScratchParent(): string {
+	const storage = tempDatabasePath()
+	const parent = dirname(dirname(storage.path))
+	storage.cleanup()
+	return parent
+}
+
+/** Lists the scratch directories a prefix owns under a probed parent. */
+export function readScratchNames(parent: string, prefix: string): readonly string[] {
+	return readdirSync(parent).filter((name) => name.startsWith(prefix))
+}
+
+export const JSON_SCHEMA = driverSchema()
+
+/** Registers a temporary database path for teardown. */
+export function databasePath(teardown: TeardownInterface): string {
+	const { path, cleanup } = tempDatabasePath()
+	teardown.add(cleanup)
+	return path
+}
+
+/** Describes the on-disk JSON fixture bound for a test. */
+export interface JSONTestStorage {
+	readonly driver: JSONDriver
+	readonly path: string
+	readonly cleanup: () => void
+}
+
+export const SQLITE_SCHEMA = driverSchema({ indexes: [['name'], ['age', 'name']] })
+export const USERS_SQL =
+	'CREATE TABLE "users" (' +
+	'"id" TEXT NOT NULL, "name" TEXT NOT NULL, "age" INTEGER NOT NULL, ' +
+	'"active" INTEGER NOT NULL, "meta" TEXT, PRIMARY KEY ("id"))'
+export const POSTS_SQL =
+	'CREATE TABLE "posts" ("slug" TEXT NOT NULL, "title" TEXT NOT NULL, PRIMARY KEY ("slug"))'
+
+export type SQLiteDriver = ReturnType<typeof createSQLiteDriver>
+
+export async function rejectPhysicalOpen(
+	statements: readonly string[],
+	schema: readonly TableSchema[] = SQLITE_SCHEMA,
+): Promise<readonly [unknown, unknown]> {
+	const temp = tempDatabasePath()
+	const native = createSQLiteDatabase({ path: temp.path })
+	const target = createSQLiteDriver({ path: temp.path })
+	try {
+		native.connect()
+		for (const statement of statements) native.execute(statement)
+		native.close()
+		const opened = await target.open(schema).catch((caught: unknown) => caught)
+		const after = await target.keys(schema[0]?.name ?? 'missing').catch((caught: unknown) => caught)
+		return [opened, after]
+	} finally {
+		native.close()
+		await target.close()
+		temp.cleanup()
+	}
+}
+
+export async function computeSQLiteAggregate(
+	target: SQLiteDriver,
+	operation: AggregateOperation,
+	column: FieldPath,
+	input: QueryInput,
+): Promise<number | undefined> {
+	const hook = target.aggregate
+	if (hook === undefined) throw new Error('SQLiteDriver is missing its native aggregate hook')
+	return hook.call(target, 'users', operation, column, input)
+}
+
+export async function collectEngineRows(
+	target: DriverInterface,
+	input: QueryInput,
+): Promise<readonly Row[]> {
+	return applyQuery(await collect(target.scan('users')), input)
+}
+
+export async function collectSQLiteIds(
+	target: SQLiteDriver,
+	input: QueryInput,
+): Promise<readonly string[]> {
+	const rows = target.records === undefined ? [] : await target.records('users', input)
+	return rows.map((row) => String(row.id)).sort()
+}
+
+export async function collectExpectedIds(
+	target: DriverInterface,
+	input: QueryInput,
+): Promise<readonly string[]> {
+	return (await collectEngineRows(target, input)).map((row) => String(row.id)).sort()
+}
+
+export async function collectSQLiteRecords(
+	target: SQLiteDriver,
+	table: string,
+	input: QueryInput,
+): Promise<readonly Row[]> {
+	const hook = target.records
+	if (hook === undefined) throw new Error('SQLiteDriver is missing its native records hook')
+	return hook.call(target, table, input)
+}
+
+export const USERS = {
+	id: stringShape(),
+	name: stringShape(),
+	age: integerShape(),
+	score: numberShape(),
+	active: booleanShape(),
+	bio: optionalShape(stringShape()),
+	meta: jsonShape(),
+	rank: optionalShape(integerShape()),
+}
+
+export type UserRow = RowOf<typeof USERS>
+
+// Mixed-case + non-ASCII names, boundary ages (0, negative, 17/18, 65, a large
+// value), an OPTIONAL `bio` (absent on several rows rather than explicit
+// null — SQLite's decodeRow omits a NULL column on read-back, so an absent
+// field is the shape that round-trips identically on both backends), a
+// nested `meta` json value, and an OPTIONAL `rank` (indexed on the browser
+// side, absent on several rows — the lossy-pushdown reproduction).
+export const ROWS: readonly UserRow[] = [
+	{
+		id: 'u1',
+		name: 'Ada',
+		age: 36,
+		score: 91.5,
+		active: true,
+		bio: 'Computer science pioneer',
+		meta: { tags: ['math', 'logic'], info: { level: 9, ok: true } },
+		rank: 10,
+	},
+	{
+		id: 'u2',
+		name: 'ada',
+		age: 0,
+		score: 0,
+		active: false,
+		meta: { tags: [], info: { level: 0, ok: false } },
+	},
+	{
+		id: 'u3',
+		name: 'ÄPFEL',
+		age: -5,
+		score: -2.5,
+		active: true,
+		bio: 'Apples in German',
+		meta: { tags: ['fruit'], info: { level: 3, ok: true } },
+		rank: 5,
+	},
+	{
+		id: 'u4',
+		name: 'bob',
+		age: 17,
+		score: 50,
+		active: false,
+		meta: { tags: ['x'], info: { level: 1, ok: false } },
+	},
+	{
+		id: 'u5',
+		name: 'Grace',
+		age: 18,
+		score: 77.7,
+		active: true,
+		bio: 'Compiler pioneer',
+		meta: { tags: ['compiler', 'math'], info: { level: 5, ok: true } },
+		rank: 20,
+	},
+	{
+		id: 'u6',
+		name: 'Edsger',
+		age: 65,
+		score: 100,
+		active: false,
+		meta: { tags: [], info: { level: 10, ok: true } },
+	},
+	{
+		id: 'u7',
+		name: 'Marie',
+		age: 1000000,
+		score: 1e9,
+		active: true,
+		bio: 'Large age case',
+		meta: { tags: ['big'], info: { level: 2, ok: false } },
+		rank: 1,
+	},
+	// Non-BMP parity fixture (AGENTS/audit FIX 1 + FIX 8): `u8`'s name starts
+	// with a SUPPLEMENTARY-plane character (U+1F600, encoded as the UTF-16
+	// surrogate pair 😀 — lead surrogate 0xD83D), `u9`'s starts with
+	// a single BMP PRIVATE-USE character (U+E050 — code unit 0xE050). Ordered
+	// by Unicode CODE POINT (SQLite's default BINARY collation), u8 (U+1F600)
+	// sorts ABOVE u9 (U+E050); ordered by UTF-16 CODE UNIT (the core engine's
+	// `compareValues`, using JS `<`), u8's lead surrogate (0xD83D = 55357) is
+	// NUMERICALLY LESS than u9's single code unit (0xE050 = 57424), so u8
+	// sorts BELOW u9 — the exact divergence `matchesConditionExactly` / `matchesOrderExactly`
+	// now refine `text` ranges/order to avoid (FIX 1).
+	{
+		id: 'u8',
+		name: '\u{1F600}-user',
+		age: 40,
+		score: 12.5,
+		active: true,
+		meta: { tags: ['emoji'], info: { level: 4, ok: true } },
+	},
+	{
+		id: 'u9',
+		name: '-zzz',
+		age: 41,
+		score: 13.5,
+		active: false,
+		meta: { tags: ['private-use'], info: { level: 6, ok: false } },
+	},
+]
+
+export const INDEXES: IndexMap = { users: [['age'], ['name'], ['rank']] }
+
+export function memoryDatabase(): DatabaseInterface<{ readonly users: typeof USERS }> {
+	return createDatabase({
+		driver: createMemoryDriver(),
+		tables: { users: USERS },
+		indexes: INDEXES,
+	})
+}
+
+export function sqliteDatabase(): DatabaseInterface<{ readonly users: typeof USERS }> {
+	return createDatabase({
+		driver: createSQLiteDriver(),
+		tables: { users: USERS },
+		indexes: INDEXES,
+	})
+}
+
+export type UsersTable = TableInterface<UserRow>
+
+export function sortById(rows: readonly UserRow[]): readonly UserRow[] {
+	return [...rows].sort((left, right) => left.id.localeCompare(right.id))
+}
+
+// A row-returning case: `ordered` distinguishes an order-sensitive comparison
+// (compare arrays exactly) from an order-insensitive one (sort by `id` first).
+export interface RowCase {
+	readonly name: string
+	readonly ordered?: boolean
+	execute(users: UsersTable): Promise<readonly UserRow[]>
+}
+
+// A scalar-returning case (count / an aggregate) — compared directly.
+export interface ScalarCase {
+	readonly name: string
+	execute(users: UsersTable): Promise<number | undefined>
+}
+
+export const ROW_CASES: readonly RowCase[] = [
+	// ── All 15 clause operators (each its own case) ──────────────────────
+	{
+		name: 'equals',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'equals', values: [36], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'not',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'not', values: [true], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'above',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'below',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'below', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'from',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'to',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'to', values: [18], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'between',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'between', values: [0, 36], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'like',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'like', values: ['%a%'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'glob',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'glob', values: ['[A-Z]*'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'starts',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['A'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'ends',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['e'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'any',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'name',
+					operator: 'any',
+					values: ['Ada', 'Grace', 'nope'],
+					connector: 'and',
+				})
+				.collect(),
+	},
+	{
+		name: 'none',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'none', values: ['Ada', 'Grace'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'absent (rank)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'absent', values: [], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'present (rank)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'present', values: [], connector: 'and' })
+				.collect(),
+	},
+
+	// ── starts/ends case-sensitivity ─────────────────────────────────────
+	{
+		name: "starts('ada') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['ada'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "starts('Ada') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: ['Ada'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "ends('a') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['a'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "ends('A') case variation",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: ['A'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "starts('') matches every row",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'starts', values: [''], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "ends('') matches every row",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'ends', values: [''], connector: 'and' })
+				.collect(),
+	},
+
+	// ── non-ASCII like, bracket glob, non-string cells ───────────────────
+	{
+		name: "like non-ASCII pattern 'äpfel%'",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'like', values: ['äpfel%'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: "glob '[a-z]' bracket pattern (engine-literal semantics)",
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'glob', values: ['[a-z]*'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'like against a non-string (age) column',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'like', values: ['%3%'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'glob against a non-string (age) column',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'glob', values: ['*3*'], connector: 'and' })
+				.collect(),
+	},
+
+	// ── any([]) / none([]) / mixed lists / deep json equals ─────────────
+	{
+		name: 'any([]) matches nothing',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'any', values: [], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'none([]) matches everything',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'none', values: [], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'any with a mixed-type list',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'any', values: [36, 'nope', 0], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'none with a mixed-type list',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'none', values: [36, 'nope', 0], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'equals a deep matching json operand',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'meta',
+					operator: 'equals',
+					values: [{ tags: ['math', 'logic'], info: { level: 9, ok: true } }],
+					connector: 'and',
+				})
+				.collect(),
+	},
+	{
+		name: 'equals a deep non-matching json operand (different nested shape)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'meta',
+					operator: 'equals',
+					values: [{ tags: ['math', 'logic'], info: { level: 9, ok: false } }],
+					connector: 'and',
+				})
+				.collect(),
+	},
+	{
+		name: 'not a deep json operand',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'meta',
+					operator: 'not',
+					values: [{ tags: [], info: { level: 0, ok: false } }],
+					connector: 'and',
+				})
+				.collect(),
+	},
+
+	// ── range operators over the INDEXED optional `rank` column, some rows absent ──
+	{
+		name: 'rank below (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'below', values: [10], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'rank to (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'to', values: [10], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'rank from (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'from', values: [5], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'rank above (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'above', values: [5], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'rank between (with absent rows)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'between', values: [1, 10], connector: 'and' })
+				.collect(),
+	},
+
+	// ── between reversed bounds ───────────────────────────────────────────
+	{
+		name: 'between reversed bounds is empty, never throws',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'between', values: [36, 0], connector: 'and' })
+				.collect(),
+	},
+
+	// ── mismatched operand types ──────────────────────────────────────────
+	{
+		name: 'equals with a string operand on an integer column',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'equals', values: ['36'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'above with a string operand on an integer column',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: ['18'], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'equals with a number operand on a text column',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'equals', values: [36], connector: 'and' })
+				.collect(),
+	},
+
+	// ── non-BMP text RANGE parity (FIX 1 — code point vs. code unit) ─────
+	// Threshold '' sits between u8's lead surrogate (0xD83D) and u9's
+	// code unit (0xE050): a code-unit (engine) comparison puts u8 BELOW the
+	// threshold while a code-point (SQLite BINARY) comparison would put it
+	// ABOVE — `matchesConditionExactly` now refines these through the engine so both
+	// backends agree.
+	{
+		name: 'above on non-BMP text (name) — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'above', values: [''], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'below on non-BMP text (name) — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'below', values: [''], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'from on non-BMP text (name) — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'from', values: [''], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'to on non-BMP text (name) — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'to', values: [''], connector: 'and' })
+				.collect(),
+	},
+	{
+		name: 'between on non-BMP text (name) — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({
+					column: 'name',
+					operator: 'between',
+					values: ['\u{10000}', ''],
+					connector: 'and',
+				})
+				.collect(),
+	},
+
+	// ── ordering ──────────────────────────────────────────────────────────
+	{
+		name: 'ascending on text (name)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'name', direction: 'ascending' }).collect(),
+	},
+	{
+		name: 'descending on text (name)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'name', direction: 'descending' }).collect(),
+	},
+	{
+		name: 'ascending on non-BMP text (name) with limit — code point vs. code unit divergence',
+		ordered: true,
+		execute: (users) =>
+			users.query().order({ column: 'name', direction: 'ascending' }).limit(4).collect(),
+	},
+	{
+		name: 'descending on non-BMP text (name) with limit — code point vs. code unit divergence',
+		ordered: true,
+		execute: (users) =>
+			users.query().order({ column: 'name', direction: 'descending' }).limit(4).collect(),
+	},
+	{
+		name: 'ascending on integer (age)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'age', direction: 'ascending' }).collect(),
+	},
+	{
+		name: 'descending on integer (age)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'age', direction: 'descending' }).collect(),
+	},
+	{
+		name: 'ascending on boolean (active)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'active', direction: 'ascending' }).collect(),
+	},
+	{
+		name: 'descending on boolean (active)',
+		ordered: true,
+		execute: (users) =>
+			users.query().order({ column: 'active', direction: 'descending' }).collect(),
+	},
+	{
+		name: 'ascending on the json column (meta)',
+		ordered: true,
+		execute: (users) => users.query().order({ column: 'meta', direction: 'ascending' }).collect(),
+	},
+	{
+		name: 'multi-term order (active then age)',
+		ordered: true,
+		execute: (users) =>
+			users
+				.query()
+				.order({ column: 'active', direction: 'ascending' })
+				.order({ column: 'age', direction: 'ascending' })
+				.collect(),
+	},
+	{
+		name: 'order + limit + offset paging',
+		ordered: true,
+		execute: (users) =>
+			users.query().order({ column: 'age', direction: 'ascending' }).offset(2).limit(3).collect(),
+	},
+
+	// ── stream() with conditions + offset + limit, order-insensitive ─────
+	{
+		name: 'stream with conditions + offset + limit',
+		execute: async (users) => {
+			const collected: UserRow[] = []
+			for await (const row of users
+				.query()
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
+				.offset(1)
+				.limit(2)
+				.stream()) {
+				collected.push(row)
+			}
+			return collected
+		},
+	},
+
+	// ── records() with a prebuilt QueryInput ────────────────────────────────
+	{
+		name: 'records() with a prebuilt QueryInput',
+		ordered: true,
+		execute: (users) => {
+			const input: QueryInput = {
+				conditions: [{ column: 'active', operator: 'equals', values: [true], connector: 'and' }],
+				order: [{ column: 'age', direction: 'ascending' }],
+			}
+			return users.records(input)
+		},
+	},
+]
+
+export const SCALAR_CASES: readonly ScalarCase[] = [
+	{ name: 'aggregate count (age, no conditions)', execute: (users) => users.query().count() },
+	{
+		name: 'aggregate sum (age, no conditions)',
+		execute: (users) => users.query().aggregate('sum', 'age'),
+	},
+	{
+		name: 'aggregate average (age, no conditions)',
+		execute: (users) => users.query().aggregate('average', 'age'),
+	},
+	{
+		name: 'aggregate minimum (age, no conditions)',
+		execute: (users) => users.query().aggregate('minimum', 'age'),
+	},
+	{
+		name: 'aggregate maximum (age, no conditions)',
+		execute: (users) => users.query().aggregate('maximum', 'age'),
+	},
+	{
+		name: 'aggregate sum (score, filtered by active)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
+				.aggregate('sum', 'score'),
+	},
+	{
+		name: 'aggregate average (score, filtered by active)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'active', operator: 'equals', values: [true], connector: 'and' })
+				.aggregate('average', 'score'),
+	},
+	{
+		name: 'aggregate sum over the TEXT name column (parseNumber semantics)',
+		execute: (users) => users.query().aggregate('sum', 'name'),
+	},
+	{
+		name: 'aggregate count over zero matching rows',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [1e9], connector: 'and' })
+				.count(),
+	},
+	{
+		name: 'aggregate sum over zero matching rows',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'age', operator: 'above', values: [1e9], connector: 'and' })
+				.aggregate('sum', 'age'),
+	},
+	{
+		name: 'rank count over a from-filtered range (indexed optional column)',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'rank', operator: 'from', values: [5], connector: 'and' })
+				.count(),
+	},
+	{
+		name: 'count over a non-BMP text (name) range — code point vs. code unit divergence',
+		execute: (users) =>
+			users
+				.query()
+				.condition({ column: 'name', operator: 'above', values: [''], connector: 'and' })
+				.count(),
+	},
+]
+
+export const COMPILER_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
+	],
+	indexes: [],
+}
+
+export function compile(input: QueryInput): {
+	readonly sql: string
+	readonly parameters: readonly unknown[]
+} {
+	const result = compileQuerySQL(input, COMPILER_SCHEMA)
+	return { sql: result.sql, parameters: result.parameters }
+}
+
+export const BOOLEAN: ColumnSchema = {
+	name: 'value',
+	storage: 'boolean',
+	optional: false,
+	nullable: false,
+}
+export const JSON_COLUMN: ColumnSchema = {
+	name: 'value',
+	storage: 'json',
+	optional: false,
+	nullable: false,
+}
+export const INTEGER: ColumnSchema = {
+	name: 'value',
+	storage: 'integer',
+	optional: false,
+	nullable: false,
+}
+export const REAL: ColumnSchema = {
+	name: 'value',
+	storage: 'real',
+	optional: false,
+	nullable: false,
+}
+export const TEXT: ColumnSchema = {
+	name: 'value',
+	storage: 'text',
+	optional: false,
+	nullable: false,
+}
+export const BLOB: ColumnSchema = {
+	name: 'value',
+	storage: 'blob',
+	optional: false,
+	nullable: false,
+}
+
+export const CODEC_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
+	],
+	indexes: [],
+}
+
+export const CONDITION_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: true },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: true },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
+	],
+	indexes: [],
+}
+
+export const ORDER_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: true },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
+	],
+	indexes: [],
+}
+
+export const QUERY_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'meta', storage: 'json', optional: false, nullable: true },
+	],
+	indexes: [],
+}
+
+export const AGGREGATE_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'score', storage: 'real', optional: true, nullable: false },
+		{ name: 'limit', storage: 'integer', optional: false, nullable: true },
+		{ name: 'rank', storage: 'integer', optional: true, nullable: true },
+	],
+	indexes: [],
+}
+
+export const INDEXED_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'name', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+	],
+	indexes: [['name'], ['name', 'age']],
+}
+
+export const METRICS = {
+	id: stringShape(),
+	value: optionalShape(nullableShape(numberShape())),
+}
+
+export const ACTIVE: QueryInput = {
+	conditions: [{ column: 'active', operator: 'equals', values: [true], connector: 'and' }],
+}
+
+export const NONE: QueryInput = {
+	conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
+}
+
+export const META_SCHEMA: readonly TableSchema[] = [
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'name', storage: 'text', optional: false, nullable: false },
+			{ name: 'age', storage: 'integer', optional: false, nullable: false },
+			{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+			{ name: 'meta', storage: 'json', optional: false, nullable: true },
+		],
+		indexes: [],
+	},
+]
+
+export const META_ROWS = [
+	{ id: 'u1', name: 'Ada', age: 36, active: true, meta: { score: 9 } },
+	{ id: 'u2', name: 'Alan', age: 41, active: false, meta: { score: 3 } },
+	{ id: 'u3', name: 'Edsger', age: 50, active: true, meta: { score: 7 } },
+	{ id: 'u4', name: 'Grace', age: 22, active: false, meta: { score: 5 } },
+]
+
+export const NULL_SCHEMA: readonly TableSchema[] = [
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'rank', storage: 'integer', optional: true, nullable: true },
+			{ name: 'meta', storage: 'json', optional: true, nullable: true },
+		],
+		indexes: [],
+	},
+]
+
+export const NULL_ROWS = [
+	{ id: 'u1', rank: 10, meta: { note: null, tag: 'a' } },
+	{ id: 'u2', meta: { note: null, tag: 'b' } },
+	{ id: 'u3', rank: 20, meta: { tag: 'c' } },
+	{ id: 'u4' },
+]
+
+export const REFINE_SCHEMA: readonly TableSchema[] = [
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'name', storage: 'text', optional: false, nullable: false },
+			{ name: 'rank', storage: 'integer', optional: false, nullable: true },
+		],
+		indexes: [],
+	},
+]
