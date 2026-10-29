@@ -1240,6 +1240,37 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		await driver.value.open(tableSchemas('users'))
 	})
 
+	it('rewrites every stored row in cursor order during column removal', async () => {
+		// Base: c8b95c5:src/browser/drivers/IndexedDBDriver.ts:749-764.
+		const deployed: TableSchema = {
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'name', storage: 'text', optional: false, nullable: false },
+				{ name: 'legacy', storage: 'boolean', optional: false, nullable: true },
+			],
+			indexes: [],
+		}
+		await driver.value.open([deployed])
+		const rows = Array.from({ length: 128 }, (_, index) => ({
+			id: `u${String(index).padStart(3, '0')}`,
+			name: `Person ${index}`,
+			legacy: true,
+		}))
+		for (const row of rows.toReversed()) await driver.value.write('users', row.id, row)
+		await driver.value.migrate?.({
+			plan: {
+				from: 0,
+				to: 1,
+				steps: [{ operation: 'column.remove', table: 'users', column: 'legacy' }],
+			},
+		})
+		expect(await collect(driver.value.scan('users'))).toEqual(
+			rows.map((row) => ({ id: row.id, name: row.name })),
+		)
+	})
+
 	it('a column.remove migration rewrites stored rows (verified post-reconnect)', async () => {
 		const deployed: TableSchema = {
 			name: 'users',

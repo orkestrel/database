@@ -10,7 +10,6 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type {
-	IndexedDBCursorInterface,
 	IndexedDBDatabaseInterface,
 	IndexedDBStoreInterface,
 	IndexedDBTransactionStoreInterface,
@@ -47,6 +46,7 @@ import {
 	selectPlan,
 } from '../helpers.js'
 import { METADATA_STORE } from '../constants.js'
+import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
 
 /**
  * Implements the {@link DriverInterface} over IndexedDB — the persistent browser backend,
@@ -729,7 +729,21 @@ export class IndexedDBDriver implements DriverInterface {
 					break
 				case 'column.remove': {
 					const store = context.stores.store(step.table)
-					await this.#rewriteCursor(await store.cursor(), step)
+					for await (const cursor of new IndexedDBMigrationIterator(store)) {
+						const row = cursor.value
+						if (row === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
+								table: step.table,
+							})
+						}
+						const [migrated] = migrateRows([row], [step])
+						if (migrated === undefined) {
+							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
+								table: step.table,
+							})
+						}
+						await cursor.update(migrated)
+					}
 					break
 				}
 				case 'column.add':
@@ -745,27 +759,6 @@ export class IndexedDBDriver implements DriverInterface {
 				'metadata',
 			)
 		}
-	}
-
-	async #rewriteCursor(
-		cursor: IndexedDBCursorInterface | null,
-		step: Extract<MigrationStep, { readonly operation: 'column.remove' }>,
-	): Promise<void> {
-		if (cursor === null) return
-		const row = cursor.value
-		if (row === undefined) {
-			throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
-				table: step.table,
-			})
-		}
-		const [migrated] = migrateRows([row], [step])
-		if (migrated === undefined) {
-			throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
-				table: step.table,
-			})
-		}
-		await cursor.update(migrated)
-		return this.#rewriteCursor(await cursor.continue(), step)
 	}
 
 	async #bootstrap(): Promise<readonly [readonly string[], number, DriverMetadata | undefined]> {

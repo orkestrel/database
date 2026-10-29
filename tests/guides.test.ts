@@ -35,6 +35,7 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class Cursor',
 	'class DatabaseContext',
 	'class DatabaseTransaction',
+	'class IndexedDBMigrationIterator',
 	'class Query',
 	'class ScopedIterator',
 	'class Table',
