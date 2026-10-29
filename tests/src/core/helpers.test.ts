@@ -358,6 +358,14 @@ describe('matchesWildcardSegment', () => {
 })
 
 describe('matchesWildcardPattern — the linear, ReDoS-safe engine', () => {
+	it('reads a wildcard char longer or shorter than one unit as a literal, as the base did', () => {
+		// Base c8b95c5 src/core/helpers.ts:277 compared one pattern unit with `any`, so `XX` never matched.
+		expect(matchesWildcardPattern('ab', 'aXXb', 'XX', '?', false)).toBe(false)
+		expect(matchesWildcardPattern('aXXb', 'aXXb', 'XX', '?', false)).toBe(true)
+		expect(matchesWildcardPattern('ab', 'ab', '', '?', false)).toBe(true)
+		expect(matchesWildcardPattern('a', 'ab', '', '?', false)).toBe(false)
+	})
+
 	it('matches generically with the injected wildcard chars + fold flag', () => {
 		expect(matchesWildcardPattern('abc', 'a%', '%', '_', false)).toBe(true)
 		expect(matchesWildcardPattern('ABC', 'a%', '%', '_', true)).toBe(true) // fold

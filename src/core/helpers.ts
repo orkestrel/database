@@ -297,7 +297,9 @@ export function matchesWildcardPattern(
 		)
 	}
 	const haystack = fold ? value.toLowerCase() : value
-	const segments = (fold ? pattern.toLowerCase() : pattern).split(any)
+	const needle = fold ? pattern.toLowerCase() : pattern
+	// Only a one-unit wildcard ever equalled a pattern unit, so any other `any` stays literal.
+	const segments = any.length === 1 ? needle.split(any) : [needle]
 	const head = segments[0] ?? ''
 	const tail = segments.at(-1) ?? ''
 	if (segments.length === 1) {
