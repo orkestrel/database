@@ -73,7 +73,7 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Factories
 
-| API                     | Kind     | Summary                                                                                                                               |
+| Name                    | Kind     | Summary                                                                                                                               |
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `createDatabase`        | function | Creates a database over a driver and a declared `tables` schema.                                                                      |
 | `createMemoryDriver`    | function | Creates the in-memory reference `DriverInterface`.                                                                                    |
@@ -83,7 +83,7 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Classes
 
-| Class               | Kind  | Summary                                                                                                                                                |
+| Name                | Kind  | Summary                                                                                                                                                |
 | ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Database`          | class | Exposes a typed view over one shared internal lifecycle and storage context.                                                                           |
 | `DriverIterator`    | class | Forms the internal continuation boundary for a root driver async iterator.                                                                             |
@@ -97,7 +97,7 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Server
 
-| API                          | Kind     | Summary                                                                                                                                                                                                                                                                                                                                                                      |
+| Name                         | Kind     | Summary                                                                                                                                                                                                                                                                                                                                                                      |
 | ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `METADATA_TABLE`             | const    | Names the reserved metadata table the `SQLiteDriver` creates on `open` to persist its stamped `DriverMetadata` (`version` + declared schema JSON) — the SQLite realization of the `metadata` / `stamp` driver hooks.                                                                                                                                                         |
 | `matchesConditionExactly`    | function | Reports whether one `Condition` compiles to SQL that is provably identical to the core engine's `matchesCondition` for every value its column's declared type can store.                                                                                                                                                                                                     |
@@ -115,7 +115,7 @@ Pure, server-only functions that turn a core `QueryInput` / `TableSchema` into
 parameterized SQL text — the native-query payoff for a SQLite-backed driver.
 None of these import a SQLite package; they speak strings and values only.
 
-| API                       | Kind     | Summary                                                                                                                                                                                                                                                                                                                          |
+| Name                      | Kind     | Summary                                                                                                                                                                                                                                                                                                                          |
 | ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inferValueStorage`       | function | Reads the storage type a nested (`json_extract`) operand encodes as from its runtime value, never as `json`.                                                                                                                                                                                                                     |
 | `compileJSONTypeSQL`      | function | Compiles a nested `FieldPath` to the `json_type(<col>, <path>)` SQL expression — the `compileFieldSQL` `json_extract` sibling used to tell a present JSON `null` apart from an absent path (both read back as SQL `NULL` through `json_extract`, but `json_type` reports `'null'` for the former and SQL `NULL` for the latter). |
@@ -146,7 +146,7 @@ Pure functions behind the IndexedDB driver's key-range pushdown planner — a
 candidate superset the core engine then refines to the exact result, never
 lossy.
 
-| API                        | Kind     | Summary                                                                                                                                                                                              |
+| Name                       | Kind     | Summary                                                                                                                                                                                              |
 | -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `selectPlan`               | function | Plans an IndexedDB read for a `QueryInput` — picks the index (or the primary store) and `IDBKeyRange` to narrow by, falling back to a full scan.                                                     |
 | `conditionToRange`         | function | Translates one `Condition` to the `IDBKeyRange` it maps to, when its operator is one of the exact key comparisons over scalar operands; otherwise returns `undefined`.                               |
@@ -159,7 +159,7 @@ lossy.
 
 ### Errors
 
-| API               | Kind     | Summary                                               |
+| Name              | Kind     | Summary                                               |
 | ----------------- | -------- | ----------------------------------------------------- |
 | `DatabaseError`   | class    | Represents an error thrown by the database layer.     |
 | `isDatabaseError` | function | Narrows an unknown caught value to a `DatabaseError`. |
@@ -176,7 +176,7 @@ and plain objects carrying only the brand.
 The portable semantics every backend shares — pure, total functions the
 driver never re-implements.
 
-| Helper                 | Kind     | Summary                                                                                                                                                                |
+| Name                   | Kind     | Summary                                                                                                                                                                |
 | ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `compareValues`        | function | Compares two arbitrary values under one total order — the comparator behind sorting and the range operators.                                                           |
 | `matchesCondition`     | function | Evaluates one `Condition` against a row — the per-operator predicate.                                                                                                  |
@@ -201,7 +201,7 @@ row-sized argument list.
 
 ### Abort
 
-| API          | Kind     | Summary                                                                                                                   |
+| Name         | Kind     | Summary                                                                                                                   |
 | ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `checkAbort` | function | Throws when an `AbortSignal` has fired — the shared abort gate checked at operation boundaries and between streamed rows. |
 
@@ -211,7 +211,7 @@ Caller-driven schema migration — a pure structural diff plus a pure row
 transform. Versioning drivers persist reconciliation metadata through the paired
 `metadata` / `stamp` hooks.
 
-| API                      | Kind     | Summary                                                                         |
+| Name                     | Kind     | Summary                                                                         |
 | ------------------------ | -------- | ------------------------------------------------------------------------------- |
 | `planMigration`          | function | Diffs a deployed and a declared table set structurally into a `Migration` plan. |
 | `migrateRows`            | function | Applies one table's `MigrationStep`s to its rows — a pure row transform.        |
@@ -220,7 +220,7 @@ transform. Versioning drivers persist reconciliation metadata through the paired
 
 ### Conformance
 
-| API             | Kind     | Summary                                                                                                                                                                                                                                                             |
+| Name            | Kind     | Summary                                                                                                                                                                                                                                                             |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `conformDriver` | function | Runs the driver-conformance battery, throwing on the first violated invariant — the fail-fast entry point most callers (test setup, CI smoke checks) want.                                                                                                          |
 | `scanDriver`    | function | Walks the driver-conformance battery against a fresh `DriverInterface` per phase, yielding one `ConformanceFinding` per violated invariant — the shared invariant suite every backend (in-memory, SQLite, IndexedDB) must uphold to be a drop-in `DriverInterface`. |
@@ -230,7 +230,7 @@ transform. Versioning drivers persist reconciliation metadata through the paired
 
 Pure helpers behind the query engine's pattern matching.
 
-| API                      | Kind     | Summary                                                                                                                                         |
+| Name                     | Kind     | Summary                                                                                                                                         |
 | ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cloneDriverMetadata`    | function | Clones unknown driver metadata into a distinct deeply frozen snapshot.                                                                          |
 | `matchesWildcardPattern` | function | Matches a value against a wildcard pattern in linear time — the shared, ReDoS-safe engine behind `matchesLikePattern` and `matchesGlobPattern`. |
@@ -253,7 +253,7 @@ Pure helpers behind the query engine's pattern matching.
 
 A `Shape` cell holds the constant's declared type.
 
-| Constant                   | Kind  | Shape                    | Summary                                                                                                       |
+| Name                       | Kind  | Shape                    | Summary                                                                                                       |
 | -------------------------- | ----- | ------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_PRIMARY`          | const | `string`                 | Supplies the primary-key column, `'id'`, assumed when `PrimaryMap` does not name one.                         |
 | `MAX_PATTERN_LENGTH`       | const | `number`                 | Sets the longest `LIKE` / `GLOB` pattern the wildcard matcher accepts, 1024 characters, before rejecting it.  |
@@ -265,7 +265,7 @@ A `Shape` cell holds the constant's declared type.
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
-| Type                       | Kind      | Shape                                                                                                                                                                                                                                                                 | Summary                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Name                       | Kind      | Shape                                                                                                                                                                                                                                                                 | Summary                                                                                                                                                                                                                                                                                                                                                                                                         |
 | -------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Key`                      | type      | `string \| number`                                                                                                                                                                                                                                                    | Represents a primary key — the value identifying a row within its table.                                                                                                                                                                                                                                                                                                                                        |
 | `KeyFunction`              | type      | `() => Key`                                                                                                                                                                                                                                                           | Represents a key-generating function.                                                                                                                                                                                                                                                                                                                                                                           |
