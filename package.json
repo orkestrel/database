@@ -92,10 +92,10 @@
 		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.19",
-		"@orkestrel/emitter": "^0.0.12",
-		"@orkestrel/indexeddb": "^0.0.14",
-		"@orkestrel/sqlite": "^0.0.14"
+		"@orkestrel/contract": "^0.0.20",
+		"@orkestrel/emitter": "^0.0.13",
+		"@orkestrel/indexeddb": "^0.0.15",
+		"@orkestrel/sqlite": "^0.0.15"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.60.0",
@@ -103,7 +103,7 @@
 		"@orkestrel/guide": "^0.0.25",
 		"@orkestrel/probe": "^0.0.25",
 		"@orkestrel/scaffold": "^0.0.113",
-		"@orkestrel/test": "^0.0.30",
+		"@orkestrel/test": "^0.0.31",
 		"@types/node": "^26.6.6",
 		"@vitest/browser-playwright": "^5.0.5",
 		"oxfmt": "^0.75.0",
