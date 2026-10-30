@@ -406,6 +406,8 @@ export function probe(override?: UserConfig): UserConfig {
 export default defineConfig({
 	resolve,
 	test: {
+		// Vitest 5.0.5 hands cached code to the module runner as bytes, which breaks stack mapping.
+		fsModuleCache: false,
 		projects: [
 			srcCore,
 			srcBrowser,

@@ -891,6 +891,26 @@ export const POLICY_MODULE_GLOB = `{app,src}/**/*.{${POLICY_MODULE_EXTENSIONS.jo
 /** Matches the tests-axis setup module population available to mirrored tests. */
 export const POLICY_TESTS_MODULE_GLOB = `tests/**/${POLICY_TESTS_MODULE_PREFIX}*.ts`
 
+/**
+ * Lists the root setup modules a workspace authors; scaffold owns `tests/setupPolicy.ts` and
+ * `tests/setupDistribution.ts` beside them.
+ */
+export const POLICY_SETUP_MODULES: readonly string[] = Object.freeze([
+	'tests/setup.ts',
+	'tests/setupServer.ts',
+	'tests/setupBrowser.ts',
+	'tests/setupStyles.ts',
+	'tests/setupStudy.ts',
+	'tests/setupService.ts',
+	'tests/setupGlobal.ts',
+])
+
+/** Names the correction a tests-tree module outside the root setup modules receives. */
+export const POLICY_INFRASTRUCTURE_MESSAGE = `test infrastructure lives only in ${POLICY_SETUP_MODULES.join(', ')}: move this module's declarations into the one its environment names, or under a fixtures/ directory when a test runs it as its own entry`
+
+/** Matches every TypeScript module the tests tree holds. */
+export const POLICY_TESTS_SOURCE_GLOB = 'tests/**/*.{ts,mts,cts,tsx}'
+
 /** Matches the mirrored module-test population inspected under either workspace axis. */
 export const POLICY_TEST_GLOB = 'tests/{app,src}/**/*.test.ts'
 
@@ -1263,7 +1283,11 @@ export function inspectPolicyMirrors(root: string): readonly PolicyViolation[] {
 		...globSync(POLICY_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
 		...globSync(POLICY_TESTS_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
 	])
-	return [...inspectPolicyMirrorPaths(tests, modules), ...inspectPolicySetup(root)]
+	return [
+		...inspectPolicyMirrorPaths(tests, modules),
+		...inspectPolicySetup(root),
+		...inspectPolicyInfrastructure(root),
+	]
 }
 
 /**
@@ -1312,6 +1336,8 @@ export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
 				? []
 				: [createPolicyViolation('mirror', path, `setup proof requires its module: ${module}`)]
 		}
+		// A setup-named module outside the canon's set is the placement inspector's finding alone.
+		if (!POLICY_SETUP_MODULES.includes(path) && path !== DISTRIBUTION_SETUP_PATH) return []
 		return /^export /m.test(readFileSync(join(root, path), 'utf8')) &&
 			!paths.has(path.replace(/\.ts$/u, '.test.ts')) &&
 			!imports.has(path)
@@ -1324,6 +1350,46 @@ export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
 				]
 			: []
 	})
+}
+
+/**
+ * Checks whether a tests-tree module sits where test infrastructure may live.
+ *
+ * @param path - The workspace-relative module path.
+ * @param root - The workspace root whose manifest determines harness ownership.
+ * @returns True if the module is a test, a bench, a declaration file, a root setup module the
+ * canon names, a scaffold-owned module, or a file under a `fixtures/` directory; false otherwise.
+ * @example
+ * ```ts
+ * matchesPolicyInfrastructure('tests/setupServer.ts', root) // true
+ * matchesPolicyInfrastructure('tests/setupConformance.ts', root) // false
+ * ```
+ */
+export function matchesPolicyInfrastructure(path: string, root: string): boolean {
+	const normalized = normalizePolicyPath(path)
+	return (
+		/\.(?:test|bench)\.ts$/u.test(normalized) ||
+		/\.d\.[cm]?ts$/u.test(normalized) ||
+		POLICY_SETUP_MODULES.includes(normalized) ||
+		normalized === DISTRIBUTION_SETUP_PATH ||
+		matchesScaffoldSetup(normalized, root) ||
+		normalized.split('/').includes('fixtures')
+	)
+}
+
+/**
+ * Inspects the tests tree for test infrastructure outside the root setup modules the canon names.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns One mirror violation per misplaced module, in path order.
+ */
+export function inspectPolicyInfrastructure(root: string): readonly PolicyViolation[] {
+	return globSync(POLICY_TESTS_SOURCE_GLOB, { cwd: root })
+		.map(normalizePolicyPath)
+		.filter((path) => !path.split('/').includes('node_modules'))
+		.sort()
+		.filter((path) => !matchesPolicyInfrastructure(path, root))
+		.map((path) => createPolicyViolation('mirror', path, POLICY_INFRASTRUCTURE_MESSAGE))
 }
 
 /**
@@ -3936,11 +4002,11 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		label: 'rejects an exporting setup module without proof',
 		membership: 'target-owned exporting root setup modules',
 		rule: 'mirror',
-		files: [{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' }],
+		files: [{ path: 'tests/setupStyles.ts', content: 'export const STYLES = 1\n' }],
 		violations: [
 			{
 				rule: 'mirror',
-				path: 'tests/setupCanvas.ts',
+				path: 'tests/setupStyles.ts',
 				message:
 					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
 			},
@@ -3950,19 +4016,19 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		label: 'admits a non-exporting setup module without proof',
 		membership: 'root setup modules without exports',
 		rule: 'mirror',
-		files: [{ path: 'tests/setupCanvas.ts', content: 'const canvas = 1\nvoid canvas\n' }],
+		files: [{ path: 'tests/setupStyles.ts', content: 'const canvas = 1\nvoid canvas\n' }],
 		violations: [],
 	},
 	{
 		label: 'rejects a setup proof without its module',
 		membership: 'target-owned root setup proofs',
 		rule: 'mirror',
-		files: [{ path: 'tests/setupCanvas.test.ts', content: '' }],
+		files: [{ path: 'tests/setupStyles.test.ts', content: '' }],
 		violations: [
 			{
 				rule: 'mirror',
-				path: 'tests/setupCanvas.test.ts',
-				message: 'setup proof requires its module: tests/setupCanvas.ts',
+				path: 'tests/setupStyles.test.ts',
+				message: 'setup proof requires its module: tests/setupStyles.ts',
 			},
 		],
 	},
@@ -3971,9 +4037,9 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		membership: 'root setup modules with shared proof imports',
 		rule: 'mirror',
 		files: [
-			{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' },
+			{ path: 'tests/setupStyles.ts', content: 'export const STYLES = 1\n' },
 			{ path: 'tests/setup.ts', content: '' },
-			{ path: 'tests/setup.test.ts', content: "import { CANVAS } from './setupCanvas.js'\n" },
+			{ path: 'tests/setup.test.ts', content: "import { STYLES } from './setupStyles.js'\n" },
 		],
 		violations: [],
 	},
@@ -3982,17 +4048,17 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		membership: 'exporting root setup modules named only by comments',
 		rule: 'mirror',
 		files: [
-			{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' },
+			{ path: 'tests/setupStyles.ts', content: 'export const STYLES = 1\n' },
 			{ path: 'tests/setup.ts', content: '' },
 			{
 				path: 'tests/setup.test.ts',
-				content: "/*\nimport { CANVAS } from './setupCanvas.js'\n*/\nexport {}\n",
+				content: "/*\nimport { STYLES } from './setupStyles.js'\n*/\nexport {}\n",
 			},
 		],
 		violations: [
 			{
 				rule: 'mirror',
-				path: 'tests/setupCanvas.ts',
+				path: 'tests/setupStyles.ts',
 				message:
 					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
 			},
@@ -4028,6 +4094,75 @@ export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
 			},
 		],
+	},
+])
+
+/** Lists tests-tree placement controls and their expected mirror readings. */
+export const INFRASTRUCTURE_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects a root setup module outside the canon names',
+		membership: 'root setup modules the canon does not name',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupCanvas.ts', content: 'const canvas = 1\nvoid canvas\n' }],
+		violations: [
+			{ rule: 'mirror', path: 'tests/setupCanvas.ts', message: POLICY_INFRASTRUCTURE_MESSAGE },
+		],
+	},
+	{
+		label: 'rejects a helper module inside the mirrored tree',
+		membership: 'non-test modules beneath tests outside the root setup modules',
+		rule: 'mirror',
+		files: [{ path: 'tests/src/core/suite.ts', content: '' }],
+		violations: [
+			{ rule: 'mirror', path: 'tests/src/core/suite.ts', message: POLICY_INFRASTRUCTURE_MESSAGE },
+		],
+	},
+	{
+		label: 'admits the canon setup modules, a bench, a declaration file, and a fixture entry',
+		membership: 'modules the tests tree may hold',
+		rule: 'mirror',
+		files: [
+			{ path: 'tests/setupServer.ts', content: 'const server = 1\nvoid server\n' },
+			{ path: 'tests/setupBrowser.ts', content: 'const browser = 1\nvoid browser\n' },
+			{ path: 'tests/src/core/helpers.bench.ts', content: '' },
+			{ path: 'tests/env.d.ts', content: '' },
+			{ path: 'tests/src/server/fixtures/child.ts', content: '' },
+		],
+		violations: [],
+	},
+	{
+		label: 'reports an exporting setup module outside the canon names once',
+		membership: 'exporting root setup modules the canon does not name',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' }],
+		violations: [
+			{ rule: 'mirror', path: 'tests/setupCanvas.ts', message: POLICY_INFRASTRUCTURE_MESSAGE },
+		],
+	},
+	{
+		label: 'reports an exporting setup module outside the canon names once in a private workspace',
+		membership: 'exporting root setup modules the canon does not name, private workspace',
+		rule: 'mirror',
+		files: [
+			{ path: 'package.json', content: '{"private":true}\n' },
+			{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' },
+		],
+		violations: [
+			{ rule: 'mirror', path: 'tests/setupCanvas.ts', message: POLICY_INFRASTRUCTURE_MESSAGE },
+		],
+	},
+	{
+		label: 'admits an exporting setup-named declaration file and bench',
+		membership: 'declaration files and benches whose names open with setup',
+		rule: 'mirror',
+		files: [
+			{
+				path: 'tests/setupTypes.d.ts',
+				content: 'export interface Shape {\n\treadonly value: number\n}\n',
+			},
+			{ path: 'tests/setupTiming.bench.ts', content: 'export const TIMING = 1\n' },
+		],
+		violations: [],
 	},
 ])
 

@@ -906,6 +906,12 @@
 					}
 				]
 			}
+		},
+		{
+			"files": ["tests/src/**/*.test.ts", "tests/app/**/*.test.ts", "tests/setup*.test.ts"],
+			"rules": {
+				"policy/no-test-helper": "error"
+			}
 		}
 	]
 }

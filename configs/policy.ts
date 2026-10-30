@@ -322,6 +322,16 @@ export const POLICY_NESTED_GLOBS: readonly string[] = Object.freeze(
 )
 
 /**
+ * Matches the lint population the test-helper rule runs over, as the Oxlint configuration declares
+ * it: the mirrored test files and the root setup proofs.
+ */
+export const POLICY_TEST_GLOBS: readonly string[] = Object.freeze([
+	'tests/src/**/*.test.ts',
+	'tests/app/**/*.test.ts',
+	'tests/setup*.test.ts',
+])
+
+/**
  * Matches the lint population the skill-script rules run over, as the Oxlint configuration declares
  * it.
  */
@@ -1225,6 +1235,22 @@ export function reportData(context: PolicyContext, node: PolicyExpression): void
 	}
 }
 
+/** Reports a module-scope function, class, or function-valued binding a test file declares. */
+export function reportTestHelper(context: PolicyContext, node: PolicyExpression): void {
+	if (!isPolicyTop(node)) return
+	if (node.type !== 'VariableDeclaration') {
+		context.report({ node, messageId: 'helper' })
+		return
+	}
+	for (const declarator of node.declarations ?? []) {
+		const init = declarator.init
+		if (init === undefined || init === null) continue
+		if (isPolicyFunction(init) || init.type === 'ClassExpression') {
+			context.report({ node: declarator, messageId: 'helper' })
+		}
+	}
+}
+
 /** Reports module function syntax outside a function-kind file. */
 export function reportFunction(context: PolicyContext, node: PolicyExpression): void {
 	if (isPolicyAmbient(context.filename)) return
@@ -1827,6 +1853,28 @@ export const MUTABLE_RULE: PolicyRuleInterface = {
 	},
 }
 
+/** Bans a module-scope function, class, or fixture factory in a mirrored test file or setup proof. */
+export const HELPER_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow a module-scope function, class, or function-valued binding in a test file; shared test infrastructure lives in the root setup modules.',
+		},
+		messages: {
+			helper:
+				'Move this declaration into the root setup module its environment names (tests/setup.ts, tests/setupServer.ts, or tests/setupBrowser.ts), export it, and import it; a test file imports shared infrastructure and declares none of its own.',
+		},
+	},
+	create(context) {
+		return {
+			FunctionDeclaration: (node) => reportTestHelper(context, node),
+			ClassDeclaration: (node) => reportTestHelper(context, node),
+			VariableDeclaration: (node) => reportTestHelper(context, node),
+		}
+	},
+}
+
 /** Bans a comment carrying a term the substitution table bans unconditionally. */
 export const TERM_RULE: PolicyRuleInterface = {
 	meta: {
@@ -1870,5 +1918,6 @@ export default {
 		'no-banned-term': TERM_RULE,
 		'no-malformed-script': SCRIPT_RULE,
 		'no-mutable-property': MUTABLE_RULE,
+		'no-test-helper': HELPER_RULE,
 	},
 }

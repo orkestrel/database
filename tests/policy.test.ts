@@ -36,6 +36,8 @@ import {
 	POLICY_SURFACE_CATALOG,
 	POLICY_CONTROLS,
 	SETUP_POLICY_CONTROLS,
+	INFRASTRUCTURE_POLICY_CONTROLS,
+	POLICY_INFRASTRUCTURE_MESSAGE,
 	POLICY_MIRROR_PATTERN,
 	POLICY_SUPPRESSION_DIRECTIVE,
 	POLICY_TERM_FILE,
@@ -68,6 +70,16 @@ import {
 
 describe('root setup mirror controls', () => {
 	for (const control of SETUP_POLICY_CONTROLS) {
+		it(`${control.label} [membership: ${control.membership}]`, () => {
+			expect(
+				inspectPolicyControl(control).filter((violation) => violation.rule === 'mirror'),
+			).toEqual(control.violations)
+		})
+	}
+})
+
+describe('tests-tree placement controls', () => {
+	for (const control of INFRASTRUCTURE_POLICY_CONTROLS) {
 		it(`${control.label} [membership: ${control.membership}]`, () => {
 			expect(
 				inspectPolicyControl(control).filter((violation) => violation.rule === 'mirror'),
@@ -237,17 +249,17 @@ describe('surface policy controls', () => {
 		try {
 			scratch.write('tests/setupDistribution.ts', 'export function readShared() {}\n')
 			expect(inspectPolicyWorkspace(scratch.path)).toEqual([])
-			scratch.write('tests/setupExtra.ts', 'export function readShared() {}\n')
+			scratch.write('tests/setupGlobal.ts', 'export function readShared() {}\n')
 			expect(inspectPolicyWorkspace(scratch.path)).toEqual([
 				{
 					rule: 'mirror',
-					path: 'tests/setupExtra.ts',
+					path: 'tests/setupGlobal.ts',
 					message:
 						'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
 				},
 				{
 					rule: 'surface',
-					path: 'tests/setupExtra.ts',
+					path: 'tests/setupGlobal.ts',
 					line: 1,
 					message: 'surface name belongs to one package: readShared (other)',
 				},
@@ -517,18 +529,20 @@ describe('policy population controls', () => {
 		).toEqual([])
 	})
 
-	it('accepts a setup module mirror inside tests', () => {
+	it('refuses a nested setup module even where a test stem mirrors it', () => {
 		expect(
 			inspectPolicyControl({
-				label: 'accepts a setup module mirror inside tests',
-				membership: 'tests-axis setup modules with an exact test stem',
+				label: 'refuses a nested setup module even where a test stem mirrors it',
+				membership: 'tests-axis setup modules outside the root setup modules',
 				rule: 'mirror',
 				files: [
 					{ path: 'tests/app/core/setup.ts', content: '' },
 					{ path: 'tests/app/core/setup.test.ts', content: '' },
 				],
 			}),
-		).toEqual([])
+		).toEqual([
+			{ rule: 'mirror', path: 'tests/app/core/setup.ts', message: POLICY_INFRASTRUCTURE_MESSAGE },
+		])
 	})
 
 	it('excludes documentation from the suppression population', () => {

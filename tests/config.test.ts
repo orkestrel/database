@@ -39,6 +39,7 @@ import policyPlugin, {
 	LET_RULE,
 	MOCKING_RULE,
 	MUTABLE_RULE,
+	HELPER_RULE,
 	NESTED_RULE,
 	PARSER_RULE,
 	PLUGIN_RULE,
@@ -46,6 +47,7 @@ import policyPlugin, {
 	POLICY_ENDING_GLOBS,
 	POLICY_JUDGED_TERMS,
 	POLICY_NESTED_GLOBS,
+	POLICY_TEST_GLOBS,
 	POLICY_PLACEMENT_GLOBS,
 	POLICY_SCRIPT_GLOBS,
 	POLICY_VOICE_STOPWORDS,
@@ -2806,6 +2808,53 @@ createSomething({
 		],
 	})
 
+	tester.run('no-test-helper', HELPER_RULE, {
+		valid: [
+			{
+				name: 'accepts imports, registrations, and module data in a mirrored test',
+				filename: 'tests/src/core/helpers.test.ts',
+				code: "import { it } from 'vitest'\nconst CASES = Object.freeze([1, 2])\nit('reads', () => { const read = () => CASES[0]; void read })",
+			},
+			{
+				name: 'accepts a callback passed to a registration',
+				filename: 'tests/setupServer.test.ts',
+				code: "import { describe, it } from 'vitest'\ndescribe('server', () => { it('reads', function () {}) })",
+			},
+		],
+		invalid: [
+			{
+				name: 'rejects a module-scope function declaration [membership: module-scope declarations of a mirrored test]',
+				filename: 'tests/src/core/helpers.test.ts',
+				code: 'function buildValue(): number { return 1 }\nvoid buildValue',
+				errors: [{ messageId: 'helper' }],
+			},
+			{
+				name: 'rejects a function-valued binding [membership: module-scope declarations of a mirrored test]',
+				filename: 'tests/app/browser/App.test.ts',
+				code: 'const createFixture = () => ({ id: 1 })\nvoid createFixture',
+				errors: [{ messageId: 'helper' }],
+			},
+			{
+				name: 'rejects an exported function expression [membership: module-scope declarations of a mirrored test]',
+				filename: 'tests/src/core/helpers.test.ts',
+				code: 'export const readValue = function (): number { return 1 }',
+				errors: [{ messageId: 'helper' }],
+			},
+			{
+				name: 'rejects a module-scope class [membership: module-scope declarations of a root setup proof]',
+				filename: 'tests/setupBrowser.test.ts',
+				code: 'class Fixture {}\nvoid Fixture',
+				errors: [{ messageId: 'helper' }],
+			},
+			{
+				name: 'rejects a class-valued binding [membership: module-scope declarations of a mirrored test]',
+				filename: 'tests/src/core/helpers.test.ts',
+				code: 'const Fixture = class {}\nvoid Fixture',
+				errors: [{ messageId: 'helper' }],
+			},
+		],
+	})
+
 	tester.run('no-mutable-property', MUTABLE_RULE, {
 		valid: [
 			{
@@ -4329,18 +4378,25 @@ createSomething({
 		expect(declared).toContain('no-cross-vue-face')
 		expect(declared).toContain('no-malformed-script')
 		expect(declared).toContain('no-mutable-property')
+		expect(declared).toContain('no-test-helper')
 		expect(
 			inspectPolicyWiring(
 				parsed,
 				declared.map((name) => `policy/${name}`),
-				[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS, POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS],
+				[
+					POLICY_PLACEMENT_GLOBS,
+					POLICY_ENDING_GLOBS,
+					POLICY_SCRIPT_GLOBS,
+					POLICY_NESTED_GLOBS,
+					POLICY_TEST_GLOBS,
+				],
 			),
 		).toEqual([])
 		// The controls: a configuration with the skill-script override or the nested-function
 		// override removed reports the population it no longer declares.
 		const overrides: unknown = Object.getOwnPropertyDescriptor(parsed, 'overrides')?.value
 		if (!Array.isArray(overrides)) throw new Error('The Oxlint configuration has no overrides')
-		for (const population of [POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS]) {
+		for (const population of [POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS, POLICY_TEST_GLOBS]) {
 			const trimmed = {
 				...readConfigRecord(parsed),
 				overrides: overrides.filter((override: unknown) => {
@@ -4352,7 +4408,13 @@ createSomething({
 				inspectPolicyWiring(
 					trimmed,
 					[],
-					[POLICY_PLACEMENT_GLOBS, POLICY_ENDING_GLOBS, POLICY_SCRIPT_GLOBS, POLICY_NESTED_GLOBS],
+					[
+						POLICY_PLACEMENT_GLOBS,
+						POLICY_ENDING_GLOBS,
+						POLICY_SCRIPT_GLOBS,
+						POLICY_NESTED_GLOBS,
+						POLICY_TEST_GLOBS,
+					],
 				),
 			).toEqual([`no override files list declares the population exactly: ${population.join(' ')}`])
 		}
