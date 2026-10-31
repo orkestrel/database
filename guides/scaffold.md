@@ -55,300 +55,324 @@ Exported from `@orkestrel/scaffold`, and reachable from
 
 #### Types
 
-| Name                | Kind | Summary                                                                                                     |
-| ------------------- | ---- | ----------------------------------------------------------------------------------------------------------- |
-| `Artifact`          | type | Represents one file in a plan, discriminated by how its content is produced and what scaffold claims of it. |
-| `Axis`              | type | Names the workspace axis an extension occupies.                                                             |
-| `BuildFormat`       | type | Names one module format a published library environment builds.                                             |
-| `CatalogEntry`      | type | Represents one package row of the fleet catalog.                                                            |
-| `CompileStage`      | type | Names the compile phases, in the order they run.                                                            |
-| `CompilerEventMap`  | type | Represents the compiler's observation channel.                                                              |
-| `HostFile`          | type | Represents one vendored file read from the repository, beside the target bytes it answers for.              |
-| `Drift`             | type | Names how one target path compares to the artifact planned for it.                                          |
-| `Environment`       | type | Names one environment a generated workspace selects on its `src` or `app` axis.                             |
-| `Extension`         | type | Represents an extension discriminated by its surface.                                                       |
-| `Finding`           | type | Represents one drift verdict against a target path.                                                         |
-| `Framework`         | type | Names a supported browser framework.                                                                        |
-| `Group`             | type | Names the artifact group a plan selects over.                                                               |
-| `Lookup`            | type | Names how an upstream lookup resolved: found, missing, unmatched, or failed.                                |
-| `Mirror`            | type | Represents one dependency guide fetched from upstream, beside the local mirror it answers for.              |
-| `Origin`            | type | Names how an artifact's content is produced.                                                                |
-| `Ownership`         | type | Names what scaffold claims at an artifact's path.                                                           |
-| `Release`           | type | Represents one declared dependency range measured against a registry release.                               |
-| `ScaffoldErrorCode` | type | Names the coded reasons a scaffold error is raised.                                                         |
-| `SetupRuntime`      | type | Names the runtime a root setup proof requires.                                                              |
-| `Snapshot`          | type | Holds exact lowercase hexadecimal target bytes keyed by artifact-relative path.                             |
-| `Surface`           | type | Names the surface an extension extends.                                                                     |
+| Name                | Kind | Signature                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Summary                                                                                                     |
+| ------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `Artifact`          | type | `HostArtifact \| HydratedArtifact \| ContentArtifact`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents one file in a plan, discriminated by how its content is produced and what scaffold claims of it. |
+| `Axis`              | type | `'src' \| 'app'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Names the workspace axis an extension occupies.                                                             |
+| `BuildFormat`       | type | `'es' \| 'cjs'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Names one module format a published library environment builds.                                             |
+| `CatalogEntry`      | type | `{ readonly name: string; readonly lookup: 'found'; readonly version: string; readonly dependencies: readonly Dependency[]; readonly peers: readonly Dependency[]; readonly note?: never; } \| { readonly name: string; readonly lookup: 'missing' \| 'unmatched' \| 'failed'; readonly note: string; readonly version?: never; readonly dependencies?: never; readonly peers?: never; }`                                                                                                                                                                          | Represents one package row of the fleet catalog.                                                            |
+| `CompileStage`      | type | `'draft' \| 'gate' \| 'pin'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Names the compile phases, in the order they run.                                                            |
+| `CompilerEventMap`  | type | `{ readonly compile: readonly [result: CompileResult]; readonly audit: readonly [audit: Audit]; readonly block: readonly [questions: readonly Question[]]; readonly error: readonly [error: unknown]; readonly destroy: readonly []; }`                                                                                                                                                                                                                                                                                                                            | Represents the compiler's observation channel.                                                              |
+| `HostFile`          | type | `{ readonly path: string; readonly lookup: 'found'; readonly hex: string; readonly observed?: string; readonly note?: never; } \| { readonly path: string; readonly lookup: 'missing' \| 'unmatched' \| 'failed'; readonly note: string; readonly observed?: string; readonly hex?: never; }`                                                                                                                                                                                                                                                                      | Represents one vendored file read from the repository, beside the target bytes it answers for.              |
+| `Drift`             | type | `'aligned' \| 'stale' \| 'missing' \| 'foreign'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Names how one target path compares to the artifact planned for it.                                          |
+| `Environment`       | type | `'core' \| 'browser' \| 'server'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Names one environment a generated workspace selects on its `src` or `app` axis.                             |
+| `Extension`         | type | `BrowserExtension \| StylesExtension`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents an extension discriminated by its surface.                                                       |
+| `Finding`           | type | `{ readonly path: string; readonly group: Group; readonly ownership: Ownership; readonly drift: 'stale'; readonly observed: string; } \| { readonly path: string; readonly group: Group; readonly ownership?: never; readonly drift: 'foreign'; readonly observed: string; } \| { readonly path: string; readonly group: Group; readonly ownership: Ownership; readonly drift: 'missing'; readonly observed?: never; } \| { readonly path: string; readonly group: Group; readonly ownership: Ownership; readonly drift: 'aligned'; readonly observed?: string; }` | Represents one drift verdict against a target path.                                                         |
+| `Framework`         | type | `'vue'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names a supported browser framework.                                                                        |
+| `Group`             | type | `'manifest' \| 'configs' \| 'source' \| 'tests' \| 'guides' \| 'docs' \| 'orchestration'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Names the artifact group a plan selects over.                                                               |
+| `Lookup`            | type | `'found' \| 'missing' \| 'unmatched' \| 'failed'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Names how an upstream lookup resolved: found, missing, unmatched, or failed.                                |
+| `Mirror`            | type | `{ readonly name: string; readonly path: string; readonly lookup: 'found'; readonly content: string; readonly observed?: string; readonly note?: never; } \| { readonly name: string; readonly path: string; readonly lookup: 'missing' \| 'unmatched' \| 'failed'; readonly note: string; readonly observed?: string; readonly content?: never; }`                                                                                                                                                                                                                | Represents one dependency guide fetched from upstream, beside the local mirror it answers for.              |
+| `Origin`            | type | `'host' \| 'template' \| 'computed'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Names how an artifact's content is produced.                                                                |
+| `Ownership`         | type | `'content' \| 'presence' \| 'birth'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Names what scaffold claims at an artifact's path.                                                           |
+| `Release`           | type | `{ readonly name: string; readonly range: string; readonly lookup: 'found'; readonly latest: string; readonly major?: number; readonly note?: never; } \| { readonly name: string; readonly range: string; readonly lookup: 'missing' \| 'unmatched' \| 'failed'; readonly note: string; readonly major?: number; readonly latest?: never; }`                                                                                                                                                                                                                      | Represents one declared dependency range measured against a registry release.                               |
+| `ScaffoldErrorCode` | type | `'INVALID' \| 'BLOCKED' \| 'DESTROYED' \| 'TARGET' \| 'WRITE' \| 'FETCH'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Names the coded reasons a scaffold error is raised.                                                         |
+| `SetupRuntime`      | type | `'node' \| 'browser'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Names the runtime a root setup proof requires.                                                              |
+| `Snapshot`          | type | `Readonly<Record<string, string>>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Holds exact lowercase hexadecimal target bytes keyed by artifact-relative path.                             |
+| `Surface`           | type | `'browser' \| 'styles'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the surface an extension extends.                                                                     |
 
 #### Interfaces
 
-| Name                    | Kind      | Summary                                                                                           |
-| ----------------------- | --------- | ------------------------------------------------------------------------------------------------- |
-| `AppDefinition`         | interface | Describes the configuration and runtime-entry settings one private `app` environment contributes. |
-| `ArtifactBase`          | interface | Describes the fields every planned file carries.                                                  |
-| `Audit`                 | interface | Represents the whole comparison of a plan against a target's current content.                     |
-| `Blueprint`             | interface | Represents the closed, JSON-serializable workspace specification.                                 |
-| `BrowserExtension`      | interface | Represents a browser framework and its physically occupied axes.                                  |
-| `CompileFailure`        | interface | Represents the coded reason one compile stage failed.                                             |
-| `CompileRecord`         | interface | Holds the input and output snapshot of one compile stage.                                         |
-| `CompilerInterface`     | interface | Describes the compilation contract: pure, synchronous, and host-independent.                      |
-| `CompilerOptions`       | interface | Represents the options for the compiler.                                                          |
-| `ContentArtifact`       | interface | Represents a text file produced by the template or computed compilation path.                     |
-| `Dependency`            | interface | Represents one runtime `@orkestrel/*` dependency of a generated workspace.                        |
-| `DependencyPinSet`      | interface | Describes the runtime and development sections a range-writing operation may change.              |
-| `FrameworkDefinition`   | interface | Describes the tooling and package boundaries a browser framework contributes.                     |
-| `HostArtifact`          | interface | Represents a file byte-copied from the vendored data root, planned before its bytes are read.     |
-| `HydratedArtifact`      | interface | Represents a vendored file whose exact bytes have been read, so its content can be compared.      |
-| `ManifestDependencySet` | interface | Describes the runtime, development, and peer sections read from an existing package manifest.     |
-| `ManifestEdit`          | interface | Represents one in-place replacement of manifest text.                                             |
-| `ManifestRegionSet`     | interface | Describes the manifest regions a writing operation may change.                                    |
-| `ManifestScript`        | interface | Represents one manifest script a region-writing operation may replace.                            |
-| `ManifestToken`         | interface | Represents one string or object brace found in manifest text.                                     |
-| `Override`              | interface | Represents one artifact override.                                                                 |
-| `Plan`                  | interface | Holds the compiled, ordered artifact list and the selection it covers.                            |
-| `PlanSummary`           | interface | Represents the tally of one plan by artifact origin.                                              |
-| `Question`              | interface | Represents one validation issue raised against a blueprint or a plan.                             |
-| `CompileResult`         | interface | Represents the replayable outcome of one compile.                                                 |
-| `SrcDefinition`         | interface | Describes the build and export settings one published `src` environment contributes.              |
-| `StylesExtension`       | interface | Represents a named sheet face under `src/<name>`.                                                 |
-| `ToolchainHold`         | interface | Represents one foreign tool range required by a browser framework.                                |
-| `ViteMachinery`         | interface | Names which host-specific pipelines a generated root Vite configuration carries.                  |
+| Name                    | Kind      | Signature                                                                                                                                                                                                                                            | Summary                                                                                           |
+| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `AppDefinition`         | interface | `{ configs, project, entry? }`                                                                                                                                                                                                                       | Describes the configuration and runtime-entry settings one private `app` environment contributes. |
+| `ArtifactBase`          | interface | `{ path, group, ownership, environment? }`                                                                                                                                                                                                           | Describes the fields every planned file carries.                                                  |
+| `ArtifactTemplateSet`   | interface | `{ source, tests, docs, guides, orchestration }`                                                                                                                                                                                                     | Represents the source, test, document, guide, and service template text.                          |
+| `Audit`                 | interface | `{ findings, questions }`                                                                                                                                                                                                                            | Represents the whole comparison of a plan against a target's current content.                     |
+| `Blueprint`             | interface | `{ name, description?, keywords, src, app, extensions, styles, themes, dependencies, peers, extras, version, engines, overrides, bin, setup, guides, integration, conformance, tree, service, vendors, studies, global, showcase, journey, skills }` | Represents the closed, JSON-serializable workspace specification.                                 |
+| `BrowserExtension`      | interface | `{ surface, name, axes }`                                                                                                                                                                                                                            | Represents a browser framework and its physically occupied axes.                                  |
+| `CompileFailure`        | interface | `{ code, message }`                                                                                                                                                                                                                                  | Represents the coded reason one compile stage failed.                                             |
+| `CompileRecord`         | interface | `{ stage, input, output, failure? }`                                                                                                                                                                                                                 | Holds the input and output snapshot of one compile stage.                                         |
+| `CompilerInterface`     | interface | `{ emitter, compile(), audit(), destroy() }`                                                                                                                                                                                                         | Describes the compilation contract: pure, synchronous, and host-independent.                      |
+| `CompilerOptions`       | interface | `{ on?, error? }`                                                                                                                                                                                                                                    | Represents the options for the compiler.                                                          |
+| `ConfigTemplateSet`     | interface | `{ root, factories, tsconfigs, vites, browsers, commands }`                                                                                                                                                                                          | Represents the configuration template text, grouped by the artifact each template builds.         |
+| `ContentArtifact`       | interface | `{ origin, content, hex?, source? }`                                                                                                                                                                                                                 | Represents a text file produced by the template or computed compilation path.                     |
+| `Dependency`            | interface | `{ name, range, optional? }`                                                                                                                                                                                                                         | Represents one runtime `@orkestrel/*` dependency of a generated workspace.                        |
+| `DependencyPinSet`      | interface | `{ runtime, development }`                                                                                                                                                                                                                           | Describes the runtime and development sections a range-writing operation may change.              |
+| `FrameworkDefinition`   | interface | `{ plugin, checker, suffixes, refused, dependencies }`                                                                                                                                                                                               | Describes the tooling and package boundaries a browser framework contributes.                     |
+| `HostArtifact`          | interface | `{ origin, ownership, source?, pointer?, hex?, content? }`                                                                                                                                                                                           | Represents a file byte-copied from the vendored data root, planned before its bytes are read.     |
+| `HydratedArtifact`      | interface | `{ origin, ownership, source?, hex, content? }`                                                                                                                                                                                                      | Represents a vendored file whose exact bytes have been read, so its content can be compared.      |
+| `ManifestDependencySet` | interface | `{ runtime, development, peer }`                                                                                                                                                                                                                     | Describes the runtime, development, and peer sections read from an existing package manifest.     |
+| `ManifestEdit`          | interface | `{ start, end, text }`                                                                                                                                                                                                                               | Represents one in-place replacement of manifest text.                                             |
+| `ManifestRegionSet`     | interface | `{ pins, scripts, additions?, overrides? }`                                                                                                                                                                                                          | Describes the manifest regions a writing operation may change.                                    |
+| `ManifestScript`        | interface | `{ name, command, accepted }`                                                                                                                                                                                                                        | Represents one manifest script a region-writing operation may replace.                            |
+| `ManifestToken`         | interface | `{ text, index, depth, value }`                                                                                                                                                                                                                      | Represents one string or object brace found in manifest text.                                     |
+| `Override`              | interface | `{ path, content }`                                                                                                                                                                                                                                  | Represents one artifact override.                                                                 |
+| `Plan`                  | interface | `{ blueprint, groups, artifacts, hash? }`                                                                                                                                                                                                            | Holds the compiled, ordered artifact list and the selection it covers.                            |
+| `PlanSummary`           | interface | `{ name, src, app, groups, host, template, computed }`                                                                                                                                                                                               | Represents the tally of one plan by artifact origin.                                              |
+| `Question`              | interface | `{ field, message, blocking, candidates? }`                                                                                                                                                                                                          | Represents one validation issue raised against a blueprint or a plan.                             |
+| `CompileResult`         | interface | `{ plan?, questions, stages }`                                                                                                                                                                                                                       | Represents the replayable outcome of one compile.                                                 |
+| `SrcDefinition`         | interface | `{ configs, project, path, formats }`                                                                                                                                                                                                                | Describes the build and export settings one published `src` environment contributes.              |
+| `StylesExtension`       | interface | `{ surface, name }`                                                                                                                                                                                                                                  | Represents a named sheet face under `src/<name>`.                                                 |
+| `ToolchainHold`         | interface | `{ framework, range, reason }`                                                                                                                                                                                                                       | Represents one foreign tool range required by a browser framework.                                |
+| `ViteMachinery`         | interface | `{ browser, frameworks, output, showcase }`                                                                                                                                                                                                          | Names which host-specific pipelines a generated root Vite configuration carries.                  |
+
+| Name                | Kind      | Signature                                     | Summary                                                                                            |
+| ------------------- | --------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `SurfaceAdvisory`   | interface | `{ name, owner, peer, similarity }`           | Reports a name a candidate adds beside a near name or an equal contract another owner claims.      |
+| `SurfaceCandidate`  | interface | `{ conflicts }`                               | Represents a candidate checkout's contract with each name two or more of its environments export.  |
+| `SurfaceClaim`      | interface | `{ owner, names }`                            | Represents one owner's bare exported names, including an empty candidate surface.                  |
+| `SurfaceCollision`  | interface | `{ name, owners }`                            | Represents a bare name claimed by distinct package owners.                                         |
+| `SurfaceConflict`   | interface | `{ name, owner, environments }`               | Represents a bare name one owner's barrels export from two or more of its environments.            |
+| `SurfaceContract`   | interface | `{ signatures }`                              | Represents one owner's claim with the guide `Signature` cell of each name a Surface row documents. |
+| `SurfaceFinding`    | interface | `{ standing }`                                | Reports a collision's standing against the recorded owner set.                                     |
+| `SurfaceSimilarity` | type      | `'case' \| 'plural' \| 'edit' \| 'signature'` | Names how an added name resembles a name another owner claims.                                     |
 
 #### Constants
 
-| Name                              | Kind  | Summary                                                                                                                                                                                |
-| --------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_BROWSER_DEV_DEPENDENCIES`    | const | Lists the development dependencies a private browser application adds.                                                                                                                 |
-| `APP_DEV_DEPENDENCIES`            | const | Names the development dependency every private `app` environment adds.                                                                                                                 |
-| `APP_MATRIX`                      | const | Holds the configuration and runtime-entry settings each private `app` environment contributes, frozen.                                                                                 |
-| `APP_SERVER_DEV_DEPENDENCIES`     | const | Lists the development dependencies a private server application adds.                                                                                                                  |
-| `ARTIFACT_TEMPLATES`              | const | Holds formatter-stable template text for source, test, document, guide, and service artifacts.                                                                                         |
-| `AXES`                            | const | Lists the axes a browser extension may occupy, frozen.                                                                                                                                 |
-| `BASE_DEV_DEPENDENCIES`           | const | Holds the baseline tooling versions, before framework holds apply.                                                                                                                     |
-| `BIN_CONFIGS`                     | const | Lists the configuration files a workspace that ships its own executable adds, frozen.                                                                                                  |
-| `BIN_ENTRY_PATH`                  | const | Names the executable entry whose presence makes a workspace `bin`.                                                                                                                     |
-| `BIN_OUTPUT_PATH`                 | const | Names the built executable a bin workspace's manifest command runs.                                                                                                                    |
-| `BROWSE_DEV_DEPENDENCIES`         | const | Names the development dependency a browser or styles surface adds.                                                                                                                     |
-| `BROWSE_UPSTREAM`                 | const | Lists the packages `@orkestrel/browser` depends on at runtime, directly or transitively, frozen.                                                                                       |
-| `CAPTURE_DEV_DEPENDENCIES`        | const | Names the development dependency a browser application's journey axis adds.                                                                                                            |
-| `CAPTURE_UPSTREAM`                | const | Lists the capture package and its fleet runtime dependency closure, frozen.                                                                                                            |
-| `CANON_PATHS`                     | const | Lists the instruction-canon paths staged for reading rather than for a target, frozen.                                                                                                 |
-| `CATALOG_AGENT_PATH`              | const | Names the agent file whose marker-bounded package table the catalog verb alone owns.                                                                                                   |
-| `CATALOG_END_MARKER`              | const | Names the marker closing the package table inside `CATALOG_AGENT_PATH`.                                                                                                                |
-| `CATALOG_START_MARKER`            | const | Names the marker opening the package table inside `CATALOG_AGENT_PATH`.                                                                                                                |
-| `CONFIG_TEMPLATES`                | const | Holds formatter-stable template text for every configuration artifact.                                                                                                                 |
-| `CONFORMANCE_TEST_PATH`           | const | Names the official-tooling drift proof whose presence makes a workspace `conformance`.                                                                                                 |
-| `CONTROL_CHARACTER_PATTERN`       | const | Matches the Unicode controls, formatting controls, and line and paragraph separators rejected in text.                                                                                 |
-| `DECLARATION_DEV_DEPENDENCIES`    | const | Lists the development dependencies that roll declarations up for published source.                                                                                                     |
-| `DEFAULT_ENGINES`                 | const | Names the `engines.node` range a workspace starts with.                                                                                                                                |
-| `DEFAULT_VERSION`                 | const | Names the version a workspace starts at.                                                                                                                                               |
-| `DEPENDENCY_NAME_PATTERN`         | const | Matches the runtime dependency name syntax: the `@orkestrel` scope and a bare name.                                                                                                    |
-| `DISTRIBUTION_SETUP_PATH`         | const | Names the content-owned harness imported by the generated distribution proof.                                                                                                          |
-| `DISTRIBUTION_TEST_PATH`          | const | Names the generated packed-package proof every publishing workspace is planned at.                                                                                                     |
-| `ENGINES_PATTERN`                 | const | Matches the minimum-Node engine syntax a blueprint declares.                                                                                                                           |
-| `ENVIRONMENTS`                    | const | Lists the `Environment` values, frozen.                                                                                                                                                |
-| `EXECUTABLE_PATHS`                | const | Lists the vendored paths a target receives with its executable bit set, frozen.                                                                                                        |
-| `EXTRA_RANGE_PATTERN`             | const | Matches the registry-only semver subset accepted for a development extra's range.                                                                                                      |
-| `FLOOR_RANGE_PATTERN`             | const | Matches the exact `major.minor.patch` floor accepted for a foreign peer's range.                                                                                                       |
-| `FOREIGN_NAME_PATTERN`            | const | Matches the package name syntax for a dependency this package does not publish.                                                                                                        |
-| `FRAMEWORKS`                      | const | Lists the supported browser frameworks, frozen.                                                                                                                                        |
-| `FRAMEWORK_MATRIX`                | const | Describes the tooling and package boundaries of each browser framework, frozen.                                                                                                        |
-| `GLOBAL_SETUP_PATH`               | const | Names the shared Vitest global-setup module whose presence makes a workspace `global`.                                                                                                 |
-| `GROUPS`                          | const | Lists the `Group` values in plan order, frozen.                                                                                                                                        |
-| `GUIDES_TEST_PATH`                | const | Names the package-owned guide-parity entry used by `test:guides` and to select the `guides` project.                                                                                   |
-| `HEX_PATTERN`                     | const | Matches exact lowercase hexadecimal bytes: two digits per byte, and empty content is valid.                                                                                            |
-| `HOST_INVENTORY_PATH`             | const | Names the repository-relative path where the committed vendored-file inventory is served.                                                                                              |
-| `HOST_PATHS`                      | const | Lists the paths a target receives from the vendored data root, frozen.                                                                                                                 |
-| `INTEGRATION_TEST_PATH`           | const | Names the cross-environment composition proof whose presence makes a workspace `integration`.                                                                                          |
-| `INVALID_PATH_CHARACTER_PATTERN`  | const | Matches the visible characters a target-relative path and a Markdown path cell both forbid.                                                                                            |
-| `JOURNEY_CONFIG_PATH`             | const | Names the Vite wrapper whose presence makes a workspace `journey`.                                                                                                                     |
-| `MANIFEST_PATH`                   | const | Names the manifest path every compiler plan emits with birth ownership.                                                                                                                |
-| `MAX_ARTIFACT_BYTES`              | const | Caps the bytes accepted for one artifact.                                                                                                                                              |
-| `MAX_ARTIFACT_HEX_LENGTH`         | const | Caps the length of the hexadecimal string carrying one artifact's bytes.                                                                                                               |
-| `MAX_AUDIT_FINDINGS`              | const | Caps the findings one audit can produce from a bounded plan and snapshot.                                                                                                              |
-| `MAX_COLLECTION_ITEMS`            | const | Caps the items accepted in one public collection.                                                                                                                                      |
-| `MAX_DEPENDENCY_NAME_LENGTH`      | const | Sets the maximum dependency package name length, scope included, as the registry caps it.                                                                                              |
-| `MAX_MANIFEST_BYTES`              | const | Caps the bytes accepted for one package or vendored-host manifest.                                                                                                                     |
-| `MAX_NAME_LENGTH`                 | const | Caps the bare workspace name length.                                                                                                                                                   |
-| `MAX_PATH_LENGTH`                 | const | Caps the length of one path, matching the longest a supported filesystem accepts.                                                                                                      |
-| `MAX_RANGE_LENGTH`                | const | Caps the length of one declared package range.                                                                                                                                         |
-| `MAX_REGISTRY_BYTES`              | const | Caps the decoded bytes accepted from one registry response.                                                                                                                            |
-| `MAX_SCRIPT_LENGTH`               | const | Caps the length of one manifest script name or command.                                                                                                                                |
-| `MAX_TOTAL_ARTIFACT_BYTES`        | const | Caps the bytes retained across one whole plan or audit.                                                                                                                                |
-| `MAX_TOTAL_REGISTRY_BYTES`        | const | Caps the decoded bytes accepted across one registry-reading call.                                                                                                                      |
-| `MINIMUM_NODE_VERSION`            | const | Names the oldest Node version the generated toolchain supports.                                                                                                                        |
-| `MINIMUM_NPM_VERSION`             | const | Names the oldest npm version the generated toolchain supports.                                                                                                                         |
-| `NAME_PATTERN`                    | const | Matches the bare workspace name syntax: lowercase alphanumeric with hyphens, letter first.                                                                                             |
-| `ORCHESTRATION_PATH_NAMES`        | const | Lists the exact root paths that wire an agent bench or own an orchestration directory, frozen.                                                                                         |
-| `ORCHESTRATION_PATH_PREFIXES`     | const | Lists the path prefixes whose contents instruct or wire an agent, frozen.                                                                                                              |
-| `ORKESTREL_RANGE_PATTERN`         | const | Matches the exact caret-pinned pre-1.0 range accepted for an `@orkestrel/*` runtime dependency.                                                                                        |
-| `PRINT_WIDTH`                     | const | Caps the columns one emitted line may occupy, matching `printWidth` in `.oxfmtrc.json`.                                                                                                |
-| `REFERENCE_PATHS`                 | const | Lists the reference paths staged for offline reading, frozen.                                                                                                                          |
-| `RELEASE_PROOF_COMMAND`           | const | Names the `prepublishOnly` row that runs the packed-package proof against a real registry.                                                                                             |
-| `RESERVED_SHEET_NAMES`            | const | Lists the names a styles extension cannot occupy, frozen.                                                                                                                              |
-| `SEED_GUIDE_PATHS`                | const | Lists the guide paths a generated workspace starts with, frozen.                                                                                                                       |
-| `SERVICE_SCRIPT_PATH`             | const | Names the inventory skeleton a workspace with declared service vendors is given once.                                                                                                  |
-| `SERVICE_SETUP_PATH`              | const | Names the live-service readiness module whose presence makes a workspace `service`.                                                                                                    |
-| `SERVICE_TEST_INCLUDE`            | const | Names the include the live-service project covers, which is a directory rather than one proof.                                                                                         |
-| `SHEET_ENTRY_NAME`                | const | Names the build entry beside each stylesheet marker.                                                                                                                                   |
-| `SHOWCASE_CONFIG_PATH`            | const | Names the Vite wrapper whose presence makes a workspace `showcase`.                                                                                                                    |
-| `SHOWCASE_DEV_DEPENDENCIES`       | const | Names the tested dependency pair selected by the optional single-file showcase build.                                                                                                  |
-| `SHOWCASE_OVERRIDES`              | const | Names the scoped npm override required by the tested showcase plugin.                                                                                                                  |
-| `SHOWCASE_PAGES_PATH`             | const | Names the physical showcase output directory.                                                                                                                                          |
-| `SKILLS_CONFIG_PATH`              | const | Names the TypeScript wrapper whose presence makes a workspace `skills`.                                                                                                                |
-| `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | Lists the development dependencies a published browser `src` environment adds.                                                                                                         |
-| `SRC_MATRIX`                      | const | Holds the build and export settings each published `src` environment contributes, frozen.                                                                                              |
-| `STUDIES_TEST_INCLUDE`            | const | Names the include the study project covers, where an exact-case `*.test.ts` file beneath `tests/studies`, outside any `node_modules` or `.git` directory, makes a workspace `studies`. |
-| `STYLES_DEV_DEPENDENCIES`         | const | Lists the development dependencies the styles surface adds, frozen.                                                                                                                    |
-| `STYLES_ENTRY_PATH`               | const | Names the base stylesheet marker.                                                                                                                                                      |
-| `SURFACES`                        | const | Lists the surfaces an extension may extend, frozen.                                                                                                                                    |
-| `TAB_WIDTH`                       | const | Sets the columns one tab occupies when the formatter measures a line, matching `tabWidth`.                                                                                             |
-| `TARGET_SKILL_NAMES`              | const | Lists the package-facing skills a target receives pointers for, frozen and alphabetical.                                                                                               |
-| `THEMES_BARREL_PATH`              | const | Names the themes stylesheet marker.                                                                                                                                                    |
-| `THEMES_ENTRY_PATH`               | const | Names the themes build entry marker.                                                                                                                                                   |
-| `TOOLCHAIN_HOLDS`                 | const | Holds foreign tool ranges required by selected browser frameworks, frozen.                                                                                                             |
-| `TREE_TEST_PATH`                  | const | Names the real-tree proof whose presence makes a workspace `tree`.                                                                                                                     |
-| `VERSION_PATTERN`                 | const | Matches the exact `major.minor.patch` version syntax a blueprint declares.                                                                                                             |
-| `WORKSPACE_DEV_ENGINES`           | const | Holds the `devEngines` record every generated manifest carries.                                                                                                                        |
-| `WORKSPACE_OWNED_PATHS`           | const | Lists the vendored paths whose present bytes belong to each workspace, frozen.                                                                                                         |
+| Name                              | Kind  | Signature                                                                                         | Summary                                                                                                                                                                                |
+| --------------------------------- | ----- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_BROWSER_DEV_DEPENDENCIES`    | const | `Readonly<Record<string, string>>`                                                                | Lists the development dependencies a private browser application adds.                                                                                                                 |
+| `APP_DEV_DEPENDENCIES`            | const | `Readonly<Record<string, string>>`                                                                | Names the development dependency every private `app` environment adds.                                                                                                                 |
+| `APP_MATRIX`                      | const | `Readonly<Record<Environment, AppDefinition>>`                                                    | Holds the configuration and runtime-entry settings each private `app` environment contributes, frozen.                                                                                 |
+| `APP_SERVER_DEV_DEPENDENCIES`     | const | `Readonly<Record<string, string>>`                                                                | Lists the development dependencies a private server application adds.                                                                                                                  |
+| `ARTIFACT_TEMPLATES`              | const | `ArtifactTemplateSet`                                                                             | Holds formatter-stable template text for source, test, document, guide, and service artifacts.                                                                                         |
+| `AXES`                            | const | `readonly Axis[]`                                                                                 | Lists the axes a browser extension may occupy, frozen.                                                                                                                                 |
+| `BASE_DEV_DEPENDENCIES`           | const | `Readonly<Record<string, string>>`                                                                | Holds the baseline tooling versions, before framework holds apply.                                                                                                                     |
+| `BIN_CONFIGS`                     | const | `readonly string[]`                                                                               | Lists the configuration files a workspace that ships its own executable adds, frozen.                                                                                                  |
+| `BIN_ENTRY_PATH`                  | const | `"src/bin/main.ts"`                                                                               | Names the executable entry whose presence makes a workspace `bin`.                                                                                                                     |
+| `BIN_OUTPUT_PATH`                 | const | `"dist/bin/main.js"`                                                                              | Names the built executable a bin workspace's manifest command runs.                                                                                                                    |
+| `BROWSE_DEV_DEPENDENCIES`         | const | `Readonly<Record<string, string>>`                                                                | Names the development dependency a browser or styles surface adds.                                                                                                                     |
+| `BROWSE_UPSTREAM`                 | const | `readonly string[]`                                                                               | Lists the packages `@orkestrel/browser` depends on at runtime, directly or transitively, frozen.                                                                                       |
+| `CAPTURE_DEV_DEPENDENCIES`        | const | `Readonly<Record<string, string>>`                                                                | Names the development dependency a browser application's journey axis adds.                                                                                                            |
+| `CAPTURE_UPSTREAM`                | const | `readonly string[]`                                                                               | Lists the capture package and its fleet runtime dependency closure, frozen.                                                                                                            |
+| `CANON_PATHS`                     | const | `readonly string[]`                                                                               | Lists the instruction-canon paths staged for reading rather than for a target, frozen.                                                                                                 |
+| `CATALOG_AGENT_PATH`              | const | `".claude/agents/orkestrel.md"`                                                                   | Names the agent file whose marker-bounded package table the catalog verb alone owns.                                                                                                   |
+| `CATALOG_END_MARKER`              | const | `"<!-- /orkestrel:catalog -->"`                                                                   | Names the marker closing the package table inside `CATALOG_AGENT_PATH`.                                                                                                                |
+| `CATALOG_START_MARKER`            | const | `"<!-- orkestrel:catalog -->"`                                                                    | Names the marker opening the package table inside `CATALOG_AGENT_PATH`.                                                                                                                |
+| `CONFIG_TEMPLATES`                | const | `ConfigTemplateSet`                                                                               | Holds formatter-stable template text for every configuration artifact.                                                                                                                 |
+| `CONFORMANCE_TEST_PATH`           | const | `"tests/conformance.test.ts"`                                                                     | Names the official-tooling drift proof whose presence makes a workspace `conformance`.                                                                                                 |
+| `CONTROL_CHARACTER_PATTERN`       | const | `RegExp`                                                                                          | Matches the Unicode controls, formatting controls, and line and paragraph separators rejected in text.                                                                                 |
+| `DECLARATION_DEV_DEPENDENCIES`    | const | `Readonly<Record<string, string>>`                                                                | Lists the development dependencies that roll declarations up for published source.                                                                                                     |
+| `DEFAULT_ENGINES`                 | const | `">=22.18.0"`                                                                                     | Names the `engines.node` range a workspace starts with.                                                                                                                                |
+| `DEFAULT_VERSION`                 | const | `"0.0.1"`                                                                                         | Names the version a workspace starts at.                                                                                                                                               |
+| `DEPENDENCY_NAME_PATTERN`         | const | `RegExp`                                                                                          | Matches the runtime dependency name syntax: the `@orkestrel` scope and a bare name.                                                                                                    |
+| `DISTRIBUTION_SETUP_PATH`         | const | `"tests/setupDistribution.ts"`                                                                    | Names the content-owned harness imported by the generated distribution proof.                                                                                                          |
+| `DISTRIBUTION_TEST_PATH`          | const | `"tests/distribution.test.ts"`                                                                    | Names the generated packed-package proof every publishing workspace is planned at.                                                                                                     |
+| `ENGINES_PATTERN`                 | const | `RegExp`                                                                                          | Matches the minimum-Node engine syntax a blueprint declares.                                                                                                                           |
+| `ENVIRONMENTS`                    | const | `readonly Environment[]`                                                                          | Lists the `Environment` values, frozen.                                                                                                                                                |
+| `EXECUTABLE_PATHS`                | const | `readonly string[]`                                                                               | Lists the vendored paths a target receives with its executable bit set, frozen.                                                                                                        |
+| `EXTRA_RANGE_PATTERN`             | const | `RegExp`                                                                                          | Matches the registry-only semver subset accepted for a development extra's range.                                                                                                      |
+| `FLOOR_RANGE_PATTERN`             | const | `RegExp`                                                                                          | Matches the exact `major.minor.patch` floor accepted for a foreign peer's range.                                                                                                       |
+| `FOREIGN_NAME_PATTERN`            | const | `RegExp`                                                                                          | Matches the package name syntax for a dependency this package does not publish.                                                                                                        |
+| `FRAMEWORKS`                      | const | `readonly Framework[]`                                                                            | Lists the supported browser frameworks, frozen.                                                                                                                                        |
+| `FRAMEWORK_MATRIX`                | const | `Readonly<Record<Framework, FrameworkDefinition>>`                                                | Describes the tooling and package boundaries of each browser framework, frozen.                                                                                                        |
+| `GLOBAL_SETUP_PATH`               | const | `"tests/setupGlobal.ts"`                                                                          | Names the shared Vitest global-setup module whose presence makes a workspace `global`.                                                                                                 |
+| `GROUPS`                          | const | `readonly Group[]`                                                                                | Lists the `Group` values in plan order, frozen.                                                                                                                                        |
+| `GUIDES_TEST_PATH`                | const | `"tests/guides.test.ts"`                                                                          | Names the package-owned guide-parity entry used by `test:guides` and to select the `guides` project.                                                                                   |
+| `HEX_PATTERN`                     | const | `RegExp`                                                                                          | Matches exact lowercase hexadecimal bytes: two digits per byte, and empty content is valid.                                                                                            |
+| `HOST_INVENTORY_PATH`             | const | `"host.json"`                                                                                     | Names the repository-relative path where the committed vendored-file inventory is served.                                                                                              |
+| `HOST_PATHS`                      | const | `readonly string[]`                                                                               | Lists the paths a target receives from the vendored data root, frozen.                                                                                                                 |
+| `INTEGRATION_TEST_PATH`           | const | `"tests/integration.test.ts"`                                                                     | Names the cross-environment composition proof whose presence makes a workspace `integration`.                                                                                          |
+| `INVALID_PATH_CHARACTER_PATTERN`  | const | `RegExp`                                                                                          | Matches the visible characters a target-relative path and a Markdown path cell both forbid.                                                                                            |
+| `JOURNEY_CONFIG_PATH`             | const | `"configs/app/vite.journey.config.ts"`                                                            | Names the Vite wrapper whose presence makes a workspace `journey`.                                                                                                                     |
+| `MANIFEST_PATH`                   | const | `"package.json"`                                                                                  | Names the manifest path every compiler plan emits with birth ownership.                                                                                                                |
+| `MAX_ARTIFACT_BYTES`              | const | `5242880`                                                                                         | Caps the bytes accepted for one artifact.                                                                                                                                              |
+| `MAX_ARTIFACT_HEX_LENGTH`         | const | `number`                                                                                          | Caps the length of the hexadecimal string carrying one artifact's bytes.                                                                                                               |
+| `MAX_AUDIT_FINDINGS`              | const | `number`                                                                                          | Caps the findings one audit can produce from a bounded plan and snapshot.                                                                                                              |
+| `MAX_COLLECTION_ITEMS`            | const | `1000`                                                                                            | Caps the items accepted in one public collection.                                                                                                                                      |
+| `MAX_DEPENDENCY_NAME_LENGTH`      | const | `214`                                                                                             | Sets the maximum dependency package name length, scope included, as the registry caps it.                                                                                              |
+| `MAX_MANIFEST_BYTES`              | const | `1048576`                                                                                         | Caps the bytes accepted for one package or vendored-host manifest.                                                                                                                     |
+| `MAX_NAME_LENGTH`                 | const | `203`                                                                                             | Caps the bare workspace name length.                                                                                                                                                   |
+| `MAX_PATH_LENGTH`                 | const | `32767`                                                                                           | Caps the length of one path, matching the longest a supported filesystem accepts.                                                                                                      |
+| `MAX_RANGE_LENGTH`                | const | `2048`                                                                                            | Caps the length of one declared package range.                                                                                                                                         |
+| `MAX_REGISTRY_BYTES`              | const | `33554432`                                                                                        | Caps the decoded bytes accepted from one registry response.                                                                                                                            |
+| `MAX_SCRIPT_LENGTH`               | const | `4096`                                                                                            | Caps the length of one manifest script name or command.                                                                                                                                |
+| `MAX_TOTAL_ARTIFACT_BYTES`        | const | `104857600`                                                                                       | Caps the bytes retained across one whole plan or audit.                                                                                                                                |
+| `MAX_TOTAL_REGISTRY_BYTES`        | const | `100663296`                                                                                       | Caps the decoded bytes accepted across one registry-reading call.                                                                                                                      |
+| `MINIMUM_NODE_VERSION`            | const | `"22.18.0"`                                                                                       | Names the oldest Node version the generated toolchain supports.                                                                                                                        |
+| `MINIMUM_NPM_VERSION`             | const | `"11.6.0"`                                                                                        | Names the oldest npm version the generated toolchain supports.                                                                                                                         |
+| `NAME_PATTERN`                    | const | `RegExp`                                                                                          | Matches the bare workspace name syntax: lowercase alphanumeric with hyphens, letter first.                                                                                             |
+| `ORCHESTRATION_PATH_NAMES`        | const | `readonly string[]`                                                                               | Lists the exact root paths that wire an agent bench or own an orchestration directory, frozen.                                                                                         |
+| `ORCHESTRATION_PATH_PREFIXES`     | const | `readonly string[]`                                                                               | Lists the path prefixes whose contents instruct or wire an agent, frozen.                                                                                                              |
+| `ORKESTREL_RANGE_PATTERN`         | const | `RegExp`                                                                                          | Matches the exact caret-pinned pre-1.0 range accepted for an `@orkestrel/*` runtime dependency.                                                                                        |
+| `PRINT_WIDTH`                     | const | `100`                                                                                             | Caps the columns one emitted line may occupy, matching `printWidth` in `.oxfmtrc.json`.                                                                                                |
+| `REFERENCE_PATHS`                 | const | `readonly string[]`                                                                               | Lists the reference paths staged for offline reading, frozen.                                                                                                                          |
+| `RELEASE_PROOF_COMMAND`           | const | `"npm run test:distribution -- --mode release"`                                                   | Names the `prepublishOnly` row that runs the packed-package proof against a real registry.                                                                                             |
+| `RESERVED_SHEET_NAMES`            | const | `readonly string[]`                                                                               | Lists the names a styles extension cannot occupy, frozen.                                                                                                                              |
+| `SEED_GUIDE_PATHS`                | const | `readonly string[]`                                                                               | Lists the guide paths a generated workspace starts with, frozen.                                                                                                                       |
+| `SERVICE_SCRIPT_PATH`             | const | `"scripts/service.sh"`                                                                            | Names the inventory skeleton a workspace with declared service vendors is given once.                                                                                                  |
+| `SERVICE_SETUP_PATH`              | const | `"tests/setupService.ts"`                                                                         | Names the live-service readiness module whose presence makes a workspace `service`.                                                                                                    |
+| `SERVICE_TEST_INCLUDE`            | const | `"tests/service/**/*.test.ts"`                                                                    | Names the include the live-service project covers, which is a directory rather than one proof.                                                                                         |
+| `SHEET_ENTRY_NAME`                | const | `"sheet.ts"`                                                                                      | Names the build entry beside each stylesheet marker.                                                                                                                                   |
+| `SHOWCASE_CONFIG_PATH`            | const | `"configs/app/vite.showcase.config.ts"`                                                           | Names the Vite wrapper whose presence makes a workspace `showcase`.                                                                                                                    |
+| `SHOWCASE_DEV_DEPENDENCIES`       | const | `Readonly<Record<string, string>>`                                                                | Names the tested dependency pair selected by the optional single-file showcase build.                                                                                                  |
+| `SHOWCASE_OVERRIDES`              | const | `Readonly<Record<string, Readonly<Record<string, string>>>>`                                      | Names the scoped npm override required by the tested showcase plugin.                                                                                                                  |
+| `SHOWCASE_PAGES_PATH`             | const | `"showcase"`                                                                                      | Names the physical showcase output directory.                                                                                                                                          |
+| `SKILLS_CONFIG_PATH`              | const | `"configs/agents/tsconfig.skills.json"`                                                           | Names the TypeScript wrapper whose presence makes a workspace `skills`.                                                                                                                |
+| `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | `Readonly<Record<string, string>>`                                                                | Lists the development dependencies a published browser `src` environment adds.                                                                                                         |
+| `SRC_MATRIX`                      | const | `Readonly<Record<Environment, SrcDefinition>>`                                                    | Holds the build and export settings each published `src` environment contributes, frozen.                                                                                              |
+| `STUDIES_TEST_INCLUDE`            | const | `"tests/studies/**/*.test.ts"`                                                                    | Names the include the study project covers, where an exact-case `*.test.ts` file beneath `tests/studies`, outside any `node_modules` or `.git` directory, makes a workspace `studies`. |
+| `STYLES_DEV_DEPENDENCIES`         | const | `Readonly<Record<string, string>>`                                                                | Lists the development dependencies the styles surface adds, frozen.                                                                                                                    |
+| `STYLES_ENTRY_PATH`               | const | `"src/styles/index.scss"`                                                                         | Names the base stylesheet marker.                                                                                                                                                      |
+| `SURFACES`                        | const | `readonly Surface[]`                                                                              | Lists the surfaces an extension may extend, frozen.                                                                                                                                    |
+| `SURFACE_EDIT_LENGTH`             | const | `6`                                                                                               | Sets the shortest name length at which a one-edit neighbor counts as a near name.                                                                                                      |
+| `TAB_WIDTH`                       | const | `2`                                                                                               | Sets the columns one tab occupies when the formatter measures a line, matching `tabWidth`.                                                                                             |
+| `TARGET_SKILL_NAMES`              | const | `readonly string[]`                                                                               | Lists the package-facing skills a target receives pointers for, frozen and alphabetical.                                                                                               |
+| `THEMES_BARREL_PATH`              | const | `"src/styles/themes/index.scss"`                                                                  | Names the themes stylesheet marker.                                                                                                                                                    |
+| `THEMES_ENTRY_PATH`               | const | `"src/styles/themes/sheet.ts"`                                                                    | Names the themes build entry marker.                                                                                                                                                   |
+| `TOOLCHAIN_HOLDS`                 | const | `Readonly<Record<string, ToolchainHold>>`                                                         | Holds foreign tool ranges required by selected browser frameworks, frozen.                                                                                                             |
+| `TREE_TEST_PATH`                  | const | `"tests/tree.test.ts"`                                                                            | Names the real-tree proof whose presence makes a workspace `tree`.                                                                                                                     |
+| `VERSION_PATTERN`                 | const | `RegExp`                                                                                          | Matches the exact `major.minor.patch` version syntax a blueprint declares.                                                                                                             |
+| `WORKSPACE_DEV_ENGINES`           | const | `Readonly<{ packageManager: Readonly<{ name: "npm"; version: ">=11.6.0"; onFail: "error"; }>; }>` | Holds the `devEngines` record every generated manifest carries.                                                                                                                        |
+| `WORKSPACE_OWNED_PATHS`           | const | `readonly string[]`                                                                               | Lists the vendored paths whose present bytes belong to each workspace, frozen.                                                                                                         |
 
 #### Guards
 
-| Name                 | Kind     | Summary                                                                           |
-| -------------------- | -------- | --------------------------------------------------------------------------------- |
-| `isArtifact`         | const    | Narrows a value to an `Artifact`.                                                 |
-| `isAudit`            | const    | Narrows a value to an `Audit`.                                                    |
-| `isBlueprint`        | const    | Narrows a value to a `Blueprint`.                                                 |
-| `isBrowserExtension` | const    | Narrows a value to a supported browser framework with distinct occupied axes.     |
-| `isCatalogEntry`     | const    | Narrows a value to a `CatalogEntry`.                                              |
-| `isCollection`       | function | Narrows a value to an array within the limit one public collection accepts.       |
-| `isCompilerHooks`    | const    | Narrows a value to the compiler's initial listener record.                        |
-| `isCompilerOptions`  | const    | Narrows a value to `CompilerOptions`.                                             |
-| `isContent`          | const    | Narrows a value to text this package will accept as one artifact's content.       |
-| `isDependency`       | const    | Narrows a value to a `Dependency`.                                                |
-| `isDependencyName`   | const    | Narrows a value to the scoped package name a runtime dependency carries.          |
-| `isEnvironment`      | const    | Narrows a value to one `Environment` a workspace may select.                      |
-| `isExtension`        | const    | Narrows a value to an extension of a supported surface.                           |
-| `isFinding`          | const    | Narrows a value to a `Finding`.                                                   |
-| `isGroup`            | const    | Narrows a value to one `Group` a plan selects over.                               |
-| `isGroups`           | const    | Narrows a value to a bounded group selection.                                     |
-| `isHex`              | const    | Narrows a value to exact lowercase hexadecimal bytes within one artifact's limit. |
-| `isManifestScript`   | const    | Narrows a value to a `ManifestScript`.                                            |
-| `isMirror`           | const    | Narrows a value to a `Mirror`.                                                    |
-| `isOverride`         | const    | Narrows a value to an `Override`.                                                 |
-| `isPath`             | function | Narrows a value to a logical target-relative path.                                |
-| `isPlan`             | const    | Narrows a value to a `Plan`.                                                      |
-| `isQuestion`         | const    | Narrows a value to a `Question`.                                                  |
-| `isScaffoldError`    | function | Narrows a caught value to a `ScaffoldError`.                                      |
-| `isSheetName`        | function | Narrows a value to a non-reserved sheet face name.                                |
-| `isSnapshot`         | function | Narrows a value to a `Snapshot`.                                                  |
-| `isStylesExtension`  | const    | Narrows a value to a named non-reserved stylesheet face.                          |
-| `isSurface`          | const    | Narrows a value to a surface an extension can extend.                             |
+| Name                 | Kind     | Signature                                         | Summary                                                                           |
+| -------------------- | -------- | ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `isArtifact`         | const    | `Guard<Artifact>`                                 | Narrows a value to an `Artifact`.                                                 |
+| `isAudit`            | const    | `Guard<Audit>`                                    | Narrows a value to an `Audit`.                                                    |
+| `isBlueprint`        | const    | `Guard<Blueprint>`                                | Narrows a value to a `Blueprint`.                                                 |
+| `isBrowserExtension` | const    | `Guard<BrowserExtension>`                         | Narrows a value to a supported browser framework with distinct occupied axes.     |
+| `isCatalogEntry`     | const    | `Guard<CatalogEntry>`                             | Narrows a value to a `CatalogEntry`.                                              |
+| `isCollection`       | function | `(value: unknown) => value is readonly unknown[]` | Narrows a value to an array within the limit one public collection accepts.       |
+| `isCompilerHooks`    | const    | `Guard<EmitterHooks<CompilerEventMap>>`           | Narrows a value to the compiler's initial listener record.                        |
+| `isCompilerOptions`  | const    | `Guard<CompilerOptions>`                          | Narrows a value to `CompilerOptions`.                                             |
+| `isContent`          | const    | `Guard<string>`                                   | Narrows a value to text this package will accept as one artifact's content.       |
+| `isDependency`       | const    | `Guard<Dependency>`                               | Narrows a value to a `Dependency`.                                                |
+| `isDependencyName`   | const    | `Guard<string>`                                   | Narrows a value to the scoped package name a runtime dependency carries.          |
+| `isEnvironment`      | const    | `Guard<Environment>`                              | Narrows a value to one `Environment` a workspace may select.                      |
+| `isExtension`        | const    | `Guard<Extension>`                                | Narrows a value to an extension of a supported surface.                           |
+| `isFinding`          | const    | `Guard<Finding>`                                  | Narrows a value to a `Finding`.                                                   |
+| `isGroup`            | const    | `Guard<Group>`                                    | Narrows a value to one `Group` a plan selects over.                               |
+| `isGroups`           | const    | `Guard<readonly Group[]>`                         | Narrows a value to a bounded group selection.                                     |
+| `isHex`              | const    | `Guard<string>`                                   | Narrows a value to exact lowercase hexadecimal bytes within one artifact's limit. |
+| `isManifestScript`   | const    | `Guard<ManifestScript>`                           | Narrows a value to a `ManifestScript`.                                            |
+| `isMirror`           | const    | `Guard<Mirror>`                                   | Narrows a value to a `Mirror`.                                                    |
+| `isOverride`         | const    | `Guard<Override>`                                 | Narrows a value to an `Override`.                                                 |
+| `isPath`             | function | `(value: unknown) => value is string`             | Narrows a value to a logical target-relative path.                                |
+| `isPlan`             | const    | `Guard<Plan>`                                     | Narrows a value to a `Plan`.                                                      |
+| `isQuestion`         | const    | `Guard<Question>`                                 | Narrows a value to a `Question`.                                                  |
+| `isScaffoldError`    | function | `(value: unknown) => value is ScaffoldError`      | Narrows a caught value to a `ScaffoldError`.                                      |
+| `isSheetName`        | function | `(value: unknown) => value is string`             | Narrows a value to a non-reserved sheet face name.                                |
+| `isSnapshot`         | function | `(value: unknown) => value is Snapshot`           | Narrows a value to a `Snapshot`.                                                  |
+| `isStylesExtension`  | const    | `Guard<StylesExtension>`                          | Narrows a value to a named non-reserved stylesheet face.                          |
+| `isSurface`          | const    | `Guard<Surface>`                                  | Narrows a value to a surface an extension can extend.                             |
 
 #### Parsers
 
-| Name                   | Kind     | Summary                                                                     |
-| ---------------------- | -------- | --------------------------------------------------------------------------- |
-| `parseBlueprint`       | function | Coerces an untrusted value to a `Blueprint`.                                |
-| `parseCompilerOptions` | function | Coerces an untrusted value to `CompilerOptions`.                            |
-| `parseExtension`       | function | Coerces an extension value or a `surface:name` selection into an extension. |
-| `parseGroups`          | function | Coerces an untrusted value to a group selection.                            |
-| `parseSnapshot`        | function | Coerces an untrusted value to a `Snapshot`.                                 |
+| Name                   | Kind     | Signature                                           | Summary                                                                     |
+| ---------------------- | -------- | --------------------------------------------------- | --------------------------------------------------------------------------- |
+| `parseBlueprint`       | function | `(value: unknown) => Blueprint \| undefined`        | Coerces an untrusted value to a `Blueprint`.                                |
+| `parseCompilerOptions` | function | `(value: unknown) => CompilerOptions \| undefined`  | Coerces an untrusted value to `CompilerOptions`.                            |
+| `parseExtension`       | function | `(value: unknown) => Extension \| undefined`        | Coerces an extension value or a `surface:name` selection into an extension. |
+| `parseGroups`          | function | `(value: unknown) => readonly Group[] \| undefined` | Coerces an untrusted value to a group selection.                            |
+| `parseSnapshot`        | function | `(value: unknown) => Snapshot \| undefined`         | Coerces an untrusted value to a `Snapshot`.                                 |
 
 #### Helpers
 
-| Name                        | Kind     | Summary                                                                                             |
-| --------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `artifactToFinding`         | function | Projects one planned artifact and the bytes found at its path into a verdict.                       |
-| `artifactToHex`             | function | Projects an artifact to the exact bytes it claims, as hexadecimal.                                  |
-| `bytesToHex`                | function | Encodes bytes as exact lowercase hexadecimal text.                                                  |
-| `catalogToLayers`           | function | Projects a catalog into the layers it publishes in.                                                 |
-| `cloneValue`                | function | Snapshots an untrusted value into exact JSON data the caller owns.                                  |
-| `compareVersions`           | function | Compares two versions by their numeric components.                                                  |
-| `computeBytes`              | function | Counts the UTF-8 bytes text encodes to.                                                             |
-| `computeHash`               | function | Computes the deterministic content identity of text.                                                |
-| `computeTotal`              | function | Computes the sum of a list of numbers.                                                              |
-| `contentToHex`              | function | Encodes text as the exact lowercase hexadecimal form of its UTF-8 bytes.                            |
-| `extractRangeMajor`         | function | Extracts the major component of an admitted dependency range.                                       |
-| `extractVersion`            | function | Extracts the major, minor, and patch components of an exact version.                                |
-| `inferDrift`                | function | Infers how one target path compares to the artifact planned for it.                                 |
-| `inferGroup`                | function | Infers the `Group` a path belongs to.                                                               |
-| `isCanonPath`               | function | Checks whether a path belongs to the instruction canon a target reads rather than holds.            |
-| `isDeferredPath`            | function | Checks whether another surface owns the vendored bytes at a path.                                   |
-| `isFloorPath`               | function | Checks whether a destination's floor bytes survive a live overlay.                                  |
-| `isRetainedPath`            | function | Checks whether another surface owns a target's present bytes at a path.                             |
-| `iterateAnswers`            | function | Yields the answer to each value of a source and ends after the first refused answer.                |
-| `manifestToDependencies`    | function | Projects a package manifest's text to the `@orkestrel/*` packages each dependency section declares. |
-| `manifestToName`            | function | Projects a package manifest's text to its own name.                                                 |
-| `matchesDriftReachability`  | function | Tests whether `inferDrift` could have produced a finding for an ownership.                          |
-| `matchesEngines`            | function | Tests whether a declared engines floor is at or above the supported minimum.                        |
-| `matchesOrchestrationPath`  | function | Tests whether a path instructs or wires an agent rather than the toolchain.                         |
-| `matchesPrintWidth`         | function | Tests whether one emitted line fits the vendored formatter width.                                   |
-| `matchesRange`              | function | Tests whether a declared range already admits a published version.                                  |
-| `nameToGuide`               | function | Derives the guide mirror path a package name answers for.                                           |
-| `planToSummary`             | function | Projects a plan into its tally by artifact origin.                                                  |
-| `renderSkillPointer`        | function | Renders the `SKILL.md` pointer a target carries in place of a canonical skill.                      |
-| `scanManifestTokens`        | function | Scans manifest text for its strings and object braces, in order.                                    |
-| `selectGroups`              | function | Selects the groups a compile covers, in plan order.                                                 |
-| `selectHostPaths`           | function | Selects the host paths a named workspace vendors.                                                   |
-| `serializeTypeScriptString` | function | Serializes one string as a single-quoted TypeScript literal.                                        |
-| `srcToRoot`                 | function | Selects the single published environment a package root points at.                                  |
+| Name                        | Kind     | Signature                                                                                                                                          | Summary                                                                                             |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `artifactToFinding`         | function | `(artifact: Artifact, observed?: string) => Finding`                                                                                               | Projects one planned artifact and the bytes found at its path into a verdict.                       |
+| `artifactToHex`             | function | `(artifact: Artifact) => string \| undefined`                                                                                                      | Projects an artifact to the exact bytes it claims, as hexadecimal.                                  |
+| `bytesToHex`                | function | `(bytes: Uint8Array) => string`                                                                                                                    | Encodes bytes as exact lowercase hexadecimal text.                                                  |
+| `catalogToLayers`           | function | `(entries: readonly CatalogEntry[]) => ReadonlyArray<readonly string[]>`                                                                           | Projects a catalog into the layers it publishes in.                                                 |
+| `cloneValue`                | function | `(value: unknown) => JSONValue \| undefined`                                                                                                       | Snapshots an untrusted value into exact JSON data the caller owns.                                  |
+| `compareVersions`           | function | `(left: string, right: string) => number`                                                                                                          | Compares two versions by their numeric components.                                                  |
+| `computeBytes`              | function | `(content: string) => number`                                                                                                                      | Counts the UTF-8 bytes text encodes to.                                                             |
+| `computeHash`               | function | `(text: string) => string`                                                                                                                         | Computes the deterministic content identity of text.                                                |
+| `computeTotal`              | function | `(values: readonly number[]) => number`                                                                                                            | Computes the sum of a list of numbers.                                                              |
+| `contentToHex`              | function | `(content: string) => string`                                                                                                                      | Encodes text as the exact lowercase hexadecimal form of its UTF-8 bytes.                            |
+| `extractRangeMajor`         | function | `(range: string) => number \| undefined`                                                                                                           | Extracts the major component of an admitted dependency range.                                       |
+| `extractVersion`            | function | `(version: string) => readonly [major: number, minor: number, patch: number] \| undefined`                                                         | Extracts the major, minor, and patch components of an exact version.                                |
+| `inferDrift`                | function | `(artifact: Artifact, observed?: string) => Exclude<Drift, 'foreign'>`                                                                             | Infers how one target path compares to the artifact planned for it.                                 |
+| `inferGroup`                | function | `(path: string) => Group`                                                                                                                          | Infers the `Group` a path belongs to.                                                               |
+| `isCanonPath`               | function | `(path: string) => boolean`                                                                                                                        | Checks whether a path belongs to the instruction canon a target reads rather than holds.            |
+| `isDeferredPath`            | function | `(path: string) => boolean`                                                                                                                        | Checks whether another surface owns the vendored bytes at a path.                                   |
+| `isFloorPath`               | function | `(path: string) => boolean`                                                                                                                        | Checks whether a destination's floor bytes survive a live overlay.                                  |
+| `isRetainedPath`            | function | `(path: string) => boolean`                                                                                                                        | Checks whether another surface owns a target's present bytes at a path.                             |
+| `iterateAnswers`            | function | `<TValue, TAnswer>(source: Iterable<TValue>, answer: (value: TValue) => TAnswer \| undefined) => Generator<TAnswer \| undefined, void, undefined>` | Yields the answer to each value of a source and ends after the first refused answer.                |
+| `manifestToDependencies`    | function | `(manifest: string) => ManifestDependencySet`                                                                                                      | Projects a package manifest's text to the `@orkestrel/*` packages each dependency section declares. |
+| `manifestToName`            | function | `(manifest: string) => string \| undefined`                                                                                                        | Projects a package manifest's text to its own name.                                                 |
+| `matchesDriftReachability`  | function | `(ownership: Ownership, finding: Finding) => boolean`                                                                                              | Tests whether `inferDrift` could have produced a finding for an ownership.                          |
+| `matchesEngines`            | function | `(engines: string) => boolean`                                                                                                                     | Tests whether a declared engines floor is at or above the supported minimum.                        |
+| `matchesOrchestrationPath`  | function | `(path: string) => boolean`                                                                                                                        | Tests whether a path instructs or wires an agent rather than the toolchain.                         |
+| `matchesPrintWidth`         | function | `(line: string) => boolean`                                                                                                                        | Tests whether one emitted line fits the vendored formatter width.                                   |
+| `matchesRange`              | function | `(range: string, latest: string) => boolean`                                                                                                       | Tests whether a declared range already admits a published version.                                  |
+| `nameToGuide`               | function | `(name: string) => string`                                                                                                                         | Derives the guide mirror path a package name answers for.                                           |
+| `planToSummary`             | function | `(plan: Plan) => PlanSummary`                                                                                                                      | Projects a plan into its tally by artifact origin.                                                  |
+| `renderSkillPointer`        | function | `(canonical: string, name: string) => string \| undefined`                                                                                         | Renders the `SKILL.md` pointer a target carries in place of a canonical skill.                      |
+| `scanManifestTokens`        | function | `(text: string) => readonly ManifestToken[] \| undefined`                                                                                          | Scans manifest text for its strings and object braces, in order.                                    |
+| `selectGroups`              | function | `(groups?: readonly Group[]) => readonly Group[]`                                                                                                  | Selects the groups a compile covers, in plan order.                                                 |
+| `selectHostPaths`           | function | `(paths: readonly string[], name: string) => readonly string[]`                                                                                    | Selects the host paths a named workspace vendors.                                                   |
+| `serializeTypeScriptString` | function | `(value: string) => string`                                                                                                                        | Serializes one string as a single-quoted TypeScript literal.                                        |
+| `srcToRoot`                 | function | `(src: readonly Environment[]) => Environment \| undefined`                                                                                        | Selects the single published environment a package root points at.                                  |
+
+| Name                       | Kind     | Signature                                                                                                                         | Summary                                                                                                                                                 |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectSurfaceAdvisories` | function | `(candidate: SurfaceContract, published: readonly string[], contracts: readonly SurfaceContract[]) => readonly SurfaceAdvisory[]` | Collects the near names and equal contracts other owners claim beside each name a candidate adds.                                                       |
+| `collectSurfaceCollisions` | function | `(claims: readonly SurfaceClaim[]) => readonly SurfaceCollision[]`                                                                | Collects bare names claimed by distinct owners in sorted order.                                                                                         |
+| `collectSurfaceConflicts`  | function | `(owner: string, exports: Readonly<Record<string, readonly string[]>>) => readonly SurfaceConflict[]`                             | Collects the bare names one owner exports from two or more of its environments.                                                                         |
+| `compareSurfaceCollisions` | function | `(collisions: readonly SurfaceCollision[], record: readonly SurfaceCollision[]) => readonly SurfaceFinding[]`                     | Compares collisions with the record and reports errors, recorded subsets, and closures.                                                                 |
+| `inferSurfaceSimilarity`   | function | `(name: string, other: string) => SurfaceSimilarity \| undefined`                                                                 | Infers how two different names resemble each other by spelling.                                                                                         |
+| `matchesGuideRefusal`      | function | `(error: unknown) => boolean`                                                                                                     | Checks whether an error is the `TARGET` refusal a surface reader raises for a guide its parser refuses, which carries the parser's code in its context. |
+| `matchesSurfaceStructure`  | function | `(signature: string) => boolean`                                                                                                  | Checks whether a guide `Signature` cell spells a structure rather than a literal or a type name.                                                        |
 
 #### Compilers
 
-| Name                                | Kind     | Summary                                                                                                  |
-| ----------------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `applyOverrides`                    | function | Replaces the content of every drafted artifact an override names.                                        |
-| `artifactsToQuestions`              | function | Measures a drafted artifact list against the laws a whole plan decides.                                  |
-| `blueprintToConfigArtifacts`        | function | Compiles every artifact in the `configs` group.                                                          |
-| `blueprintToDevDependencies`        | function | Projects a blueprint into the development dependencies its manifest declares.                            |
-| `blueprintToToolchainHolds`         | function | Projects a blueprint into the toolchain holds its browser frameworks require.                            |
-| `blueprintToDocumentArtifacts`      | function | Compiles the generated workspace's root documentation.                                                   |
-| `blueprintToExports`                | function | Projects published environments and sheets into the manifest export map.                                 |
-| `blueprintToFaces`                  | function | Projects a blueprint into browser extensions restricted to occupied browser axes.                        |
-| `blueprintToGuideArtifacts`         | function | Compiles the generated workspace's guide index.                                                          |
-| `blueprintToHostArtifacts`          | function | Compiles the vendored host artifacts a workspace plans.                                                  |
-| `blueprintToMachinery`              | function | Derives the host-specific machinery a generated root Vite configuration carries.                         |
-| `blueprintToManifest`               | function | Compiles a blueprint into its `package.json` content.                                                    |
-| `blueprintToManifestOverrides`      | function | Projects the scoped npm overrides required by a selected browser showcase.                               |
-| `blueprintToOrchestrationArtifacts` | function | Compiles the blueprint-dependent orchestration artifacts.                                                |
-| `blueprintToQuestions`              | function | Measures a blueprint against every law its own fields decide.                                            |
-| `blueprintToRootTsconfig`           | function | Compiles the root TypeScript configuration for a blueprint.                                              |
-| `blueprintToProjects`               | function | Projects a blueprint into the project labels its root Vitest configuration registers.                    |
-| `blueprintToOptimizedDependencies`  | function | Compiles the browser projects' pre-bundled dependency list for a blueprint.                              |
-| `blueprintToRootVite`               | function | Compiles the root Vite and Vitest configuration for a blueprint.                                         |
-| `blueprintToScripts`                | function | Projects a blueprint into the scripts its manifest declares.                                             |
-| `blueprintToSheets`                 | function | Projects a blueprint into its validated sheet-face names in stable order.                                |
-| `blueprintToSourceArtifacts`        | function | Compiles every artifact in the `source` group.                                                           |
-| `blueprintToTestArtifacts`          | function | Compiles every artifact in the `tests` group that is not vendored from the host.                         |
-| `blueprintToWritableScripts`        | function | Projects a blueprint into the manifest scripts a region write may replace.                               |
-| `dependenciesToQuestions`           | function | Measures one declared package list against the name and range syntax it accepts.                         |
-| `insertManifestDependencies`        | function | Inserts dependencies a package manifest does not declare into the section each one names.                |
-| `insertManifestSection`             | function | Inserts dependencies into one section of package manifest text.                                          |
-| `overridesToQuestions`              | function | Measures a blueprint's overrides against the artifacts drafted for it.                                   |
-| `pathToCondition`                   | function | Builds one `exports` condition block for a built environment.                                            |
-| `planToFindings`                    | function | Compares a plan against a target's current content.                                                      |
-| `planToHash`                        | function | Computes a plan's content identity.                                                                      |
-| `replaceManifestRanges`             | function | Replaces the runtime and development dependency ranges in package manifest text, and never a peer range. |
-| `replaceManifestOverride`           | function | Replaces one npm override leaf in manifest text, inserting its absent ancestors.                         |
-| `replaceManifestOverrides`          | function | Replaces selected npm override leaves while preserving every byte outside the edited path.               |
-| `replaceManifestScripts`            | function | Replaces named script values in package manifest text.                                                   |
-| `replacePlanRanges`                 | function | Replaces dependency ranges in a plan's manifest and recomputes its identity.                             |
-| `srcToEntry`                        | function | Projects a published selection into the manifest's entry fields.                                         |
-| `srcToExports`                      | function | Projects a published selection into the manifest's `exports` map.                                        |
+| Name                                | Kind     | Signature                                                                                                                                        | Summary                                                                                                  |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `applyOverrides`                    | function | `(artifacts: readonly Artifact[], overrides: readonly Override[]) => readonly Artifact[]`                                                        | Replaces the content of every drafted artifact an override names.                                        |
+| `artifactsToQuestions`              | function | `(artifacts: readonly Artifact[]) => readonly Question[]`                                                                                        | Measures a drafted artifact list against the laws a whole plan decides.                                  |
+| `blueprintToConfigArtifacts`        | function | `(blueprint: Blueprint) => readonly Artifact[]`                                                                                                  | Compiles every artifact in the `configs` group.                                                          |
+| `blueprintToDevDependencies`        | function | `(blueprint: Blueprint) => Readonly<Record<string, string>>`                                                                                     | Projects a blueprint into the development dependencies its manifest declares.                            |
+| `blueprintToToolchainHolds`         | function | `(blueprint: Blueprint) => Readonly<Record<string, ToolchainHold>>`                                                                              | Projects a blueprint into the toolchain holds its browser frameworks require.                            |
+| `blueprintToDocumentArtifacts`      | function | `(blueprint: Blueprint) => readonly ContentArtifact[]`                                                                                           | Compiles the generated workspace's root documentation.                                                   |
+| `blueprintToExports`                | function | `(blueprint: Blueprint) => Readonly<Record<string, unknown>>`                                                                                    | Projects published environments and sheets into the manifest export map.                                 |
+| `blueprintToFaces`                  | function | `(blueprint: Blueprint) => readonly BrowserExtension[]`                                                                                          | Projects a blueprint into browser extensions restricted to occupied browser axes.                        |
+| `blueprintToGuideArtifacts`         | function | `(blueprint: Blueprint) => readonly ContentArtifact[]`                                                                                           | Compiles the generated workspace's guide index.                                                          |
+| `blueprintToHostArtifacts`          | function | `(blueprint: Blueprint) => readonly Artifact[]`                                                                                                  | Compiles the vendored host artifacts a workspace plans.                                                  |
+| `blueprintToMachinery`              | function | `(blueprint: Blueprint) => ViteMachinery`                                                                                                        | Derives the host-specific machinery a generated root Vite configuration carries.                         |
+| `blueprintToManifest`               | function | `(blueprint: Blueprint) => string`                                                                                                               | Compiles a blueprint into its `package.json` content.                                                    |
+| `blueprintToManifestOverrides`      | function | `(blueprint: Blueprint) => Readonly<Record<string, Readonly<Record<string, string>>>>`                                                           | Projects the scoped npm overrides required by a selected browser showcase.                               |
+| `blueprintToOrchestrationArtifacts` | function | `(blueprint: Blueprint) => readonly ContentArtifact[]`                                                                                           | Compiles the blueprint-dependent orchestration artifacts.                                                |
+| `blueprintToQuestions`              | function | `(blueprint: Blueprint) => readonly Question[]`                                                                                                  | Measures a blueprint against every law its own fields decide.                                            |
+| `blueprintToRootTsconfig`           | function | `(blueprint: Blueprint) => string`                                                                                                               | Compiles the root TypeScript configuration for a blueprint.                                              |
+| `blueprintToProjects`               | function | `(blueprint: Blueprint) => readonly string[]`                                                                                                    | Projects a blueprint into the project labels its root Vitest configuration registers.                    |
+| `blueprintToOptimizedDependencies`  | function | `(blueprint: Blueprint) => string`                                                                                                               | Compiles the browser projects' pre-bundled dependency list for a blueprint.                              |
+| `blueprintToRootVite`               | function | `(blueprint: Blueprint) => string`                                                                                                               | Compiles the root Vite and Vitest configuration for a blueprint.                                         |
+| `blueprintToScripts`                | function | `(blueprint: Blueprint) => Readonly<Record<string, string>>`                                                                                     | Projects a blueprint into the scripts its manifest declares.                                             |
+| `blueprintToSheets`                 | function | `(blueprint: Blueprint) => readonly string[]`                                                                                                    | Projects a blueprint into its validated sheet-face names in stable order.                                |
+| `blueprintToSourceArtifacts`        | function | `(blueprint: Blueprint) => readonly ContentArtifact[]`                                                                                           | Compiles every artifact in the `source` group.                                                           |
+| `blueprintToTestArtifacts`          | function | `(blueprint: Blueprint) => readonly ContentArtifact[]`                                                                                           | Compiles every artifact in the `tests` group that is not vendored from the host.                         |
+| `blueprintToWritableScripts`        | function | `(blueprint: Blueprint) => readonly ManifestScript[]`                                                                                            | Projects a blueprint into the manifest scripts a region write may replace.                               |
+| `dependenciesToQuestions`           | function | `(dependencies: readonly Dependency[], field: string, name: RegExp, range: RegExp) => readonly Question[]`                                       | Measures one declared package list against the name and range syntax it accepts.                         |
+| `insertManifestDependencies`        | function | `(manifest: string, additions: DependencyPinSet) => string \| undefined`                                                                         | Inserts dependencies a package manifest does not declare into the section each one names.                |
+| `insertManifestSection`             | function | `(manifest: string, section: 'dependencies' \| 'devDependencies', dependencies: readonly Dependency[], present: boolean) => string \| undefined` | Inserts dependencies into one section of package manifest text.                                          |
+| `overridesToQuestions`              | function | `(overrides: readonly Override[], artifacts: readonly Artifact[]) => readonly Question[]`                                                        | Measures a blueprint's overrides against the artifacts drafted for it.                                   |
+| `pathToCondition`                   | function | `(path: string, formats: readonly BuildFormat[]) => Readonly<Record<string, unknown>>`                                                           | Builds one `exports` condition block for a built environment.                                            |
+| `planToFindings`                    | function | `(plan: Plan, current: Snapshot) => readonly Finding[]`                                                                                          | Compares a plan against a target's current content.                                                      |
+| `planToHash`                        | function | `(plan: Plan) => string \| undefined`                                                                                                            | Computes a plan's content identity.                                                                      |
+| `replaceManifestRanges`             | function | `(manifest: string, pins: DependencyPinSet) => string \| undefined`                                                                              | Replaces the runtime and development dependency ranges in package manifest text, and never a peer range. |
+| `replaceManifestOverride`           | function | `(manifest: string, path: readonly string[], range: string) => string \| undefined`                                                              | Replaces one npm override leaf in manifest text, inserting its absent ancestors.                         |
+| `replaceManifestOverrides`          | function | `(manifest: string, overrides: Readonly<Record<string, Readonly<Record<string, string>>>>) => string \| undefined`                               | Replaces selected npm override leaves while preserving every byte outside the edited path.               |
+| `replaceManifestScripts`            | function | `(manifest: string, scripts: readonly ManifestScript[]) => string \| undefined`                                                                  | Replaces named script values in package manifest text.                                                   |
+| `replacePlanRanges`                 | function | `(plan: Plan, pins: DependencyPinSet) => Plan \| undefined`                                                                                      | Replaces dependency ranges in a plan's manifest and recomputes its identity.                             |
+| `srcToEntry`                        | function | `(src: readonly Environment[]) => { readonly main: string; readonly module: string; readonly types?: string; }`                                  | Projects a published selection into the manifest's entry fields.                                         |
+| `srcToExports`                      | function | `(src: readonly Environment[]) => Readonly<Record<string, unknown>>`                                                                             | Projects a published selection into the manifest's `exports` map.                                        |
 
 #### Factories
 
-| Name              | Kind     | Summary                                                                            |
-| ----------------- | -------- | ---------------------------------------------------------------------------------- |
-| `createBlueprint` | function | Constructs a `Blueprint` from a name and the fields that differ from the defaults. |
+| Name              | Kind     | Signature                                                               | Summary                                                                            |
+| ----------------- | -------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `createBlueprint` | function | `(name: string, input?: Partial<Omit<Blueprint, 'name'>>) => Blueprint` | Constructs a `Blueprint` from a name and the fields that differ from the defaults. |
 
 #### Classes
 
-| Name            | Kind  | Summary                                                                                |
-| --------------- | ----- | -------------------------------------------------------------------------------------- |
-| `Compiler`      | class | Represents the compile spine: draft, gate, pin, run in that order over a blueprint.    |
-| `ScaffoldError` | class | Represents the one error this package throws, carrying the coded reason it was raised. |
+| Name            | Kind  | Signature                                                                            | Summary                                                                                |
+| --------------- | ----- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `Compiler`      | class | `new (options?: CompilerOptions) => CompilerInterface`                               | Represents the compile spine: draft, gate, pin, run in that order over a blueprint.    |
+| `ScaffoldError` | class | `new (code: ScaffoldErrorCode, message: string, context?: unknown) => ScaffoldError` | Represents the one error this package throws, carrying the coded reason it was raised. |
 
 ### Server
 
@@ -357,152 +381,152 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 
 #### Types
 
-| Name                   | Kind | Summary                                               |
-| ---------------------- | ---- | ----------------------------------------------------- |
-| `MaterializerEventMap` | type | Represents the materializer's observation channel.    |
-| `UpstreamEventMap`     | type | Represents the upstream reader's observation channel. |
+| Name                   | Kind | Signature                                                                                                                                                                                                                 | Summary                                                       |
+| ---------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `MaterializerEventMap` | type | `{ readonly write: readonly [path: string]; readonly remove: readonly [path: string]; readonly finish: readonly [result: MaterializeResult]; readonly error: readonly [error: unknown]; readonly destroy: readonly []; }` | Represents the materializer's observation channel.            |
+| `UpstreamEventMap`     | type | `{ readonly release: readonly [release: Release]; readonly mirror: readonly [mirror: Mirror]; readonly file: readonly [file: HostFile]; readonly error: readonly [error: unknown]; readonly destroy: readonly []; }`      | Represents the upstream reader's observation channel.         |
+| `SurfaceLoader`        | type | `(specifier: string) => unknown`                                                                                                                                                                                          | Loads a module by specifier for validated surface reflection. |
 
 #### Interfaces
 
-| Name                     | Kind      | Summary                                                                                           |
-| ------------------------ | --------- | ------------------------------------------------------------------------------------------------- |
-| `BytesReadResult`        | interface | Reports the outcome of one bounded read whose body is taken as exact bytes.                       |
-| `Host`                   | interface | Represents a whole vendored host supplied as a value: the membership beside the bytes filling it. |
-| `HostInventory`          | interface | Represents the committed vendored-file inventory as one call's reads are decided against.         |
-| `HostManifest`           | interface | Represents the complete vendored-host inventory.                                                  |
-| `HostStageOptions`       | interface | Configures the committed inventory baseline and staging reports.                                  |
-| `ManifestEntry`          | interface | Represents one file record of the vendored host's manifest.                                       |
-| `MaterializeResult`      | interface | Reports the outcome of one mutation of a target.                                                  |
-| `MaterializerInterface`  | interface | Describes the mutation contract: the package's only filesystem writer.                            |
-| `MaterializerOptions`    | interface | Represents the options for the materializer.                                                      |
-| `ReadAllowanceInterface` | interface | Describes the byte allowance one upstream call spends across every read it makes.                 |
-| `SurfaceCollision`       | interface | Represents a Surface name claimed by distinct package guides.                                     |
-| `TextReadResult`         | interface | Reports the outcome of one bounded read whose body is taken as text.                              |
-| `Worktree`               | interface | Describes what git reports about a target's working tree.                                         |
-| `UpstreamInterface`      | interface | Describes the upstream contract: the package's only network reader, and it never writes.          |
-| `UpstreamOptions`        | interface | Represents the options for the upstream reader.                                                   |
-| `WriteAnchor`            | interface | Represents one physical directory identity captured across a write transaction.                   |
-| `WriteDirectoryResult`   | interface | Reports the final directory anchor of a write transaction and the subset one call created.        |
-| `WriteExpectation`       | interface | Represents one destination snapshot captured before a write and required to survive it.           |
-| `WritePrecondition`      | interface | Describes the narrower caller-observed destination state a write transaction must still match.    |
-
-The inventory contracts carry these data members.
-
-| Member                       | Contract                                                                                                                                  |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `HostManifest.surface`       | Required readonly `SurfaceCollision[]`, sorted by name; each collision has distinct sorted owners and is included in the manifest digest. |
-| `HostStageOptions.inventory` | Optional checkout-relative inventory path. Default: `HOST_INVENTORY_PATH` (`host.json`).                                                  |
-| `HostStageOptions.establish` | Optional boolean. If `true`, an absent inventory establishes the baseline; if `false`, staging refuses it. Default: `false`.              |
-| `HostStageOptions.report`    | Optional callback receiving the baseline location or its absence. Default: no reporting.                                                  |
+| Name                     | Kind      | Signature                                                                                            | Summary                                                                                           |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `BytesReadResult`        | interface | `{ lookup, hex, note, unreachable? }`                                                                | Reports the outcome of one bounded read whose body is taken as exact bytes.                       |
+| `Host`                   | interface | `{ manifest, bytes }`                                                                                | Represents a whole vendored host supplied as a value: the membership beside the bytes filling it. |
+| `HostInventory`          | interface | `{ lookup, digests, duplicates, note, surface, unreachable? }`                                       | Represents the committed vendored-file inventory as one call's reads are decided against.         |
+| `HostManifest`           | interface | `{ entries, roots, surface, digest }`                                                                | Represents the complete vendored-host inventory.                                                  |
+| `HostStageOptions`       | interface | `{ inventory?, establish?, report? }`                                                                | Configures the committed inventory baseline and staging reports.                                  |
+| `ManifestEntry`          | interface | `{ storage, destination, executable, digest }`                                                       | Represents one file record of the vendored host's manifest.                                       |
+| `MaterializeResult`      | interface | `{ target, written, skipped, removed }`                                                              | Reports the outcome of one mutation of a target.                                                  |
+| `MaterializerInterface`  | interface | `{ emitter, audit(), materialize(), repair(), mirror(), catalog(), declare(), remove(), destroy() }` | Describes the mutation contract: the package's only filesystem writer.                            |
+| `MaterializerOptions`    | interface | `{ host?, on?, error? }`                                                                             | Represents the options for the materializer.                                                      |
+| `ReadAllowanceInterface` | interface | `{ remaining, spend() }`                                                                             | Describes the byte allowance one upstream call spends across every read it makes.                 |
+| `SurfaceModule`          | interface | `{ createGuide, createSource, extractSourceLines, isGuideError }`                                    | Describes the guide module functions required by surface reflection.                              |
+| `TextReadResult`         | interface | `{ lookup, content, note, unreachable? }`                                                            | Reports the outcome of one bounded read whose body is taken as text.                              |
+| `Worktree`               | interface | `{ tracked, dirty }`                                                                                 | Describes what git reports about a target's working tree.                                         |
+| `UpstreamInterface`      | interface | `{ emitter, lookup(), fetch(), read(), catalog(), inventory(), destroy() }`                          | Describes the upstream contract: the package's only network reader, and it never writes.          |
+| `UpstreamOptions`        | interface | `{ repository?, registry?, concurrency?, retries?, limit?, budget?, on?, error? }`                   | Represents the options for the upstream reader.                                                   |
+| `WriteAnchor`            | interface | `{ path, device, inode }`                                                                            | Represents one physical directory identity captured across a write transaction.                   |
+| `WriteDirectoryResult`   | interface | `{ anchor, created }`                                                                                | Reports the final directory anchor of a write transaction and the subset one call created.        |
+| `WriteExpectation`       | interface | `{ path, shape, device?, inode?, modified?, size?, digest? }`                                        | Represents one destination snapshot captured before a write and required to survive it.           |
+| `WritePrecondition`      | interface | `{ path, shape, digest? }`                                                                           | Describes the narrower caller-observed destination state a write transaction must still match.    |
 
 #### Constants
 
-| Name                                | Kind  | Summary                                                                                               |
-| ----------------------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
-| `BRANCH_PATTERN`                    | const | Matches the Git branch syntax the repository endpoint accepts.                                        |
-| `DEFAULT_BRANCH`                    | const | Holds the repository branch a raw content read addresses when a caller names none.                    |
-| `DEFAULT_REGISTRY_BASE`             | const | Holds the registry a version read addresses when a caller names none.                                 |
-| `DEFAULT_REPOSITORY_BASE`           | const | Holds the raw content host a repository read addresses when a caller names none.                      |
-| `DEFAULT_UPSTREAM_CONCURRENCY`      | const | Sets the simultaneous upstream requests a reader opens with, under `MAX_UPSTREAM_CONCURRENCY`.        |
-| `DEFAULT_UPSTREAM_RETRIES`          | const | Sets the retries one upstream request is given when a caller names none.                              |
-| `DEFAULT_UPSTREAM_TIMEOUT`          | const | Sets the timeout one upstream request is given when a caller names none, in milliseconds.             |
-| `DIGEST_PATTERN`                    | const | Matches the exact SHA-256 syntax a digest is stated in: sixty-four lowercase hexadecimal digits.      |
-| `DRIVE_PATTERN`                     | const | Matches the drive prefix a Windows host path may open with.                                           |
-| `INVALID_SEGMENT_CHARACTER_PATTERN` | const | Matches the visible characters no host path segment may carry.                                        |
-| `MANIFEST_NAME`                     | const | Reserves the metadata name a staged vendored host writes at its own root.                             |
-| `MAX_BRANCH_LENGTH`                 | const | Caps the characters one repository branch may carry.                                                  |
-| `MAX_ENDPOINT_LENGTH`               | const | Caps the characters one caller-supplied upstream endpoint may carry.                                  |
-| `MAX_INVENTORY_PATHS`               | const | Caps the paths one target's working-tree inventory may report.                                        |
-| `MAX_PATH_DEPTH`                    | const | Caps the segments one host path may carry.                                                            |
-| `MAX_PATH_SEGMENT_BYTES`            | const | Caps the UTF-8 bytes one host path segment may encode to.                                             |
-| `MAX_UPSTREAM_CONCURRENCY`          | const | Caps the simultaneous upstream requests.                                                              |
-| `MAX_UPSTREAM_RETRIES`              | const | Caps the retries one upstream request may be given after a transport fault.                           |
-| `MAX_UPSTREAM_TIMEOUT`              | const | Caps the timeout one upstream request may be given, in milliseconds.                                  |
-| `ORKESTREL_SCOPE`                   | const | Names the npm scope and repository owner the fleet's packages and sources are published under.        |
-| `PACKUMENT_MEDIA_TYPE`              | const | Names the media type that selects the registry's abbreviated packument.                               |
-| `RESERVED_SEGMENT_PATTERN`          | const | Matches the Windows device names that stay reserved even when an extension follows.                   |
-| `SCAFFOLD_REPOSITORY`               | const | Names the repository this package's own vendored files are served from.                               |
-| `UNREADABLE_VERSION_NOTE`           | const | Holds the note a release carries when its packument names no readable version under the `latest` tag. |
+| Name                                | Kind  | Signature                                         | Summary                                                                                               |
+| ----------------------------------- | ----- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `BRANCH_PATTERN`                    | const | `RegExp`                                          | Matches the Git branch syntax the repository endpoint accepts.                                        |
+| `DEFAULT_BRANCH`                    | const | `"main"`                                          | Holds the repository branch a raw content read addresses when a caller names none.                    |
+| `DEFAULT_REGISTRY_BASE`             | const | `"https://registry.npmjs.org"`                    | Holds the registry a version read addresses when a caller names none.                                 |
+| `DEFAULT_REPOSITORY_BASE`           | const | `"https://raw.githubusercontent.com"`             | Holds the raw content host a repository read addresses when a caller names none.                      |
+| `DEFAULT_UPSTREAM_CONCURRENCY`      | const | `6`                                               | Sets the simultaneous upstream requests a reader opens with, under `MAX_UPSTREAM_CONCURRENCY`.        |
+| `DEFAULT_UPSTREAM_RETRIES`          | const | `0`                                               | Sets the retries one upstream request is given when a caller names none.                              |
+| `DEFAULT_UPSTREAM_TIMEOUT`          | const | `10000`                                           | Sets the timeout one upstream request is given when a caller names none, in milliseconds.             |
+| `DIGEST_PATTERN`                    | const | `RegExp`                                          | Matches the exact SHA-256 syntax a digest is stated in: sixty-four lowercase hexadecimal digits.      |
+| `DRIVE_PATTERN`                     | const | `RegExp`                                          | Matches the drive prefix a Windows host path may open with.                                           |
+| `INVALID_SEGMENT_CHARACTER_PATTERN` | const | `RegExp`                                          | Matches the visible characters no host path segment may carry.                                        |
+| `MANIFEST_NAME`                     | const | `"manifest.json"`                                 | Reserves the metadata name a staged vendored host writes at its own root.                             |
+| `MAX_BRANCH_LENGTH`                 | const | `255`                                             | Caps the characters one repository branch may carry.                                                  |
+| `MAX_ENDPOINT_LENGTH`               | const | `2048`                                            | Caps the characters one caller-supplied upstream endpoint may carry.                                  |
+| `MAX_INVENTORY_PATHS`               | const | `100000`                                          | Caps the paths one target's working-tree inventory may report.                                        |
+| `MAX_PATH_DEPTH`                    | const | `64`                                              | Caps the segments one host path may carry.                                                            |
+| `MAX_PATH_SEGMENT_BYTES`            | const | `255`                                             | Caps the UTF-8 bytes one host path segment may encode to.                                             |
+| `MAX_UPSTREAM_CONCURRENCY`          | const | `64`                                              | Caps the simultaneous upstream requests.                                                              |
+| `MAX_UPSTREAM_RETRIES`              | const | `5`                                               | Caps the retries one upstream request may be given after a transport fault.                           |
+| `MAX_UPSTREAM_TIMEOUT`              | const | `300000`                                          | Caps the timeout one upstream request may be given, in milliseconds.                                  |
+| `ORKESTREL_SCOPE`                   | const | `"orkestrel"`                                     | Names the npm scope and repository owner the fleet's packages and sources are published under.        |
+| `PACKUMENT_MEDIA_TYPE`              | const | `"application/vnd.npm.install-v1+json"`           | Names the media type that selects the registry's abbreviated packument.                               |
+| `RESERVED_SEGMENT_PATTERN`          | const | `RegExp`                                          | Matches the Windows device names that stay reserved even when an extension follows.                   |
+| `SCAFFOLD_REPOSITORY`               | const | `"scaffold"`                                      | Names the repository this package's own vendored files are served from.                               |
+| `UNREADABLE_VERSION_NOTE`           | const | `"the answer carries no readable latest version"` | Holds the note a release carries when its packument names no readable version under the `latest` tag. |
 
 #### Guards
 
-| Name                    | Kind     | Summary                                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------------------- |
-| `isBranch`              | const    | Narrows a value to a Git branch the repository endpoint accepts.                    |
-| `isCatalogEntries`      | const    | Narrows a value to a bounded list of fleet catalog rows.                            |
-| `isDependencies`        | const    | Narrows a value to a bounded list of declared runtime dependencies.                 |
-| `isDependencyNames`     | const    | Narrows a value to a bounded list of `@orkestrel` package names.                    |
-| `isDigest`              | const    | Narrows a value to one exact SHA-256 digest.                                        |
-| `isEndpoint`            | const    | Narrows a value to a bounded upstream endpoint.                                     |
-| `isFilesystemPath`      | function | Narrows a value to a path naming a location on this host.                           |
-| `isHost`                | const    | Narrows a value to one `Host`.                                                      |
-| `isHostManifest`        | const    | Narrows a value to one `HostManifest`.                                              |
-| `isInventory`           | function | Narrows a value to a working-tree inventory within the limit one target may report. |
-| `isManifestEntry`       | const    | Narrows a value to one `ManifestEntry`.                                             |
-| `isManifestRegionSet`   | const    | Narrows a value to one `ManifestRegionSet`.                                         |
-| `isMaterializerHooks`   | const    | Narrows a value to the materializer's initial listener record.                      |
-| `isMaterializerOptions` | const    | Narrows a value to `MaterializerOptions`.                                           |
-| `isMirrors`             | const    | Narrows a value to a bounded list of fetched guide mirrors.                         |
-| `isPaths`               | const    | Narrows a value to a bounded list of target-relative paths.                         |
-| `isWorktree`            | const    | Narrows a value to a `Worktree`.                                                    |
-| `isTimeout`             | const    | Narrows a value to a per-request timeout in milliseconds.                           |
-| `isUpstreamHooks`       | const    | Narrows a value to the upstream reader's initial listener record.                   |
-| `isUpstreamOptions`     | const    | Narrows a value to `UpstreamOptions`.                                               |
+| Name                    | Kind     | Signature                                         | Summary                                                                             |
+| ----------------------- | -------- | ------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `isBranch`              | const    | `Guard<string>`                                   | Narrows a value to a Git branch the repository endpoint accepts.                    |
+| `isCatalogEntries`      | const    | `Guard<readonly CatalogEntry[]>`                  | Narrows a value to a bounded list of fleet catalog rows.                            |
+| `isDependencies`        | const    | `Guard<readonly Dependency[]>`                    | Narrows a value to a bounded list of declared runtime dependencies.                 |
+| `isDependencyNames`     | const    | `Guard<readonly string[]>`                        | Narrows a value to a bounded list of `@orkestrel` package names.                    |
+| `isDigest`              | const    | `Guard<string>`                                   | Narrows a value to one exact SHA-256 digest.                                        |
+| `isEndpoint`            | const    | `Guard<string>`                                   | Narrows a value to a bounded upstream endpoint.                                     |
+| `isFilesystemPath`      | function | `(value: unknown) => value is string`             | Narrows a value to a path naming a location on this host.                           |
+| `isHost`                | const    | `Guard<Host>`                                     | Narrows a value to one `Host`.                                                      |
+| `isHostManifest`        | const    | `Guard<HostManifest>`                             | Narrows a value to one `HostManifest`.                                              |
+| `isInventory`           | function | `(value: unknown) => value is readonly unknown[]` | Narrows a value to a working-tree inventory within the limit one target may report. |
+| `isManifestEntry`       | const    | `Guard<ManifestEntry>`                            | Narrows a value to one `ManifestEntry`.                                             |
+| `isManifestRegionSet`   | const    | `Guard<ManifestRegionSet>`                        | Narrows a value to one `ManifestRegionSet`.                                         |
+| `isMaterializerHooks`   | const    | `Guard<EmitterHooks<MaterializerEventMap>>`       | Narrows a value to the materializer's initial listener record.                      |
+| `isMaterializerOptions` | const    | `Guard<MaterializerOptions>`                      | Narrows a value to `MaterializerOptions`.                                           |
+| `isMirrors`             | const    | `Guard<readonly Mirror[]>`                        | Narrows a value to a bounded list of fetched guide mirrors.                         |
+| `isPaths`               | const    | `Guard<readonly string[]>`                        | Narrows a value to a bounded list of target-relative paths.                         |
+| `isSurfaceModule`       | function | `(value: unknown) => value is SurfaceModule`      | Narrows a value to the callable guide functions surface reflection requires.        |
+| `isWorktree`            | const    | `Guard<Worktree>`                                 | Narrows a value to a `Worktree`.                                                    |
+| `isTimeout`             | const    | `Guard<number>`                                   | Narrows a value to a per-request timeout in milliseconds.                           |
+| `isUpstreamHooks`       | const    | `Guard<EmitterHooks<UpstreamEventMap>>`           | Narrows a value to the upstream reader's initial listener record.                   |
+| `isUpstreamOptions`     | const    | `Guard<UpstreamOptions>`                          | Narrows a value to `UpstreamOptions`.                                               |
 
 #### Helpers
 
-| Name                      | Kind     | Summary                                                                                           |
-| ------------------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `climbRealPath`           | function | Climbs from an absolute path to its deepest existing ancestor and resolves it through every link. |
-| `collectIndexed`          | function | Places each result at the index its entry names, in a fresh array.                                |
-| `computeDigest`           | function | Computes the SHA-256 digest of text.                                                              |
-| `computeFileDigest`       | function | Computes the SHA-256 digest of one file's exact bytes.                                            |
-| `computeManifestDigest`   | function | Computes the digest of a vendored host's declared membership.                                     |
-| `decodeHexText`           | function | Decodes exact bytes stated in hexadecimal as strict UTF-8 text.                                   |
-| `filesToHost`             | function | Assembles a whole vendored host from live files and the installed floor.                          |
-| `hexToDigest`             | function | Projects exact bytes stated in hexadecimal to their SHA-256 digest.                               |
-| `isExactCaseFile`         | function | Tests whether a path is a physical file with exact on-disk casing.                                |
-| `isPhysicalDirectory`     | function | Tests whether a path is a physical directory this package will read or write into.                |
-| `isPhysicalFile`          | function | Tests whether a path is a physical file this package will read or replace.                        |
-| `isVacant`                | function | Tests whether a target is safe to write a fresh workspace into.                                   |
-| `listAncestors`           | function | Lists a path followed by each directory above it, nearest first.                                  |
-| `listCanonPaths`          | function | Lists the canon paths a target holds, filtered to a plan's groups.                                |
-| `listDirectories`         | function | Lists a directory's descendant directories as sorted root-relative paths.                         |
-| `listFiles`               | function | Lists a directory's files as sorted root-relative paths.                                          |
-| `matchesAnchor`           | function | Tests whether a path still holds the captured directory identity.                                 |
-| `matchesExecutablePath`   | function | Tests whether a vendored path is one a target receives executable.                                |
-| `matchesExpectation`      | function | Tests whether a destination still holds what was captured of it.                                  |
-| `matchesGitPath`          | function | Tests whether a path addresses a target's own repository metadata.                                |
-| `matchesMissingPath`      | function | Tests whether a caught filesystem error reports an absent path.                                   |
-| `matchesPrecondition`     | function | Tests whether a destination still matches the narrower state a caller observed.                   |
-| `matchesProtectedPath`    | function | Tests whether a target-relative path is one no verb may delete.                                   |
-| `matchesSensitivePath`    | function | Tests whether a path names local configuration or a credential.                                   |
-| `pathToStorage`           | function | Projects a target-relative path to the storage name a vendored host holds it under.               |
-| `pruneEmptiedDirectories` | function | Removes every directory one set of deletions emptied.                                             |
-| `readAnchor`              | function | Captures one directory's physical identity.                                                       |
-| `readExpectation`         | function | Captures what one destination holds before a write.                                               |
-| `readFileHex`             | function | Reads one contained file as its exact bytes in lowercase hexadecimal.                             |
-| `readFileText`            | function | Reads one contained file as bounded UTF-8 text.                                                   |
-| `readHostFloor`           | function | Reads the installed vendored host floor as a value.                                               |
-| `readHostManifest`        | function | Reads a vendored host's manifest, when it carries one.                                            |
-| `readManifestEntry`       | function | Derives one vendored-host manifest entry from a file in a checkout.                               |
-| `readSnapshot`            | function | Reads a target's current bytes at the paths a plan claims.                                        |
-| `readSurfaceBaseline`     | function | Reads the Surface collision baseline from a committed inventory.                                  |
-| `readSurfaceCollisions`   | function | Reads bare Surface names claimed by distinct package guides.                                      |
-| `resolveContainedPath`    | function | Resolves a root-relative path and refuses one that leaves its root.                               |
-| `resolveRealPath`         | function | Resolves a path through the real filesystem, keeping the part that does not exist yet.            |
-| `stageBytes`              | function | Stages the named destinations of a value host into a private root.                                |
-| `stageHost`               | function | Stages a vendored host root from a real checkout.                                                 |
-| `stageInventory`          | function | Stages the committed inventory of the files a vendored host carries.                              |
+| Name                      | Kind     | Signature                                                                                                       | Summary                                                                                           |
+| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `climbRealPath`           | function | `(current: string, pending: readonly string[], depth: number) => string \| undefined`                           | Climbs from an absolute path to its deepest existing ancestor and resolves it through every link. |
+| `collectIndexed`          | function | `<TResult>(entries: ReadonlyArray<readonly [number, TResult]>) => readonly TResult[]`                           | Places each result at the index its entry names, in a fresh array.                                |
+| `computeDigest`           | function | `(content: string) => string`                                                                                   | Computes the SHA-256 digest of text.                                                              |
+| `computeFileDigest`       | function | `(path: string) => string \| undefined`                                                                         | Computes the SHA-256 digest of one file's exact bytes.                                            |
+| `computeManifestDigest`   | function | `(entries: readonly ManifestEntry[], roots: readonly string[], surface: readonly SurfaceCollision[]) => string` | Computes the digest of a vendored host's declared membership.                                     |
+| `decodeHexText`           | function | `(hex: string) => string \| undefined`                                                                          | Decodes exact bytes stated in hexadecimal as strict UTF-8 text.                                   |
+| `filesToHost`             | function | `(files: readonly HostFile[], floor: Host) => Host \| undefined`                                                | Assembles a whole vendored host from live files and the installed floor.                          |
+| `hexToDigest`             | function | `(hex: string) => string`                                                                                       | Projects exact bytes stated in hexadecimal to their SHA-256 digest.                               |
+| `isExactCaseFile`         | function | `(path: string) => boolean`                                                                                     | Tests whether a path is a physical file with exact on-disk casing.                                |
+| `isPhysicalDirectory`     | function | `(path: string) => boolean`                                                                                     | Tests whether a path is a physical directory this package will read or write into.                |
+| `isPhysicalFile`          | function | `(path: string) => boolean`                                                                                     | Tests whether a path is a physical file this package will read or replace.                        |
+| `isVacant`                | function | `(target: string) => boolean`                                                                                   | Tests whether a target is safe to write a fresh workspace into.                                   |
+| `listAncestors`           | function | `(path: string, limit?: number) => readonly string[]`                                                           | Lists a path followed by each directory above it, nearest first.                                  |
+| `listCanonPaths`          | function | `(target: string, groups: readonly Group[]) => readonly string[]`                                               | Lists the canon paths a target holds, filtered to a plan's groups.                                |
+| `listDirectories`         | function | `(root: string) => readonly string[]`                                                                           | Lists a directory's descendant directories as sorted root-relative paths.                         |
+| `listFiles`               | function | `(root: string) => readonly string[]`                                                                           | Lists a directory's files as sorted root-relative paths.                                          |
+| `matchesAnchor`           | function | `(anchor: WriteAnchor) => boolean`                                                                              | Tests whether a path still holds the captured directory identity.                                 |
+| `matchesExecutablePath`   | function | `(path: string) => boolean`                                                                                     | Tests whether a vendored path is one a target receives executable.                                |
+| `matchesExpectation`      | function | `(expectation: WriteExpectation) => boolean`                                                                    | Tests whether a destination still holds what was captured of it.                                  |
+| `matchesGitPath`          | function | `(path: string) => boolean`                                                                                     | Tests whether a path addresses a target's own repository metadata.                                |
+| `matchesMissingPath`      | function | `(error: unknown) => boolean`                                                                                   | Tests whether a caught filesystem error reports an absent path.                                   |
+| `matchesPrecondition`     | function | `(precondition: WritePrecondition) => boolean`                                                                  | Tests whether a destination still matches the narrower state a caller observed.                   |
+| `matchesProtectedPath`    | function | `(path: string) => boolean`                                                                                     | Tests whether a target-relative path is one no verb may delete.                                   |
+| `matchesSensitivePath`    | function | `(path: string) => boolean`                                                                                     | Tests whether a path names local configuration or a credential.                                   |
+| `pathToStorage`           | function | `(path: string) => string`                                                                                      | Projects a target-relative path to the storage name a vendored host holds it under.               |
+| `pruneEmptiedDirectories` | function | `(target: string, removed: readonly string[]) => readonly string[]`                                             | Removes every directory one set of deletions emptied.                                             |
+| `readAnchor`              | function | `(path: string) => WriteAnchor \| undefined`                                                                    | Captures one directory's physical identity.                                                       |
+| `readExpectation`         | function | `(path: string) => WriteExpectation \| undefined`                                                               | Captures what one destination holds before a write.                                               |
+| `readFileHex`             | function | `(root: string, path: string, limit?: number) => string \| undefined`                                           | Reads one contained file as its exact bytes in lowercase hexadecimal.                             |
+| `readFileText`            | function | `(root: string, path: string, limit?: number) => string \| undefined`                                           | Reads one contained file as bounded UTF-8 text.                                                   |
+| `readHostFloor`           | function | `(root?: string) => Host`                                                                                       | Reads the installed vendored host floor as a value.                                               |
+| `readHostManifest`        | function | `(host: string, name?: string) => HostManifest \| undefined`                                                    | Reads a vendored host's manifest, when it carries one.                                            |
+| `readManifestEntry`       | function | `(destination: string, source: string) => ManifestEntry \| undefined`                                           | Derives one vendored-host manifest entry from a file in a checkout.                               |
+| `readSnapshot`            | function | `(target: string, paths: readonly string[]) => Snapshot`                                                        | Reads a target's current bytes at the paths a plan claims.                                        |
+| `readSurfaceBaseline`     | function | `(root: string, name?: string) => readonly SurfaceCollision[] \| undefined`                                     | Reads the Surface collision baseline from a committed inventory.                                  |
+| `readSurfaceCollisions`   | function | `(root: string) => ReadonlyMap<string, readonly string[]>`                                                      | Reads bare Surface names claimed by distinct package guides.                                      |
+| `readSurfaceClaims`       | function | `(root: string, loader?: SurfaceLoader) => readonly SurfaceContract[]`                                          | Reads each immediate package guide's bare names under its file owner.                             |
+| `readSurfaceCandidate`    | function | `(root: string, loader?: SurfaceLoader) => SurfaceCandidate`                                                    | Reads a checkout's combined guide and barrel claims under its manifest owner.                     |
+| `readSurfaceFile`         | function | `(root: string \| Host, owner: string, label: string, loader?: SurfaceLoader) => SurfaceContract \| undefined`  | Reads one owner's `guides/<owner>.md` under a root, or from a verified host value, as a claim.    |
+| `readSurfaceGuide`        | function | `(text: string, owner: string, source: string, loader?: SurfaceLoader) => SurfaceContract`                      | Reads one guide's claims and reports parser refusals with its owner and source.                   |
+| `readSurfaceModule`       | function | `(loader?: SurfaceLoader) => SurfaceModule`                                                                     | Loads and validates the guide functions required by surface reflection.                           |
+| `readSurfaceRecord`       | function | `(root: string) => readonly SurfaceCollision[]`                                                                 | Reads a data root's verified collision record.                                                    |
+| `resolveHostRoot`         | function | `() => string`                                                                                                  | Resolves the bundled host root from the executing module's location.                              |
+| `resolveContainedPath`    | function | `(root: string, path: string) => string \| undefined`                                                           | Resolves a root-relative path and refuses one that leaves its root.                               |
+| `resolveRealPath`         | function | `(path: string) => string \| undefined`                                                                         | Resolves a path through the real filesystem, keeping the part that does not exist yet.            |
+| `stageBytes`              | function | `(host: Host, root: string, destinations: readonly string[]) => readonly ManifestEntry[]`                       | Stages the named destinations of a value host into a private root.                                |
+| `stageHost`               | function | `(checkout: string, host: string, options?: HostStageOptions) => readonly ManifestEntry[]`                      | Stages a vendored host root from a real checkout.                                                 |
+| `stageInventory`          | function | `(checkout: string, path?: string) => HostManifest`                                                             | Stages the committed inventory of the files a vendored host carries.                              |
 
 #### Classes
 
-| Name               | Kind  | Summary                                                                                       |
-| ------------------ | ----- | --------------------------------------------------------------------------------------------- |
-| `Materializer`     | class | Represents the mutation spine: read the vendored host, re-derive the target, stage, swap.     |
-| `ReadAllowance`    | class | Represents the byte allowance one upstream call spends across every read it makes.            |
-| `Upstream`         | class | Represents the reading spine: one bounded, unauthenticated, redirect-free request per answer. |
-| `WriteTransaction` | class | Represents one staged, reversible mutation of one target directory.                           |
+| Name               | Kind  | Signature                                                                                                          | Summary                                                                                       |
+| ------------------ | ----- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `Materializer`     | class | `new (options?: MaterializerOptions) => MaterializerInterface`                                                     | Represents the mutation spine: read the vendored host, re-derive the target, stage, swap.     |
+| `ReadAllowance`    | class | `new (budget: number) => ReadAllowanceInterface`                                                                   | Represents the byte allowance one upstream call spends across every read it makes.            |
+| `Upstream`         | class | `new (options?: UpstreamOptions) => UpstreamInterface`                                                             | Represents the reading spine: one bounded, unauthenticated, redirect-free request per answer. |
+| `WriteTransaction` | class | `new (target: string, paths: readonly string[], preconditions?: readonly WritePrecondition[]) => WriteTransaction` | Represents one staged, reversible mutation of one target directory.                           |
 
 ## Methods
 
@@ -541,13 +565,14 @@ publishes no interface and is documented directly.
 
 #### `UpstreamInterface`
 
-| Method    | Summary                                                                                     |
-| --------- | ------------------------------------------------------------------------------------------- |
-| `lookup`  | Looks up the highest release each declared range admits.                                    |
-| `fetch`   | Fetches each named package's guide, beside the local mirror it answers for.                 |
-| `read`    | Reads each named vendored file from the repository, beside the target bytes it answers for. |
-| `catalog` | Catalogs the published fleet from the registry's organization package list.                 |
-| `destroy` | Tears the reader down, aborting every request in flight. Teardown is idempotent.            |
+| Method      | Summary                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| `lookup`    | Looks up the highest release each declared range admits.                                    |
+| `fetch`     | Fetches each named package's guide, beside the local mirror it answers for.                 |
+| `read`      | Reads each named vendored file from the repository, beside the target bytes it answers for. |
+| `catalog`   | Catalogs the published fleet from the registry's organization package list.                 |
+| `inventory` | Reads the verified upstream inventory and its collision record.                             |
+| `destroy`   | Tears the reader down, aborting every request in flight. Teardown is idempotent.            |
 
 #### `WriteTransaction`
 
@@ -562,13 +587,14 @@ publishes no interface and is documented directly.
 
 ## Command line
 
-Authority is the verb's: every verb except `audit` writes when it is typed, and no
+Authority is the verb's: `audit` and `surface` read without writing, and no
 option grants a write.
 
 | Verb        | Writes                                                                                     |
 | ----------- | ------------------------------------------------------------------------------------------ |
 | `new`       | A whole workspace, into a target that holds nothing the plan would collide with            |
 | `audit`     | Nothing                                                                                    |
+| `surface`   | Nothing                                                                                    |
 | `repair`    | Each planned path the target is missing or has let drift, and the range and script regions |
 | `catalog`   | The package table, the guide mirrors, and the range region                                 |
 | `overwrite` | Everything `repair` and `catalog` write, deletions, and missing planned dependencies       |
@@ -603,7 +629,7 @@ A value `Host` can carry live host-owned bytes beside installed floor bytes for 
 catalog paths. Each surface still contributes one baseline. Deferred paths are presence-only, and
 repair never writes their floor bytes.
 
-Every verb's machine-readable result carries `provenance`. The record names only the remote
+Every verb that reads upstream carries `provenance` in its machine-readable result. The record names only the remote
 surfaces that the verb read. A host supplied by the `--from` option is absent because it comes from
 a local path.
 
@@ -616,6 +642,8 @@ scaffold <verb> [options]
       scaffold a workspace
   scaffold audit [--groups <list>] [--offline] [--from <path>] [--target <path>] [--json]
       report how the target compares to its plan, writing nothing
+  scaffold surface [<checkout>...] [--offline] [--from <path>] [--target <path>] [--json]
+      report fleet name collisions against the recorded baseline, writing nothing
   scaffold repair [--groups <list>] [--offline] [--from <path>] [--target <path>] [--json]
       write each planned path the target is missing or has let drift
   scaffold catalog [--all] [--from <path>] [--target <path>] [--json]
@@ -652,8 +680,8 @@ An option a verb does not list is refused by name rather than parsed and ignored
 one exception, because it replaces the run rather than modifying it: a command line carrying
 `--help` anywhere prints the whole reference and exits `0` before the line is read as a command, so
 no verb has to list it. Without the `--offline` option, every verb reaches the registry, and none of
-them invents a range when the read produces no answer. Dependency floors states what each verb reads
-and what it does then.
+them invents a range when the read produces no answer. `surface` given `--from` reads that root
+alone. Dependency floors states what each verb reads and what it does then.
 
 At their defaults, online runs contact `registry.npmjs.org` for scoped package packuments and the
 `/-/org/orkestrel/package` membership path. They contact `raw.githubusercontent.com` for guide
@@ -685,6 +713,142 @@ script on that basis.
 `distribution` is not on that list. Publishing at least one `src` environment or one sheet face is
 its whole condition, and scaffold writes `tests/distribution.test.ts` itself rather than waiting for
 you to. Limits states what makes that one proof generable when the others are not.
+
+### Check fleet names
+
+Run `scaffold surface` before publishing a candidate checkout. The command reads every owner's
+`## Surface` claims, groups the bare names that distinct owners claim into collisions, and compares
+them with the collision record. It reads each source the way `catalog` does, from the freshest one
+down to the bundled floor, and stops at the first that answers:
+
+| Reading    | Sources, freshest first                                                                                                                       |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Membership | Every candidate, then the registry's organization list through `Upstream.catalog`, or the data root's catalog table when that read fails      |
+| Claims     | The candidate's working tree, then the owner's guide on `main` through `Upstream.fetch`, then the data root's `guides/<owner>.md`             |
+| Record     | A `--from` root's `manifest.json` or `host.json`, then scaffold's `host.json` on `main` through `Upstream.inventory`, then the bundled record |
+
+An owner that no claim source answers for is `unread`, never an owner claiming nothing. The
+registry's published package copy is in no order. `--offline` reads the bundled guides, catalog
+table, and record without a request. `--from <path>` reads that root alone, without a request. A
+missing or malformed record refuses the run. The bundled root and a built root, one carrying
+`manifest.json`, are read through their verified inventory: a floor guide the inventory does not
+declare is unread, and a declared file whose bytes do not match its digest refuses the run. A
+checkout root without `manifest.json` is read by path.
+
+The membership read is the first registry request, and the record read through
+`Upstream.inventory` is the first repository request. When either produces no HTTP response, the
+command reads nothing further and refuses with `FETCH`. A request produces no HTTP response when
+`fetch` rejects before the response headers arrive: the host name does not resolve, the connection
+is refused, the TLS handshake fails, the connection is reset or closed, or the timeout expires.
+`URL` is the request's address and `CAUSE` the transport note, such as
+`TypeError: fetch failed (ECONNREFUSED)`:
+
+```text
+Surface registry is unreachable from this host: the organization package list at URL produced no answer: CAUSE. Use --offline to check against the bundled guides.
+Surface repository is unreachable from this host: the vendored inventory at URL produced no answer: CAUSE. Use --offline to check against the bundled guides.
+```
+
+A response that arrives is an answer rather than an outage, whatever follows it: an HTTP failure, a
+malformed body, and a reset or timeout after the response headers arrive each leave that reading to
+its floor source, and the run continues. The command gives each upstream read one attempt.
+
+Each positional checkout contributes its `guides/<owner>.md` names together with every barrel
+surface reflected from its immediate `src/<environment>` directories. Its package manifest names
+the owner, with the `@orkestrel/` scope removed. The `--target` directory defaults to the working
+directory and joins the candidates when it holds `package.json`. Candidates that share an owner
+contribute their combined names, and candidate claims replace every other source for that owner,
+including when the candidate claims no names. A name a candidate's barrels export from two or more
+of its `src/<environment>` directories is a conflict: export it once from `src/core`, or give each
+environment's export a distinct name. The record never holds a conflict, so a conflict fails every
+run that reads its owner as a candidate.
+
+A candidate refuses, naming its path, when its manifest is unreadable, when it has neither its guide
+nor `src/`, when its guide exists but is not UTF-8 text within the artifact bound, or when a
+TypeScript source under `src/` cannot be read. Only `.ts` files under `src/` are read, so a binary
+asset there is ignored. A barrel holding a statement other than `export * from './module.js'`
+refuses with the statement named, because the reflection follows nothing else and an incomplete
+reading never reports clean. When `@orkestrel/guide` refuses a guide from any source with an error
+its `isGuideError` guard accepts, such as a `## Surface` header other than
+`Name | Kind | Signature | Summary`, the command refuses with `TARGET`, naming the owner and the
+source, carrying the parser's message, and holding the guide error's `code` in the refusal's
+context. Any other error the parser raises propagates unchanged.
+
+Compare unpublished candidates together with this command:
+
+```sh
+scaffold surface ../router ../server --from . --json
+```
+
+The comparison uses the bare identifier, case included, across declaration keywords and
+environments. A name claimed by distinct owners is a collision. A collision absent from the record,
+or carrying an owner absent from its recorded owner set, has `error` standing. A collision with the
+same or fewer owners has `recorded` standing. A recorded name that no longer collides has `closed`
+standing, so a release can shrink the record.
+
+A name a candidate adds is one its claims hold and its owner's published guide does not. The
+published guide is read in the order the Claims row gives for any other owner: the guide on `main`,
+then the data root's `guides/<owner>.md`, or that root's guide alone under `--from`. That guide
+sets only the advisory baseline, so when its parser refuses it the command reads the next source,
+and with none left every name the candidate claims counts as added; a refused guide for any other
+owner stops the run. The command compares each added name with every other owner's claimed names, never with the candidate's own,
+and reports an advisory for each near name: a case-fold twin (`case`), a singular or plural form by
+`s`, `es`, or `y` to `ies` (`plural`), or a name one insertion, deletion, or substitution away when
+both names hold at least `SURFACE_EDIT_LENGTH` characters (`edit`). It also reports a different
+name whose `Signature` cell equals the added name's cell (`signature`) when `matchesSurfaceStructure`
+reads that cell as a structure: a member list with at least one member, its array and union forms
+included. A pair that is both a near name and an equal structure reports once in each class. A literal, a bare
+primitive, a type reference, a function type, and an empty member list are no structure, and a name
+only a barrel claims carries no cell. An advisory never changes the exit code; rule each one under
+`.claude/rules/names.md` § Fleet name ownership before you publish. Each advisory prints one line,
+where `NAME` is the added name, `OWNER` the candidate, `PEER` the other name, `HOLDER` the other
+owner, and `CLASS` the similarity:
+
+```text
+Surface advisory "NAME": "OWNER" adds it beside "PEER" from "HOLDER" (CLASS). Rule it under fleet name ownership before the upload.
+```
+
+The command returns `1` when a collision has `error` standing, a candidate carries a conflict, or
+an owner is unread. A run without
+`--offline` or `--from` also returns `1` when membership fell to the floor catalog table, any
+owner fell to the floor guide, or the record fell to the floor inventory. Every other completed run returns `0`, and malformed arguments return `2`.
+
+The human report names membership when it fell to the floor catalog table, with the failure the
+registry read reported, then each owner that fell to the floor guide, each unread owner, the record
+when it fell to the floor inventory, each `error` collision with its owners, each conflict
+with its owner and environments, and each advisory, then prints the recorded and closed counts. The `--json` option
+emits one value with `owners`, `collisions`, `conflicts`, `advisories`, and `provenance`. Each owner carries `owner`, `source` (`candidate`, `live`, `floor`, or `unread`), and
+`names` unless it is unread. Each collision carries `name`, `owners`, and `standing`, sorted by
+name, including closed entries with their recorded owners. Each conflict carries `name`, `owner`,
+and `environments`, sorted by name within each candidate. Each advisory carries the candidate's
+`name` and `owner`, the other owner's name as `peer`, and `similarity`, sorted within each candidate
+by added name, peer owner, and peer name, with a spelling class before `signature`. `provenance.membership` names the
+package list's baseline, `provenance.guides` is `live` only when no owner fell to the floor, and
+`provenance.record` names the record's baseline; a `--from` run reports none of them. The command changes no files.
+
+The core `SurfaceClaim` interface carries `owner` and `names`. `SurfaceCollision` carries `name`
+and `owners`; `SurfaceFinding` adds `standing`. `SurfaceConflict` carries `name`, `owner`, and
+`environments`. `SurfaceContract` adds `signatures`, the `Signature` cell of each name a guide row
+documents, to a claim, and `SurfaceCandidate` adds `conflicts` to a contract. `SurfaceAdvisory`
+carries `name`, `owner`, `peer`, and a `SurfaceSimilarity` as `similarity`. `collectSurfaceCollisions`
+deduplicates owners, `compareSurfaceCollisions` applies the record, and `collectSurfaceConflicts`
+finds the names one owner exports from more than one environment. `collectSurfaceAdvisories`
+compares a candidate's added names with other owners' contracts through `inferSurfaceSimilarity`
+and `matchesSurfaceStructure`, and `matchesGuideRefusal` recognizes the refusal a reader raises for
+a guide its parser refuses. `readSurfaceClaims` reads
+immediate package guides, excluding the README index. `readSurfaceCandidate` adds live barrel names
+and the candidate's conflicts. `readSurfaceFile` reads
+one owner's guide file under a root, and `readSurfaceGuide` parses guide text from any source into
+a contract.
+`readSurfaceRecord` reads a data root's record, and `resolveHostRoot` resolves the bundled root.
+`readSurfaceModule` loads `@orkestrel/guide` lazily and narrows it with `isSurfaceModule`, which
+requires `createGuide`, `createSource`, `extractSourceLines`, and `isGuideError` as functions, and
+refuses with `TARGET` a module that lacks one or holds another value there; every reader takes an optional `SurfaceLoader` that resolves the module, and requires the package in
+scaffold's resolution path when none is supplied. Importing the server entry alone does not load
+it.
+
+The executable's `SurfaceCommand` interface carries `verb: 'surface'`, positional `checkouts`,
+and the optional `offline`, `from`, `target`, and `json` members. The parser refuses other verbs'
+options.
 
 ### Reading a target
 
@@ -837,6 +1001,13 @@ reconcile the declared ranges and write the script region on every run, whatever
 names. A run scoped to `manifest` for a script write takes the reconciled `@orkestrel/*`
 ranges with it, and a run that excludes `manifest` still takes the ranges and the scripts.
 
+Before resolving overwrite's version ranges, the declaration step lifts each planned foreign tool
+whose `devDependencies` major is earlier than the canon's to the blueprint's planned range,
+including selected framework holds. An equal or later declared major stays, as does a disjunction
+with an arm at the planned major, and a `dependencies` declaration never lifts. The version lookup then searches within the selected major. Offline
+overwrite writes the planned floor; an online lookup can raise its minor or patch. Peers remain
+unchanged.
+
 A value matching neither is a script the workspace author wrote. The region writer retains that
 value byte-for-byte and reports its name, declared value, and planned value. Each other planned
 script is decided independently: an absent script appends, the planned value stands, and an accepted
@@ -956,20 +1127,24 @@ deletion.
 `--json` replaces the report with one JSON value on standard output. Warnings and refusals go to
 standard error, so a piped value is never polluted.
 
-| Verb        | Value                                                                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed` — plus `provenance`                                                                           |
-| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                           |
-| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                      |
-| `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run |
-| `overwrite` | The `catalog` value plus `audit`, top-level `releases` from its version read, and `additions`; `note` explains a partial run                                  |
+| Verb        | Value                                                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed` — plus `provenance`                                                                            |
+| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                            |
+| `surface`   | `owners` with each owner's `source`, `collisions` with each entry's `standing` (`error`, `recorded`, or `closed`), and `provenance` with `guides` and `record` |
+| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                       |
+| `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run  |
+| `overwrite` | The `catalog` value plus `audit`, top-level `releases` from its version read, `additions`, and `lifts`; `note` explains a partial run                          |
 
 The `membership` entity is present only when the catalog read completes. Its `entries` holds the
 package table, `dropped` names packages the preceding table carried that the registry no longer
 lists, and `releases` measures declared fleet ranges against the catalog read. The `overwrite`
 result also retains top-level `releases` from its separate version read, including foreign tools,
 and `additions`, the `DependencyPinSet` of planned dependencies it declared, empty when the
-manifest lacked none.
+manifest lacked none. Its `lifts` list names each tool whose major the run lifted, with the
+declared range in `from` and the written range in `to`, and is empty when no lift landed. The human
+report prints `Lifted "<name>" from "<from>" to "<to>". Run npm install to install it.` for each
+lift. The version evidence in `releases` uses the range selected for the lookup, after any lift.
 An absent `membership` identifies an incomplete catalog read; `note` explains the cause.
 
 The following JSON excerpt shows the membership evidence in a completed catalog result:
@@ -1135,13 +1310,12 @@ end-to-end proof that no study engine drives is an integration test instead. It 
 `tests/integration.test.ts` when it crosses environments.
 The project loads `tests/setup.ts` alone. The tests import
 `tests/setupStudy.ts`, a harness module the package owns, so scaffold plans no such file and no
-project loads it as a setup file. A publishing workspace invokes the project from `prepublishOnly`,
-after `npm test` and before the release proof; a `private: true` workspace invokes it from `test`,
-before the live-service project. Its longer timeouts and disabled file parallelism match the
+project loads it as a setup file. In publishing and `private: true` workspaces, run the project on
+demand with `npm run test:studies` alone; no gate or chain runs it.
+Its longer timeouts and disabled file parallelism match the
 live-service project. The root `studies/` directory holds the adapters and declarations the study
-tests run, and it selects nothing. A `prepublishOnly` chain written before the fact existed upgrades
-in place: the generated chain without its study step, and without both its study step and the release
-proof, are accepted predecessors.
+tests run, and it selects nothing. A chain that carries a study step fails the configuration proof
+until the workspace removes that step during scaffold adoption.
 
 `tree` says the workspace holds the exact-case `tests/tree.test.ts` proof, and it alone registers
 the `tree` Vitest project over that file and its `test:tree` script, which `test` invokes in a
@@ -2007,8 +2181,13 @@ capture. A browser source, styles surface, or browser setup without that journey
 receives no capture seed. A runtime declaration remains in its existing section instead of
 being duplicated as a development dependency.
 
-Outside the selected showcase pair, a newer major is never crossed for you. `audit` reports one as a non-blocking `dependencies`
-question, and a person decides whether the generated toolchain supports it.
+`audit` reports a later registry major as a non-blocking `dependencies` question. Outside the
+selected showcase pair, `repair` keeps the declared major. `overwrite` lifts an earlier declared
+foreign `devDependencies` major to the blueprint's planned range; it does not select an arbitrary
+later registry major, and it never lifts a `dependencies` declaration. It reads a major only from
+`^MAJOR` or a full version, optionally under `^` or `~`. A disjunction lifts only when every arm
+names a readable major earlier than the planned major. A range whose major cannot be read, or one
+longer than `MAX_RANGE_LENGTH`, stays declared.
 
 `TOOLCHAIN_HOLDS` records framework-specific ranges. `blueprintToToolchainHolds` selects those
 rows from the blueprint's occupied browser framework faces. A `src/vue` or `app/vue` face selects
@@ -2017,7 +2196,9 @@ TypeScript `^6.0.3`: no stable `vue-tsc` runs on TypeScript 7, `vue-tsc` resolve
 directs Vue projects to stay on TypeScript 6.0. Every workspace without that extension receives TypeScript `^7.0.2`.
 For a selected hold, `audit` reports the hold and its reason in place of the newer-major question
 and reports a declaration past the hold. A non-Vue workspace on TypeScript 7 raises no hold
-question. The constants proof ties each hold to its framework's planned range and scaffold's
+question. Overwrite uses the held range as its lift target: TypeScript 6 stays at that major in a
+Vue workspace, while TypeScript 6 lifts to 7 in a workspace without Vue. A declaration already
+past the hold stays declared; overwrite does not downgrade it. The constants proof ties each hold to its framework's planned range and scaffold's
 manifest baseline. Prove the framework on the later major before lifting its hold.
 
 The dependency tables select these floors:
@@ -2085,6 +2266,18 @@ That cycle is what keeps every release shipping the registry floor read for that
 generating a workspace with no network receives.
 
 ## Vendored data root
+
+The inventory contracts carry these data members.
+
+| Member                       | Contract                                                                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `HostInventory.surface`      | Required readonly `SurfaceCollision[]`: the verified record when `lookup` is `found`, and an empty collection otherwise.                  |
+| `HostInventory.unreachable`  | Optional boolean, `true` only when the inventory request produced no HTTP response.                                                       |
+| `TextReadResult.unreachable` | Optional boolean, `true` only when the request produced no HTTP response. The same member sits on `BytesReadResult`.                      |
+| `HostManifest.surface`       | Required readonly `SurfaceCollision[]`, sorted by name; each collision has distinct sorted owners and is included in the manifest digest. |
+| `HostStageOptions.inventory` | Optional checkout-relative inventory path. Default: `HOST_INVENTORY_PATH` (`host.json`).                                                  |
+| `HostStageOptions.establish` | Optional boolean. If `true`, an absent inventory establishes the baseline; if `false`, staging refuses it. Default: `false`.              |
+| `HostStageOptions.report`    | Optional callback receiving the baseline location or its absence. Default: no reporting.                                                  |
 
 The vendored data root is the shared file set, staged into the published package as plain data.
 Staging walks `HOST_PATHS`, `CANON_PATHS`, and `REFERENCE_PATHS`, and a release ships what those
@@ -2738,9 +2931,11 @@ projects. Scaffold also seeds proofs for its own setup modules, as Root setup mi
 
 Registration follows the same split. Scaffold registers `conformance`, `tree`, `studies`, and
 `service` when their structural facts are set, and registers `distribution` whenever the workspace
-publishes at least one `src` environment or sheet face. In a publishing workspace, `distribution`,
-`studies`, and `service` run from `prepublishOnly`, and `conformance` and `tree` stay in `test`. In a `private: true` workspace, `distribution` is absent,
-`studies` and then `service` run from `test`, and there is no `prepublishOnly` at all. The `policy` project reports an exporting root setup module that lacks its sibling proof or an import from `tests/setup.test.ts`.
+publishes at least one `src` environment or sheet face. In a publishing workspace, `distribution`
+and `service` run from `prepublishOnly`, and `conformance` and `tree` stay in `test`. In a
+`private: true` workspace, `distribution` is absent, `service` runs from `test`, and there is no
+`prepublishOnly`. In both kinds of workspace, `studies` runs on demand through `npm run test:studies`
+alone, outside every gate and chain. The `policy` project reports an exporting root setup module that lacks its sibling proof or an import from `tests/setup.test.ts`.
 Separately, a filled, exporting `tests/setup*.ts` module that no `tests/setup*.test.ts`
 proof covers raises the non-blocking `setup` question in `audit`, which names the modules and the proof to add.
 For setup modules the workspace authors, the workspace supplies the behavior proof; the setup modules scaffold seeds arrive with their sibling proofs.

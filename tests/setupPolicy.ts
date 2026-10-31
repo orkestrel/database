@@ -144,9 +144,11 @@ export function createPolicySurfaceGuide(names: readonly string[]): string {
 		'',
 		'## Surface',
 		'',
-		'| Name | Kind | Summary |',
-		'| ---- | ---- | ------- |',
-		...names.map((name) => `| \`${name}\` | function | Declares a fixture name. |`),
+		'| Name | Kind | Signature | Summary |',
+		'| ---- | ---- | --------- | ------- |',
+		...names.map(
+			(name) => `| \`${name}\` | function | \`() => void\` | Declares a fixture name. |`,
+		),
 		'',
 	].join('\n')
 }

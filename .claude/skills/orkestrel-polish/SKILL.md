@@ -8,5 +8,4 @@ description: Drive a rendered or externally driven surface to shipped quality th
 Read `.agents/skills/orkestrel-polish/SKILL.md` completely, then read every
 reference it requires. Follow that canonical workflow before acting.
 
-This bridge contains no independent process. `AGENTS.md`, applicable rules, the
-canonical skill, and the governing guide/spec remain authoritative in that order.
+Apply `AGENTS.md` § Authority and loading.

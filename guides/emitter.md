@@ -46,34 +46,34 @@ The reserved `on` option wires initial listeners at construction; the optional `
 
 ### Factories
 
-| API             | Kind     | Summary                                                                                                                                                           |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createEmitter` | function | Creates a typed synchronous event emitter and returns it as an `EmitterInterface<TMap>`, wiring the initial `on` hooks and the `error` handler its options carry. |
+| Name            | Kind     | Signature                                                                           | Summary                                                                                                                                                           |
+| --------------- | -------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createEmitter` | function | `<TMap extends EventMap>(options?: EmitterOptions<TMap>) => EmitterInterface<TMap>` | Creates a typed synchronous event emitter and returns it as an `EmitterInterface<TMap>`, wiring the initial `on` hooks and the `error` handler its options carry. |
 
 ### Helpers
 
-| API           | Kind     | Summary                                                                      |
-| ------------- | -------- | ---------------------------------------------------------------------------- |
-| `extractKeys` | function | Extracts the own enumerable keys of a mapped object, typed as its key union. |
+| Name          | Kind     | Signature                                                 | Summary                                                                      |
+| ------------- | -------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `extractKeys` | function | `<T extends object>(object: T) => ReadonlyArray<keyof T>` | Extracts the own enumerable keys of a mapped object, typed as its key union. |
 
 ### Classes
 
-| API       | Kind  | Summary                                                                                                                                                                                                                                              |
-| --------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Emitter` | class | Implements `EmitterInterface` over one listener `Set` per event, so every public method is precisely typed with no assertion. A stateful entity owns one as a `#emitter` field and exposes it through `readonly emitter`; it never inherits from it. |
+| Name      | Kind  | Signature                                                                               | Summary                                                                                                                                                                                                                                              |
+| --------- | ----- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Emitter` | class | `new <TMap extends EventMap>(options?: EmitterOptions<TMap>) => EmitterInterface<TMap>` | Implements `EmitterInterface` over one listener `Set` per event, so every public method is precisely typed with no assertion. A stateful entity owns one as a `#emitter` field and exposes it through `readonly emitter`; it never inherits from it. |
 
 ### Types
 
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
-| Type                  | Kind      | Shape                                                           | Summary                                                                                                                                                                                                                                 |
-| --------------------- | --------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EventMap`            | type      | `Record<string, readonly unknown[]>`                            | Maps each event name to the argument tuple its listeners receive.                                                                                                                                                                       |
-| `EmitterHandler`      | type      | `(...args: TArgs) => void`                                      | Represents a listener for one event's argument tuple.                                                                                                                                                                                   |
-| `EmitterErrorHandler` | type      | `(error: unknown, event: string) => void`                       | Represents the emitter's own listener-error handler — the `error` option, invoked when a listener throws during `emit`, with the caught error and the stringified event name.                                                           |
-| `EmitterHooks`        | type      | `{ readonly [K in keyof TMap]?: EmitterHandler<TMap[K]> }`      | Declares the initial event listeners for an emitter — the reserved `on` option: a partial map of event name to its handler, wired at construction.                                                                                      |
-| `EmitterOptions`      | interface | `{ on?, error? }`                                               | Configures `createEmitter` and the `Emitter` constructor.                                                                                                                                                                               |
-| `EmitterInterface`    | interface | `{ destroyed } plus on, once, off, emit, count, clear, destroy` | Represents the contract a consumer of an emitter holds: the `destroyed` reading, the `on` / `once` / `off` registration trio, the synchronous `emit`, and the `count` / `clear` / `destroy` set that reports on and releases listeners. |
+| Name                  | Kind      | Signature                                                                 | Summary                                                                                                                                                                                                                                 |
+| --------------------- | --------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EventMap`            | type      | `Record<string, readonly unknown[]>`                                      | Maps each event name to the argument tuple its listeners receive.                                                                                                                                                                       |
+| `EmitterHandler`      | type      | `(...args: TArgs) => void`                                                | Represents a listener for one event's argument tuple.                                                                                                                                                                                   |
+| `EmitterErrorHandler` | type      | `(error: unknown, event: string) => void`                                 | Represents the emitter's own listener-error handler — the `error` option, invoked when a listener throws during `emit`, with the caught error and the stringified event name.                                                           |
+| `EmitterHooks`        | type      | `{ readonly [K in keyof TMap]?: EmitterHandler<TMap[K]>; }`               | Declares the initial event listeners for an emitter — the reserved `on` option: a partial map of event name to its handler, wired at construction.                                                                                      |
+| `EmitterOptions`      | interface | `{ on?, error? }`                                                         | Configures `createEmitter` and the `Emitter` constructor.                                                                                                                                                                               |
+| `EmitterInterface`    | interface | `{ destroyed, on(), once(), off(), emit(), count(), clear(), destroy() }` | Represents the contract a consumer of an emitter holds: the `destroyed` reading, the `on` / `once` / `off` registration trio, the synchronous `emit`, and the `count` / `clear` / `destroy` set that reports on and releases listeners. |
 
 The `destroyed` boolean is a `readonly` data member of `EmitterInterface` (a preceding Surface row) — its call-signature methods are documented under [Methods](#methods).
 

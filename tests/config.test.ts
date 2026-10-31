@@ -1496,24 +1496,18 @@ describe('root configuration', () => {
 		expect(typeof publish === 'string' && publish.includes('npm run test:service')).toBe(
 			hasService && manifestPublishes,
 		)
-		// The study proof spawns processes, so it follows the same split as the live-service proof:
-		// the publish gate of a publishing workspace runs it after `npm test` and before the release
-		// proof, and a private workspace reaches it from `test`.
 		expect(studies).toBe(
 			hasStudies
 				? 'vitest run --config vite.config.ts --no-cache --reporter=dot --project studies'
 				: undefined,
 		)
-		expect(typeof test === 'string' && test.includes('npm run test:studies')).toBe(
-			hasStudies && !manifestPublishes,
-		)
-		expect(typeof publish === 'string' && publish.includes('npm run test:studies')).toBe(
-			hasStudies && manifestPublishes,
-		)
-		const steps = ['npm test &&', 'npm run test:studies', 'npm run test:distribution']
-		const positions = typeof publish === 'string' ? steps.map((step) => publish.indexOf(step)) : []
-		const sequenced = positions.every((position, index) => position > (positions[index - 1] ?? -1))
-		expect(sequenced || !(hasStudies && hasDistribution && manifestPublishes)).toBe(true)
+		for (const [name, command] of Object.entries(scripts)) {
+			if (name === 'test:studies') continue
+			expect(
+				typeof command === 'string' &&
+					(command.includes('npm run test:studies') || command.includes('--project studies')),
+			).toBe(false)
+		}
 	})
 
 	it('rebuilds publishing workspaces before packing', () => {

@@ -7,4 +7,4 @@ description: Research, audit, refactor, implement, centralize, test, document, a
 
 Read `.agents/skills/orkestrel-harden/SKILL.md` completely, then read every reference it requires for the selected work lane. Follow that canonical workflow before acting.
 
-This bridge contains no independent process. `AGENTS.md`, applicable rules, the canonical skill, and the governing guide/spec remain authoritative in that order.
+Apply `AGENTS.md` § Authority and loading.
