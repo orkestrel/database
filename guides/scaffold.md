@@ -126,6 +126,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `SurfaceContract`   | interface | `{ signatures }`                              | Represents one owner's claim with the guide `Signature` cell of each name a Surface row documents. |
 | `SurfaceFinding`    | interface | `{ standing }`                                | Reports a collision's standing against the recorded owner set.                                     |
 | `SurfaceSimilarity` | type      | `'case' \| 'plural' \| 'edit' \| 'signature'` | Names how an added name resembles a name another owner claims.                                     |
+| `SurfaceTransfer`   | interface | `{ name, keeper, item }`                      | Represents a declared transfer of one bare name to the package a roadmap item rules keeps it.      |
 
 #### Constants
 
@@ -216,6 +217,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `STYLES_ENTRY_PATH`               | const | `"src/styles/index.scss"`                                                                         | Names the base stylesheet marker.                                                                                                                                                      |
 | `SURFACES`                        | const | `readonly Surface[]`                                                                              | Lists the surfaces an extension may extend, frozen.                                                                                                                                    |
 | `SURFACE_EDIT_LENGTH`             | const | `6`                                                                                               | Sets the shortest name length at which a one-edit neighbor counts as a near name.                                                                                                      |
+| `SURFACE_TRANSFERS`               | const | `readonly SurfaceTransfer[]`                                                                      | Lists the declared transfers of bare names to their ruled keepers, frozen.                                                                                                             |
 | `TAB_WIDTH`                       | const | `2`                                                                                               | Sets the columns one tab occupies when the formatter measures a line, matching `tabWidth`.                                                                                             |
 | `TARGET_SKILL_NAMES`              | const | `readonly string[]`                                                                               | Lists the package-facing skills a target receives pointers for, frozen and alphabetical.                                                                                               |
 | `THEMES_BARREL_PATH`              | const | `"src/styles/themes/index.scss"`                                                                  | Names the themes stylesheet marker.                                                                                                                                                    |
@@ -781,7 +783,9 @@ scaffold surface ../router ../server --from . --json
 
 The comparison uses the bare identifier, case included, across declaration keywords and
 environments. A name claimed by distinct owners is a collision. A collision absent from the record,
-or carrying an owner absent from its recorded owner set, has `error` standing. A collision with the
+or carrying an owner absent from its recorded owner set, has `error` standing. When another guide
+claims the name, the keeper a `SURFACE_TRANSFERS` entry declares is a recorded owner of it from the
+first build after the declaration, so its claim reads `recorded` before its guide is mirrored. A collision with the
 same or fewer owners has `recorded` standing. A recorded name that no longer collides has `closed`
 standing, so a release can shrink the record.
 
@@ -2455,6 +2459,12 @@ committed inventory does not already record: `stageHost` reads the baseline thro
 `readSurfaceBaseline` before the build rewrites the inventory, and refuses a name whose staged
 owner set differs from the inventory — absent from the record, or not a subset of its recorded
 owners — which is what stops a release from widening the set of names more than one package claims.
+A `SURFACE_TRANSFERS` entry that another staged guide claims admits exactly its keeper beside the
+recorded owners, or beside the one owner of a name the record lacks, and the stage records that
+keeper whether or not its guide is mirrored; any other added owner is still refused. A transfer
+whose keeper alone claims the name is spent, and the stage refuses it with `TARGET`, naming the
+name, the keeper, and the item to remove from `SURFACE_TRANSFERS`. A transfer that no staged guide
+claims stays inert.
 A collision the baseline records and the stage no longer produces, or whose staged owners are a
 narrower subset of the recorded set, is accepted, so closing one needs no separate step. `HostStageOptions.inventory` selects the
 checkout-relative inventory path, defaulting to `HOST_INVENTORY_PATH` (`host.json`).

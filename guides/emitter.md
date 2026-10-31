@@ -64,8 +64,6 @@ The reserved `on` option wires initial listeners at construction; the optional `
 
 ### Types
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
-
 | Name                  | Kind      | Signature                                                                 | Summary                                                                                                                                                                                                                                 |
 | --------------------- | --------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `EventMap`            | type      | `Record<string, readonly unknown[]>`                                      | Maps each event name to the argument tuple its listeners receive.                                                                                                                                                                       |

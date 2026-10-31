@@ -12,7 +12,13 @@ import {
 	hasCanonicalSegments,
 	resolveLink,
 } from '@orkestrel/guide'
-import { BASE_DEV_DEPENDENCIES, DISTRIBUTION_SETUP_PATH, HOST_PATHS } from '@orkestrel/scaffold'
+import {
+	BASE_DEV_DEPENDENCIES,
+	DISTRIBUTION_SETUP_PATH,
+	HOST_INVENTORY_PATH,
+	HOST_PATHS,
+} from '@orkestrel/scaffold'
+import { MANIFEST_NAME, readSurfaceBaseline } from '@orkestrel/scaffold/server'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import {
@@ -3737,8 +3743,10 @@ export function readPolicySurface(root: string): PolicySurfacePopulation {
  * Inspects source and target-owned setup names against the hosted fleet guides.
  *
  * @remarks
- * Source names claimed by the target's own hosted guide are grandfathered. Setup names have no
- * grandfather. Catalog rows come from beside the guides: when reading installed guides, from the
+ * Source names claimed by the target's own hosted guide are grandfathered, and so are source names
+ * whose collision record names the target as an owner: the installed host's `manifest.json` in a
+ * target, and the committed `host.json` in the scaffold checkout. A malformed record throws. Setup
+ * names have no grandfather. Catalog rows come from beside the guides: when reading installed guides, from the
  * staged catalog and never from the target's own table, which can list a package without a guide in
  * that host. An absent installed host falls back to checkout guides only with catalog coverage.
  * Missing comparison evidence and unread barrel statements produce surface violations.
@@ -3804,9 +3812,13 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
 						]
 			},
 		)
-	const grandfather = new Set(
-		guides.filter((guide) => guide.owner === own).flatMap(({ symbols }) => symbols),
-	)
+	const record = readSurfaceBaseline(host, hosted ? MANIFEST_NAME : HOST_INVENTORY_PATH) ?? []
+	const grandfather = new Set([
+		...guides.filter((guide) => guide.owner === own).flatMap(({ symbols }) => symbols),
+		...record
+			.filter(({ owners }) => own !== undefined && owners.includes(own))
+			.map(({ name }) => name),
+	])
 	const claimed = Map.groupBy(
 		guides
 			.filter((guide) => guide.owner !== own)

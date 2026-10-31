@@ -64,8 +64,8 @@ transparent proxies, unbranded look-alikes, and plain branded objects fail.
 | `supportsIndexedDB`    | function | `() => boolean`                                                                                                                   | Checks whether IndexedDB is available in this environment.                                                                                 |
 | `promisifyRequest`     | function | `<T>(request: IDBRequest<T>) => Promise<T>`                                                                                       | Resolves an `IDBRequest` to its result, rejecting with an `IndexedDBError`.                                                                |
 | `promisifyTransaction` | function | `(transaction: IDBTransaction) => Promise<void>`                                                                                  | Resolves after an `IDBTransaction` commits, rejecting if it errors or aborts.                                                              |
-| `readRecord`           | function | `(source: IDBObjectStore \| IDBIndex, key: IDBValidKey) => Promise<Row \| undefined>`                                             | Reads one record by key from a store or index, narrowing it to a `Row`.                                                                    |
-| `readRecords`          | function | `(source: IDBObjectStore \| IDBIndex, query?: IDBKeyRange \| IDBValidKey, count?: number) => Promise<readonly Row[]>`             | Reads many records from a store or index over an optional key range, narrowing each to a `Row`.                                            |
+| `readRecord`           | function | `(source: IDBObjectStore \| IDBIndex, key: IDBValidKey) => Promise<StoreRecord \| undefined>`                                     | Reads one record by key from a store or index, narrowing it to a `StoreRecord`.                                                            |
+| `readRecords`          | function | `(source: IDBObjectStore \| IDBIndex, query?: IDBKeyRange \| IDBValidKey, count?: number) => Promise<readonly StoreRecord[]>`     | Reads many records from a store or index over an optional key range, narrowing each to a `StoreRecord`.                                    |
 | `hasKey`               | function | `(source: IDBObjectStore \| IDBIndex, key: IDBValidKey) => Promise<boolean>`                                                      | Checks whether a key is present in a store or index.                                                                                       |
 | `createIndex`          | function | `(store: IDBObjectStore, definition: IndexDefinition) => void`                                                                    | Creates a secondary index on a store from its `IndexDefinition`.                                                                           |
 | `wrapCall`             | function | `<T>(action: () => T) => T`                                                                                                       | Runs a synchronous native IndexedDB call, wrapping a thrown `DOMException` into a typed `IndexedDBError`.                                  |
@@ -74,29 +74,25 @@ transparent proxies, unbranded look-alikes, and plain branded objects fail.
 | `rangeBelowKey`        | function | `(value: IDBValidKey) => IDBKeyRange`                                                                                             | Builds a key range strictly below one key.                                                                                                 |
 | `rangeToKey`           | function | `(value: IDBValidKey) => IDBKeyRange`                                                                                             | Builds a key range ending at and including one key.                                                                                        |
 | `rangePrefix`          | function | `(value: string) => IDBKeyRange`                                                                                                  | Builds a key range containing every string with one prefix.                                                                                |
-| `wrapError`            | function | `(error: DOMException \| null) => IndexedDBError`                                                                                 | Maps a native IndexedDB `DOMException` to a typed `IndexedDBError`.                                                                        |
+| `wrapDOMException`     | function | `(error: DOMException \| null) => IndexedDBError`                                                                                 | Maps a native IndexedDB `DOMException` to a typed `IndexedDBError`.                                                                        |
 | `IndexedDBError`       | class    | `new (code: IndexedDBErrorCode, message: string, cause?: unknown, context?: Readonly<Record<string, unknown>>) => IndexedDBError` | Represents an error thrown by the IndexedDB wrapper, carrying a machine-readable `code` and an optional `context` beside the native cause. |
 | `isIndexedDBError`     | function | `(value: unknown) => value is IndexedDBError`                                                                                     | Checks whether a value is an `IndexedDBError`.                                                                                             |
 
-`supportsIndexedDB` reads `globalThis.indexedDB`, and `hasKey` is a native `count` greater than 0. `createIndex` is the shared index-DDL leaf both the built-in schema pass and `context.indexes.create` run. `wrapError` is the request boundary every bridge maps a native `DOMException` through.
+`supportsIndexedDB` reads `globalThis.indexedDB`, and `hasKey` is a native `count` greater than 0. `createIndex` is the shared index-DDL leaf both the built-in schema pass and `context.indexes.create` run. `wrapDOMException` is the request boundary every bridge maps a native `DOMException` through.
 
 ### Constants
-
-A `Shape` cell holds the constant's declared type.
 
 | Name          | Kind  | Signature                                      | Summary                                                               |
 | ------------- | ----- | ---------------------------------------------- | --------------------------------------------------------------------- |
 | `ERROR_CODES` | const | `Readonly<Record<string, IndexedDBErrorCode>>` | Maps native `DOMException.name` → the wrapper's `IndexedDBErrorCode`. |
 
-`wrapError` reads this frozen map at the request boundary, falling back to `UNKNOWN` for a native name it does not carry.
+`wrapDOMException` reads this frozen map at the request boundary, falling back to `UNKNOWN` for a native name it does not carry.
 
 ### Types
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
-
 | Name                                    | Kind      | Signature                                                                                                                                                              | Summary                                                                                                                          |
 | --------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `Row`                                   | type      | `Record<string, unknown>`                                                                                                                                              | Represents a record stored in, and read from, an object store.                                                                   |
+| `StoreRecord`                           | type      | `Record<string, unknown>`                                                                                                                                              | Represents a record stored in, and read from, an object store.                                                                   |
 | `KeyPath`                               | type      | `string \| readonly string[]`                                                                                                                                          | Represents a key path — one field, or several for a compound key.                                                                |
 | `IndexDefinition`                       | interface | `{ name, path, unique?, multiple? }`                                                                                                                                   | Represents the declaration of a secondary index — its name, key path, and uniqueness.                                            |
 | `StoreDefinition`                       | interface | `{ path?, increment?, indexes? }`                                                                                                                                      | Represents the declaration of one object store — its key path, key generation, and secondary indexes.                            |
@@ -115,13 +111,13 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `IndexedDBTransactionInterface`         | interface | `{ transaction, mode, stores, active, finished, error, store(), abort(), commit() }`                                                                                   | Represents the contract of an explicit transaction over one or more stores.                                                      |
 | `IndexedDBTransactionStoreInterface`    | interface | `{ store }`                                                                                                                                                            | Represents the contract of an object store bound to an explicit transaction.                                                     |
 
-Values are this package's own `Row` (a record), narrowed from IndexedDB's structured clone with `isRecord` (from `@orkestrel/contract`) at the read boundary — an `as`-free bridge. Keys are the full native `IDBValidKey`, so the wrapper speaks IndexedDB's whole key space.
+Values are this package's own `StoreRecord` (a record), narrowed from IndexedDB's structured clone with `isRecord` (from `@orkestrel/contract`) at the read boundary — an `as`-free bridge. Keys are the full native `IDBValidKey`, so the wrapper speaks IndexedDB's whole key space.
 
 A database connects **lazily**: the first store operation (or an explicit `connect`) opens it; you never wire up `onsuccess` yourself. `version` controls schema creation: pin an explicit number to create any missing stores on a bump, or **omit it** for auto-managed mode, where the database opens at its current version and bumps once on its own to create any declared store the stored schema lacks — so adding a store never needs a manual version bump.
 
 ## Methods
 
-The public methods of each behavioral interface — one table per type, keyed by its backticked name, every call-signature member listed. Each interface's `readonly` data members are named in the `Shape` column of the [Types](#types) table, earlier. Each class implements its interface exactly, so this doubles as the per-instance method surface (`AGENTS.md` § Documentation contract).
+The public methods of each behavioral interface — one table per type, keyed by its backticked name, every call-signature member listed. Each interface's `readonly` data members are named in the `Signature` column of the [Types](#types) table, earlier. Each class implements its interface exactly, so this doubles as the per-instance method surface (`AGENTS.md` § Documentation contract).
 
 `IndexedDBUpgradeContext` carries only readonly data, so no Methods table follows for it. Its managers carry the upgrade's schema verbs: `context.stores` is the store manager, while `IndexedDBDatabaseInterface.stores` is the plain name list.
 
@@ -142,9 +138,9 @@ The keyed record surface `IndexedDBStoreInterface` and `IndexedDBTransactionStor
 
 | Method    | Returns                                     | Summary                                                                |
 | --------- | ------------------------------------------- | ---------------------------------------------------------------------- |
-| `get`     | `Promise<Row \| undefined>`                 | Reads the record at a primary key, or `undefined` on a miss.           |
-| `resolve` | `Promise<Row>`                              | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.     |
-| `records` | `Promise<readonly Row[]>`                   | Reads the stored records over an optional key range.                   |
+| `get`     | `Promise<StoreRecord \| undefined>`         | Reads the record at a primary key, or `undefined` on a miss.           |
+| `resolve` | `Promise<StoreRecord>`                      | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.     |
+| `records` | `Promise<readonly StoreRecord[]>`           | Reads the stored records over an optional key range.                   |
 | `keys`    | `Promise<readonly IDBValidKey[]>`           | Lists the stored primary keys over an optional key range.              |
 | `has`     | `Promise<boolean>`                          | Checks whether a primary key is present.                               |
 | `count`   | `Promise<number>`                           | Counts the stored records within an optional key range.                |
@@ -160,9 +156,9 @@ The keyed record surface `IndexedDBStoreInterface` and `IndexedDBTransactionStor
 
 | Method    | Returns                                     | Summary                                                                      |
 | --------- | ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `get`     | `Promise<Row \| undefined>`                 | Reads the record at a primary key, or `undefined` on a miss.                 |
-| `resolve` | `Promise<Row>`                              | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.           |
-| `records` | `Promise<readonly Row[]>`                   | Reads the stored records over an optional key range.                         |
+| `get`     | `Promise<StoreRecord \| undefined>`         | Reads the record at a primary key, or `undefined` on a miss.                 |
+| `resolve` | `Promise<StoreRecord>`                      | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.           |
+| `records` | `Promise<readonly StoreRecord[]>`           | Reads the stored records over an optional key range.                         |
 | `keys`    | `Promise<readonly IDBValidKey[]>`           | Lists the stored primary keys over an optional key range.                    |
 | `has`     | `Promise<boolean>`                          | Checks whether a primary key is present.                                     |
 | `count`   | `Promise<number>`                           | Counts the stored records within an optional key range.                      |
@@ -177,9 +173,9 @@ The keyed record surface `IndexedDBStoreInterface` and `IndexedDBTransactionStor
 
 | Method    | Returns                                     | Summary                                                                          |
 | --------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
-| `get`     | `Promise<Row \| undefined>`                 | Reads the first record for an index key, or `undefined` on a miss.               |
-| `resolve` | `Promise<Row>`                              | Reads the first record for an index key, throwing `NOT_FOUND` on a miss.         |
-| `records` | `Promise<readonly Row[]>`                   | Reads the matching records over an optional index-key range.                     |
+| `get`     | `Promise<StoreRecord \| undefined>`         | Reads the first record for an index key, or `undefined` on a miss.               |
+| `resolve` | `Promise<StoreRecord>`                      | Reads the first record for an index key, throwing `NOT_FOUND` on a miss.         |
+| `records` | `Promise<readonly StoreRecord[]>`           | Reads the matching records over an optional index-key range.                     |
 | `keys`    | `Promise<readonly IDBValidKey[]>`           | Lists the primary keys of the matching records over an optional index-key range. |
 | `primary` | `Promise<IDBValidKey \| undefined>`         | Reads the primary key an index key maps to, or `undefined` on a miss.            |
 | `has`     | `Promise<boolean>`                          | Checks whether an index key is present.                                          |
@@ -212,9 +208,9 @@ Each readonly data member is a snapshot of the position the cursor stopped on, b
 
 | Method    | Returns                                     | Summary                                                                |
 | --------- | ------------------------------------------- | ---------------------------------------------------------------------- |
-| `get`     | `Promise<Row \| undefined>`                 | Reads the record at a primary key, or `undefined` on a miss.           |
-| `resolve` | `Promise<Row>`                              | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.     |
-| `records` | `Promise<readonly Row[]>`                   | Reads the stored records over an optional key range.                   |
+| `get`     | `Promise<StoreRecord \| undefined>`         | Reads the record at a primary key, or `undefined` on a miss.           |
+| `resolve` | `Promise<StoreRecord>`                      | Reads the record at a primary key, throwing `NOT_FOUND` on a miss.     |
+| `records` | `Promise<readonly StoreRecord[]>`           | Reads the stored records over an optional key range.                   |
 | `keys`    | `Promise<readonly IDBValidKey[]>`           | Lists the stored primary keys over an optional key range.              |
 | `has`     | `Promise<boolean>`                          | Checks whether a primary key is present.                               |
 | `count`   | `Promise<number>`                           | Counts the stored records within an optional key range.                |
@@ -249,11 +245,11 @@ These invariants hold across `src/browser` ↔ `indexeddb.md`:
 
 1. **DOC ↔ SOURCE bijection.** Every row in the `## Surface` tables is a real export of the wrapper, and every export appears as a Surface row — exhaustive, both directions (`AGENTS.md` § Documentation contract).
 2. **Native, not a query engine.** The wrapper exposes only what raw IndexedDB offers natively — object stores, secondary indexes, key-range helpers, cursors, and multi-store transactions. It has **no** `where` / `filter` / `order` / aggregate builder; that stays out of scope entirely, deliberately, so the wrapper never grows into a second query DSL.
-3. **`Row` values, `IDBValidKey` keys.** Reads return this package's own `Row` (narrowed with `isRecord`, never an unchecked cast); writes take a `Row`. Keys are the native `IDBValidKey`.
-4. **In-line or out-of-line keys.** A store with a `path` keys rows by that field; a store with no `path` is out-of-line and takes an explicit key on `set` / `add` (`set(row, key)`).
+3. **`StoreRecord` values, `IDBValidKey` keys.** Reads return this package's own `StoreRecord` (narrowed with `isRecord`, never an unchecked cast); writes take a `StoreRecord`. Keys are the native `IDBValidKey`.
+4. **In-line or out-of-line keys.** A store with a `path` keys records by that field; a store with no `path` is out-of-line and takes an explicit key on `set` / `add` (`set(record, key)`).
 5. **Batch by the array overload, array-first.** `get` / `resolve` / `has` / `remove` / `set` / `add` take one value for one result or an array for an array of results (`.claude/rules/patterns.md` § Managers § Batch operations). The array overload is declared first because an array is itself both a record and a compound `IDBValidKey`; to act on a single compound key, pass `IDBKeyRange.only([…])` to `records` / `count`.
 6. **Each standalone call is its own transaction; `read` / `write` are atomic.** A store method opens and commits its own implicit transaction; `db.read` / `db.write` run a scope across stores that commits on resolve and rolls back on a throw. The completion listener is attached BEFORE the scope runs (not after it resolves), so a scope whose last step is a non-IDB `await` — letting the native transaction auto-commit while the scope is still on the stack — still settles `read` / `write` instead of hanging: `complete` can otherwise fire before a listener attached only after the scope returns would ever be wired.
-7. **`get` / `records` narrow to records; `count` / `has` / `keys` operate on keys.** A store or index counts, tests presence, and lists keys over every stored value regardless of shape, but `get` / `resolve` / `records` narrow each value with `isRecord` — so a store holding a non-record value shows `count` greater than `records().length`, and `has` reads `true` for a key `get` reads back as `undefined` (a miss and a non-record value both read as `undefined` from `get`). A cursor reports the same boundary the same way: `cursor.value` is `Row | undefined` and reads `undefined` for a non-record stored value — see Cursor streaming and in-place mutation, later in this guide.
+7. **`get` / `records` narrow to records; `count` / `has` / `keys` operate on keys.** A store or index counts, tests presence, and lists keys over every stored value regardless of shape, but `get` / `resolve` / `records` narrow each value with `isRecord` — so a store holding a non-record value shows `count` greater than `records().length`, and `has` reads `true` for a key `get` reads back as `undefined` (a miss and a non-record value both read as `undefined` from `get`). A cursor reports the same boundary the same way: `cursor.value` is `StoreRecord | undefined` and reads `undefined` for a non-record stored value — see Cursor streaming and in-place mutation, later in this guide.
 8. **DOC ↔ SOURCE method bijection.** Every method in a `## Methods` table is a real call-signature member of that interface in source, and every public method of each behavioral interface is documented — exhaustive, both directions; and each implementing class exposes exactly its interface's public methods, no more (`AGENTS.md` § Documentation contract).
 
 9. **One atomic upgrade boundary.** The built-in create-missing-stores pass and the custom `upgrade` callback run inside the same versionchange transaction and failure boundary. A synchronous built-in/custom fault, or a custom rejection captured while that transaction remains active, aborts the whole upgrade and rejects `connect()` with `UPGRADE`; no partially created store, index, or migration survives. Its `cause` preserves the initiating value even when that value is `undefined`, and a native schema failure retains the nested typed chain (`UPGRADE` → `CONSTRAINT` → native `ConstraintError`). A failed open clears only its attempt-local state, so the same handle can retry. If auto-commit already occurred but the browser reports success after a failure was recorded, the wrapper closes that result before rejecting, preventing an orphan connection; closing cannot undo the already-committed schema.
@@ -319,7 +315,7 @@ while (cursor) {
 }
 ```
 
-A `store` cursor runs in a `readwrite` transaction, so `update` / `remove` work; an `index` cursor is read-only and rejects them with a typed `IndexedDBError` (`code: 'READONLY'`, native `ReadOnlyError`). Iterate promptly — an unrelated `await` between `continue` steps lets the transaction auto-commit and ends the loop. `cursor.value` is `Row | undefined`: it narrows the stored value with `isRecord` exactly as `get` does, so a non-record stored value reads `undefined` while the cursor still stops on that position and still exposes its `key` and `primary`. Test `value` before you dereference it.
+A `store` cursor runs in a `readwrite` transaction, so `update` / `remove` work; an `index` cursor is read-only and rejects them with a typed `IndexedDBError` (`code: 'READONLY'`, native `ReadOnlyError`). Iterate promptly — an unrelated `await` between `continue` steps lets the transaction auto-commit and ends the loop. `cursor.value` is `StoreRecord | undefined`: it narrows the stored value with `isRecord` exactly as `get` does, so a non-record stored value reads `undefined` while the cursor still stops on that position and still exposes its `key` and `primary`. Test `value` before you dereference it.
 
 ### Seeking an index cursor to one primary key
 
@@ -391,18 +387,18 @@ import {
 	readRecord,
 	readRecords,
 	wrapCall,
-	wrapError,
+	wrapDOMException,
 } from '@orkestrel/indexeddb'
 
 await db.read('users', async (transaction) => {
 	const native = transaction.store('users').store
 	await promisifyRequest(wrapCall(() => native.get('u1'))) // sync throw → IndexedDBError too
-	await readRecord(native, 'u1') // narrowed to Row (or undefined) with isRecord
+	await readRecord(native, 'u1') // narrowed to StoreRecord (or undefined) with isRecord
 	await readRecords(native) // every record, narrowed the same way
 	await hasKey(native, 'u1') // a native count() > 0
 	await promisifyTransaction(native.transaction) // resolves after the transaction commits
 })
-wrapError(null) // the same DOMException → IndexedDBError mapping every bridge uses
+wrapDOMException(null) // the same DOMException → IndexedDBError mapping every bridge uses
 
 // createIndex is the leaf `context.indexes.create` delegates to inside
 // onupgradeneeded — call it directly only if you are hand-rolling a raw
@@ -493,7 +489,7 @@ await db.connect()
 ## Tests
 
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/browser` bijection, the `## Methods` ↔ interface bijection, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Feature-detecting before opening a database` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline.
-- [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the `supportsIndexedDB` probe, the key-range helpers asserted on the bounds they return, the shared read primitives (`readRecord` / `readRecords` / `hasKey`) over a real store / index (including the non-record `isRecord` boundary), `createIndex` translating an `IndexDefinition` into a native `createIndex` call inside a real `onupgradeneeded` (honouring `unique` / `multiple`), the `promisifyRequest` / `promisifyTransaction` bridges (success + `IndexedDBError` rejection), `wrapCall` over each of its three paths (a returned value passing through, a thrown `DOMException` surfacing as the mapped `IndexedDBError` with the native error as `cause`, and a non-`DOMException` throw rethrown by identity), the `context` an `IndexedDBError` carries beside its `code`, `wrapError` (including `INACTIVE` / `INVALID`), and `isIndexedDBError`.
+- [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the `supportsIndexedDB` probe, the key-range helpers asserted on the bounds they return, the shared read primitives (`readRecord` / `readRecords` / `hasKey`) over a real store / index (including the non-record `isRecord` boundary), `createIndex` translating an `IndexDefinition` into a native `createIndex` call inside a real `onupgradeneeded` (honouring `unique` / `multiple`), the `promisifyRequest` / `promisifyTransaction` bridges (success + `IndexedDBError` rejection), `wrapCall` over each of its three paths (a returned value passing through, a thrown `DOMException` surfacing as the mapped `IndexedDBError` with the native error as `cause`, and a non-`DOMException` throw rethrown by identity), the `context` an `IndexedDBError` carries beside its `code`, `wrapDOMException` (including `INACTIVE` / `INVALID`), and `isIndexedDBError`.
 - [`tests/src/browser/IndexedDBDatabase.test.ts`](../tests/src/browser/IndexedDBDatabase.test.ts) — the database handle in real Chromium: lazy connect and state, the `store` accessor, atomic `read` / `write` scopes (including settling when the scope ends on a trailing non-IDB `await`, the auto-commit race), `close` / `drop`, the auto-managed schema path, persistence across reopen, the `upgrade` hook (dropping a store, indexing an existing store and a same-upgrade `context.stores.create`d store through `context.indexes.create` — honouring `unique` / `multiple` — removing an index through `context.indexes.drop`, data migration through `context.stores.store`, `context.stores.create`, `old` / `version` / `stores.names`, an async `upgrade` rejection cleanly failing `connect()` with `UPGRADE`, and a synchronous `wrapCall` fault from `context.stores.drop` / `context.indexes.drop` targeting a missing store/index likewise failing `connect()` with `UPGRADE`), built-in auto-managed missing-store creation containing duplicate index names as `UPGRADE` → `CONSTRAINT` → native `ConstraintError` on two distinct same-handle `connect()` retries while suppressing the custom callback, atomic rollback of the version, sentinel data, and failed store, deletion without an orphan connection, synchronous `throw undefined` and asynchronous `Promise.reject(undefined)` failures retaining a present `cause` property, raw blockers proving a versioned open and deletion remain pending until release, repeated blocked connects share one Promise and produce one upgrade/owned connection, `close()` during blocked explicit or auto-managed second opens rejecting `CLOSED` after release without orphaning the native result, and `drop()` directly retiring a pending blocked open before deletion completes without leaving an orphan, a live connection yielding to a second connection's `versionchange`, that yielded handle lazily reconnecting at the new version on its next operation, and an ABNORMAL (non-self-initiated) `onclose` likewise leaving the handle able to lazily reconnect instead of staying invalid forever.
 - [`tests/src/browser/IndexedDBStore.test.ts`](../tests/src/browser/IndexedDBStore.test.ts) — the store reached through `db.store(name)`: metadata getters, the keyed CRUD surface with array-first batch overloads, key-range reads, `index` / `cursor` access, and the `NOT_FOUND` / `CONSTRAINT` / `DATA` (a non-cloneable value) faults.
 - [`tests/src/browser/IndexedDBIndex.test.ts`](../tests/src/browser/IndexedDBIndex.test.ts) — the index reached through `store.index(name)`: metadata getters, the read surface (`get` / `resolve` / `records` / `keys` / `primary` / `has` / `count` / `cursor`), the unique-index lookup + constraint, and the `multiple` (multiEntry) array index.

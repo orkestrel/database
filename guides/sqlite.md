@@ -46,8 +46,6 @@ db.prepare('SELECT name FROM users WHERE age >= ?').all([18]) // → [{ name: 'A
 
 ### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                | Kind  | Signature | Summary                                                                          |
 | ------------------- | ----- | --------- | -------------------------------------------------------------------------------- |
 | `SQLITE_CONSTRAINT` | const | `19`      | Names the SQLite result code whose low byte, `19`, flags a constraint violation. |
@@ -69,8 +67,6 @@ stores the error itself under `Symbol.for('@orkestrel/sqlite.SQLiteError')` as a
 non-writable own property.
 
 ### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
 | Name                       | Kind      | Signature                                                                                                                                             | Summary                                                                                                                                                                                                          |
 | -------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
