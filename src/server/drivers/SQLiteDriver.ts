@@ -125,7 +125,7 @@ export class SQLiteDriver implements DriverInterface {
 	readonly #transactions = new Set<SQLiteTransaction>()
 
 	constructor(options: SQLiteDriverOptions) {
-		if (!isString(options?.path)) {
+		if (!isString(options?.path) || options.path === '') {
 			throw new DatabaseError(
 				'VALIDATION',
 				"SQLite path is required; pass a file path or ':memory:'",

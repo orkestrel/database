@@ -23,10 +23,29 @@ import { buildCondition as cond } from '../../setup.js'
 // The SQLite ↔ JS codecs as pure functions (no DB needed): the SQL
 // identifier containment (`quoteIdentifier`), persisted SQLite index naming,
 // value / row codecs, value extraction, and exactness gates. SQL emitters are
-// tested together in `compilers.test.ts`. Every codec is total — a value that
-// does not fit its column encodes to `null` rather than throwing.
+// tested together in `compilers.test.ts`. Incompatible present values refuse with a validation error.
 
 describe('quoteIdentifier', () => {
+	it('refuses incompatible present column values with bounded diagnostics', async () => {
+		for (const [column, value] of [
+			[BOOLEAN, 1],
+			[INTEGER, 1.5],
+			[REAL, Number.NaN],
+			[TEXT, 36],
+			[BLOB, 'invalid'],
+			[JSON_COLUMN, { at: new Date(0) }],
+		] satisfies ReadonlyArray<readonly [ColumnSchema, unknown]>) {
+			expect(() => encodeValue(value, column)).toThrow(
+				expect.objectContaining({ code: 'VALIDATION' }),
+			)
+		}
+		const column = { ...JSON_COLUMN, name: 'column'.repeat(10000) }
+		const error = await captureError(() => encodeValue({ at: new Date(0) }, column))
+		expect(isDatabaseError(error)).toBe(true)
+		if (!isDatabaseError(error)) throw error
+		expect(error.message.length).toBeLessThan(1000)
+		expect(error.message).toContain('column')
+	})
 	it('wraps an identifier in double quotes', () => {
 		expect(quoteIdentifier('order')).toBe('"order"')
 	})
@@ -51,24 +70,26 @@ describe('encodeValue / decodeValue — round-trips', () => {
 		expect(decodeValue(encoded, JSON_COLUMN)).toEqual(value)
 	})
 
-	it('keeps a number / bigint for integer and real, else null', () => {
+	it('keeps a number / bigint for integer and real, refusing incompatible values', () => {
 		expect(encodeValue(36, INTEGER)).toBe(36)
 		expect(encodeValue(10n, INTEGER)).toBe(10n)
 		expect(encodeValue(3.5, REAL)).toBe(3.5)
-		expect(encodeValue('nope', INTEGER)).toBeNull()
+		expect(() => encodeValue('nope', INTEGER)).toThrow(
+			expect.objectContaining({ code: 'VALIDATION' }),
+		)
 		expect(decodeValue(36, INTEGER)).toBe(36)
 	})
 
-	it('keeps a string for text, else null', () => {
+	it('keeps a string for text, refusing incompatible values', () => {
 		expect(encodeValue('Ada', TEXT)).toBe('Ada')
-		expect(encodeValue(36, TEXT)).toBeNull()
+		expect(() => encodeValue(36, TEXT)).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
 		expect(decodeValue('Ada', TEXT)).toBe('Ada')
 	})
 
-	it('keeps a Uint8Array for blob, else null', () => {
+	it('keeps a Uint8Array for blob, refusing incompatible values', () => {
 		const bytes = new Uint8Array([1, 2, 3])
 		expect(encodeValue(bytes, BLOB)).toBe(bytes)
-		expect(encodeValue('nope', BLOB)).toBeNull()
+		expect(() => encodeValue('nope', BLOB)).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
 		expect(decodeValue(bytes, BLOB)).toBe(bytes)
 	})
 
@@ -92,10 +113,14 @@ describe('encodeValue / decodeValue — round-trips', () => {
 	})
 
 	it('rejects non-finite, fractional integer, permissive boolean, and malformed JSON values', () => {
-		expect(encodeValue(Number.NaN, REAL)).toBeNull()
-		expect(encodeValue(Number.POSITIVE_INFINITY, REAL)).toBeNull()
-		expect(encodeValue(1.5, INTEGER)).toBeNull()
-		expect(encodeValue(1, BOOLEAN)).toBeNull()
+		expect(() => encodeValue(Number.NaN, REAL)).toThrow(
+			expect.objectContaining({ code: 'VALIDATION' }),
+		)
+		expect(() => encodeValue(Number.POSITIVE_INFINITY, REAL)).toThrow(
+			expect.objectContaining({ code: 'VALIDATION' }),
+		)
+		expect(() => encodeValue(1.5, INTEGER)).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
+		expect(() => encodeValue(1, BOOLEAN)).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
 		expect(decodeValue(2, BOOLEAN)).toBeUndefined()
 		expect(decodeValue(1.5, INTEGER)).toBeUndefined()
 		expect(decodeValue('{', JSON_COLUMN)).toBeUndefined()

@@ -20,14 +20,13 @@ import {
 	isInteger,
 	isString,
 	isUint8Array,
+	preview,
 } from '@orkestrel/contract'
 import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js'
 
 // The server environment's pure helpers: the SQLite ↔ JS bridge, and the
-// filesystem-error classification the file-backed driver reads. Every helper is pure and
-// total — it narrows with `typeof` / `instanceof`, never `as`:
-// a value that does not fit its column's storage type encodes to `null` rather
-// than throwing, and `decodeValue` is the exact inverse. `encodeRow` /
+// filesystem-error classification the file-backed driver reads. Encoding refuses
+// incompatible present values; decoding omits malformed storage. `encodeRow` /
 // `decodeRow` lift the per-cell codecs across a whole schema; the SQL
 // `quoteIdentifier` contains identifier input. The SQL emitters live together
 // in `compilers.ts`; this module owns exactness, codecs, value extraction, and
@@ -307,7 +306,7 @@ export function quoteIdentifier(identifier: string): string {
  * Encodes a JS value to its stored {@link SQLiteValue} for a declared column.
  *
  * @remarks
- * The codec is total: a malformed value encodes to SQL `NULL`. Absence always
+ * A malformed present value throws a `VALIDATION` DatabaseError. Absence always
  * uses SQL `NULL`. A nullable-only column also uses SQL `NULL` for explicit
  * `null`; an optional-and-nullable column uses a storage-class sentinel so
  * absence and explicit `null` remain distinct.
@@ -331,22 +330,28 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 	}
 	switch (column.storage) {
 		case 'boolean':
-			return isBoolean(value) ? (value ? 1 : 0) : null
+			if (isBoolean(value)) return value ? 1 : 0
+			break
 		case 'json':
 			try {
 				return JSON.stringify(cloneJSONValue(value))
 			} catch {
-				return null
+				break
 			}
 		case 'integer':
-			return isBigInt(value) || (isFiniteNumber(value) && isInteger(value)) ? value : null
+			if (isBigInt(value) || (isFiniteNumber(value) && isInteger(value))) return value
+			break
 		case 'real':
-			return isBigInt(value) || isFiniteNumber(value) ? value : null
+			if (isBigInt(value) || isFiniteNumber(value)) return value
+			break
 		case 'text':
-			return isString(value) ? value : null
+			if (isString(value)) return value
+			break
 		case 'blob':
-			return isUint8Array(value) ? value : null
+			if (isUint8Array(value)) return value
+			break
 	}
+	throw new DatabaseError('VALIDATION', `Value cannot be stored in column ${preview(column.name)}`)
 }
 
 /**

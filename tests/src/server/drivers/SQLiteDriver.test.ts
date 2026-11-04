@@ -33,6 +33,7 @@ import {
 	integerShape,
 	nullableShape,
 	optionalShape,
+	rawShape,
 	shapeShape,
 	stringShape,
 } from '@orkestrel/contract'
@@ -97,6 +98,52 @@ afterEach(async () => {
 })
 
 describe('SQLiteDriver — open', () => {
+	it('refuses a raw store value on disk while memory preserves host values', async () => {
+		const temp = tempDatabasePath()
+		for (const backend of [createSQLiteDriver({ path: temp.path })]) {
+			const database = createDatabase({
+				driver: backend,
+				tables: { calls: { id: stringShape(), arguments: rawShape({}) } },
+			})
+			try {
+				const store = database.table('calls')
+				const row = { id: 'call', arguments: { at: new Date(0) } }
+				await expect(store.set(row)).rejects.toMatchObject({ code: 'VALIDATION' })
+				expect(await store.get('call')).toBeUndefined()
+			} finally {
+				await database.close()
+			}
+		}
+		temp.cleanup()
+		const memory = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { calls: { id: stringShape(), arguments: rawShape({}) } },
+		})
+		try {
+			const row = { id: 'call', arguments: { at: new Date(0) } }
+			await memory.table('calls').set(row)
+			expect(await memory.table('calls').get('call')).toEqual(row)
+		} finally {
+			await memory.close()
+		}
+	})
+	it('refuses a non-JSON column value without persisting an unreadable row', async () => {
+		const temp = tempDatabasePath()
+		const target = createSQLiteDriver({ path: temp.path })
+		try {
+			await target.open(SCHEMA)
+			await expect(
+				target.write('users', 'invalid', { id: 'invalid', meta: { at: new Date(0) } }),
+			).rejects.toMatchObject({ code: 'VALIDATION' })
+			expect(await target.read('users', 'invalid')).toBeUndefined()
+			await target.close()
+			await target.open(SCHEMA)
+			expect(await target.read('users', 'invalid')).toBeUndefined()
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
 	it('round-trips a shape-valued column through a real table', async () => {
 		const database = createDatabase({
 			driver: createSQLiteDriver({ path: ':memory:' }),

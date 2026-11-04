@@ -43,6 +43,7 @@ describe('createJSONDriver', () => {
 
 describe('createSQLiteDriver', () => {
 	it('refuses an omitted SQLite path', () => {
+		expect(() => createSQLiteDriver({ path: '' })).toThrow('SQLite path is required')
 		expect(() => Reflect.construct(SQLiteDriver, [])).toThrow('SQLite path is required')
 		expect(() => Reflect.construct(SQLiteDriver, [{}])).toThrow('SQLite path is required')
 		expect(() => Reflect.construct(SQLiteDriver, [{ path: undefined }])).toThrow(
