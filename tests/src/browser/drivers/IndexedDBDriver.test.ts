@@ -11,7 +11,7 @@ import {
 } from '@src/core'
 import { createIndexedDBDriver, deriveIndexedDBIndexName, schemaToStore } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
-import { integerShape, jsonShape, stringShape } from '@orkestrel/contract'
+import { integerShape, jsonShape, shapeShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -87,6 +87,23 @@ describe('driver conformance — IndexedDBDriver', () => {
 })
 
 describe('IndexedDBDriver — storage primitives over the wrapper', () => {
+	it('round-trips a shape-valued column through a real table', async () => {
+		const databaseName = mintDatabase('database-shape-column')
+		const database = createDatabase({
+			driver: createIndexedDBDriver(databaseName),
+			tables: { definitions: { id: stringShape(), definition: shapeShape() } },
+		})
+		try {
+			await database.open()
+			const definitions = database.table('definitions')
+			const row = { id: 'profile', definition: stringShape() }
+			await definitions.set(row)
+			expect(await definitions.get('profile')).toEqual(row)
+		} finally {
+			await database.close()
+			await deleteDatabase(databaseName)
+		}
+	})
 	it('reads back what it writes; misses are undefined / false', async () => {
 		await driver.value.write('users', 'u1', { id: 'u1', n: 1 })
 		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', n: 1 })

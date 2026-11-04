@@ -55,6 +55,7 @@ import {
 	objectShape,
 	optionalShape,
 	rawShape,
+	shapeShape,
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
@@ -570,6 +571,14 @@ describe('shapeToColumnStorage', () => {
 })
 
 describe('shapeToColumnSchema', () => {
+	it('stores a shape-valued column as JSON', () => {
+		expect(shapeToColumnSchema('definition', shapeShape())).toEqual({
+			name: 'definition',
+			storage: 'json',
+			optional: false,
+			nullable: false,
+		})
+	})
 	it('derives absence and null acceptance independently from the compiled contract', () => {
 		expect(shapeToColumnSchema('value', stringShape())).toEqual({
 			name: 'value',

@@ -662,6 +662,7 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 		case 'union':
 		case 'json':
 		case 'raw':
+		case 'shape':
 			return 'json'
 	}
 }

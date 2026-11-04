@@ -33,6 +33,7 @@ import {
 	integerShape,
 	nullableShape,
 	optionalShape,
+	shapeShape,
 	stringShape,
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
@@ -96,6 +97,21 @@ afterEach(async () => {
 })
 
 describe('SQLiteDriver — open', () => {
+	it('round-trips a shape-valued column through a real table', async () => {
+		const database = createDatabase({
+			driver: createSQLiteDriver({ path: ':memory:' }),
+			tables: { definitions: { id: stringShape(), definition: shapeShape() } },
+		})
+		try {
+			await database.open()
+			const definitions = database.table('definitions')
+			const row = { id: 'profile', definition: stringShape() }
+			await definitions.set(row)
+			expect(await definitions.get('profile')).toEqual(row)
+		} finally {
+			await database.close()
+		}
+	})
 	it('supports an explicit Database migration before the lazy open lifecycle', async () => {
 		const database = createDatabase({
 			driver: createSQLiteDriver({ path: ':memory:' }),
