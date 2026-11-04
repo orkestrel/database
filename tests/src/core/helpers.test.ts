@@ -154,6 +154,14 @@ describe('resolvePrimary', () => {
 })
 
 describe('requireColumns', () => {
+	it('bounds an undeclared table name in the refusal', () => {
+		const name = 'x'.repeat(100_000)
+		const error = captureError(() => requireColumns({}, name))
+		expect(isDatabaseError(error)).toBe(true)
+		if (!isDatabaseError(error)) throw error
+		expect(error.message.length).toBeLessThan(300)
+		expect(error).toMatchObject({ code: 'NOT_FOUND', context: { table: name } })
+	})
 	it('reads a declared table and throws NOT_FOUND for an undeclared one', () => {
 		const tables = { users: { id: stringShape() } }
 		expect(requireColumns(tables, 'users')).toBe(tables.users)

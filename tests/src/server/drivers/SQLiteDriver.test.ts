@@ -72,7 +72,9 @@ import {
 // stream / transaction); each backend suite registers its own case.
 describe('driver conformance — SQLiteDriver', () => {
 	it('conforms to DriverInterface', async () => {
-		await expect(conformDriver(() => createSQLiteDriver())).resolves.toBeUndefined()
+		await expect(
+			conformDriver(() => createSQLiteDriver({ path: ':memory:' })),
+		).resolves.toBeUndefined()
 	})
 })
 
@@ -84,7 +86,7 @@ describe('driver conformance — SQLiteDriver', () => {
 const driver = new DatabaseFixture<SQLiteDriver>()
 
 beforeEach(async () => {
-	driver.hold(createSQLiteDriver())
+	driver.hold(createSQLiteDriver({ path: ':memory:' }))
 	await driver.value.open(SCHEMA)
 })
 
@@ -96,7 +98,7 @@ afterEach(async () => {
 describe('SQLiteDriver — open', () => {
 	it('supports an explicit Database migration before the lazy open lifecycle', async () => {
 		const database = createDatabase({
-			driver: createSQLiteDriver(),
+			driver: createSQLiteDriver({ path: ':memory:' }),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
 		const plan = await database.migrate([])
@@ -769,7 +771,7 @@ describe('SQLiteDriver — codec round-trips', () => {
 
 describe('SQLiteDriver — CLOSED gate', () => {
 	it('throws CLOSED before open', async () => {
-		const closed = createSQLiteDriver()
+		const closed = createSQLiteDriver({ path: ':memory:' })
 		await expect(closed.read('users', 'u1')).rejects.toMatchObject({ code: 'CLOSED' })
 	})
 
@@ -836,7 +838,7 @@ describe('SQLiteDriver — native aggregate', () => {
 			},
 		]
 		const memory = createMemoryDriver()
-		const target = createSQLiteDriver()
+		const target = createSQLiteDriver({ path: ':memory:' })
 		try {
 			await memory.open(schema)
 			await target.open(schema)
@@ -955,7 +957,7 @@ describe('SQLiteDriver — native aggregate', () => {
 				indexes: [],
 			},
 		]
-		const target = createSQLiteDriver()
+		const target = createSQLiteDriver({ path: ':memory:' })
 		try {
 			await target.open(schema)
 			await target.write('values', 'empty', { id: 'empty', nullable: null })
@@ -1154,7 +1156,7 @@ describe('SQLiteDriver — snapshot', () => {
 		}
 		const real = changed.columns[1]
 		if (real === undefined) throw new Error('Expected real value column')
-		const target = createSQLiteDriver()
+		const target = createSQLiteDriver({ path: ':memory:' })
 		try {
 			await target.open(schema)
 			await target.write('values', 'v1', { id: 'v1', value: 10 })
@@ -1729,7 +1731,7 @@ describe('SQLiteDriver — metadata / stamp across reopen (temp file)', () => {
 	})
 
 	it('keeps an absent metadata row distinct from malformed metadata', async () => {
-		const fresh = createSQLiteDriver()
+		const fresh = createSQLiteDriver({ path: ':memory:' })
 		await fresh.open(SCHEMA)
 		expect(await fresh.metadata?.()).toBeUndefined()
 		await fresh.close()
@@ -1754,7 +1756,7 @@ describe('SQLiteDriver — metadata / stamp across reopen (temp file)', () => {
 	})
 
 	it('checks the closed lifecycle before traversing hostile stamp or migrate metadata', async () => {
-		const closed = createSQLiteDriver()
+		const closed = createSQLiteDriver({ path: ':memory:' })
 		const reason = new Error('hostile metadata getter')
 		const metadata = createUnclonableMetadata(reason, SCHEMA)
 		const stamp = closed.stamp
@@ -1814,7 +1816,7 @@ describe('SQLiteDriver — native transaction', () => {
 	})
 
 	it('does not report rollback when a wrapper replaces the post-native rejection', async () => {
-		const native = createSQLiteDriver()
+		const native = createSQLiteDriver({ path: ':memory:' })
 		const replacement = new Error('post-rollback wrapper failure')
 		const scope = new Error('scope failed')
 		const database = createDatabase({
@@ -1963,7 +1965,7 @@ describe('SQLiteDriver — native transaction', () => {
 			active: booleanShape(),
 		}
 		const database = createDatabase({
-			driver: createSQLiteDriver(),
+			driver: createSQLiteDriver({ path: ':memory:' }),
 			name: 'app',
 			tables: { users },
 		})
@@ -2267,7 +2269,7 @@ describe('SQLiteDriver — trusted-query parity vs the core engine', () => {
 
 	beforeEach(async () => {
 		await memory.open(META_SCHEMA)
-		sqlite.hold(createSQLiteDriver())
+		sqlite.hold(createSQLiteDriver({ path: ':memory:' }))
 		await sqlite.value.open(META_SCHEMA)
 		for (const row of ROWS) {
 			await memory.write('users', row.id, row)
@@ -2335,7 +2337,7 @@ describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic 
 
 	beforeEach(async () => {
 		await memory.open(NULL_SCHEMA)
-		sqlite.hold(createSQLiteDriver())
+		sqlite.hold(createSQLiteDriver({ path: ':memory:' }))
 		await sqlite.value.open(NULL_SCHEMA)
 		for (const row of NULL_ROWS) {
 			await memory.write('users', row.id, row)
@@ -2439,7 +2441,7 @@ describe('SQLiteDriver — NULL-column trusted-query parity (three-valued-logic 
 
 describe('SQLiteDriver — optional-nullable absent/present parity', () => {
 	it('agrees across direct records/aggregate/stream and public table/query paths', async () => {
-		const exact = createSQLiteDriver()
+		const exact = createSQLiteDriver({ path: ':memory:' })
 		const database = createDatabase({
 			driver: exact,
 			tables: {
@@ -2494,7 +2496,7 @@ describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
 	const refineDriver = new DatabaseFixture<SQLiteDriver>()
 
 	beforeEach(async () => {
-		refineDriver.hold(createSQLiteDriver())
+		refineDriver.hold(createSQLiteDriver({ path: ':memory:' }))
 		await refineDriver.value.open(REFINE_SCHEMA)
 		await refineDriver.value.write('users', 'u1', { id: 'u1', name: 'Ada', rank: 10 })
 		await refineDriver.value.write('users', 'u2', { id: 'u2', name: 'ada', rank: 20 })
@@ -2586,7 +2588,7 @@ describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
 				indexes: [],
 			},
 		]
-		const jsonDriver = createSQLiteDriver()
+		const jsonDriver = createSQLiteDriver({ path: ':memory:' })
 		await jsonDriver.open(jsonSchema)
 		await jsonDriver.write('users', 'u1', { id: 'u1', meta: { a: 1, b: [2, 3] } })
 		await jsonDriver.write('users', 'u2', { id: 'u2', meta: { a: 1, b: [2, 4] } })
@@ -2646,7 +2648,7 @@ describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
 
 describe('SQLiteDriver — reserved _metadata table guard', () => {
 	it('throws a VALIDATION DatabaseError when a declared table is named _metadata', async () => {
-		const guarded = createSQLiteDriver()
+		const guarded = createSQLiteDriver({ path: ':memory:' })
 		const badSchema: readonly TableSchema[] = [
 			{
 				name: '_metadata',

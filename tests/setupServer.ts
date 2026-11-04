@@ -1219,7 +1219,7 @@ export function memoryDatabase(): DatabaseInterface<{ readonly users: typeof USE
 
 export function sqliteDatabase(): DatabaseInterface<{ readonly users: typeof USERS }> {
 	return createDatabase({
-		driver: createSQLiteDriver(),
+		driver: createSQLiteDriver({ path: ':memory:' }),
 		tables: { users: USERS },
 		indexes: INDEXES,
 	})

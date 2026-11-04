@@ -39,7 +39,7 @@ export function createJSONDriver(path: string): DriverInterface {
 
 /**
  * Creates a trusted-mode, server-native SQLite {@link DriverInterface} for a database path,
- * or for `:memory:` when the options bag omits one.
+ * or for `:memory:` when explicitly requested.
  *
  * @remarks
  * Pass it to `createDatabase` from `@orkestrel/database` to run the typed
@@ -55,7 +55,7 @@ export function createJSONDriver(path: string): DriverInterface {
  * @param options - The {@link SQLiteDriverOptions} bag (`path`, `readonly`,
  *   `timeout`, `references`, `pragmas`); `references` directly enables or
  *   disables foreign-key enforcement, and omission retains the upstream
- *   default; omit the whole bag for an in-memory database
+ *   default; pass `path: ':memory:'` for an in-memory database
  * @returns A {@link DriverInterface} backed by SQLite
  *
  * @example
@@ -74,6 +74,6 @@ export function createJSONDriver(path: string): DriverInterface {
  * createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { journal_mode: 'WAL' } })
  * ```
  */
-export function createSQLiteDriver(options?: SQLiteDriverOptions): DriverInterface {
+export function createSQLiteDriver(options: SQLiteDriverOptions): DriverInterface {
 	return new SQLiteDriver(options)
 }

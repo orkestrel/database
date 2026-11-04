@@ -1,6 +1,6 @@
 import { createDatabase } from '@src/core'
 import { stringShape } from '@orkestrel/contract'
-import { createJSONDriver, createSQLiteDriver } from '@src/server'
+import { createJSONDriver, createSQLiteDriver, SQLiteDriver } from '@src/server'
 import { collect, createTeardown } from '@orkestrel/test'
 import { afterEach, describe, expect, it } from 'vitest'
 import { tableSchemas } from '../../setup.js'
@@ -42,11 +42,21 @@ describe('createJSONDriver', () => {
 })
 
 describe('createSQLiteDriver', () => {
+	it('refuses an omitted SQLite path', () => {
+		expect(() => Reflect.construct(SQLiteDriver, [])).toThrow('SQLite path is required')
+		expect(() => Reflect.construct(SQLiteDriver, [{}])).toThrow('SQLite path is required')
+		expect(() => Reflect.construct(SQLiteDriver, [{ path: undefined }])).toThrow(
+			'SQLite path is required',
+		)
+		expect(() => Reflect.apply(createSQLiteDriver, undefined, [])).toThrow(
+			'SQLite path is required',
+		)
+	})
 	// SQLite builds real typed columns, so this one opens the shared conformance
 	// schema rather than the scan-only `tableSchemas`: an undeclared column has no
 	// place to land in a native backend.
 	it('returns a working DriverInterface (open, write, read back, scan)', async () => {
-		const driver = createSQLiteDriver()
+		const driver = createSQLiteDriver({ path: ':memory:' })
 		await driver.open(driverSchema())
 		await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
 		await driver.write('users', 'u2', { id: 'u2', name: 'Bo', age: 41, active: false })
@@ -56,9 +66,9 @@ describe('createSQLiteDriver', () => {
 		await driver.close()
 	})
 
-	it('defaults to an in-memory database when the options bag is omitted', async () => {
+	it('opens an in-memory database when explicitly requested', async () => {
 		const db = createDatabase({
-			driver: createSQLiteDriver(),
+			driver: createSQLiteDriver({ path: ':memory:' }),
 			tables: { users: { id: stringShape(), name: stringShape() } },
 		})
 		const users = db.table('users')

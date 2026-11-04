@@ -27,7 +27,7 @@ export interface CompiledSQL {
  *
  * @remarks
  * Threaded into the underlying `@orkestrel/sqlite` wrapper's connection.
- * `path` is the database file path (`':memory:'` when omitted); `readonly`
+ * `path` is the required database file path (pass `':memory:'` explicitly for memory); `readonly`
  * opens the connection read-only (a write then fails as a typed `DRIVER`
  * {@link DatabaseError}); `timeout` is the busy-timeout in milliseconds before
  * a locked database fails `BUSY`; `references` enables or disables foreign-key
@@ -40,7 +40,7 @@ export interface CompiledSQL {
  * `bigints` option is not exposed here).
  */
 export interface SQLiteDriverOptions {
-	readonly path?: string
+	readonly path: string
 	readonly readonly?: boolean
 	readonly timeout?: number
 	readonly references?: boolean

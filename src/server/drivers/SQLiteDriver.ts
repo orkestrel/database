@@ -124,8 +124,14 @@ export class SQLiteDriver implements DriverInterface {
 	#identities = new Map<string, object>()
 	readonly #transactions = new Set<SQLiteTransaction>()
 
-	constructor(options: SQLiteDriverOptions = {}) {
-		this.#path = options.path ?? ':memory:'
+	constructor(options: SQLiteDriverOptions) {
+		if (!isString(options?.path)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				"SQLite path is required; pass a file path or ':memory:'",
+			)
+		}
+		this.#path = options.path
 		this.#options = options
 	}
 

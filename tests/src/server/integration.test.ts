@@ -73,7 +73,7 @@ describe('cross-backend public aggregate adversaries', () => {
 			tables: { metrics: METRICS },
 		})
 		const sqlite = createDatabase({
-			driver: createSQLiteDriver(),
+			driver: createSQLiteDriver({ path: ':memory:' }),
 			tables: { metrics: METRICS },
 		})
 		try {

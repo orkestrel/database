@@ -30,6 +30,7 @@ import {
 	isString,
 	objectShape,
 	parseNumber,
+	preview,
 	resolveField,
 } from '@orkestrel/contract'
 import {
@@ -754,7 +755,7 @@ export function requireColumns(tables: TableMap, name: string): ColumnMap
 export function requireColumns(tables: TableMap, name: string): ColumnMap {
 	const columns = tables[name]
 	if (columns === undefined) {
-		throw new DatabaseError('NOT_FOUND', `Table '${name}' is not declared`, { table: name })
+		throw new DatabaseError('NOT_FOUND', `Table ${preview(name)} is not declared`, { table: name })
 	}
 	return columns
 }
