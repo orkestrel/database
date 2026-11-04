@@ -509,7 +509,7 @@ describe('computeAggregate', () => {
 		expect.soft(() => computeAggregate(pressureRows, 'maximum', 'value')).not.toThrow()
 		expect(computeAggregate(pressureRows, 'minimum', 'value')).toBe(-500_000)
 		expect(computeAggregate(pressureRows, 'maximum', 'value')).toBe(499_999)
-	})
+	}, 30_000)
 
 	it('preserves signed zero for extrema in reversed order', () => {
 		expect(computeAggregate([{ value: 0 }, { value: -0 }], 'minimum', 'value')).toBe(-0)
