@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Orkestrel Dispatch'
+  short_description: 'Dispatch one unit to a subagent or a bench and bring its result back'
+  default_prompt: 'Use $orkestrel-dispatch to brief, launch, watch, accept, and sweep one unit of work.'

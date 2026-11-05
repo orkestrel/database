@@ -5,9 +5,9 @@
 
 A `Claim`, a `Verdict`, and a `receipt` carry the package. A `Claim` is the question: a case, a
 control that must break, and the TypeScript project both are judged under. A `Verdict` is the
-answer: one `Check` per stage in each phase, the case and the control. A `receipt` is the verdict's
-one-line summary of the conditions it was reached under, and it exists only when the claim proved
-itself.
+answer: one `StageResult` per stage in each phase, the case and the control. A `receipt` is the
+verdict's one-line summary of the conditions it was reached under, and it exists only when the
+claim proved itself.
 
 The type stage runs the workspace's own compiler over a mirror of the tree, and the lint and runtime
 stages hold resident Oxlint and Vitest engines. Source: [`src/core`](../src/core),
@@ -29,8 +29,6 @@ trust with a shell.
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an absent
 optional field is absent rather than empty.
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
-
 | Name                | Kind      | Signature                                                                                                                                                                              | Summary                                                                               |
 | ------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `Stage`             | type      | `(typeof PROBE_STAGES)[number]`                                                                                                                                                        | Names an inspection a claim passes through, derived from `PROBE_STAGES`.              |
@@ -40,7 +38,7 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `Claim`             | interface | `{ project, case, control }`                                                                                                                                                           | Carries everything the service needs to produce one verdict.                          |
 | `Party`             | type      | `(typeof PROBE_PARTIES)[number]`                                                                                                                                                       | Names who must act on an issue or probe failure.                                      |
 | `Issue`             | interface | `{ origin, path, message, range? }`                                                                                                                                                    | Carries one message a stage reported, where it reported it, and whose fault it names. |
-| `Check`             | interface | `{ stage, elapsed, issues }`                                                                                                                                                           | Carries one stage's outcome: what it cost and what it reported.                       |
+| `StageResult`       | interface | `{ stage, elapsed, issues }`                                                                                                                                                           | Carries one stage's outcome: what it cost and what it reported.                       |
 | `Toolchain`         | interface | `{ typescript, oxlint, vitest }`                                                                                                                                                       | Names the tool versions a verdict was produced with.                                  |
 | `Project`           | interface | `{ path, digest }`                                                                                                                                                                     | Names the TypeScript project that judged a verdict's candidate drafts.                |
 | `Verdict`           | interface | `{ id, digest, toolchain, project, reason?, case, control, elapsed, receipt? }`                                                                                                        | Carries the full result of one claim: every stage, for both the case and its control. |
@@ -51,14 +49,12 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `ProbeErrorContext` | interface | `{ stage?, path?, project?, name?, deadline?, value? }`                                                                                                                                | Carries the structured detail one probe failure reports beside its message.           |
 | `ProbeErrorOptions` | interface | `{ origin, code, context?, cause? }`                                                                                                                                                   | Configures one probe failure at construction.                                         |
 
-A row whose `Shape` cell names call-signature members after `plus` carries those members in
-[`## Methods`](#methods); the data members before `plus` stay here.
+A row whose `Signature` cell names members with parentheses carries those members in
+[`## Methods`](#methods); the data members it names without parentheses stay here.
 
 ### Constants
 
 From [`constants.ts`](../src/core/constants.ts). Each is frozen.
-
-A `Shape` cell holds the constant's declared type.
 
 | Name                   | Kind  | Signature                                                               | Summary                                                                                                                                                                                           |
 | ---------------------- | ----- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -96,8 +92,6 @@ Schema. The schema is the wire contract's shape and `isClaim` is the admission r
 narrower on `Draft.path`: see
 [The advertised schema is wider than the admission rule](#registering-the-server).
 
-A `Shape` cell holds the constant's declared type.
-
 | Name            | Kind  | Signature                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Summary                                                                                                                  |
 | --------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `DRAFT_SHAPE`   | const | `import("@orkestrel/contract").ObjectShape<{ path: import("@orkestrel/contract").StringShape; text: import("@orkestrel/contract").StringShape; }, false>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Describes one proposed file a claim carries.                                                                             |
@@ -110,21 +104,19 @@ A `Shape` cell holds the constant's declared type.
 Total guards, from [`validators.ts`](../src/core/validators.ts). Each returns a boolean for any
 input and never throws.
 
-In a guard table a `Shape` cell holds the type the guard narrows to.
-
-| Name          | Kind  | Signature          | Summary                                                                                         |
-| ------------- | ----- | ------------------ | ----------------------------------------------------------------------------------------------- |
-| `isStage`     | const | `Guard<Stage>`     | Checks whether a value names a stage.                                                           |
-| `isParty`     | const | `Guard<Party>`     | Checks whether a value names a party an issue carries.                                          |
-| `isDraft`     | const | `Guard<Draft>`     | Checks whether a value carries a proposed file's path and text.                                 |
-| `isCase`      | const | `Guard<Case>`      | Checks whether a value carries a claim's candidate drafts and its test.                         |
-| `isControl`   | const | `Guard<Control>`   | Checks whether a value carries a case plus the stage and reason it must fail for.               |
-| `isClaim`     | const | `Guard<Claim>`     | Checks whether a value carries a project, a case, and a control.                                |
-| `isIssue`     | const | `Guard<Issue>`     | Checks whether a value carries one message, its location, and the origin of the fault it names. |
-| `isCheck`     | const | `Guard<Check>`     | Checks whether a value carries one stage's outcome.                                             |
-| `isToolchain` | const | `Guard<Toolchain>` | Checks whether a value names every resolved tool version.                                       |
-| `isProject`   | const | `Guard<Project>`   | Checks whether a value names one resolved TypeScript project and what it contained.             |
-| `isVerdict`   | const | `Guard<Verdict>`   | Checks whether a value carries a complete verdict.                                              |
+| Name            | Kind  | Signature            | Summary                                                                                         |
+| --------------- | ----- | -------------------- | ----------------------------------------------------------------------------------------------- |
+| `isStage`       | const | `Guard<Stage>`       | Checks whether a value names a stage.                                                           |
+| `isParty`       | const | `Guard<Party>`       | Checks whether a value names a party an issue carries.                                          |
+| `isDraft`       | const | `Guard<Draft>`       | Checks whether a value carries a proposed file's path and text.                                 |
+| `isCase`        | const | `Guard<Case>`        | Checks whether a value carries a claim's candidate drafts and its test.                         |
+| `isControl`     | const | `Guard<Control>`     | Checks whether a value carries a case plus the stage and reason it must fail for.               |
+| `isClaim`       | const | `Guard<Claim>`       | Checks whether a value carries a project, a case, and a control.                                |
+| `isIssue`       | const | `Guard<Issue>`       | Checks whether a value carries one message, its location, and the origin of the fault it names. |
+| `isStageResult` | const | `Guard<StageResult>` | Checks whether a value carries one stage's outcome.                                             |
+| `isToolchain`   | const | `Guard<Toolchain>`   | Checks whether a value names every resolved tool version.                                       |
+| `isProject`     | const | `Guard<Project>`     | Checks whether a value names one resolved TypeScript project and what it contained.             |
+| `isVerdict`     | const | `Guard<Verdict>`     | Checks whether a value carries a complete verdict.                                              |
 
 ### Formatters and the token
 
@@ -133,7 +125,7 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 | Name                   | Kind     | Signature                                                 | Summary                                                                                                             |
 | ---------------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `formatIssue`          | function | `(issue: Issue) => string`                                | Renders one tool message as a single line an agent can classify and locate.                                         |
-| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's outcome as its summary line followed by every message it reported.                              |
+| `formatStageResult`    | function | `(result: StageResult) => string`                         | Renders one stage's outcome as its summary line followed by every message it reported.                              |
 | `formatProof`          | function | `(verdict: Verdict) => string`                            | Renders the closing line a rendered verdict ends with: the receipt it earned, or its absence.                       |
 | `formatReceipt`        | function | `(verdict: Verdict) => string`                            | Renders the smallest text a verdict can travel as: what it judged, and how it ended.                                |
 | `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders a whole verdict as the text an agent reads.                                                                 |
@@ -144,8 +136,6 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 ### Server contracts
 
 From [`types.ts`](../src/server/types.ts).
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                   | Kind      | Signature                                               | Summary                                                                                          |
 | ---------------------- | --------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -260,7 +250,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `guardStage`               | function | `<T>(stage: Stage, operation: Promise<T>) => Promise<T>`                | Guards one stage operation with the stage failure contract.                                                               |
 | `findRefusedPaths`         | function | `(value: unknown) => readonly string[]`                                 | Names every draft member of a claim-shaped value whose `path` this package's guard refuses.                               |
 | `normalizeValue`           | function | `(workspace: string, value: unknown) => unknown`                        | Rewrites every workspace-contained absolute path in a value to its workspace-relative form and sorts every record's keys. |
-| `computeDigest`            | function | `(workspace: string, value: unknown) => string`                         | Computes the canonical digest of one value as it stands in a target workspace.                                            |
+| `computeWorkspaceDigest`   | function | `(workspace: string, value: unknown) => string`                         | Computes the canonical digest of one value as it stands in a target workspace.                                            |
 | `captureListeners`         | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture` | Records the listeners one emitter carries for a set of events.                                                            |
 | `releaseListeners`         | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`             | Removes every listener one emitter gained for the captured events since its capture.                                      |
 
@@ -288,21 +278,21 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `StageInterface`
 
-| Method    | Returns          | Summary                                                                |
-| --------- | ---------------- | ---------------------------------------------------------------------- |
-| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
-| `inspect` | `Promise<Check>` | Inspects one case.                                                     |
-| `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
+| Method    | Returns                | Summary                                                                |
+| --------- | ---------------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`        | Begins the warm or joins the warm already begun.                       |
+| `inspect` | `Promise<StageResult>` | Inspects one case.                                                     |
+| `destroy` | `Promise<void>`        | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `RuntimeStage`
 
 The stage implements the preceding `StageInterface` contract.
 
-| Method    | Returns          | Summary                                                                |
-| --------- | ---------------- | ---------------------------------------------------------------------- |
-| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
-| `inspect` | `Promise<Check>` | Inspects one case.                                                     |
-| `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
+| Method    | Returns                | Summary                                                                |
+| --------- | ---------------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`        | Begins the warm or joins the warm already begun.                       |
+| `inspect` | `Promise<StageResult>` | Inspects one case.                                                     |
+| `destroy` | `Promise<void>`        | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `TypeStageInterface`
 
@@ -311,20 +301,20 @@ mirror. Each termination utility has the existing `PROBE_DEADLINE` budget of 30,
 run concurrently. POSIX teardown retains `SIGTERM`. Warming settles before mirror removal on either
 host. The termination attempt remains best effort if the host utility fails.
 
-| Method    | Returns            | Summary                                                                                                           |
-| --------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `start`   | `Promise<void>`    | Begins the warm or joins the warm already begun.                                                                  |
-| `inspect` | `Promise<Check>`   | Inspects one case, against a caller-named project where the caller names one.                                     |
-| `resolve` | `Promise<Project>` | Resolves one project to the path and digest the stage applies for it. Calls `start()` before reading the project. |
-| `destroy` | `Promise<void>`    | Tears down the resident tool or the mirror and releases its resources.                                            |
+| Method    | Returns                | Summary                                                                                                           |
+| --------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`        | Begins the warm or joins the warm already begun.                                                                  |
+| `inspect` | `Promise<StageResult>` | Inspects one case, against a caller-named project where the caller names one.                                     |
+| `resolve` | `Promise<Project>`     | Resolves one project to the path and digest the stage applies for it. Calls `start()` before reading the project. |
+| `destroy` | `Promise<void>`        | Tears down the resident tool or the mirror and releases its resources.                                            |
 
 #### `LintStageInterface`
 
-| Method    | Returns          | Summary                                                                |
-| --------- | ---------------- | ---------------------------------------------------------------------- |
-| `start`   | `Promise<void>`  | Begins the warm or joins the warm already begun.                       |
-| `inspect` | `Promise<Check>` | Inspects one case, under the bound the caller supplies.                |
-| `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
+| Method    | Returns                | Summary                                                                |
+| --------- | ---------------------- | ---------------------------------------------------------------------- |
+| `start`   | `Promise<void>`        | Begins the warm or joins the warm already begun.                       |
+| `inspect` | `Promise<StageResult>` | Inspects one case, under the bound the caller supplies.                |
+| `destroy` | `Promise<void>`        | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `OverlayInterface`
 
@@ -377,13 +367,13 @@ keeps one commit checked out at two paths reading as one claim. A claim carrying
 therefore digests the same in every workspace; a claim that carries one digests per workspace, so
 compare two such tokens only when both were minted against the same tree.
 
-`prove` runs every stage over the case, then every stage over the control, and returns one `Check`
-per stage for each. A stage that cannot start throws rather than returning an empty check, so no
-verdict ever reports a stage that did not run.
+`prove` runs every stage over the case, then every stage over the control, and returns one
+`StageResult` per stage for each. A stage that cannot start throws rather than returning an empty
+stage result, so no verdict ever reports a stage that did not run.
 
 The receipt is minted on these conditions together:
 
-- both phases report one check per stage; and
+- both phases report one stage result per stage; and
 - the case produced no issue at any stage; and
 - the control produced an `origin: 'claimant'` issue at the stage it declared, and neither phase
   produced an `origin: 'instrument'` issue; and
@@ -394,28 +384,27 @@ receipt is minted for it. An `origin: 'instrument'` issue in either phase says t
 not complete, so nothing was learned about the code and no receipt is minted either. An
 `origin: 'workspace'` issue in the control decides neither break condition: it names the target
 tree rather than the candidate. A case carrying any issue did not run clean and earns no receipt.
-The check-per-stage condition binds both phases, because the clean-elsewhere condition reads the
-control entries a verdict carries: a control that omits a stage would otherwise read as a stage
-that stayed clean. `prove` records every stage for both phases, so that condition refuses only a
-verdict you assembled by hand and passed to `computeReceipt` yourself.
+The one-stage-result-per-stage condition binds both phases, because the clean-elsewhere condition
+reads the control entries a verdict carries: a control that omits a stage would otherwise read as a
+stage that stayed clean. `prove` records every stage for both phases, so that condition refuses
+only a verdict you assembled by hand and passed to `computeReceipt` yourself.
 
 `Issue.origin` names the party that must act, and the receipt conditions read that value rather
 than the message beside it. **A `claimant` issue is a tool's diagnostic about a candidate draft,
 and nothing else. Every other claimant fault is a throw.** That invariant is what lets one union
 serve both an issue and a failure: without it, a caller's own mistake — a test path no project
-collects, a `Claim.project` path that escapes the workspace — would arrive as a `claimant`
+collects, a `Claim.project` path that resolves outside the workspace — would arrive as a `claimant`
 issue and satisfy the condition that a test which never ran must never satisfy. A `workspace` issue
 carries the target tree's own defect, such as a symbolic link in a mutation path, a mutation path
 whose existing components cannot be inspected, a specification directory the target tree blocks
 probe from creating, a Vitest project the root configuration declares as a path string, into which
 the runtime stage can install no overlay, or a covered module the workspace's own configuration
-served before the runtime overlay. An `instrument` issue carries this package's own
-message about an inspection that did not complete — a specification it could not write, after its
-directory exists, for a reason the target tree does not own, a module that ran no test, or a covered
-module probe's own loader received and did not resolve.
-`formatIssue` renders the value first as `[claimant]`, `[workspace]`, or `[instrument]`, so the
-ownership survives `formatVerdict`. A clean runtime check means every collected test passed, not
-that the module reported itself passed.
+served before the runtime overlay. An `instrument` issue carries this package's own message about an
+inspection that did not complete — a specification it could not write, after its directory exists,
+for a reason the target tree does not own, a module that ran no test, or a covered module probe's
+own loader received and did not resolve. `formatIssue` renders the value first as `[claimant]`,
+`[workspace]`, or `[instrument]`, so the ownership survives `formatVerdict`. A clean runtime stage
+result means every collected test passed, not that the module reported itself passed.
 
 **A diagnostic about a project belongs to the workspace.** The compiler reports a configuration
 fault — a JSON syntax error, an option it cannot apply, a `types` entry or an extended project it
@@ -478,17 +467,17 @@ and does not match the contract it is read against, `destroyed` builds a replace
 teardown is permanent, and `deadline` changes the budget or the work it bounds. Neither axis is
 derivable from the other. These are the pairs this package raises:
 
-| Party        | Code        | Raised when                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a caller-supplied name the host refuses to inspect or create — an overlong component and one carrying a NUL byte are the shapes this package meets — a claim the tool guard rejects, a control repeating the case's candidate drafts and test byte for byte, a candidate naming no scoped project, a caller-named project whose diagnostic names no file, or a lint inspection its caller supplied no bound for. |
-| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                                                                                                                                                                                                                       |
-| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began. The lint stage raises the same pair on its own when the bound its caller supplied stops a diagnostics wait, and a coordinator that armed that bound replaces the pair with its own refusal.                                                                                             |
-| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                                                                                                                                                                                                                        |
-| `workspace`  | `malformed` | The target tree publishes something probe cannot read: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, a mutation path whose existing components cannot be inspected, or a directory it blocks probe from creating for the boot workbench.                                                                                                                                      |
-| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                                                                                                                                                                                                                        |
-| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                                                                                                                                                                                                                       |
+| Party        | Code        | Raised when                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `claimant`   | `refused`   | An input is rejected: a path resolving outside the workspace, a caller-supplied name the host refuses to inspect or create — an overlong component and one carrying a NUL byte are the shapes this package meets — a claim the tool guard rejects, a control repeating the case's candidate drafts and test byte for byte, a candidate naming no scoped project, a caller-named project whose diagnostic names no file, or a lint inspection its caller supplied no bound for. |
+| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                                                                                                                                                                                                                                |
+| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began. The lint stage raises the same pair on its own when the bound its caller supplied stops a diagnostics wait, and a coordinator that armed that bound replaces the pair with its own refusal.                                                                                                      |
+| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                                                                                                                                                                                                                                 |
+| `workspace`  | `malformed` | The target tree publishes something probe cannot read: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, a mutation path whose existing components cannot be inspected, or a directory it blocks probe from creating for the boot workbench.                                                                                                                                               |
+| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                                                                                                                                                                                                                                 |
+| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                                                                                                                                                                                                                                |
 
 A TypeScript project whose JSON the compiler cannot parse reaches you as that `workspace` and
 `malformed` pair, carrying the compiler's own diagnostic, the stage, and the project you named in
@@ -497,12 +486,13 @@ A TypeScript project whose JSON the compiler cannot parse reaches you as that `w
 An `instrument` failure carries the same meaning it carries on `Issue.origin`: the inspection did
 not complete, so nothing was learned about the code. Do not read it as evidence about a candidate.
 
-**The pure leaves are total over a validated claim and not over every value.** `computeDigest`,
-`normalizeValue`, and the other exported leaves are written for the values a `Claim` the guards
-admit can carry, so a caller that hands one a value `isClaim` would refuse — a cyclic record, a
-`BigInt` — gets the host's own `RangeError` or `TypeError` unchanged rather than a `ProbeError`.
-Measured on 2026-08-20: `computeDigest(workspace, cyclic)` raises
-`RangeError: Maximum call stack size exceeded`, and `computeDigest(workspace, { n: 1n })` raises
+**The pure leaves are total over a validated claim and not over every value.**
+`computeWorkspaceDigest`, `normalizeValue`, and the other exported leaves are written for the
+values a `Claim` the guards admit can carry, so a caller that hands one a value `isClaim` would
+refuse — a cyclic record, a `BigInt` — gets the host's own `RangeError` or `TypeError` unchanged
+rather than a `ProbeError`. Measured on 2026-08-20: `computeWorkspaceDigest(workspace, cyclic)`
+raises `RangeError: Maximum call stack size exceeded`, and
+`computeWorkspaceDigest(workspace, { n: 1n })` raises
 `TypeError: Do not know how to serialize a BigInt`. Validate with `isClaim` before you reach past
 `prove` into a leaf.
 
@@ -532,7 +522,7 @@ and proof waits for type readiness and the boot controls. See [Lifecycle](#lifec
 - **That project is composed in the root configuration, not declared as a path string.** The
   runtime stage installs its own overlay plugin into each project's configuration so the candidate
   drafts resolve from memory. A project the root configuration names by path carries no such
-  plugin, so the stage installs no overlay and runs no test. The check reports an
+  plugin, so the stage installs no overlay and runs no test. The stage result carries an
   `origin: 'workspace'` issue, because the party that must act is the workspace owner editing
   `vite.config.ts`:
   `The runtime stage cannot instrument the string-declared Vitest project <name> because its configuration carries no runtime overlay plugin`.
@@ -785,9 +775,9 @@ import { RuntimeStage } from '@orkestrel/probe/server'
 
 const runtime = new RuntimeStage(process.cwd())
 try {
-	const check = await runtime.inspect(claim.case)
-	check.stage // 'runtime'
-	check.issues // []
+	const result = await runtime.inspect(claim.case)
+	result.stage // 'runtime'
+	result.issues // []
 } finally {
 	await runtime.destroy()
 }
@@ -881,12 +871,12 @@ itself.
 
 The project digest is the digest of the `compilerOptions` member of `tsc --showConfig -p <project>`,
 read against the mirrored copy of the project with the mirror as the current directory, so the
-digest and the check read one set of files. `computeDigest` canonicalizes the record: a relative
-path the project declares that escapes the workspace root resolves against the mirror's own
-ancestors, and the mirror carries nothing such a path names. It still **moves with the TypeScript
-version**, because a compiler decides which options it resolves and how it spells them. That is
-contained rather than surprising: the token already names `typescript@<version>`, so any policy
-pinning a digest already pins the version.
+digest and the check read one set of files. `computeWorkspaceDigest` canonicalizes the record: a
+relative path the project declares that points outside the workspace root resolves against the
+mirror's own ancestors, and the mirror carries nothing such a path names. It still **moves with the
+TypeScript version**, because a compiler decides which options it resolves and how it spells them.
+That is contained rather than surprising: the token already names `typescript@<version>`, so any
+policy pinning a digest already pins the version.
 
 Further limits belong beside those:
 
@@ -916,8 +906,8 @@ rather than as a limit on the token.
 
 ## What containment reaches
 
-Containment is not one rule, and the difference between its rules decides what a hostile claim can
-do.
+Containment is not one rule, and the difference between its rules decides what an untrusted claim
+can do.
 
 **Every path a claim carries is contained lexically.** `isDraft` refuses an absolute `Draft.path`
 and one that traverses out of the workspace, and `resolveWorkspaceFile` refuses the same shapes
@@ -967,12 +957,15 @@ indeterminate answer preserves the resource; only confirmed absence permits the 
 **A read is contained lexically only, and that is the reach to plan for.** The mirror carries
 regular files inside the workspace only: a symbolic link is not carried, so a file reached only
 through one is absent from the mirror and the compiler reports what its absence causes, as a
-claimant issue like any other. A candidate path beneath an in-workspace symbolic link resolves to a
+claimant issue like any other. Of the workspace-root `tmp/` directory the mirror carries only
+`tmp/probes/`, because the scaffold tmp layout keeps nothing else there that an inspection reads,
+and a consumer's ignored data must never be read or copied; the match is the lowercase `tmp`
+spelling exactly, and a `tmp` directory below the root is walked like any other. A candidate path beneath an in-workspace symbolic link resolves to a
 file outside the workspace, and Oxlint, which reads the workspace directly rather than a mirror of
 it, inspects it there. A `Claim.project` that reaches outside the workspace through `extends`,
 `files`, `include`, or project references reaches nothing there: the type stage reads a project
-against the mirror, so an escaping relative path resolves against the mirror's own ancestors, and
-the mirror carries nothing such a path names.
+against the mirror, so a relative path that points outside the workspace resolves against the
+mirror's own ancestors, and the mirror carries nothing such a path names.
 
 Measured on 2026-08-20: with `link` a symbolic link to a directory outside the workspace,
 `isDraft({ path: 'link/secret.ts', text })` returns `true`,
@@ -991,7 +984,7 @@ already supply test code the runtime stage runs.
 
 **A path the workspace's version-control ignore excludes is a path the lint stage reports nothing
 for.** Oxlint's language server honours `.gitignore`, and it does so for text supplied from memory
-exactly as it does for a file on disk. The stage reports a clean check, not a skipped one.
+exactly as it does for a file on disk. The stage reports a clean stage result, not a skipped one.
 
 This reaches the flagship claim stated earlier: its test lives at `tmp/probes/greeting.test.ts`, and
 `tmp` is ignored in this workspace, so the lint stage inspects the candidate `src/core/factories.ts`
@@ -1007,7 +1000,7 @@ carries. Put every candidate draft you want linted at a path version control tra
 The lint stage owns the workspace, the candidate's identity, and the projection from a diagnostic to
 an `Issue`. `@orkestrel/lsp` owns everything between them, and the hookup is fixed:
 
-- **The transport is `createStdioClientTransport` from `@orkestrel/lsp/server`.** Its command vector
+- **The transport is `createLSPStdioTransport` from `@orkestrel/lsp/server`.** Its command vector
   is the current executable, the entry `resolveWorkspaceBinary` resolves for `oxlint` in the target
   workspace, and `--lsp`; its directory is that workspace. The child is therefore the workspace's
   own installed Oxlint entry rather than a `node_modules/.bin` shim, for the reason the
@@ -1248,7 +1241,7 @@ server, and the supervising Codex process remained present; no synthetic load wa
   the package declares, what `verdict.digest` covers, and the flagship claim run for its receipt.
 - [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — the formatters, the receipt token's
   conditions, and the generated specification's marker.
-- [`validators.test.ts`](../tests/src/core/validators.test.ts) — every guard against hostile shapes,
+- [`validators.test.ts`](../tests/src/core/validators.test.ts) — every guard against malformed shapes,
   including the draft path the advertised schema admits and the guard refuses.
 - [`errors.test.ts`](../tests/src/core/errors.test.ts) — the failure guard against lookalikes and a
   duplicate copy of the package, and every failure path a test can drive without a resident tool,

@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Scout Orkestrel Terrain'
+  short_description: 'Map files, headings, exports, terms, and references mechanically'
+  default_prompt: 'Use $orkestrel-scout to map the terrain a brief or a lane needs before anyone reads it.'

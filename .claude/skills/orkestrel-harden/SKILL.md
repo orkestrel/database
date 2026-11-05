@@ -5,6 +5,6 @@ description: Research, audit, refactor, implement, centralize, test, document, a
 
 # Load the canonical workflow
 
-Read `.agents/skills/orkestrel-harden/SKILL.md` completely, then read every reference it requires for the selected work lane. Follow that canonical workflow before acting.
+Read `.agents/skills/orkestrel-harden/SKILL.md` completely, then read every reference it requires for the selected phases. Follow that canonical workflow before acting.
 
 Apply `AGENTS.md` § Authority and loading.

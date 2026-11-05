@@ -279,6 +279,7 @@ describe('selected faces', () => {
 			expect(project.test?.include).toContain(`tests/${axis}/${face}/**/*.test.ts`)
 			expect(project.test?.browser).toMatchObject({
 				enabled: true,
+				screenshotDirectory: resolve(POLICY_ROOT, 'tmp/captures/screenshots'),
 				instances: expect.arrayContaining([
 					expect.objectContaining({ browser: 'chromium', name: `${axis}:${face} (chromium)` }),
 				]),
@@ -468,6 +469,9 @@ describe('selected faces', () => {
 					.map(readConfigRecord)
 					.find((variant) => variant.name === provide.variant)
 				if (selected === undefined) throw new Error('Missing selected variant')
+				expect(readConfigRecord(test.browser).screenshotDirectory).toBe(
+					resolve(POLICY_ROOT, 'tmp/captures/screenshots'),
+				)
 				expect(readConfigRecord(test.browser).viewport).toEqual({
 					width: selected.width,
 					height: selected.height,
@@ -610,6 +614,9 @@ describe('selected faces', () => {
 			const test = readConfigRecord(project.test)
 			if (readConfigRecord(test.browser ?? {}).enabled !== true) continue
 			const label = typeof test.name === 'string' ? test.name : readConfigRecord(test.name).label
+			expect(readConfigRecord(test.browser).screenshotDirectory).toBe(
+				resolve(POLICY_ROOT, 'tmp/captures/screenshots'),
+			)
 			expect(readConfigRecord(test.browser).instances).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({ browser: 'chromium', name: `${label} (chromium)` }),
