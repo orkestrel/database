@@ -571,7 +571,7 @@ publishes no interface and is documented directly.
 
 | Method      | Summary                                                                                     |
 | ----------- | ------------------------------------------------------------------------------------------- |
-| `lookup`    | Looks up the highest release each declared range admits.                                    |
+| `lookup`    | Looks up the highest eligible release each declared range admits.                           |
 | `fetch`     | Fetches each named package's guide, beside the local mirror it answers for.                 |
 | `read`      | Reads each named vendored file from the repository, beside the target bytes it answers for. |
 | `catalog`   | Catalogs the published fleet from the registry's organization package list.                 |
@@ -2774,10 +2774,18 @@ verdict carrying its cause rather than thrown, so one unreachable package never 
 rest of the answer. The organization package list is the exception, because without it there is no
 fleet to report.
 
-A found verdict carries the highest version the declared range admits, not whatever `dist-tags.latest`
-names. `lookup` reads the packument's version map, selects across it before any collection bound can
-truncate the map, and falls back to the `latest` tag only when that tag is itself admitted. A range of
-`*` admits every version, which is how a caller asks for the highest release outright.
+A found verdict carries the highest eligible version the declared range admits. `lookup` reads the
+packument's version map and selects across it before any collection bound can truncate the map. A
+version whose entry carries a non-empty string `deprecated` field is never eligible, under any range;
+an empty string, `false`, and an absent field do not mark a version deprecated.
+
+When `dist-tags.latest` reads as a version, it caps a range of `*` and every range in its own major,
+so a release published above the tag is not selected. A range on another major is not capped: with
+`latest` at `6.0.0` or at `4.2.0`, `^5` reads the top of major 5.
+
+A map that holds an admitted version but no eligible one reads `unmatched`, with a note naming that
+cause, and never falls back to the tag. A missing map, or a map that holds no admitted version, falls
+back to the `latest` tag only when the range admits that tag.
 
 Each bound counts decoded bytes, and a version lookup asks the registry for the abbreviated
 packument — `dist-tags` and a trimmed version map, rather than the full per-version metadata no
