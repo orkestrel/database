@@ -640,21 +640,22 @@ export interface TableDefinition {
 }
 
 /**
- * Represents a database view valid only inside one {@link DatabaseInterface.transaction}
- * scope.
+ * Represents a table-only database view.
  *
  * @remarks
- * The view exposes only declared tables backed by the driver's scoped
- * {@link StorageInterface}. It cannot open, close, import, migrate, or nest
- * a transaction. The view and every table captured from it throw `CONFLICT`
- * after the scope settles.
+ * A root database presents this view for its lifetime. A transaction scope
+ * presents a view backed by the driver's scoped {@link StorageInterface};
+ * that view cannot open, close, import, migrate, or nest a transaction.
+ * The scoped view and every table captured from it throw `CONFLICT` after
+ * the scope settles.
  */
 export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
 	/**
-	 * Returns a table bound to the active transaction scope.
+	 * Returns the typed handle for a declared table.
 	 *
 	 * @remarks
-	 * The returned table throws `CONFLICT` for work started after the scope settles.
+	 * On a transaction's storage the handle throws `CONFLICT` for work started
+	 * after the scope settles.
 	 */
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
 }
@@ -663,6 +664,9 @@ export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
  * Represents a database — the ergonomic entry point that owns the driver and its tables.
  *
  * @remarks
+ * Extends {@link DatabaseStorageInterface}, so a database is accepted wherever
+ * table-only storage is accepted.
+ *
  * A database is a typed view over a set of tables on one driver. Tables are
  * declared up front in `createDatabase({ tables })` and reached, fully typed,
  * with `table(name)`. The driver connects lazily on first use, so a freshly
@@ -674,14 +678,12 @@ export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
  * scoped callback through a native driver transaction when available, otherwise
  * through the universal whole-store snapshot floor.
  */
-export interface DatabaseInterface<T extends TableMap = TableMap> {
+export interface DatabaseInterface<
+	T extends TableMap = TableMap,
+> extends DatabaseStorageInterface<T> {
 	readonly emitter: EmitterInterface<DatabaseEventMap>
 	readonly name: string
 	readonly status: DatabaseStatus
-	/**
-	 * Returns the typed handle for a declared table.
-	 */
-	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
 	/**
 	 * Defines a further shape map of tables as a typed view over the same driver and storage.
 	 */

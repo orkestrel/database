@@ -1,7 +1,8 @@
+import type { DatabaseStorageInterface, RowOf, TableInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { integerShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { tableSchemas } from '../../setup.js'
 
 // The database factories — that each returns a working instance of its interface.
@@ -10,6 +11,26 @@ import { tableSchemas } from '../../setup.js'
 // only assert the factory wires up a usable object end to end.
 
 describe('createDatabase', () => {
+	it('types root and transaction storage as precise and broad views', async () => {
+		const tables = { users: { id: stringShape(), name: stringShape() } }
+		const database = createDatabase({ driver: createMemoryDriver(), tables })
+		try {
+			const storage: DatabaseStorageInterface<typeof tables> & DatabaseStorageInterface = database
+			expectTypeOf(storage.table('users')).toEqualTypeOf<
+				TableInterface<RowOf<typeof tables.users>>
+			>()
+			await database.transaction(async (scoped) => {
+				const transaction: DatabaseStorageInterface<typeof tables> & DatabaseStorageInterface =
+					scoped
+				expectTypeOf(transaction.table('users')).toEqualTypeOf<
+					TableInterface<RowOf<typeof tables.users>>
+				>()
+			})
+		} finally {
+			await database.close()
+		}
+	})
+
 	it('returns a working DatabaseInterface (a basic round-trip)', async () => {
 		const db = createDatabase({
 			driver: createMemoryDriver(),

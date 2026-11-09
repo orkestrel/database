@@ -514,14 +514,13 @@ interface Surface {
 	readonly driver: Resolution
 }
 
-// A scratch project over named consumer modules, written beside them so their own
-// resolution reaches the installed package. Nothing is emitted and no ambient types
-// are pulled in, so what the check reads is the installed declarations alone.
+// Server consumers need Node's ambient types; core and browser consumers load none.
 function writeProject(
 	stage: Stage,
 	name: string,
 	driver: Resolution,
 	files: readonly string[],
+	entry: Entry,
 ): string {
 	const path = join(stage.consumer, `tsconfig.${name}.json`)
 	const project = {
@@ -529,10 +528,10 @@ function writeProject(
 			module: driver.module,
 			moduleResolution: driver.resolution,
 			noEmit: true,
-			skipLibCheck: true,
+			skipLibCheck: false,
 			strict: true,
 			target: 'esnext',
-			types: [],
+			types: entry.subpath === './server' ? ['node'] : [],
 		},
 		files: [...files],
 	}
@@ -601,7 +600,7 @@ const declared: Record<keyof typeof entry, true> = published
 const surfaced: Record<keyof typeof published, true> = declared
 `,
 	)
-	const project = writeProject(stage, name, surface.driver, [`./${module}`])
+	const project = writeProject(stage, name, surface.driver, [`./${module}`], surface.entry)
 	return checkProject(stage, project).map((line) => `${surface.driver.label}: ${line}`)
 }
 
@@ -745,8 +744,23 @@ function buildStage(): Stage {
 	writeFile(join(consumer, 'package.json'), CONSUMER_MANIFEST)
 	writeFile(join(consumer, ESM_DRIVER), ESM_DRIVER_SOURCE)
 	writeFile(join(consumer, CJS_DRIVER), CJS_DRIVER_SOURCE)
+	const owner = readJson(join(ROOT, 'package.json'))
+	if (
+		!isRecord(owner) ||
+		!isRecord(owner.devDependencies) ||
+		!isString(owner.devDependencies['@types/node'])
+	) {
+		throw new Error('The workspace manifest declares no @types/node development range')
+	}
 	const install = runNpm(
-		['install', '--ignore-scripts', '--no-audit', '--no-fund', join(packed, archive)],
+		[
+			'install',
+			'--ignore-scripts',
+			'--no-audit',
+			'--no-fund',
+			join(packed, archive),
+			`@types/node@${owner.devDependencies['@types/node']}`,
+		],
 		consumer,
 	)
 	if (install.status !== 0) {
@@ -987,20 +1001,20 @@ describe('installed package consumer', () => {
 		const silent: string[] = []
 		for (const driver of RESOLUTIONS) {
 			for (const [extension, format] of FORMATS) {
-				const written = selectEntries(stage.entries, driver.conditions[format])
-				if (written.length === 0) continue
-				const label = `${driver.label}.${extension}`
-				const probe = `probe.${label}`
-				const specifiers = written.map((entry) => entry.specifier)
-				writeConsumerProbe(stage, probe, specifiers)
-				const project = writeProject(stage, probe, driver, [`./${probe}`])
-				for (const message of checkProject(stage, project)) {
-					reported.push(`${label}: ${message}`)
+				for (const entry of selectEntries(stage.entries, driver.conditions[format])) {
+					const slug = entry.subpath.replaceAll(/[^\w]+/gu, '-')
+					const label = `${driver.label}${slug}.${extension}`
+					const probe = `probe.${label}`
+					writeConsumerProbe(stage, probe, [entry.specifier])
+					const project = writeProject(stage, probe, driver, [`./${probe}`], entry)
+					for (const message of checkProject(stage, project)) {
+						reported.push(`${label}: ${message}`)
+					}
+					const control = `control.${label}`
+					writeConsumerProbe(stage, control, [`${name}${ABSENT_SUBPATH}`])
+					const refused = writeProject(stage, control, driver, [`./${control}`], entry)
+					if (checkProject(stage, refused).length === 0) silent.push(label)
 				}
-				const control = `control.${label}`
-				writeConsumerProbe(stage, control, [`${name}${ABSENT_SUBPATH}`])
-				const refused = writeProject(stage, control, driver, [`./${control}`])
-				if (checkProject(stage, refused).length === 0) silent.push(label)
 			}
 		}
 		expect(reported).toStrictEqual([])
