@@ -697,8 +697,9 @@ answers a read and grant no verb write authority that it did not already have.
 `new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
 `new --app browser` command selects the journey axis, creates its birth-owned wrapper, defines
 `appJourney` in the root configuration, and excludes the browser integration suite from
-`app:browser`. Its manifest declares `test:journey` and invokes it after `npm run test:app` in
-`test`. It also declares `journey: capture journey` and `capture: capture frames` for explicit
+`app:browser`. Its manifest declares `test:journey`. A `private: true` workspace invokes it after
+`npm run test:app` in `test`; a publishing workspace runs application and journey suites on demand,
+outside release gates and chains. It also declares `journey: capture journey` and `capture: capture frames` for explicit
 scoped selections. A selection without a browser application emits no journey axis. `--styles`, `--themes`,
 `--showcase`, and `--extend` select the structural facts and the extensions, and Surfaces and extensions
 states what each emits and what each refuses. Creation leaves `setup` empty, and the remaining
@@ -940,11 +941,17 @@ in command order. A configuration value containing an unresolved shell expansion
 When a `test:*` script whose text names `vitest` names a configuration that the plan does not emit
 and the target does not hold, the non-blocking `projects` question names the script and configuration
 path. Its remedy asks you to add the configuration, or remove the script that names it and its
-invocation from the `test` chain. When the plan emits `test:journey` and no chain from `test` reaches
+invocation from the `test` chain. In a `private: true` workspace, when the plan emits `test:journey` and no chain from `test` reaches
 `npm run test:journey` through literal `npm run` calls, that question asks you to insert the invocation
-after `npm run test:app`. These advisories belong to `configs`
-and remain report-only during `repair`: the command preserves a `test` chain the package owns and
-an unplanned script. A configuration emitted by the plan or present in the target does not raise
+after `npm run test:app`. A publishing workspace requires neither application nor journey suites
+in its gate chains. When a chain from `test` or `prepublishOnly` reaches their script names, names
+their Vitest projects, or runs their planned application or journey wrappers through literal
+`vitest run --config` calls, the question asks you to remove those invocations and run the suites on demand.
+For reached projects and wrappers, the question includes the caller and its command.
+These advisories belong to `configs`. `repair` and `overwrite` replace a byte-exact former generated
+publishing `test` chain with the planned chain. An authored chain, including one with an extra step,
+stays report-only; the commands preserve that chain and any unplanned script.
+A configuration emitted by the plan or present in the target does not raise
 the absent configuration advisory.
 
 `audit` still completes the comparison and reports one non-blocking `projects` question when its
@@ -984,11 +991,16 @@ Each occupied framework face adds `check:<axis>:vue` and `build:<axis>:vue`; the
 Selected showcase pages add `showcase`, `showcase:<framework>`, `build:showcase`, and `build:showcase:<framework>`; application journeys add `test:journey:<framework>`.
 Its `test:src:<face>` script accepts, as its generated predecessor, the command that ran the project
 without building the face first, and `build:src:styles` accepts the styles-only build as the
-predecessor of the chain that builds themes after it. The `test` chain joins the region only as a
-generated predecessor: when it runs fewer steps than the planned chain and every step it runs is a planned step in the planned
+predecessor of the chain that builds themes after it. A publishing `test` chain joins the region when
+it matches byte for byte the planned chain with the generated `test:app`, `test:journey`, and framework
+journey invocations inserted after `test:src`, where that blueprint emitted them before.
+`repair` and `overwrite` remove those helper invocations from that exact predecessor.
+The `test` chain also joins the region as a generated predecessor when it runs fewer steps than
+the planned chain and every step it runs is a planned step in the planned
 order, `repair` and `overwrite` write the planned chain in its place. That write lands only when
 every step the planned chain adds runs a script the manifest declares or the region writes. The
-`test:src` and `test:app` aggregates sit outside the region, so a chain whose planned form adds an
+`test:src` and `test:app` aggregates sit outside the region. Only a private workspace's planned
+chain invokes `test:app`. A chain whose planned form adds an
 aggregate the manifest lacks stays with the package, and the `projects` question keeps its remedy.
 `audit` reports this chain write only through the `projects` question, so a planned step that
 registers no Vitest project, such as `npm run test:guides`, lands on the next `repair` without an
@@ -1008,7 +1020,8 @@ The browser application's journey axis adds `journey` and `capture`. Their gener
 `capture journey` and `capture frames`, have no predecessor forms in the accepted set. Missing
 commands append; generated values remain writable; `replaceManifestScripts` preserves customized
 values while repairing siblings independently, so a selected or wrapped `journey` command survives
-repair. Neither scoped command replaces `test:journey` in the gate chain.
+repair. Neither scoped command replaces `test:journey` in a private workspace's gate chain.
+Publishing workspaces keep application and journey suites outside release gates and chains.
 
 The range region and the script region are not groups. `package.json` is birth-owned, so the
 `manifest` group creates it when a workspace is first materialized and never rewrites it afterwards,
@@ -1373,7 +1386,9 @@ viewport, and provides `variant`
 as its name, `variants` as the declared list, and `capture` as a boolean. The root configuration
 reads `process.env.CAPTURE === '1'` for that boolean. The generated `test:journey` script runs
 `vitest run --config configs/app/vite.journey.config.ts --no-cache --reporter=dot`, and the generated
-`test` chain runs it after the application projects. With the journey axis off, the ordinary
+`test` chain runs it after the application projects only in a private workspace. In a publishing
+workspace, application and journey suites run on demand outside release gates and chains.
+With the journey axis off, the ordinary
 browser project retains its integration suite.
 
 The same axis adds `journey: capture journey` and `capture: capture frames`, using the executable
@@ -1611,7 +1626,9 @@ keeps your variant list and passes the Vite mode to the root
 through `mergeOverride`, so a wrapper changes only the fields it names and the project keeps its
 include and exclude replacement, viewport, commands, and plugin rules. The manifest runs `test:journey` for the base
 application and `test:journey:<framework>`, the same command with `--mode <framework>`, for each
-app-side browser extension, after `npm run test:app` in `test`.
+app-side browser extension. A private workspace runs them after `npm run test:app` in `test`.
+A publishing workspace keeps those scripts available on demand and invokes neither application
+nor journey suites from its release gates and chains.
 
 Scaffold seeds one birth-owned arrival journey per application at
 `tests/app/<application>/integration.test.ts`. The base journey imports `app/browser/main.ts`, and
@@ -2153,7 +2170,7 @@ extras pass through unchanged except for the selected showcase pair. Extras foll
 `ORKESTREL_RANGE_PATTERN`; foreign peers follow `FLOOR_RANGE_PATTERN`.
 
 A browser application with `showcase: true`, including its Vue face, selects exact
-`vite-plugin-singlefile: 2.3.3`, Vite `^8.3.6` from scaffold's manifest, and the npm override
+`vite-plugin-singlefile: 2.3.3`, Vite `^8.3.7` from scaffold's manifest, and the npm override
 `"vite-plugin-singlefile@2.3.3": { "micromatch": "npm:picomatch@2.3.2" }`. This policy applies
 after extras. Online resolution excludes this pair from ordinary foreign-major updates; other
 dependencies retain their usual resolution. Repair preserves each package's runtime or development
@@ -2226,11 +2243,11 @@ The dependency tables select these floors:
 | TypeScript                   | `^6.0.3`   | A selected `src/vue` or `app/vue` face                         |
 | Vitest                       | `^5.1.0`   | Every workspace                                                |
 | `@vitest/browser-playwright` | `^5.1.0`   | Browser tooling                                                |
-| `oxlint`                     | `^1.91.0`  | Every workspace                                                |
-| `oxfmt`                      | `^0.76.0`  | Every workspace                                                |
+| `oxlint`                     | `^1.93.0`  | Every workspace                                                |
+| `oxfmt`                      | `^0.77.0`  | Every workspace                                                |
 | `@microsoft/api-extractor`   | `^7.60.1`  | Declaration builds; uses its bundled TypeScript 6.0.3 engine   |
 | `playwright`                 | `^1.64.1`  | Browser tooling                                                |
-| Vite                         | `^8.3.6`   | Every workspace                                                |
+| Vite                         | `^8.3.7`   | Every workspace                                                |
 | `@types/node`                | `^24.19.2` | Every workspace; generated workspaces support Node `>=22.18.0` |
 
 Node 26 types admit APIs that the supported runtime lacks. Inside the declared major the verbs
@@ -2984,7 +3001,9 @@ publishes at least one `src` environment or sheet face. In a publishing workspac
 and `service` run from `prepublishOnly`, and `conformance` and `tree` stay in `test`. In a
 `private: true` workspace, `distribution` is absent, `service` runs from `test`, and there is no
 `prepublishOnly`. In both kinds of workspace, `studies` runs on demand through `npm run test:studies`
-alone, outside every gate and chain. The `policy` project reports an exporting root setup module that lacks its sibling proof or an import from `tests/setup.test.ts`.
+alone, outside every gate and chain. Application and journey suites run on demand outside release
+gates and chains in a publishing workspace, and remain in `test` in a private workspace.
+The `policy` project reports an exporting root setup module that lacks its sibling proof or an import from `tests/setup.test.ts`.
 Separately, a filled, exporting `tests/setup*.ts` module that no `tests/setup*.test.ts`
 proof covers raises the non-blocking `setup` question in `audit`, which names the modules and the proof to add.
 For setup modules the workspace authors, the workspace supplies the behavior proof; the setup modules scaffold seeds arrive with their sibling proofs.
