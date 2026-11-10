@@ -5,8 +5,8 @@
 > file, SQLite, or IndexedDB.
 
 A table is a contract. Declare a `tables` map of
-[`ContractShape`](contract.md)s once, and the row type, write-time coercion and
-validation, JSON-Schema introspection, and seed data all flow from that one
+[`ContractShape`](contract.md)s once, and the row type, write-time admission,
+JSON-Schema introspection, and seed data all flow from that one
 declaration — no separate schema, no annotations, no `as`.
 
 The design stance is one engine, thin drivers. A backend implements only an
@@ -53,7 +53,7 @@ const db = createDatabase({
 
 const users = db.table('users') // hold the handle; TableInterface<{ id; name; age }>
 
-await users.set({ id: 'u1', name: 'Ada', age: 36 }) // coerced + validated through the contract
+await users.set({ id: 'u1', name: 'Ada', age: 36 }) // admitted whole through the contract
 await users.get('u1') // typed { id; name; age } | undefined — narrowed, never `as`
 await users
 	.query()
@@ -68,7 +68,7 @@ never write `objectShape` at the table level. The row type is `Infer` of
 those columns, so `db.table('users')` is checked against the schema (a
 typo'd column name or a wrong-typed write fails at compile time) and returns
 a `TableInterface` typed by that row. That one declaration is the single
-source of truth: it types the table, drives write coercion + validation,
+source of truth: it types the table, drives write admission,
 produces the JSON Schema, and seeds fixtures.
 
 ### Factories
@@ -169,7 +169,9 @@ The constructor installs an own, non-enumerable, non-writable
 error itself. `isDatabaseError` accepts branded subclasses across package copies
 and ESM/CJS entries without requiring an exact `name`. It validates the declared
 code and optional context, and refuses unbranded look-alikes, transparent proxies,
-and plain objects carrying only the brand.
+and plain objects carrying only the brand. When the context carries a `faults`
+member, as a `VALIDATION` refusal from `Table` does, the guard requires a list
+whose every entry passes Contract's `isAuditFault` function.
 
 ### Query engine
 
@@ -525,19 +527,24 @@ These invariants hold across the core database source tree ↔ this guide:
    both directions (see `.claude/rules/documentation.md` § Parity). Exported
    implementation declarations outside
    an entry barrel remain internal.
-2. **A table is a contract.** Every write is coerced **and** validated
-   through the table's compiled contract — `set` / `add` / `update` run the
-   row through the installed Contract 0.0.9 `contract.parse`, one step that
-   both coerces and enforces constraints such as `min` / `pattern`. Every
-   parsed result already satisfies `contract.is`, so `Table` does not run a
-   second guard after parsing; a row that fails throws `VALIDATION`. Reads are
-   narrowed back to the table's row type through the guard — never an `as`
-   (see `AGENTS.md` § Non-negotiable rules). The
-   row type is the shape's `Infer`, so a `tables` map types every table from
-   one declaration. A contract rejection reports only the table plus the first
-   bounded contract fault (`field` and `reason` when one exists); the rejected
-   row, received value, and parser cause never enter the message, context,
-   serialized error, or table events.
+2. **A table is a contract.** Every write is admitted whole through the
+   table's compiled contract — `set` / `add` / `update` run the row through
+   Contract's `admitValue`, which admits a lossless repair such as `'36'` to
+   `36` for a number column and enforces constraints such as `min` /
+   `pattern`. A row that carries an undeclared top-level column, omits a
+   required column, or needs a lossy repair such as `'036'` to `36` throws
+   `VALIDATION`; the table never removes a column to admit the rest. A
+   `rawShape` column admits any defined value, so the nested keys of a JSON
+   column never refuse. Reads are narrowed back to the table's row type
+   through the guard — never an `as` (see `AGENTS.md` § Non-negotiable
+   rules). The row type is the shape's `Infer`, so a `tables` map types every
+   table from one declaration. A refusal's context carries `table` and
+   `faults`, the `AuditFault` list `admitValue` returned, and its message
+   names the table and the first fault through Contract's `describeFaultLine`
+   function. A fault's `received` member and the message carry Contract's
+   JSON-encoded, length-capped rendering of the received value; the rejected
+   row and the parser cause never enter the message, context, serialized
+   error, or table events.
 3. **Thin driver, one engine, native overrides.** The required
    `DriverInterface` surface is the irreducible storage primitive — keyed
    read/write/atomic-insert/delete, an ordered `scan`, key listing, and `snapshot`. `open`
@@ -1213,13 +1220,13 @@ await users.remove(['u1', 'u2']) // → readonly boolean[]
 A batch runs as independent sequential operations; wrap it in `transaction`
 when it must be atomic.
 
-### Coercion through the contract
+### Admission through the contract
 
-Parses a numeric string against the table's contract, stores the coerced number, and reads it back:
+Admits a numeric string against the table's contract, stores the repaired number, and refuses an undeclared column:
 
 ```ts
-import { createDatabase, createMemoryDriver } from '@orkestrel/database'
-import { integerShape, stringShape } from '@orkestrel/contract'
+import { createDatabase, createMemoryDriver, isDatabaseError } from '@orkestrel/database'
+import { admitValue, integerShape, stringShape } from '@orkestrel/contract'
 
 const users = createDatabase({
 	driver: createMemoryDriver(),
@@ -1228,18 +1235,16 @@ const users = createDatabase({
 	},
 }).table('users')
 
-// A numeric column accepts a numeric string and stores the coerced number.
-const normalized = users.contract.parse({
-	id: 'u2',
-	name: 'Bo',
-	age: '41',
-	role: 'member',
-})
-if (normalized === undefined) throw new Error('Expected the row to parse')
-await users.set(normalized)
-;(await users.get('u2'))?.age // 41 (a number) — the contract parsed it
+// A numeric string is a lossless repair, so admitValue admits it as the number.
+const admitted = admitValue(users.contract, { id: 'u2', name: 'Bo', age: '41', role: 'member' })
+if (!admitted.success) throw new Error('Expected the row to admit')
+await users.set(admitted.value.value)
+;(await users.get('u2'))?.age // 41 (a number)
 
-// A row that cannot satisfy the shape throws DatabaseError('VALIDATION').
+// An undeclared column refuses with DatabaseError('VALIDATION') and the contract's faults.
+const imported = { id: 'u3', name: 'Cy', age: 29, role: 'member', nickname: 'Cy' }
+const refused = await users.set(imported).catch((error: unknown) => error)
+if (isDatabaseError(refused)) refused.context?.faults // [{ reason: 'extra', path: ['nickname'] }]
 ```
 
 ### Fluent queries
@@ -2517,9 +2522,10 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 
 - **Declare tables in `createDatabase({ tables })` and hold the handles** —
   `const users = db.table('users')`; reuse them rather than re-resolving.
-- **Writes coerce, reads narrow.** At an unknown-input boundary, normalize
-  loose data (`'41'`) through `table.contract.parse` before a typed write;
-  trust `get` / `records` to return the row type.
+- **Writes admit whole, reads narrow.** At an unknown-input boundary, admit
+  loose data (`'41'`) through `admitValue(table.contract, input)` and write
+  its value; a refusal carries the faults to report. Trust `get` / `records`
+  to return the row type.
 - **Use `resolve` when absence is an error**, `get` when it is expected —
   `resolve` throws `NOT_FOUND`, `get` returns `undefined`.
 - **Reach for `query()` over `records()`** — the builder compiles a portable
@@ -2549,7 +2555,7 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 - [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
 - [`tests/src/core/ScopedIterator.test.ts`](../tests/src/core/ScopedIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, the readiness thunk running before every advance and its failure preempting the source, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
 - [`tests/src/core/DriverIterator.test.ts`](../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
-- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, coercion and error paths, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit and no-aborted-event behavior.
+- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, whole-row admission with its lossless repairs, its undeclared, missing, and lossy refusals, and the raw-column nested-key admission, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit and no-aborted-event behavior.
 - [`tests/src/core/Query.test.ts`](../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.
 - [`tests/src/core/Cursor.test.ts`](../tests/src/core/Cursor.test.ts) — cursor behavior over a key snapshot: `value` / `index` / `done`, serialized overlapping `next` / `update` / `remove`, rejection recovery, synchronous runner admission, terminal close before queued work and during dispatched reads/mutations, plus transaction-ledger regressions for deleted-key skipping, unawaited normalized updates, validation rollback, and retained closed/active conflicts.
 - [`tests/src/core/factories.test.ts`](../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).

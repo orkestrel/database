@@ -1,5 +1,13 @@
 import type { DatabaseErrorCode } from './types.js'
-import { holds, INTRINSICS, isFunction, isInstance, isObject } from '@orkestrel/contract'
+import {
+	arrayOf,
+	holds,
+	INTRINSICS,
+	isAuditFault,
+	isFunction,
+	isInstance,
+	isObject,
+} from '@orkestrel/contract'
 
 // Invalid operations and programmer errors `throw`, always a
 // `DatabaseError` carrying a machine-readable `code` so a `catch` branches on
@@ -44,7 +52,8 @@ export class DatabaseError extends Error {
  *
  * @remarks
  * Accepts branded instances and subclasses across package copies and module formats.
- * Requires the declared code and context shape. Refuses look-alikes and transparent
+ * Requires the declared code and context shape, and a context `faults` member, when
+ * present, to be a list of `AuditFault` entries. Refuses look-alikes and transparent
  * proxies without requiring an exact `name`.
  *
  * @param value - The value to test (typically a `catch` binding)
@@ -77,6 +86,9 @@ export function isDatabaseError(value: unknown): value is DatabaseError {
 		)
 			return false
 		const context: unknown = INTRINSICS.reflect.read(value, 'context')
-		return context === undefined || isObject(context) || isFunction(context)
+		if (context === undefined) return true
+		if (!isObject(context) && !isFunction(context)) return false
+		const faults: unknown = INTRINSICS.reflect.read(context, 'faults')
+		return faults === undefined || arrayOf(isAuditFault)(faults)
 	})
 }

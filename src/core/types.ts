@@ -12,7 +12,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 // satisfy. The unifying idea: a table *is* a contract. A database's `tables` map
 // pairs each name with its columns (a `column → ContractShape` map, the shape DSL
 // in `../contracts`), which the database wraps in an `objectShape` for you; each
-// table is typed by `Infer` of its columns, with validation, coercion, JSON-Schema
+// table is typed by `Infer` of its columns, with whole-row admission, JSON-Schema
 // introspection, and seed generation all flowing from that one declaration.
 // `import` / `export` move whole schemas between databases and environments.
 // Types are the source of truth: implementation and tests conform to this file.
@@ -749,8 +749,10 @@ export interface DatabaseInterface<
  * Exposes typed keyed CRUD plus fluent query and cursor access.
  *
  * @remarks
- * Writes are coerced through the table's contract: a string input to a numeric
- * column is normalized, and a row that cannot be coerced throws `VALIDATION`. A
+ * Writes are admitted whole through the table's contract by `admitValue`: a numeric
+ * string for a numeric column is a lossless repair and stores the number, and a row
+ * with an undeclared column, a missing column, or a lossy repair throws `VALIDATION`
+ * whose `context` carries `table` and the contract's `faults`. A
  * row whose primary is `undefined` receives a generated key. `get` returns `undefined`
  * when a key is absent; `resolve` throws `NOT_FOUND`. `set` upserts; `add`
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the

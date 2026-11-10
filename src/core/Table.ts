@@ -15,7 +15,7 @@ import type {
 	StorageInterface,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
-import { isArray, isRecord } from '@orkestrel/contract'
+import { admitValue, describeFaultLine, isArray, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import {
@@ -37,8 +37,9 @@ import { StreamPage } from './StreamPage.js'
  * Exposes typed keyed CRUD plus fluent query and cursor access over a driver.
  *
  * @remarks
- * The table's contract is the load-bearing piece: writes go through `parse`
- * (coercing inputs and rejecting rows that don't fit with a `VALIDATION` throw),
+ * The table's contract is the load-bearing piece: writes go through `admitValue`
+ * (admitting lossless repairs and refusing an undeclared, missing, or lossy column
+ * with a `VALIDATION` throw carrying the contract's `faults`),
  * reads come back through the contract guard (narrowing a stored {@link Row} to
  * the table's type — no assertion), and `contract` is exposed for
  * introspection and seeding. The driver only stores and scans; all querying is
@@ -561,23 +562,20 @@ export class Table<T = Row> implements TableInterface<T> {
 		return prepared
 	}
 
-	// Coerce *and* validate through the contract in one step: the contract's `parse`
-	// now coerces types (`'36'` → `36`) and enforces every leaf refinement (`min` /
-	// `max` / `pattern`), so a non-`undefined` result already satisfies the guard
-	// (parse↔guard soundness) — no separate `is` re-check is needed.
-	// `isRecord` is kept solely to narrow the parsed `T` back to a storable `Row`
-	// without an assertion; a table contract is always an object shape,
-	// so it never rejects a genuinely-parsed row.
+	// `isRecord` only narrows the admitted `T` back to a storable `Row`: a table contract is
+	// always an object shape, so it never refuses an admitted row.
 	#validate(row: Row): Row {
-		const parsed = this.#contract.parse(row)
-		if (parsed === undefined || !isRecord(parsed)) {
-			const [fault] = this.#contract.explain(row)
-			throw new DatabaseError('VALIDATION', `Row failed the '${this.#name}' contract`, {
-				table: this.#name,
-				...(fault === undefined ? {} : { field: fault.path, reason: fault.reason }),
-			})
-		}
-		return parsed
+		const admission = admitValue(this.#contract, row)
+		if (admission.success && isRecord(admission.value.value)) return admission.value.value
+		const faults = admission.success ? [] : admission.error.faults
+		const [fault] = faults
+		throw new DatabaseError(
+			'VALIDATION',
+			fault === undefined
+				? `Row failed the '${this.#name}' contract`
+				: `Row failed the '${this.#name}' contract: ${describeFaultLine(fault, this.#contract.schema)}`,
+			{ table: this.#name, faults },
+		)
 	}
 
 	#resolveKey(row: Row): Key {

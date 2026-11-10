@@ -51,8 +51,15 @@ await new GuideCommand({
 	reader: readInventory,
 	runner: createVitest,
 }).execute(async ({ files, report, root, rows }) => {
-	const { integerShape, isRecord, literalShape, optionalShape, parseJSON, stringShape } =
-		await import('@orkestrel/contract')
+	const {
+		admitValue,
+		integerShape,
+		isRecord,
+		literalShape,
+		optionalShape,
+		parseJSON,
+		stringShape,
+	} = await import('@orkestrel/contract')
 	const { computeSymbolKey, createGuide, findMissingSymbols, normalizeDirectories } =
 		await import('@orkestrel/guide')
 	const { requireValue } = await import('@orkestrel/test')
@@ -67,6 +74,7 @@ await new GuideCommand({
 		equalsValue,
 		extractKey,
 		filterRows,
+		isDatabaseError,
 		isKey,
 		matchesCondition,
 		matchesGlobPattern,
@@ -540,7 +548,7 @@ await new GuideCommand({
 			expect(db.table('posts').primary).toBe('slug')
 		})
 
-		it('stores the coerced number a numeric string parsed to (guides/database.md:1145)', async () => {
+		it('admits a numeric string as its number and refuses an undeclared column (guides/database.md § Admission through the contract)', async () => {
 			const users = createDatabase({
 				driver: createMemoryDriver(),
 				tables: {
@@ -552,10 +560,21 @@ await new GuideCommand({
 					},
 				},
 			}).table('users')
-			const normalized = users.contract.parse({ id: 'u2', name: 'Bo', age: '41', role: 'member' })
-			if (normalized === undefined) throw new Error('Expected the row to parse')
-			await users.set(normalized)
+			const admitted = admitValue(users.contract, {
+				id: 'u2',
+				name: 'Bo',
+				age: '41',
+				role: 'member',
+			})
+			if (!admitted.success) throw new Error('Expected the row to admit')
+			await users.set(admitted.value.value)
 			expect((await users.get('u2'))?.age).toBe(41)
+			const imported = { id: 'u3', name: 'Cy', age: 29, role: 'member', nickname: 'Cy' }
+			const refused = await users.set(imported).catch((error: unknown) => error)
+			expect(isDatabaseError(refused) ? refused.context?.faults : undefined).toEqual([
+				{ reason: 'extra', path: ['nickname'] },
+			])
+			expect(await users.get('u3')).toBeUndefined()
 		})
 
 		it('mints a fresh key and honours the configured generator (guides/database.md:1798, :1805)', async () => {

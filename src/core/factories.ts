@@ -33,7 +33,7 @@ import { MemoryDriver } from './drivers/MemoryDriver.js'
  *
  * const users = db.table('users') // hold the handle; TableInterface<{ id; name; age }>
  *
- * await users.set({ id: 'u1', name: 'Ada', age: 36 }) // coerced + validated through the contract
+ * await users.set({ id: 'u1', name: 'Ada', age: 36 }) // admitted whole through the contract
  * await users.get('u1') // typed { id; name; age } | undefined — narrowed, never `as`
  * await users
  * 	.query()

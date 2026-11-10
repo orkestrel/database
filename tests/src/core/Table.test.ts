@@ -2,15 +2,20 @@ import type { TableEvent } from '../../setup.js'
 import type { QueryInput, Key, TableEventMap } from '@src/core'
 import { captureFailure, createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
 import {
+	describeFaultLine,
 	integerShape,
+	isArray,
+	isAuditFault,
 	literalShape,
 	nullableShape,
 	optionalShape,
+	rawShape,
 	stringShape,
 } from '@orkestrel/contract'
 import { collect, createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
+	createConstrainedUsersDatabase,
 	createMemoryAdapter,
 	createRecordingDriver,
 	createUserRow,
@@ -427,12 +432,128 @@ describe('Table — coercion and validation', () => {
 		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
 
 		expect(error.code).toBe('VALIDATION')
-		expect(error.context).toMatchObject({ table: 'users', field: ['age'] })
-		expect(error.context).toHaveProperty('reason')
+		expect(error.context).toEqual({
+			table: 'users',
+			faults: [{ reason: 'type', path: ['age'], expected: 'integer', received: 'NaN' }],
+		})
 		expect(error.message).not.toContain('payload-secret')
 		expect(JSON.stringify(error.context)).not.toContain('payload-secret')
 		expect(JSON.stringify(error)).not.toContain('payload-secret')
 		expect(events.write.count).toBe(0)
+	})
+
+	it.each(['add', 'set'] as const)(
+		'refuses an undeclared column on %s with its extra fault and writes nothing',
+		async (method) => {
+			const users = userTable()
+			const row = { ...createUserRow(), nickname: 'Ace' }
+			const error = await users[method](row).catch((caught: unknown) => caught)
+			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+			expect(error.code).toBe('VALIDATION')
+			expect(error.context).toEqual({
+				table: 'users',
+				faults: [{ reason: 'extra', path: ['nickname'] }],
+			})
+			expect(error.message).toContain('users')
+			expect(error.message).toContain('nickname')
+			expect(await users.keys()).toEqual([])
+		},
+	)
+
+	it.each([
+		['an undeclared key', { id: 'u1', name: 'Ada', age: 36, ['k'.repeat(10_000)]: 'Ace' }],
+		['a received value', { id: 'u1', name: 'Ada', age: 'x'.repeat(10_000) }],
+	])('caps the message rendering of %s', async (_label, row) => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		const error = await users.add(row).catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		const faults = error.context?.faults
+		if (!isArray(faults) || !isAuditFault(faults[0])) throw new Error('Expected a fault')
+		expect(error.message).toBe(
+			`Row failed the 'users' contract: ${describeFaultLine(faults[0], users.contract.schema)}`,
+		)
+		expect(error.message).toContain('…')
+		expect(error.message.length).toBeLessThan(400)
+	})
+
+	it('refuses an undeclared column on update and keeps the stored row', async () => {
+		const users = userTable()
+		await users.set(createUserRow())
+		const changes = { age: 37, nickname: 'Ace' }
+		const error = await users.update('u1', changes).catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.context).toEqual({
+			table: 'users',
+			faults: [{ reason: 'extra', path: ['nickname'] }],
+		})
+		expect(await users.get('u1')).toEqual(createUserRow())
+	})
+
+	it('refuses a row that omits a required column with its missing fault', async () => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		const error = await users.add({ id: 'u1', name: 'Ada' }).catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.context).toEqual({
+			table: 'users',
+			faults: [{ reason: 'missing', path: ['age'], expected: 'integer' }],
+		})
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('admits a lossless repair and stores the repaired number', async () => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		await users.set({ id: 'u1', name: 'Ada', age: '36' })
+		expect(await users.get('u1')).toEqual(createUserRow())
+	})
+
+	it('admits any nested JSON inside a raw column through insert and update', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { memos: { id: stringShape(), snapshot: rawShape({}) } },
+		})
+		const memos = db.table('memos')
+		const first = { turns: [{ role: 'user', text: 'Hello', meta: null }], tags: ['draft', null] }
+		await memos.add({ id: 'm1', snapshot: first })
+		expect(await memos.get('m1')).toEqual({ id: 'm1', snapshot: first })
+		const second = {
+			summary: { topics: [{ name: 'billing', weight: 2 }], owner: null },
+			flag: true,
+		}
+		expect(await memos.update('m1', { snapshot: second })).toBe(true)
+		expect(await memos.get('m1')).toEqual({ id: 'm1', snapshot: second })
+	})
+
+	it('refuses an undeclared top-level column beside a raw column', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { memos: { id: stringShape(), snapshot: rawShape({}) } },
+		})
+		const memos = db.table('memos')
+		const row = { id: 'm1', snapshot: { turns: [] }, label: 'draft' }
+		const error = await memos.add(row).catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.context).toEqual({
+			table: 'memos',
+			faults: [{ reason: 'extra', path: ['label'] }],
+		})
+		expect(await memos.keys()).toEqual([])
+	})
+
+	it('refuses a lossy repair and writes nothing', async () => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		const error = await users
+			.add({ id: 'u1', name: 'Ada', age: '036' })
+			.catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.context).toEqual({
+			table: 'users',
+			faults: [{ reason: 'type', path: ['age'], expected: 'integer', received: '"036"' }],
+		})
+		expect(await users.keys()).toEqual([])
 	})
 })
 

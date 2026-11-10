@@ -95,9 +95,17 @@ for (const creator of modules) {
 	const plain = {}
 	Object.defineProperty(plain, brand, { value: plain })
 	const unbranded = Object.assign(new Error('look-alike'), { name: 'DatabaseError', code: 'CONFLICT' })
+	const refused = new creator.DatabaseError('VALIDATION', 'failure', {
+		table: 'users', faults: [{ reason: 'extra', path: ['nickname'] }],
+	})
+	const corrupt = new creator.DatabaseError('VALIDATION', 'failure', {
+		table: 'users', faults: [{ reason: 'extra', path: ['nickname'], value: 'Ace' }],
+	})
 	for (const observer of modules) {
 		assert.equal(observer.isDatabaseError(original), true)
 		assert.equal(observer.isDatabaseError(derived), true)
+		assert.equal(observer.isDatabaseError(refused), true)
+		assert.equal(observer.isDatabaseError(corrupt), false)
 		assert.equal(observer.isDatabaseError(unbranded), false)
 		assert.equal(observer.isDatabaseError(new Proxy(original, {})), false)
 		assert.equal(observer.isDatabaseError(plain), false)
