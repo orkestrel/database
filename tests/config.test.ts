@@ -5,6 +5,7 @@ import type { InlineConfig, UserConfig } from 'vite'
 import type { PolicyComment, PolicyDiagnostic, PolicyExpression } from '../configs/policy.js'
 import type { PolicyProject } from './setupPolicy.js'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
 	closeSync,
 	existsSync,
@@ -379,12 +380,16 @@ describe('selected faces', () => {
 	})
 
 	it('resolves showcase and journey modes for every occupied application', async () => {
-		const applications = [
-			'browser',
-			...collectFrameworks(POLICY_ROOT)
-				.filter((face) => face.startsWith('app/'))
-				.map((face) => face.slice(4)),
-		]
+		const faces = collectFrameworks(POLICY_ROOT)
+			.filter((face) => face.startsWith('app/'))
+			.map((face) => face.slice(4))
+		// The base application is declared by its exact-case entry alone.
+		const candidates = ['browser', ...faces]
+		const applications = candidates.filter(
+			(application) =>
+				existsSync(resolve(POLICY_ROOT, 'app', application)) &&
+				readdirSync(resolve(POLICY_ROOT, 'app', application)).includes('main.ts'),
+		)
 		const manifest = readConfigRecord(
 			JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8')),
 		)
@@ -545,6 +550,20 @@ describe('selected faces', () => {
 				'absent',
 			]),
 		).toThrow('not declared')
+		// The record names an application exactly when its exact-case entry exists.
+		const variant = { name: 'desktop', width: 1280, height: 800 }
+		for (const application of applications) {
+			expect(
+				readConfigRecord(
+					readConfigRecord(Reflect.apply(factory, undefined, [variant, [], application])).test,
+				).include,
+			).toStrictEqual([`tests/app/${application}/integration.test.ts`])
+		}
+		for (const application of candidates.filter((name) => !applications.includes(name))) {
+			expect(() => Reflect.apply(factory, undefined, [variant, [], application])).toThrow(
+				'not declared',
+			)
+		}
 	})
 
 	it('collects both browser setup proofs and optimizes every selected browser factory', async () => {
@@ -1153,7 +1172,19 @@ describe('root configuration', () => {
 	})] },
 }\n`,
 		)
-		const journeys: object[][] = []
+		const journeys: Array<{ readonly application: string; readonly tests: readonly object[] }> = []
+		// A face-only workspace declares no base application, so each declared application loads the
+		// journey wrapper under its own Vite mode, and the default mode stands for the base entry.
+		const occupied = [
+			'browser',
+			...collectFrameworks(POLICY_ROOT)
+				.filter((face) => face.startsWith('app/'))
+				.map((face) => face.slice(4)),
+		].filter(
+			(application) =>
+				existsSync(resolve(POLICY_ROOT, 'app', application)) &&
+				readdirSync(resolve(POLICY_ROOT, 'app', application)).includes('main.ts'),
+		)
 		const targets = [
 			...required.map((wrapper) => ({ wrapper, directory: POLICY_ROOT })),
 			{ wrapper: journey, directory: planted.path },
@@ -1176,45 +1207,66 @@ describe('root configuration', () => {
 					if (axis === undefined || environment === undefined) {
 						throw new Error(`${wrapper} carries no target`)
 					}
-					const loaded = await loadConfigFromFile(
-						{ command: 'build', mode: 'test', isSsrBuild: false, isPreview: false },
-						resolve(directory, wrapper),
-						directory,
-						'silent',
-					)
-					if (loaded === null) throw new Error(`${wrapper} did not load`)
 					if (environment === 'journey') {
-						const projects = loaded.config.test?.projects
-						if (!Array.isArray(projects) || projects.length === 0) {
-							throw new Error(`${wrapper} carries no journey projects`)
+						const applications = directory === planted.path ? ['browser'] : occupied
+						if (applications.length === 0)
+							throw new Error(`${wrapper} has no declared application to load`)
+						for (const application of applications) {
+							const mode = application === 'browser' ? 'test' : application
+							const loaded = await loadConfigFromFile(
+								{ command: 'build', mode, isSsrBuild: false, isPreview: false },
+								resolve(directory, wrapper),
+								directory,
+								'silent',
+							)
+							if (loaded === null) throw new Error(`${wrapper} did not load`)
+							const projects = loaded.config.test?.projects
+							if (!Array.isArray(projects) || projects.length === 0) {
+								throw new Error(`${wrapper} carries no journey projects`)
+							}
+							const tests: object[] = []
+							for (const factory of projects) {
+								if (typeof factory !== 'function')
+									throw new Error(`${wrapper} carries no project factory`)
+								const project: unknown = await Reflect.apply(factory, undefined, [
+									{ command: 'serve', mode },
+								])
+								if (typeof project !== 'object' || project === null)
+									throw new Error('A journey project is not a configuration')
+								const test: unknown = Object.getOwnPropertyDescriptor(project, 'test')?.value
+								if (typeof test !== 'object' || test === null)
+									throw new Error('A journey project carries no test block')
+								tests.push(test)
+							}
+							journeys.push({ application, tests })
 						}
-						const tests: object[] = []
-						for (const factory of projects) {
-							if (typeof factory !== 'function')
-								throw new Error(`${wrapper} carries no project factory`)
-							const project: unknown = await Reflect.apply(factory, undefined, [
-								{ command: 'serve', mode: 'test' },
-							])
-							if (typeof project !== 'object' || project === null)
-								throw new Error('A journey project is not a configuration')
-							const test: unknown = Object.getOwnPropertyDescriptor(project, 'test')?.value
-							if (typeof test !== 'object' || test === null)
-								throw new Error('A journey project carries no test block')
-							tests.push(test)
-						}
-						journeys.push(tests)
 						continue
 					}
-					const output = loaded.config.build?.outDir
-					if (output === undefined) throw new Error(`${wrapper} carries no output`)
-					const expected =
-						environment === 'bin'
-							? 'dist/bin'
-							: environment === 'showcase'
-								? 'showcase'
-								: `dist/${axis}/${environment}`
-					if (resolve(POLICY_ROOT, output) !== resolve(POLICY_ROOT, expected)) {
-						throw new Error(`${wrapper} resolves to the wrong output`)
+					// The showcase selects its application by Vite mode as the journey does.
+					const modes =
+						environment === 'showcase'
+							? occupied.map((application) => (application === 'browser' ? 'test' : application))
+							: ['test']
+					if (modes.length === 0) throw new Error(`${wrapper} has no declared application to load`)
+					for (const mode of modes) {
+						const loaded = await loadConfigFromFile(
+							{ command: 'build', mode, isSsrBuild: false, isPreview: false },
+							resolve(directory, wrapper),
+							directory,
+							'silent',
+						)
+						if (loaded === null) throw new Error(`${wrapper} did not load`)
+						const output = loaded.config.build?.outDir
+						if (output === undefined) throw new Error(`${wrapper} carries no output`)
+						const expected =
+							environment === 'bin'
+								? 'dist/bin'
+								: environment === 'showcase'
+									? 'showcase'
+									: `dist/${axis}/${environment}`
+						if (resolve(POLICY_ROOT, output) !== resolve(POLICY_ROOT, expected)) {
+							throw new Error(`${wrapper} resolves to the wrong output`)
+						}
 					}
 					continue
 				}
@@ -1261,10 +1313,10 @@ describe('root configuration', () => {
 					expect(() => expect(control).toStrictEqual(expectedTypes)).toThrow('expected')
 				}
 			}
-			for (const tests of journeys) {
+			for (const { application, tests } of journeys) {
 				const names = tests.map((test) => {
 					expect(Object.getOwnPropertyDescriptor(test, 'include')?.value).toStrictEqual([
-						'tests/app/browser/integration.test.ts',
+						`tests/app/${application}/integration.test.ts`,
 					])
 					expect(Object.getOwnPropertyDescriptor(test, 'exclude')?.value).toStrictEqual([])
 					expect(Object.getOwnPropertyDescriptor(test, 'setupFiles')?.value).toStrictEqual([
@@ -1396,6 +1448,101 @@ describe('root configuration', () => {
 			expect(split).toContain('main.cjs')
 			expect(split?.length).toBeGreaterThan(1)
 		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// A workspace with studies and an `app/server` also builds the server's barrel to the
+	// single ES file `index.js` beside `main.cjs`, which a study loads as ESM. The real
+	// wrapper's configuration builds a scratch entry into a scratch output directory that
+	// already holds a `main.cjs`, four times: as declared twice, with an `external` that
+	// inlines bare packages, and with `emptyOutDir` on. The first build keeps `main.cjs` and
+	// leaves the bare import in place, the second repeats its digest, and the two controls
+	// show the declared options carry the result: the inlined build drops the bare import
+	// and the emptying build deletes `main.cjs`. A workspace without the conditions has no
+	// wrapper, and the assertion classifies the absence.
+	it('builds the application server barrel to bare externals beside main.cjs', async () => {
+		const wrapper = resolve(POLICY_ROOT, 'configs/app/vite.barrel.config.ts')
+		const planned =
+			collectStudies(POLICY_ROOT).length > 0 && existsSync(resolve(POLICY_ROOT, 'app/server'))
+		expect(existsSync(wrapper)).toBe(planned)
+		if (!planned) return
+		const scratch = createPolicyScratch({
+			parent: resolve(POLICY_ROOT, 'app/server'),
+			prefix: 'config-barrel-entry-',
+		})
+		const out = createPolicyScratch({ prefix: 'config-barrel-out-' })
+		try {
+			scratch.write(
+				'index.ts',
+				"import { join } from 'node:path'\nimport { peer } from 'barrel-peer'\nexport const served: string = join(peer, 'x')\n",
+			)
+			scratch.write(
+				'node_modules/barrel-peer/package.json',
+				'{ "name": "barrel-peer", "version": "1.0.0", "type": "module", "main": "index.js" }\n',
+			)
+			scratch.write('node_modules/barrel-peer/index.js', "export const peer = 'peer'\n")
+			const readings: Array<{
+				readonly variant: string
+				readonly kept: boolean
+				readonly bare: boolean
+				readonly digest: string
+			}> = []
+			for (const variant of ['declared', 'repeated', 'inlined', 'emptying']) {
+				out.write('main.cjs', 'main\n')
+				const loaded = await loadConfigFromFile(
+					{ command: 'build', mode: 'production', isSsrBuild: false, isPreview: false },
+					wrapper,
+					POLICY_ROOT,
+					'silent',
+				)
+				if (loaded === null) throw new Error('The barrel wrapper did not load')
+				const rolldown = loaded.config.build?.rolldownOptions
+				expect(loaded.config.build?.emptyOutDir).toBe(false)
+				await build({
+					...loaded.config,
+					root: POLICY_ROOT,
+					configFile: false,
+					logLevel: 'silent',
+					// The output boundary pins the real output directory, which the scratch directory replaces.
+					plugins: (loaded.config.plugins ?? []).filter(
+						(plugin) =>
+							typeof plugin !== 'object' ||
+							plugin === null ||
+							Object.getOwnPropertyDescriptor(plugin, 'name')?.value !==
+								'orkestrel-output-boundary',
+					),
+					build: {
+						...loaded.config.build,
+						outDir: out.path,
+						...(variant === 'emptying' ? { emptyOutDir: true } : {}),
+						lib: {
+							entry: resolve(scratch.path, 'index.ts'),
+							formats: ['es'],
+							fileName: () => 'index.js',
+						},
+						rolldownOptions: {
+							...rolldown,
+							...(variant === 'inlined' ? { external: /^node:/u } : {}),
+						},
+					},
+				})
+				const text = readFileSync(resolve(out.path, 'index.js'), 'utf8')
+				readings.push({
+					variant,
+					kept: existsSync(resolve(out.path, 'main.cjs')),
+					bare: /from ["']barrel-peer["']/u.test(text),
+					digest: createHash('sha256').update(text).digest('hex'),
+				})
+			}
+			const [declared, repeated, inlined, emptying] = readings
+			expect(declared).toMatchObject({ kept: true, bare: true })
+			expect(repeated?.digest).toBe(declared?.digest)
+			expect(inlined).toMatchObject({ kept: true, bare: false })
+			expect(inlined?.digest).not.toBe(declared?.digest)
+			expect(emptying).toMatchObject({ kept: false, bare: true })
+		} finally {
+			out.destroy()
 			scratch.destroy()
 		}
 	})
@@ -5027,7 +5174,7 @@ describe('configuration helpers', () => {
 			'environmentSourceError',
 			'fileSystemPath',
 			'findPackageDirectory',
-			'hasAsciiUrlControl',
+			'hasASCIIURLControl',
 			'isBoundaryExemptModule',
 			'isExtractorModule',
 			'isOutsideWorkspacePath',
@@ -5315,8 +5462,8 @@ describe('configuration helpers', () => {
 				"const module = import('./module.js')\nconst asset = new URL('./asset%20name.png', import.meta.url)\nvoid module\nvoid asset\n"
 			writeFileSync(source, code, 'utf8')
 
-			expect(configHelpers.hasAsciiUrlControl('clean')).toBe(false)
-			expect(configHelpers.hasAsciiUrlControl('line\u0000break')).toBe(true)
+			expect(configHelpers.hasASCIIURLControl('clean')).toBe(false)
+			expect(configHelpers.hasASCIIURLControl('line\u0000break')).toBe(true)
 			expect(configHelpers.isBoundaryExemptModule('virtual:control')).toBe(true)
 			expect(configHelpers.isBoundaryExemptModule(resolve(POLICY_ROOT, 'src/core/index.ts'))).toBe(
 				false,

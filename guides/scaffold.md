@@ -82,39 +82,39 @@ Exported from `@orkestrel/scaffold`, and reachable from
 
 #### Interfaces
 
-| Name                    | Kind      | Signature                                                                                                                                                                                                                                            | Summary                                                                                           |
-| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `AppDefinition`         | interface | `{ configs, project, entry? }`                                                                                                                                                                                                                       | Describes the configuration and runtime-entry settings one private `app` environment contributes. |
-| `ArtifactBase`          | interface | `{ path, group, ownership, environment? }`                                                                                                                                                                                                           | Describes the fields every planned file carries.                                                  |
-| `ArtifactTemplateSet`   | interface | `{ source, tests, docs, guides, orchestration }`                                                                                                                                                                                                     | Represents the source, test, document, guide, and service template text.                          |
-| `Audit`                 | interface | `{ findings, questions }`                                                                                                                                                                                                                            | Represents the whole comparison of a plan against a target's current content.                     |
-| `Blueprint`             | interface | `{ name, description?, keywords, src, app, extensions, styles, themes, dependencies, peers, extras, version, engines, overrides, bin, setup, guides, integration, conformance, tree, service, vendors, studies, global, showcase, journey, skills }` | Represents the closed, JSON-serializable workspace specification.                                 |
-| `BrowserExtension`      | interface | `{ surface, name, axes }`                                                                                                                                                                                                                            | Represents a browser framework and its physically occupied axes.                                  |
-| `CompileFailure`        | interface | `{ code, message }`                                                                                                                                                                                                                                  | Represents the coded reason one compile stage failed.                                             |
-| `CompileRecord`         | interface | `{ stage, input, output, failure? }`                                                                                                                                                                                                                 | Holds the input and output snapshot of one compile stage.                                         |
-| `CompilerInterface`     | interface | `{ emitter, compile(), audit(), destroy() }`                                                                                                                                                                                                         | Describes the compilation contract: pure, synchronous, and host-independent.                      |
-| `CompilerOptions`       | interface | `{ on?, error? }`                                                                                                                                                                                                                                    | Represents the options for the compiler.                                                          |
-| `ConfigTemplateSet`     | interface | `{ root, factories, tsconfigs, vites, browsers, commands }`                                                                                                                                                                                          | Represents the configuration template text, grouped by the artifact each template builds.         |
-| `ContentArtifact`       | interface | `{ origin, content, hex?, source? }`                                                                                                                                                                                                                 | Represents a text file produced by the template or computed compilation path.                     |
-| `Dependency`            | interface | `{ name, range, optional? }`                                                                                                                                                                                                                         | Represents one runtime `@orkestrel/*` dependency of a generated workspace.                        |
-| `DependencyPinSet`      | interface | `{ runtime, development }`                                                                                                                                                                                                                           | Describes the runtime and development sections a range-writing operation may change.              |
-| `FrameworkDefinition`   | interface | `{ plugin, checker, suffixes, refused, dependencies }`                                                                                                                                                                                               | Describes the tooling and package boundaries a browser framework contributes.                     |
-| `HostArtifact`          | interface | `{ origin, ownership, source?, pointer?, hex?, content? }`                                                                                                                                                                                           | Represents a file byte-copied from the vendored data root, planned before its bytes are read.     |
-| `HydratedArtifact`      | interface | `{ origin, ownership, source?, hex, content? }`                                                                                                                                                                                                      | Represents a vendored file whose exact bytes have been read, so its content can be compared.      |
-| `ManifestDependencySet` | interface | `{ runtime, development, peer }`                                                                                                                                                                                                                     | Describes the runtime, development, and peer sections read from an existing package manifest.     |
-| `ManifestEdit`          | interface | `{ start, end, text }`                                                                                                                                                                                                                               | Represents one in-place replacement of manifest text.                                             |
-| `ManifestRegionSet`     | interface | `{ pins, scripts, additions?, overrides? }`                                                                                                                                                                                                          | Describes the manifest regions a writing operation may change.                                    |
-| `ManifestScript`        | interface | `{ name, command, accepted }`                                                                                                                                                                                                                        | Represents one manifest script a region-writing operation may replace.                            |
-| `ManifestToken`         | interface | `{ text, index, depth, value }`                                                                                                                                                                                                                      | Represents one string or object brace found in manifest text.                                     |
-| `Override`              | interface | `{ path, content }`                                                                                                                                                                                                                                  | Represents one artifact override.                                                                 |
-| `Plan`                  | interface | `{ blueprint, groups, artifacts, hash? }`                                                                                                                                                                                                            | Holds the compiled, ordered artifact list and the selection it covers.                            |
-| `PlanSummary`           | interface | `{ name, src, app, groups, host, template, computed }`                                                                                                                                                                                               | Represents the tally of one plan by artifact origin.                                              |
-| `Question`              | interface | `{ field, message, blocking, candidates? }`                                                                                                                                                                                                          | Represents one validation issue raised against a blueprint or a plan.                             |
-| `CompileResult`         | interface | `{ plan?, questions, stages }`                                                                                                                                                                                                                       | Represents the replayable outcome of one compile.                                                 |
-| `SrcDefinition`         | interface | `{ configs, project, path, formats }`                                                                                                                                                                                                                | Describes the build and export settings one published `src` environment contributes.              |
-| `StylesExtension`       | interface | `{ surface, name }`                                                                                                                                                                                                                                  | Represents a named sheet face under `src/<name>`.                                                 |
-| `ToolchainHold`         | interface | `{ framework, range, reason }`                                                                                                                                                                                                                       | Represents one foreign tool range required by a browser framework.                                |
-| `ViteMachinery`         | interface | `{ browser, frameworks, output, showcase }`                                                                                                                                                                                                          | Names which host-specific pipelines a generated root Vite configuration carries.                  |
+| Name                    | Kind      | Signature                                                                                                                                                                                                                                                  | Summary                                                                                           |
+| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `AppDefinition`         | interface | `{ configs, project, entry? }`                                                                                                                                                                                                                             | Describes the configuration and runtime-entry settings one private `app` environment contributes. |
+| `ArtifactBase`          | interface | `{ path, group, ownership, environment? }`                                                                                                                                                                                                                 | Describes the fields every planned file carries.                                                  |
+| `ArtifactTemplateSet`   | interface | `{ source, tests, docs, guides, orchestration }`                                                                                                                                                                                                           | Represents the source, test, document, guide, and service template text.                          |
+| `Audit`                 | interface | `{ findings, questions }`                                                                                                                                                                                                                                  | Represents the whole comparison of a plan against a target's current content.                     |
+| `Blueprint`             | interface | `{ name, description?, keywords, src, app, extensions, styles, themes, dependencies, peers, extras, version, engines, overrides, bin, setup, guides, integration, conformance, tree, service, vendors, studies, global, showcase, journey, base, skills }` | Represents the closed, JSON-serializable workspace specification.                                 |
+| `BrowserExtension`      | interface | `{ surface, name, axes }`                                                                                                                                                                                                                                  | Represents a browser framework and its physically occupied axes.                                  |
+| `CompileFailure`        | interface | `{ code, message }`                                                                                                                                                                                                                                        | Represents the coded reason one compile stage failed.                                             |
+| `CompileRecord`         | interface | `{ stage, input, output, failure? }`                                                                                                                                                                                                                       | Holds the input and output snapshot of one compile stage.                                         |
+| `CompilerInterface`     | interface | `{ emitter, compile(), audit(), destroy() }`                                                                                                                                                                                                               | Describes the compilation contract: pure, synchronous, and host-independent.                      |
+| `CompilerOptions`       | interface | `{ on?, error? }`                                                                                                                                                                                                                                          | Represents the options for the compiler.                                                          |
+| `ConfigTemplateSet`     | interface | `{ root, factories, tsconfigs, vites, browsers, commands }`                                                                                                                                                                                                | Represents the configuration template text, grouped by the artifact each template builds.         |
+| `ContentArtifact`       | interface | `{ origin, content, hex?, source? }`                                                                                                                                                                                                                       | Represents a text file produced by the template or computed compilation path.                     |
+| `Dependency`            | interface | `{ name, range, optional? }`                                                                                                                                                                                                                               | Represents one runtime `@orkestrel/*` dependency of a generated workspace.                        |
+| `DependencyPinSet`      | interface | `{ runtime, development }`                                                                                                                                                                                                                                 | Describes the runtime and development sections a range-writing operation may change.              |
+| `FrameworkDefinition`   | interface | `{ plugin, checker, suffixes, refused, dependencies }`                                                                                                                                                                                                     | Describes the tooling and package boundaries a browser framework contributes.                     |
+| `HostArtifact`          | interface | `{ origin, ownership, source?, pointer?, hex?, content? }`                                                                                                                                                                                                 | Represents a file byte-copied from the vendored data root, planned before its bytes are read.     |
+| `HydratedArtifact`      | interface | `{ origin, ownership, source?, hex, content? }`                                                                                                                                                                                                            | Represents a vendored file whose exact bytes have been read, so its content can be compared.      |
+| `ManifestDependencySet` | interface | `{ runtime, development, peer }`                                                                                                                                                                                                                           | Describes the runtime, development, and peer sections read from an existing package manifest.     |
+| `ManifestEdit`          | interface | `{ start, end, text }`                                                                                                                                                                                                                                     | Represents one in-place replacement of manifest text.                                             |
+| `ManifestRegionSet`     | interface | `{ pins, scripts, additions?, overrides? }`                                                                                                                                                                                                                | Describes the manifest regions a writing operation may change.                                    |
+| `ManifestScript`        | interface | `{ name, command, accepted }`                                                                                                                                                                                                                              | Represents one manifest script a region-writing operation may replace.                            |
+| `ManifestToken`         | interface | `{ text, index, depth, value }`                                                                                                                                                                                                                            | Represents one string or object brace found in manifest text.                                     |
+| `Override`              | interface | `{ path, content }`                                                                                                                                                                                                                                        | Represents one artifact override.                                                                 |
+| `Plan`                  | interface | `{ blueprint, groups, artifacts, hash? }`                                                                                                                                                                                                                  | Holds the compiled, ordered artifact list and the selection it covers.                            |
+| `PlanSummary`           | interface | `{ name, src, app, groups, host, template, computed }`                                                                                                                                                                                                     | Represents the tally of one plan by artifact origin.                                              |
+| `Question`              | interface | `{ field, message, blocking, candidates? }`                                                                                                                                                                                                                | Represents one validation issue raised against a blueprint or a plan.                             |
+| `CompileResult`         | interface | `{ plan?, questions, stages }`                                                                                                                                                                                                                             | Represents the replayable outcome of one compile.                                                 |
+| `SrcDefinition`         | interface | `{ configs, project, path, formats }`                                                                                                                                                                                                                      | Describes the build and export settings one published `src` environment contributes.              |
+| `StylesExtension`       | interface | `{ surface, name }`                                                                                                                                                                                                                                        | Represents a named sheet face under `src/<name>`.                                                 |
+| `ToolchainHold`         | interface | `{ framework, range, reason }`                                                                                                                                                                                                                             | Represents one foreign tool range required by a browser framework.                                |
+| `ViteMachinery`         | interface | `{ browser, frameworks, output, showcase }`                                                                                                                                                                                                                | Names which host-specific pipelines a generated root Vite configuration carries.                  |
 
 | Name                | Kind      | Signature                                     | Summary                                                                                            |
 | ------------------- | --------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -139,6 +139,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `ARTIFACT_GROUPS`                 | const | `readonly ArtifactGroup[]`                                                                        | Lists the `ArtifactGroup` values in plan order, frozen.                                                                                                                                |
 | `ARTIFACT_TEMPLATES`              | const | `ArtifactTemplateSet`                                                                             | Holds formatter-stable template text for source, test, document, guide, and service artifacts.                                                                                         |
 | `AXES`                            | const | `readonly Axis[]`                                                                                 | Lists the axes a browser extension may occupy, frozen.                                                                                                                                 |
+| `BARREL_CONFIGS`                  | const | `readonly string[]`                                                                               | Lists the configuration file a workspace with studies and a server application adds, frozen.                                                                                           |
 | `BASE_DEV_DEPENDENCIES`           | const | `Readonly<Record<string, string>>`                                                                | Holds the baseline tooling versions, before framework holds apply.                                                                                                                     |
 | `BIN_CONFIGS`                     | const | `readonly string[]`                                                                               | Lists the configuration files a workspace that ships its own executable adds, frozen.                                                                                                  |
 | `BIN_ENTRY_PATH`                  | const | `"src/bin/main.ts"`                                                                               | Names the executable entry whose presence makes a workspace `bin`.                                                                                                                     |
@@ -146,6 +147,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `BROWSE_DEV_DEPENDENCIES`         | const | `Readonly<Record<string, string>>`                                                                | Names the development dependency a browser or styles surface adds.                                                                                                                     |
 | `BROWSE_UPSTREAM`                 | const | `readonly string[]`                                                                               | Lists the packages `@orkestrel/browser` depends on at runtime, directly or transitively, frozen.                                                                                       |
 | `CAPTURE_DEV_DEPENDENCIES`        | const | `Readonly<Record<string, string>>`                                                                | Names the development dependency a browser application's journey axis adds.                                                                                                            |
+| `BROWSER_ENTRIES`                 | const | `readonly string[]`                                                                               | Lists the Orkestrel packages that publish a `/browser` entry, frozen.                                                                                                                  |
 | `CAPTURE_UPSTREAM`                | const | `readonly string[]`                                                                               | Lists the capture package and its fleet runtime dependency closure, frozen.                                                                                                            |
 | `CANON_PATHS`                     | const | `readonly string[]`                                                                               | Lists the instruction-canon paths staged for reading rather than for a target, frozen.                                                                                                 |
 | `CATALOG_AGENT_PATH`              | const | `".claude/agents/orkestrel.md"`                                                                   | Names the agent file whose marker-bounded package table the catalog verb alone owns.                                                                                                   |
@@ -296,6 +298,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `manifestToDependencies`           | function | `(manifest: string) => ManifestDependencySet`                                                                                                      | Projects a package manifest's text to the `@orkestrel/*` packages each dependency section declares. |
 | `manifestToName`                   | function | `(manifest: string) => string \| undefined`                                                                                                        | Projects a package manifest's text to its own name.                                                 |
 | `matchesArtifactDriftReachability` | function | `(ownership: Ownership, finding: ArtifactFinding) => boolean`                                                                                      | Tests whether `inferArtifactDrift` could have produced a finding for an ownership.                  |
+| `matchesBarrel`                    | function | `(blueprint: Blueprint) => boolean`                                                                                                                | Tests whether a workspace plans the application server barrel build.                                |
 | `matchesEngines`                   | function | `(engines: string) => boolean`                                                                                                                     | Tests whether a declared engines floor is at or above the supported minimum.                        |
 | `matchesOrchestrationPath`         | function | `(path: string) => boolean`                                                                                                                        | Tests whether a path instructs or wires an agent rather than the toolchain.                         |
 | `matchesPrintWidth`                | function | `(line: string) => boolean`                                                                                                                        | Tests whether one emitted line fits the vendored formatter width.                                   |
@@ -989,22 +992,27 @@ Scaffold writes one part of the manifest rather than advising on it: the writabl
 and `prepublishOnly`. Each sheet face adds its `check:src:<face>` and `build:src:<face>` scripts.
 Each occupied framework face adds `check:<axis>:vue` and `build:<axis>:vue`; the application face also adds `dev:vue`.
 Selected showcase pages add `showcase`, `showcase:<framework>`, `build:showcase`, and `build:showcase:<framework>`; application journeys add `test:journey:<framework>`.
+A workspace that plans the application server barrel adds `build:app:barrel`, which has no
+predecessor form. A workspace with the server application adds `serve:build`, which runs `build`
+before `serve` and accepts `npm run build:app:server && npm run serve` as its generated predecessor.
 Its `test:src:<face>` script accepts, as its generated predecessor, the command that ran the project
 without building the face first, and `build:src:styles` accepts the styles-only build as the
 predecessor of the chain that builds themes after it. A publishing `test` chain joins the region when
 it matches byte for byte the planned chain with the generated `test:app`, `test:journey`, and framework
 journey invocations inserted after `test:src`, where that blueprint emitted them before.
 `repair` and `overwrite` remove those helper invocations from that exact predecessor.
-The `test` chain also joins the region as a generated predecessor when it runs fewer steps than
-the planned chain and every step it runs is a planned step in the planned
-order, `repair` and `overwrite` write the planned chain in its place. That write lands only when
+When the `test` or `build:app` chain is a generated predecessor, which runs fewer steps than
+the planned chain and runs only planned steps in the planned order, that chain joins the region
+and `repair` and `overwrite` write the planned chain in its place. That write lands only when
 every step the planned chain adds runs a script the manifest declares or the region writes. The
 `test:src` and `test:app` aggregates sit outside the region. Only a private workspace's planned
 chain invokes `test:app`. A chain whose planned form adds an
 aggregate the manifest lacks stays with the package, and the `projects` question keeps its remedy.
-`audit` reports this chain write only through the `projects` question, so a planned step that
+`audit` reports this `test` chain write only through the `projects` question, so a planned step that
 registers no Vitest project, such as `npm run test:guides`, lands on the next `repair` without an
-earlier advisory. A `test` chain running any other step or order stays maintainer-owned, as do the
+earlier advisory. `audit` reports no `build:app` chain write, so in a barrel workspace only the
+`scripts` question's report of a missing `build:app:barrel` script precedes that write. A `test` or
+`build:app` chain running any other step or order stays maintainer-owned, as do the
 `check`, `build`, `dev`, `serve`, `format`, `lint`, `clean`, and `copy` gate chains. A
 declared value is overwritten only when it is already the value being written or is a recognized
 generated predecessor. The overwrite happens in place,
@@ -1016,9 +1024,9 @@ section. A name carrying no colon has no family, and a family the section declar
 nothing to follow, so each of those is appended after the last declared script instead. `catalog`
 writes no script region; it names the ranges alone.
 
-The browser application's journey axis adds `journey` and `capture`. Their generated commands,
+The base browser application's journey axis adds `journey` and `capture`, and each app-side browser face adds `journey:<name>` and `capture:<name>`. Their generated commands,
 `capture journey` and `capture frames`, have no predecessor forms in the accepted set. Missing
-commands append; generated values remain writable; `replaceManifestScripts` preserves customized
+commands append, each face's `journey:<name>` and `capture:<name>` among them; generated values remain writable; `replaceManifestScripts` preserves customized
 values while repairing siblings independently, so a selected or wrapped `journey` command survives
 repair. Neither scoped command replaces `test:journey` in a private workspace's gate chain.
 Publishing workspaces keep application and journey suites outside release gates and chains.
@@ -1266,7 +1274,7 @@ because the shape is chosen once and read afterwards: `new` refuses the advisory
 caller creating a workspace holds the same refusal, and the Compile section states it.
 
 `bin`, `setup`, `guides`, `integration`, `conformance`, `tree`, `service`, `vendors`, `studies`,
-`global`, `styles`, `themes`, `showcase`, `journey`, and `skills` are structural facts, and `extensions` lists the
+`global`, `styles`, `themes`, `showcase`, `journey`, `base`, and `skills` are structural facts, and `extensions` lists the
 extension faces. Reading verbs set each fact and list each extension only when the workspace
 physically ships the directory or exact-case file that defines it, never because of the workspace's
 name and never because a sibling fact is set.
@@ -1295,6 +1303,9 @@ carries the `vue` browser extension on an axis whose selection includes `browser
 can import and render the extension's components. A browser application without that
 extension keeps the non-Vue pipeline, and a `src/browser` selection adds no Vue plugin or
 dependency.
+
+Every browser project also pre-bundles each declared `@orkestrel` package's `/browser` entry when
+that package publishes one. Node projects keep no `optimizeDeps` setting.
 
 A structural fact is read when a verb runs, not when the file appears. Writing
 `tests/integration.test.ts` into a workspace sets the fact, but the root configuration on disk was
@@ -1368,11 +1379,19 @@ no artifact, configuration, script, or dependency, and the gate reports a non-bl
 that field so the caller who set it learns it emitted nothing.
 
 The library's `journey` flag defaults to `false`; `new` sets it when its `app` selection includes
-`browser`. Reading verbs infer it from the wrapper's presence. The flag requires a browser application. Without that
-application, it emits no journey configuration or script and raises a non-blocking `journey`
-question. With that application, the content-owned root configuration defines the `appJourney`
-factory and excludes `tests/app/browser/integration.test.ts` from the ordinary `app:browser`
-project. Surfaces and extensions states the journey of each further application mode.
+`browser`. Reading verbs infer it from the wrapper's presence. The `base` fact selects the exact-case
+`app/browser/main.ts` entry. `new` sets `base` when the browser environment is selected, while a
+target without that entry, including one with only `app/browser/Main.ts`, has `base: false`. A
+face-only workspace retains the browser environment and its `appBrowser` project without planning
+the base entry, scripts, application record member, or arrival journey. When the browser environment
+has no base entry or app-side browser face, the plan raises one non-blocking question on `base`.
+
+With a journey and a declared browser application, the content-owned root configuration defines
+the `appJourney` factory. It selects the suite for the exact Vite mode and refuses a mode the generated `applications`
+record omits. The base record member follows `base`, which follows the exact-case `app/browser/main.ts`
+entry, and a face's member follows its extension, which the reader sets from the `app/<name>` directory. The ordinary `app:browser` project
+excludes the base arrival suite only when `base` is true. Surfaces and extensions states the journey
+of each further application mode.
 
 Edit the variant list in `configs/app/vite.journey.config.ts`. This wrapper is birth-owned:
 scaffold creates it when absent and preserves your edits during `repair`. It imports
@@ -1380,7 +1399,9 @@ scaffold creates it when absent and preserves your edits during `repair`. It imp
 at 1280 × 800 and `compact` at 390 × 844 without a theme. Rename and extend those variants for
 your application; apply themes through the application's interface in your tests.
 
-The wrapper registers `journey:<name>` for each variant through the root factory. Each project
+The wrapper registers `journey:<name>` for each variant through the root factory. Each app-side
+browser face also receives `journey:<name>` as `capture journey --mode <name>` and `capture:<name>`
+as `capture frames --mode <name>`. Each project
 collects the integration suite of the application the Vite mode selects, sets the variant
 viewport, and provides `variant`
 as its name, `variants` as the declared list, and `capture` as a boolean. The root configuration
@@ -1391,8 +1412,9 @@ workspace, application and journey suites run on demand outside release gates an
 With the journey axis off, the ordinary
 browser project retains its integration suite.
 
-The same axis adds `journey: capture journey` and `capture: capture frames`, using the executable
-from `node_modules/@orkestrel/capture`. Run `npm run journey -- <selector>` for behavior with
+With `base`, the same axis adds `journey: capture journey` and `capture: capture frames`, using the
+executable from `node_modules/@orkestrel/capture`. Each app-side browser face adds
+`journey:<name>` and `capture:<name>`, the same commands with `--mode <name>`. Run `npm run journey -- <selector>` for behavior with
 capture off and `npm run capture -- <selector>` for frames with `CAPTURE=1`. A selector is `all`
 or a colon-delimited owner path declared by the wrapper. Narrow with `--variant <name>` and
 `--case <exact-full-name>`; frames also accept `--state <name>`. Replace the selector with
@@ -1495,6 +1517,7 @@ no selection is stored anywhere. Each fact and each extension has its own marker
 | `themes`           | The exact-case `THEMES_BARREL_PATH` and `THEMES_ENTRY_PATH` files under `src/styles/themes` |
 | `showcase`         | The exact-case `configs/app/vite.showcase.config.ts` wrapper, or a `showcase` directory     |
 | `journey`          | The exact-case `configs/app/vite.journey.config.ts` wrapper                                 |
+| `base`             | The exact-case `app/browser/main.ts` entry                                                  |
 | `vue`              | A `src/vue` or `app/vue` directory, and `axes` lists each one present                       |
 | A styles extension | A direct `src/<name>` directory holding the exact-case `index.scss` and `sheet.ts` files    |
 
@@ -1609,7 +1632,7 @@ leaves every sibling page in place. It stamps the final inlined page through `st
 the page `showcase/<application>.html`. The manifest declares `showcase` and `build:showcase` for
 the base mode and `showcase:<framework>` and `build:showcase:<framework>` for each extension mode,
 and a publishing workspace rebuilds every page from `prepublishOnly` after `npm run build` and
-before `npm test`. The vendored `.prettierignore` lists `showcase/`, so formatting never rewrites a
+before `npm test`, the base page only when `base` is set. The vendored `.prettierignore` lists `showcase/`, so formatting never rewrites a
 committed page.
 
 `stampPage` writes one `<meta name="build-id" content="DIGEST" />` line before the line that closes
@@ -1628,7 +1651,8 @@ include and exclude replacement, viewport, commands, and plugin rules. The manif
 application and `test:journey:<framework>`, the same command with `--mode <framework>`, for each
 app-side browser extension. A private workspace runs them after `npm run test:app` in `test`.
 A publishing workspace keeps those scripts available on demand and invokes neither application
-nor journey suites from its release gates and chains.
+nor journey suites from its release gates and chains. With `base` unset, the plan omits `test:journey`
+and its `npm run test:journey` chain entry, and the base arrival journey below.
 
 Scaffold seeds one birth-owned arrival journey per application at
 `tests/app/<application>/integration.test.ts`. The base journey imports `app/browser/main.ts`, and
@@ -1669,6 +1693,21 @@ scratch entry through the real wrapper in each target that holds `app/server`, r
 and splits it under a control. Scaffold's `tests/src/core/templates.test.ts` runs the emitted file in a staged
 server root, builds explicit output lists through the factory parameter, and runs the vendored case
 in staged server targets under a mutation of the factory and of the control.
+
+A workspace that selects `studies` and the `server` application also builds the server's barrel,
+`app/server/index.ts`, because `@orkestrel/study` loads the package under study as ES modules. The
+`appBarrel` factory, the content-owned `configs/app/vite.barrel.config.ts` wrapper, and the
+`build:app:barrel` script exist only under that condition, and `build:app` runs the script after
+`build:app:server`. `serve:build` runs `build` before `serve`, so the barrel, which the server
+build's emptied `dist/app/server` would otherwise lose, and every browser face the server serves are
+rebuilt. The build emits the single file `dist/app/server/index.js` with `@app/*` and
+`@src/*` specifiers and relative imports inlined, and `node:` and every installed package specifier
+left external. It sets `emptyOutDir` to `false`, so `main.cjs` stays byte-identical. A workspace
+without both conditions plans none of the three. Scaffold's `tests/src/core/templates.test.ts` builds both entries in a
+staged root, compares the `main.cjs` digest across the barrel step, builds the barrel twice for one
+`index.js` digest, imports the file in Node, and holds each claim under a control. The vendored
+`tests/config.test.ts` repeats the externals, digest, and `main.cjs` readings in each target that
+plans the barrel.
 
 ### The migration guard
 
@@ -2204,8 +2243,9 @@ row entering or leaving the manifest moves a test rather than passing unnoticed.
 of `STYLES_DEV_DEPENDENCIES`, is a seed as well: it carries the `^1.105.1` range the
 `@orkestrel/veneer` checkout declared on 2026-09-30, and that test names it in the seeded set.
 
-`CAPTURE_DEV_DEPENDENCIES` seeds `@orkestrel/capture` at `^0.0.1` only when the blueprint's
-`journey` axis is enabled and its `app` includes `browser`. `CAPTURE_UPSTREAM` withholds that
+`CAPTURE_DEV_DEPENDENCIES` seeds `@orkestrel/capture` at `^0.0.5`, the first release whose commands
+take `--mode`, only when the blueprint plans a journey: the `journey` axis with the base entry or
+an app-side browser face. `CAPTURE_UPSTREAM` withholds that
 seed from capture itself and its fleet runtime closure: `@orkestrel/contract`,
 `@orkestrel/emitter`, `@orkestrel/process`, and `@orkestrel/timeout`. The frozen, sorted list
 follows dependencies and peers from capture's installed manifests and moves with the capture
@@ -2244,7 +2284,7 @@ The dependency tables select these floors:
 | Vitest                       | `^5.1.0`   | Every workspace                                                |
 | `@vitest/browser-playwright` | `^5.1.0`   | Browser tooling                                                |
 | `oxlint`                     | `^1.93.0`  | Every workspace                                                |
-| `oxfmt`                      | `^0.77.0`  | Every workspace                                                |
+| `oxfmt`                      | `^0.78.0`  | Every workspace                                                |
 | `@microsoft/api-extractor`   | `^7.60.1`  | Declaration builds; uses its bundled TypeScript 6.0.3 engine   |
 | `playwright`                 | `^1.64.1`  | Browser tooling                                                |
 | Vite                         | `^8.3.7`   | Every workspace                                                |

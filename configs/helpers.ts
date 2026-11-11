@@ -21,7 +21,7 @@ import {
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path'
 
-export function hasAsciiUrlControl(value: string): boolean {
+export function hasASCIIURLControl(value: string): boolean {
 	for (const character of value) {
 		const code = character.codePointAt(0)
 		if (code !== undefined && (code <= 0x1f || code === 0x7f)) return true
@@ -468,7 +468,7 @@ export function environmentPathError(owner: string, target: string): string | un
 
 export function environmentSourceError(owner: string, source: string): string | undefined {
 	const normalizedSource = source.replaceAll('\\', '/')
-	if (hasAsciiUrlControl(normalizedSource)) {
+	if (hasASCIIURLControl(normalizedSource)) {
 		return 'Environment module URLs cannot contain ASCII controls'
 	}
 	const [sourcePath] = normalizedSource.split(/[?#]/)

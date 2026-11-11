@@ -55,10 +55,15 @@ export interface DistributionClassification {
 	readonly targets: readonly string[]
 }
 
+/** Holds the file, leading arguments, and shell route an npm run spawns with. */
+export interface DistributionNpmCommand {
+	readonly file: string
+	readonly prefix: readonly string[]
+	readonly shell: boolean
+}
+
 /** Names the workspace whose packed artifact the proof consumes. */
 export const DISTRIBUTION_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-/** Names the npm executable on the running host. */
-export const DISTRIBUTION_NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // The compiler this workspace installs, run as a command rather than called in
 // process: the command and its plain-text diagnostics are the same across the
 // compiler majors this toolchain supports, and its in-process API is not. It is
@@ -71,12 +76,6 @@ export const DISTRIBUTION_TYPESCRIPT = createRequire(
 ).resolve('typescript/package.json')
 /** Names the compiler installed by the workspace under proof. */
 export const DISTRIBUTION_COMPILER = join(dirname(DISTRIBUTION_TYPESCRIPT), 'bin', 'tsc')
-// Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
-// batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
-// rather than an exit code a caller can read. Every following argument is a literal or
-// a path this file built, so the shell has nothing to escape.
-/** Selects the Windows command-shell route required by the npm shim. */
-export const DISTRIBUTION_SHELL = process.platform === 'win32'
 // `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`,
 // and the root configuration's project factories carry that mode into this project.
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
@@ -404,6 +403,50 @@ export function readDistributionOutput(result: SpawnSyncReturns<string>): string
 }
 
 /**
+ * Resolves the npm command for the running host.
+ *
+ * @remarks
+ * npm's JavaScript entry beside the running Node binary spawns without a shell on every host. The
+ * shim is the fallback where none sits there, and Windows needs a shell to launch its `.cmd`: Node
+ * refuses one directly since the batch-argument hardening, and `spawnSync` returns `EINVAL` with a
+ * null status rather than an exit code a caller can read. Every argument this file passes is a
+ * literal or a path it built, so the shell has nothing to escape.
+ *
+ * @returns The file to spawn, the arguments that precede npm's own, and whether it needs a shell.
+ */
+export function resolveDistributionNpm(): DistributionNpmCommand {
+	const cli = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+	if (existsSync(cli)) return { file: process.execPath, prefix: [cli], shell: false }
+	const windows = process.platform === 'win32'
+	return { file: windows ? 'npm.cmd' : 'npm', prefix: [], shell: windows }
+}
+
+/**
+ * Merges added variables over an inherited environment by case-folded name.
+ *
+ * @remarks
+ * A Windows environment block folds names by case, and npm reads its `npm_config_` variables
+ * case-insensitively on every host, so every inherited name an added name claims is dropped first:
+ * an inherited `NPM_CONFIG_CACHE` would otherwise outrank an added `npm_config_cache`.
+ *
+ * @param inherited - The environment the child would inherit.
+ * @param added - The variables the call sets.
+ * @returns The merged environment.
+ */
+export function mergeDistributionEnvironment(
+	inherited: Readonly<Record<string, string | undefined>>,
+	added: Readonly<Record<string, string>>,
+): Readonly<Record<string, string | undefined>> {
+	const claimed = new Set(Object.keys(added).map((name) => name.toLowerCase()))
+	return {
+		...Object.fromEntries(
+			Object.entries(inherited).filter(([name]) => !claimed.has(name.toLowerCase())),
+		),
+		...added,
+	}
+}
+
+/**
  * Runs npm with a cache inside the owned scratch directory.
  *
  * @param args - The npm arguments.
@@ -416,11 +459,12 @@ export function runDistributionNpm(
 	cwd: string,
 	scratch: string,
 ): SpawnSyncReturns<string> {
-	return spawnSync(DISTRIBUTION_NPM, [...args], {
+	const npm = resolveDistributionNpm()
+	return spawnSync(npm.file, [...npm.prefix, ...args], {
 		cwd,
 		encoding: 'utf8',
-		env: { ...process.env, npm_config_cache: join(scratch, 'cache') },
-		shell: DISTRIBUTION_SHELL,
+		env: mergeDistributionEnvironment(process.env, { npm_config_cache: join(scratch, 'cache') }),
+		shell: npm.shell,
 		windowsHide: true,
 	})
 }
