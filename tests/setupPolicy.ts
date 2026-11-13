@@ -6,6 +6,7 @@ import type {
 	PolicyExpression,
 	PolicyScopeCode,
 } from '../configs/policy.js'
+import { isRecord } from '@orkestrel/contract'
 import {
 	createGuide,
 	extractSourceLines,
@@ -157,6 +158,20 @@ export function createPolicySurfaceGuide(names: readonly string[]): string {
 		),
 		'',
 	].join('\n')
+}
+
+/**
+ * Describes the refusal for a name that two packages claim, with the owner's import.
+ *
+ * @param name - The colliding bare name.
+ * @param owner - The package that owns the name, without its scope.
+ * @returns The refusal text that names the owner's import and the reuse-before-renaming rule.
+ */
+export function describeSurfaceCollision(name: string, owner: string): string {
+	const subject = JSON.stringify(name.slice(0, 512)).slice(1, -1)
+	const label = JSON.stringify(owner.slice(0, 512)).slice(1, -1)
+	const specifier = JSON.stringify(`@orkestrel/${owner.slice(0, 512)}`)
+	return `surface name belongs to one package: ${subject} (${label}). Where the local declaration carries the owner's contract, delete it and import the owner's: import { ${subject} } from ${specifier}, or from the owner's environment entry that exports it. Rename the local declaration only when its contract differs from the owner's, and name it for the thing it is.`
 }
 
 /**
@@ -637,7 +652,8 @@ export const POLICY_LAZY_CASES: readonly PolicyLazyCase[] = Object.freeze([
 			[POLICY_LAZY_SHAPES.hole, 'return []', [1]],
 			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
 			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
-			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			// `isRecord` reports a revoked proxy as no record instead of throwing, so the reader skips it.
+			[POLICY_LAZY_SHAPES.refusalFirst, 'return []', [0, 1]],
 			[POLICY_LAZY_SHAPES.holeBetween, 'return []', [0, 2]],
 			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
 		],
@@ -656,7 +672,8 @@ export const POLICY_LAZY_CASES: readonly PolicyLazyCase[] = Object.freeze([
 			[POLICY_LAZY_SHAPES.hole, 'return ["override entries must be records"]', [1]],
 			[POLICY_LAZY_SHAPES.holeFailure, 'throw RangeError', [1]],
 			[POLICY_LAZY_SHAPES.failureFirst, 'throw RangeError', [0]],
-			[POLICY_LAZY_SHAPES.refusalFirst, 'throw TypeError', [0]],
+			// `isRecord` reports a revoked proxy as no record instead of throwing, so the reader refuses it.
+			[POLICY_LAZY_SHAPES.refusalFirst, 'return ["override entries must be records"]', [0, 1]],
 			[POLICY_LAZY_SHAPES.holeBetween, 'return ["override entries must be records"]', [0, 2]],
 			[POLICY_LAZY_SHAPES.unlisted, 'throw TypeError', []],
 		],
@@ -1147,14 +1164,6 @@ export function normalizePolicyFilename(root: string, filename: string): string 
 }
 
 /**
- * Reports whether a parsed configuration value is a plain record rather than an array or a
- * primitive.
- */
-export function isPolicyRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
  * Parses JSON text without throwing.
  *
  * @param content - The raw JSON text.
@@ -1309,7 +1318,7 @@ export function matchesScaffoldSetup(path: string, root: string): boolean {
 	const manifest = readPolicyJSON(join(root, 'package.json'))
 	return (
 		(normalized === DISTRIBUTION_SETUP_PATH &&
-			(!isPolicyRecord(manifest) || manifest.private !== true)) ||
+			(!isRecord(manifest) || manifest.private !== true)) ||
 		HOST_PATHS.some(
 			(vendored) =>
 				normalized === normalizePolicyPath(vendored) ||
@@ -1539,7 +1548,7 @@ export function inspectPolicyText(root: string): readonly PolicyViolation[] {
  */
 export function collectPolicyOverrideSegments(overrides: unknown): readonly string[] {
 	return (Array.isArray(overrides) ? overrides : []).flatMap((override: unknown) => {
-		const files: unknown = isPolicyRecord(override)
+		const files: unknown = isRecord(override)
 			? Object.getOwnPropertyDescriptor(override, 'files')?.value
 			: undefined
 		return (Array.isArray(files) ? files : []).flatMap((glob: unknown) =>
@@ -1592,7 +1601,7 @@ export function isPolicyIgnoreReaching(pattern: string, overrides: unknown): boo
  * @returns Every wiring violation in rule and configuration order.
  */
 export function inspectPolicyConfiguration(configuration: unknown): readonly string[] {
-	if (!isPolicyRecord(configuration)) {
+	if (!isRecord(configuration)) {
 		return ['Oxlint configuration must be a record']
 	}
 
@@ -1604,7 +1613,7 @@ export function inspectPolicyConfiguration(configuration: unknown): readonly str
 	const overrides: unknown = Object.getOwnPropertyDescriptor(configuration, 'overrides')?.value
 	return [
 		...Object.entries(POLICY_WIRING_SETTINGS).flatMap(([rule, declared]) => {
-			const setting = isPolicyRecord(rules)
+			const setting = isRecord(rules)
 				? Object.getOwnPropertyDescriptor(rules, rule)?.value
 				: undefined
 			return isDeepStrictEqual(setting, declared)
@@ -1627,9 +1636,9 @@ export function inspectPolicyConfiguration(configuration: unknown): readonly str
 				// was in the loop, and no entry after a failing one is read.
 				Iterator.from(Array.isArray(overrides) ? overrides : [])
 					.flatMap((override) => {
-						if (!isPolicyRecord(override)) return ['override entries must be records']
+						if (!isRecord(override)) return ['override entries must be records']
 						const overrideRules: unknown = Object.getOwnPropertyDescriptor(override, 'rules')?.value
-						return isPolicyRecord(overrideRules)
+						return isRecord(overrideRules)
 							? POLICY_WIRING_RULES.flatMap((rule) =>
 									Object.getOwnPropertyDescriptor(overrideRules, rule) === undefined
 										? []
@@ -1654,7 +1663,7 @@ export function inspectPolicyWiring(
 	rules: readonly string[],
 	populations: ReadonlyArray<readonly string[]>,
 ): readonly string[] {
-	if (!isPolicyRecord(configuration)) {
+	if (!isRecord(configuration)) {
 		return ['Oxlint configuration must be a record']
 	}
 
@@ -1664,7 +1673,7 @@ export function inspectPolicyWiring(
 	// `undefined` and no entry after a failing one is read, as in the loops these replaced.
 	const entries = Iterator.from(Array.isArray(overrides) ? overrides : [])
 		.flatMap((entry) => {
-			if (!isPolicyRecord(entry)) return []
+			if (!isRecord(entry)) return []
 			const record: unknown = Object.getOwnPropertyDescriptor(entry, 'rules')?.value
 			const files: unknown = Object.getOwnPropertyDescriptor(entry, 'files')?.value
 			return [{ record, declared: Array.isArray(files) ? [files.join(' ')] : [] }]
@@ -1673,7 +1682,7 @@ export function inspectPolicyWiring(
 	// A name enables its rule only at error severity: the string, or the first member of an array.
 	const enabled = new Set(
 		[topRules, ...entries.map(({ record }) => record)].flatMap((record) =>
-			isPolicyRecord(record)
+			isRecord(record)
 				? Object.getOwnPropertyNames(record).filter((name) => {
 						const setting = Object.getOwnPropertyDescriptor(record, name)?.value
 						return (Array.isArray(setting) ? setting[0] : setting) === 'error'
@@ -2115,13 +2124,13 @@ export function readSkillExports(root: string, specifier: string): SkillDeclarat
 	const segments = specifier.split('/')
 	const key = segments.length === 2 ? '.' : `./${segments.slice(2).join('/')}`
 	const own = readSkillManifest(root)
-	const owned = isPolicyRecord(own) && own['name'] === segments.slice(0, 2).join('/')
+	const owned = isRecord(own) && own['name'] === segments.slice(0, 2).join('/')
 	const directory = owned ? root : join(root, 'node_modules', ...segments.slice(0, 2))
 	const manifest = owned ? own : readSkillManifest(directory)
-	if (!isPolicyRecord(manifest)) return { outcome: 'package', names: [] }
+	if (!isRecord(manifest)) return { outcome: 'package', names: [] }
 	const exports = manifest['exports']
 	const target = resolveSkillDeclaration(
-		isPolicyRecord(exports) && Object.keys(exports).some((name) => name.startsWith('.'))
+		isRecord(exports) && Object.keys(exports).some((name) => name.startsWith('.'))
 			? exports[key]
 			: key === '.'
 				? exports
@@ -2140,7 +2149,7 @@ export function readSkillExports(root: string, specifier: string): SkillDeclarat
  */
 export function resolveSkillDeclaration(target: unknown): string | undefined {
 	if (typeof target === 'string') return /\.d\.(?:ts|mts|cts)$/u.test(target) ? target : undefined
-	if (!isPolicyRecord(target)) return undefined
+	if (!isRecord(target)) return undefined
 	for (const condition of ['types', 'import', 'default']) {
 		if (Object.hasOwn(target, condition)) return resolveSkillDeclaration(target[condition])
 	}
@@ -2506,7 +2515,7 @@ export function inspectSkillImports(
  * @returns The literal specifier, or `undefined` when the source is computed.
  */
 export function readPolicyLiteral(source: unknown): string | undefined {
-	if (!isPolicyRecord(source)) return undefined
+	if (!isRecord(source)) return undefined
 	const value: unknown = Object.getOwnPropertyDescriptor(source, 'value')?.value
 	if (typeof value === 'string') return value
 	const expressions: unknown = Object.getOwnPropertyDescriptor(source, 'expressions')?.value
@@ -2521,10 +2530,10 @@ export function readPolicyLiteral(source: unknown): string | undefined {
 		return undefined
 	}
 	const [quasi]: readonly unknown[] = quasis
-	const text: unknown = isPolicyRecord(quasi)
+	const text: unknown = isRecord(quasi)
 		? Object.getOwnPropertyDescriptor(quasi, 'value')?.value
 		: undefined
-	const cooked: unknown = isPolicyRecord(text)
+	const cooked: unknown = isRecord(text)
 		? Object.getOwnPropertyDescriptor(text, 'cooked')?.value
 		: undefined
 	return typeof cooked === 'string' ? cooked : undefined
@@ -2543,7 +2552,7 @@ export function readPolicyLiteral(source: unknown): string | undefined {
  */
 export function collectPolicySpecifiers(node: unknown): readonly string[] {
 	if (Array.isArray(node)) return node.flatMap((child: unknown) => collectPolicySpecifiers(child))
-	if (!isPolicyRecord(node)) return []
+	if (!isRecord(node)) return []
 	const type: unknown = Object.getOwnPropertyDescriptor(node, 'type')?.value
 	const value = readPolicyLiteral(Object.getOwnPropertyDescriptor(node, 'source')?.value)
 	return [
@@ -3218,9 +3227,9 @@ export function inspectPolicyFilenames(root: string): readonly PolicyViolation[]
  */
 export function parsePolicyScripts(content: string): ReadonlyMap<string, string> {
 	const manifest = parsePolicyJSON(content)
-	if (!isPolicyRecord(manifest)) return new Map()
+	if (!isRecord(manifest)) return new Map()
 	const record: unknown = Object.getOwnPropertyDescriptor(manifest, 'scripts')?.value
-	if (!isPolicyRecord(record)) return new Map()
+	if (!isRecord(record)) return new Map()
 	return new Map(
 		Object.getOwnPropertyNames(record).flatMap((name): Array<[string, string]> => {
 			const command: unknown = Object.getOwnPropertyDescriptor(record, name)?.value
@@ -3335,7 +3344,7 @@ export function readPolicyProse(root: string): readonly string[] {
 export function readPolicyPackage(root: string): string | undefined {
 	if (!isPolicyFile(root, POLICY_MANIFEST_FILE)) return undefined
 	const manifest = readPolicyJSON(join(root, POLICY_MANIFEST_FILE))
-	if (!isPolicyRecord(manifest)) return undefined
+	if (!isRecord(manifest)) return undefined
 	const name: unknown = Object.getOwnPropertyDescriptor(manifest, 'name')?.value
 	if (typeof name !== 'string') return undefined
 	return name.slice(name.lastIndexOf('/') + 1)
@@ -3856,7 +3865,7 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
 				createPolicyViolation(
 					'surface',
 					declaration.path,
-					`surface name belongs to one package: ${declaration.name} (${owner})`,
+					describeSurfaceCollision(declaration.name, owner),
 					declaration.line,
 				),
 			),
@@ -4532,8 +4541,7 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		files: [
 			{
 				path: '.agents/skills/sample/SKILL.md',
-				content:
-					SKILL_POLICY_TEXT + '\n```ts\nimport { isString } from "@orkestrel/contract"\n```\n',
+				content: SKILL_POLICY_TEXT + '\n```ts\nimport { Logger } from "@orkestrel/console"\n```\n',
 			},
 			{ path: '.agents/skills/sample/agents/openai.yaml', content: createSkillMetadata('sample') },
 		],
@@ -4542,7 +4550,7 @@ export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 				rule: 'skill',
 				path: '.agents/skills/sample/SKILL.md',
 				message:
-					'skill fence import @orkestrel/contract is outside BASE_DEV_DEPENDENCIES: @orkestrel/contract',
+					'skill fence import @orkestrel/console is outside BASE_DEV_DEPENDENCIES: @orkestrel/console',
 			},
 		],
 	},
@@ -5946,8 +5954,7 @@ export function collectFrameworks(directory: string): readonly string[] {
  * @returns The record's own entries; throws for a non-record.
  */
 export function readConfigRecord(value: unknown): Readonly<Record<string, unknown>> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value))
-		throw new Error('Expected a configuration record')
+	if (!isRecord(value)) throw new Error('Expected a configuration record')
 	return Object.fromEntries(Object.entries(value))
 }
 

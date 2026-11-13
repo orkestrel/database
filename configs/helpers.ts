@@ -19,14 +19,19 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path'
+import {
+	basename,
+	dirname,
+	extname,
+	isAbsolute,
+	join,
+	relative,
+	resolve as resolvePath,
+	sep,
+} from 'node:path'
 
 export function hasASCIIURLControl(value: string): boolean {
-	for (const character of value) {
-		const code = character.codePointAt(0)
-		if (code !== undefined && (code <= 0x1f || code === 0x7f)) return true
-	}
-	return false
+	return /[\p{Cc}--[\u0080-\u009f]]/v.test(value)
 }
 
 /**
@@ -372,7 +377,7 @@ export function findPackageDirectory(current: string): string | undefined {
 export function packageRootOf(packageName: string, resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
 	const directory = findPackageDirectory(
-		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical),
+		lstatSync(physical, { throwIfNoEntry: false })?.isDirectory() ? physical : dirname(physical),
 	)
 	return directory !== undefined && packageManifestName(directory) === packageName
 		? realpathSync.native(directory)
@@ -382,7 +387,7 @@ export function packageRootOf(packageName: string, resolvedPath: string): string
 export function packageRootForResolved(resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
 	const directory = findPackageDirectory(
-		existsSync(physical) && lstatSync(physical).isDirectory() ? physical : dirname(physical),
+		lstatSync(physical, { throwIfNoEntry: false })?.isDirectory() ? physical : dirname(physical),
 	)
 	return directory !== undefined && packageManifestName(directory) !== undefined
 		? realpathSync.native(directory)
@@ -518,7 +523,7 @@ export class BuildState {
 	#building = false
 	#output: string
 	#root = WORKSPACE_ROOT
-	#source = ''
+	#entries: Readonly<Record<string, string>> = {}
 	readonly #trusted = new Set<string>()
 
 	constructor(output = WORKSPACE_ROOT) {
@@ -540,9 +545,9 @@ export class BuildState {
 		return this.#root
 	}
 
-	/** The library entry path, or an empty string when the build has none. */
-	get source(): string {
-		return this.#source
+	/** The library entry paths by entry name, empty when the build has none. */
+	get entries(): Readonly<Record<string, string>> {
+		return this.#entries
 	}
 
 	/**
@@ -567,7 +572,10 @@ export class BuildState {
 	}
 
 	/**
-	 * Reads the command, output directory, project root, and library entry from a resolved config.
+	 * Reads the command, output directory, project root, and library entries from a resolved config.
+	 *
+	 * @remarks
+	 * A single-path entry and each member of an entry list take their file's stem as their name.
 	 *
 	 * @param config - The resolved Vite configuration.
 	 */
@@ -575,10 +583,11 @@ export class BuildState {
 		this.#building = config.command === 'build'
 		this.#output = resolvePath(config.root, config.build.outDir)
 		this.#root = physicalPath(config.root)
-		this.#source =
-			config.build.lib !== false && typeof config.build.lib.entry === 'string'
-				? config.build.lib.entry
-				: ''
+		const entry = config.build.lib === false ? {} : config.build.lib.entry
+		this.#entries =
+			typeof entry === 'string' || Array.isArray(entry)
+				? Object.fromEntries([entry].flat().map((path) => [basename(path, extname(path)), path]))
+				: { ...entry }
 	}
 }
 
@@ -692,13 +701,15 @@ export interface ExtractorModule {
  *
  * @remarks
  * `project` is the absolute path of that face's TypeScript project file. `types` overrides the
- * `types` the extractor's own program reads, and defaults to the face's resolved `types`. `rewrite`
- * receives the finished roll-up and returns what the face ships; a face that omits it ships the
- * roll-up as the extractor wrote it.
+ * `types` the extractor's own program reads, and defaults to the face's resolved `types`. `entries`
+ * names the library entries that roll up, and defaults to every entry the build declares; a
+ * single-path entry takes its file's stem as its name. `rewrite` receives each finished roll-up and
+ * returns what the face ships; a face that omits it ships the roll-up as the extractor wrote it.
  */
 export interface DeclarationRollupOptions {
 	readonly project: string
 	readonly types?: readonly string[]
+	readonly entries?: readonly string[]
 	readonly rewrite?: (content: string) => string
 }
 
@@ -874,7 +885,28 @@ export function rewriteBrowserSpecifier(content: string): string {
 }
 
 /**
- * Rolls one published face's declarations into the single file that face ships.
+ * Rewrites every source environment alias in a roll-up to the built environment beside `dist/bin`.
+ *
+ * @param content - The finished roll-up.
+ * @returns That roll-up with each `@src/<environment>` specifier replaced by
+ * `../src/<environment>/index.js`.
+ *
+ * @remarks
+ * A `src/bin` module reaches a library environment through its `@src/*` alias, and the extractor
+ * keeps the alias external and writes it through unchanged. `dist/bin/<name>.d.ts` resolves the
+ * environment's declarations at the relative path its `<name>.js` imports through `output.paths`.
+ *
+ * @example
+ * ```ts
+ * rewriteSourceSpecifier("from '@src/server'") // "from '../src/server/index.js'"
+ * ```
+ */
+export function rewriteSourceSpecifier(content: string): string {
+	return content.replaceAll(/@src\/([a-z][a-z0-9-]*)(?=['"])/gu, '../src/$1/index.js')
+}
+
+/**
+ * Rolls each named library entry's declarations into the single file that entry ships.
  *
  * @param options - The face's roll-up options.
  * @returns The Vite plugin that performs that roll-up.
@@ -882,13 +914,15 @@ export function rewriteBrowserSpecifier(content: string): string {
  * @remarks
  * At `closeBundle`, after Vite has written every format of the face, the plugin emits the face's
  * declarations with the workspace compiler run as a process into a scratch directory made fresh
- * under the host temporary directory, hands the emitted entry to the extractor's own engine,
- * applies `rewrite`, and removes the scratch directory. Keeping the scratch outside the face's own
- * output means its unconditional removal can never take a sibling the face already published, such
- * as its own `declarations` folder. The extractor is a publishing workspace's development
- * dependency, so this vendored leaf defers loading it to that hook: a workspace that publishes no
- * library installs no extractor, never reaches the hook, and never resolves the package at build
- * or at check.
+ * under the host temporary directory, hands each named entry to the extractor's own engine,
+ * applies `rewrite`, and removes the scratch directory. Each roll-up takes its entry's name, so
+ * an `index.ts` face ships `index.d.ts` and a `reporter` entry ships `reporter.d.ts`. An empty
+ * `entries` list rolls up nothing. Keeping the
+ * scratch outside the face's own output means its unconditional removal can never take a sibling
+ * the face already published, such as its own `declarations` folder. The extractor is a publishing
+ * workspace's development dependency, so this vendored leaf defers loading it to that hook: a
+ * workspace that publishes no library installs no extractor, never reaches the hook, and never
+ * resolves the package at build or at check.
  */
 export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 	const state = new BuildState()
@@ -899,12 +933,20 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 		},
 		closeBundle() {
 			if (!state.building) return
-			const declaration = state.source.replace(/\.tsx?$/, '.d.ts')
-			if (declaration === state.source) {
+			const named = options.entries ?? Object.keys(state.entries)
+			const declarations = named.map((name) => {
+				const source = state.entries[name] ?? ''
+				return { name, source, declaration: source.replace(/\.tsx?$/, '.d.ts') }
+			})
+			if (
+				(options.entries === undefined && declarations.length === 0) ||
+				declarations.some(({ source, declaration }) => declaration === source)
+			) {
 				throw new Error(
-					'[orkestrel-declaration-rollup] The face must build one TypeScript library entry',
+					'[orkestrel-declaration-rollup] The face must build each named TypeScript library entry',
 				)
 			}
+			if (declarations.length === 0) return
 			const load = createRequire(import.meta.url)
 			const compiler = resolveCompiler(import.meta.url)
 			const scope = parseProjectScope(
@@ -917,7 +959,6 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 				)
 			}
 			const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-declarations-'))
-			const rollup = resolvePath(state.output, 'index.d.ts')
 			try {
 				readCompilerOutput(compiler, [
 					'-p',
@@ -929,7 +970,6 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 					'--outDir',
 					scratch,
 				])
-				const entry = resolvePath(scratch, relative(scope.root, declaration))
 				// A literal `import()` of the extractor reddens `tsc` in a workspace that does not
 				// install it, so the literal `createRequire` call is the form that clears the
 				// typecheck in an app-only workspace.
@@ -939,45 +979,51 @@ export function declarationRollup(options: DeclarationRollupOptions): Plugin {
 						'[orkestrel-declaration-rollup] The declaration extractor exposes no entry point',
 					)
 				}
-				const prepared: unknown = loaded.ExtractorConfig.prepare({
-					configObject: {
-						projectFolder: WORKSPACE_ROOT,
-						mainEntryPointFilePath: entry,
-						bundledPackages: [],
-						compiler: {
-							overrideTsconfig: buildExtractorOverride(
-								entry,
-								scope.lib,
-								options.types ?? scope.types,
-							),
+				for (const { name, declaration } of declarations) {
+					const entry = resolvePath(scratch, relative(scope.root, declaration))
+					const rollup = resolvePath(state.output, `${name}.d.ts`)
+					const prepared: unknown = loaded.ExtractorConfig.prepare({
+						configObject: {
+							projectFolder: WORKSPACE_ROOT,
+							mainEntryPointFilePath: entry,
+							bundledPackages: [],
+							compiler: {
+								overrideTsconfig: buildExtractorOverride(
+									entry,
+									scope.lib,
+									options.types ?? scope.types,
+								),
+							},
+							apiReport: { enabled: false },
+							docModel: { enabled: false },
+							tsdocMetadata: { enabled: false },
+							dtsRollup: { enabled: true, untrimmedFilePath: rollup },
+							messages: {
+								compilerMessageReporting: { default: { logLevel: 'none' } },
+								extractorMessageReporting: { default: { logLevel: 'none' } },
+								tsdocMessageReporting: { default: { logLevel: 'none' } },
+							},
 						},
-						apiReport: { enabled: false },
-						docModel: { enabled: false },
-						tsdocMetadata: { enabled: false },
-						dtsRollup: { enabled: true, untrimmedFilePath: rollup },
-						messages: {
-							compilerMessageReporting: { default: { logLevel: 'none' } },
-							extractorMessageReporting: { default: { logLevel: 'none' } },
-							tsdocMessageReporting: { default: { logLevel: 'none' } },
-						},
-					},
-					configObjectFullPath: resolvePath(WORKSPACE_ROOT, 'api-extractor.json'),
-					packageJsonFullPath: resolvePath(WORKSPACE_ROOT, 'package.json'),
-				})
-				const outcome: unknown = loaded.Extractor.invoke(prepared, {
-					localBuild: true,
-					showVerboseMessages: false,
-					showDiagnostics: false,
-				})
-				const succeeded: unknown =
-					typeof outcome === 'object' && outcome !== null
-						? Reflect.get(outcome, 'succeeded')
-						: undefined
-				if (succeeded !== true) {
-					throw new Error('[orkestrel-declaration-rollup] The declaration roll-up failed')
-				}
-				if (options.rewrite !== undefined) {
-					writeFileSync(rollup, options.rewrite(readFileSync(rollup, 'utf8')), 'utf8')
+						configObjectFullPath: resolvePath(WORKSPACE_ROOT, 'api-extractor.json'),
+						packageJsonFullPath: resolvePath(WORKSPACE_ROOT, 'package.json'),
+					})
+					const outcome: unknown = loaded.Extractor.invoke(prepared, {
+						localBuild: true,
+						showVerboseMessages: false,
+						showDiagnostics: false,
+					})
+					const succeeded: unknown =
+						typeof outcome === 'object' && outcome !== null
+							? Reflect.get(outcome, 'succeeded')
+							: undefined
+					if (succeeded !== true) {
+						throw new Error(
+							`[orkestrel-declaration-rollup] The declaration roll-up of ${name} failed`,
+						)
+					}
+					if (options.rewrite !== undefined) {
+						writeFileSync(rollup, options.rewrite(readFileSync(rollup, 'utf8')), 'utf8')
+					}
 				}
 			} finally {
 				rmSync(scratch, { recursive: true, force: true })

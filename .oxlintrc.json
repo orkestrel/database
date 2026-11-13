@@ -89,6 +89,12 @@
 			}
 		},
 		{
+			"files": ["src/bin/*.ts"],
+			"rules": {
+				"import/no-default-export": "off"
+			}
+		},
+		{
 			"files": [".agents/skills/*/scripts/*.ts"],
 			"rules": {
 				"policy/no-nested-functions": "error",

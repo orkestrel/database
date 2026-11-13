@@ -2,7 +2,9 @@ import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
+import { arrayOf, isArray, isRecord, isString } from '@orkestrel/contract'
 import { spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import {
 	existsSync,
 	mkdirSync,
@@ -254,39 +256,6 @@ export interface DistributionStage {
 	readonly targets: readonly string[]
 }
 
-/**
- * Checks whether a value is a non-null object other than an array.
- *
- * @param value - The value to inspect.
- * @returns True if the value is a record; false otherwise.
- */
-export function isDistributionRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
- * Checks whether a value is an array of strings.
- *
- * @param value - The value to inspect.
- * @returns True if every array member is a string; false otherwise.
- */
-export function isDistributionNames(value: unknown): value is readonly string[] {
-	return Array.isArray(value) && value.every((name) => typeof name === 'string')
-}
-
-// A fallback list, which is what Node reads an array in an exports entry as. The
-// narrowing is what the following walkers need: `Array.isArray` widens an `unknown`
-// member to `any`, and an entry read that way is not read at all.
-/**
- * Checks whether a value is a fallback array.
- *
- * @param value - The value to inspect.
- * @returns True if the value is an array; false otherwise.
- */
-export function isDistributionList(value: unknown): value is readonly unknown[] {
-	return Array.isArray(value)
-}
-
 // Whether a string is a valid package target. Node rejects a target outside the
 // package and a target containing a dot, parent, or node_modules segment during
 // package-target resolution. A later module-resolution failure is not the same
@@ -331,7 +300,7 @@ export function readDistributionJSON(path: string): unknown {
  */
 export function readDistributionManifestName(path: string): string {
 	const manifest = readDistributionJSON(path)
-	if (!isDistributionRecord(manifest) || typeof manifest.name !== 'string') {
+	if (!isRecord(manifest) || typeof manifest.name !== 'string') {
 		throw new Error(`The manifest at ${path} declares no package name`)
 	}
 	return manifest.name
@@ -348,19 +317,17 @@ export function readDistributionManifestName(path: string): string {
  */
 export function readDistributionPeers(path: string): Readonly<Record<string, string>> {
 	const manifest = readDistributionJSON(path)
-	if (!isDistributionRecord(manifest) || !isDistributionRecord(manifest.peerDependencies)) {
+	if (!isRecord(manifest) || !isRecord(manifest.peerDependencies)) {
 		return {}
 	}
-	const meta = isDistributionRecord(manifest.peerDependenciesMeta)
-		? manifest.peerDependenciesMeta
-		: undefined
+	const meta = isRecord(manifest.peerDependenciesMeta) ? manifest.peerDependenciesMeta : undefined
 	const peers = Object.entries(manifest.peerDependencies).filter(
 		(entry): entry is [string, string] => typeof entry[1] === 'string',
 	)
 	return Object.fromEntries(
 		peers.filter(([name]) => {
 			const entry = meta?.[name]
-			return !isDistributionRecord(entry) || entry.optional !== true
+			return !isRecord(entry) || entry.optional !== true
 		}),
 	)
 }
@@ -375,7 +342,7 @@ export function createDistributionConsumerManifest(
 	peers: Readonly<Record<string, string>>,
 ): string {
 	const manifest: unknown = JSON.parse(DISTRIBUTION_CONSUMER_MANIFEST)
-	if (Object.keys(peers).length === 0 || !isDistributionRecord(manifest)) {
+	if (Object.keys(peers).length === 0 || !isRecord(manifest)) {
 		return DISTRIBUTION_CONSUMER_MANIFEST
 	}
 	return `${JSON.stringify({ ...manifest, dependencies: peers })}\n`
@@ -496,7 +463,7 @@ export function resolveDistributionPackageTarget(
 	conditions: readonly string[],
 ): DistributionTargetResult | undefined {
 	if (typeof entry === 'string') return { target: entry }
-	if (isDistributionList(entry)) {
+	if (isArray(entry)) {
 		for (const member of entry) {
 			const resolved = resolveDistributionPackageTarget(member, conditions)
 			if (resolved !== undefined && matchesDistributionPackageTarget(resolved.target))
@@ -504,7 +471,7 @@ export function resolveDistributionPackageTarget(
 		}
 		return undefined
 	}
-	if (!isDistributionRecord(entry)) return undefined
+	if (!isRecord(entry)) return undefined
 	for (const [condition, nested] of Object.entries(entry)) {
 		if (condition !== 'default' && !conditions.includes(condition)) continue
 		const resolved = resolveDistributionPackageTarget(nested, conditions)
@@ -589,14 +556,14 @@ export function resolveDistributionDeclaration(
 	installed: string,
 ): string | undefined {
 	if (typeof entry === 'string') return targetToDistributionDeclaration(entry, installed)
-	if (isDistributionList(entry)) {
+	if (isArray(entry)) {
 		for (const member of entry) {
 			const resolved = resolveDistributionDeclaration(member, conditions, installed)
 			if (resolved !== undefined) return resolved
 		}
 		return undefined
 	}
-	if (!isDistributionRecord(entry)) return undefined
+	if (!isRecord(entry)) return undefined
 	for (const [condition, nested] of Object.entries(entry)) {
 		if (condition !== 'default' && !conditions.includes(condition)) continue
 		const resolved = resolveDistributionDeclaration(nested, conditions, installed)
@@ -629,7 +596,7 @@ export function readDistributionPackageType(installed: string, target: string): 
 	if (scope === undefined) return undefined
 	try {
 		const manifest = readDistributionJSON(join(scope, 'package.json'))
-		return isDistributionRecord(manifest) ? manifest.type : undefined
+		return isRecord(manifest) ? manifest.type : undefined
 	} catch {
 		return undefined
 	}
@@ -706,9 +673,9 @@ export function declaresDistributionCommonJS(entry: unknown, installed: string):
  */
 export function collectDistributionTargets(entry: unknown): readonly string[] {
 	if (typeof entry === 'string') return [entry]
-	if (isDistributionList(entry))
+	if (isArray(entry))
 		return entry.flatMap(collectDistributionTargets).filter(matchesDistributionPackageTarget)
-	if (!isDistributionRecord(entry)) return []
+	if (!isRecord(entry)) return []
 	return Object.values(entry).flatMap((nested) => collectDistributionTargets(nested))
 }
 
@@ -839,7 +806,7 @@ export function filterDistributionUntypable(
 	return entries.filter(
 		(entry) =>
 			entry.requirable &&
-			isDistributionRecord(entry.mapping) &&
+			isRecord(entry.mapping) &&
 			Object.hasOwn(entry.mapping, 'require') &&
 			!declaresDistributionCommonJS(entry.mapping, installed),
 	)
@@ -1029,7 +996,7 @@ export function driveDistributionRuntime(
 		)
 	}
 	const published: unknown = JSON.parse(result.stdout)
-	if (!isDistributionNames(published))
+	if (!arrayOf(isString)(published))
 		throw new Error(`The driver printed no name list for ${specifier}`)
 	return published
 }
@@ -1150,9 +1117,8 @@ export async function readDistributionBrowserExports(
 		response.end(readFileSync(path))
 	})
 	try {
-		await new Promise<void>((settle) => {
-			server.listen(0, '127.0.0.1', settle)
-		})
+		server.listen(0, '127.0.0.1')
+		await once(server, 'listening')
 		const address = server.address()
 		if (address === null || typeof address === 'string') {
 			throw new Error('The bundle server bound no port')
@@ -1163,8 +1129,7 @@ export async function readDistributionBrowserExports(
 		await page.goto(`http://127.0.0.1:${String(address.port)}/`, { waitUntil: 'load' })
 		const published: unknown = await page.evaluate('globalThis.subject')
 		if (failures.length > 0) throw new Error(`The bundle raised ${failures.join(' | ')}`)
-		if (!isDistributionNames(published))
-			throw new Error('The bundled module published no name list')
+		if (!arrayOf(isString)(published)) throw new Error('The bundled module published no name list')
 		return published
 	} finally {
 		server.close()
@@ -1255,7 +1220,7 @@ export function buildDistributionStage(scratch: string): DistributionStage {
 	const name = readDistributionManifestName(join(DISTRIBUTION_ROOT, 'package.json'))
 	const installed = join(consumer, 'node_modules', ...name.split('/'))
 	const manifest = readDistributionJSON(join(installed, 'package.json'))
-	if (!isDistributionRecord(manifest) || !isDistributionRecord(manifest.exports)) {
+	if (!isRecord(manifest) || !isRecord(manifest.exports)) {
 		throw new Error('The installed manifest publishes no exports map')
 	}
 	return { consumer, installed, archives, ...classifyDistributionStage(manifest, installed, name) }
@@ -1350,7 +1315,7 @@ export function classifyDistributionStage(
 	installed: string,
 	name: string,
 ): DistributionClassification {
-	if (!isDistributionRecord(manifest.exports))
+	if (!isRecord(manifest.exports))
 		throw new Error('The installed manifest publishes no exports map')
 	const readings = Object.entries(manifest.exports).map(([subpath, mapping]) => {
 		const files = collectDistributionTargets(mapping)
@@ -1440,8 +1405,8 @@ export function readDistributionFace(installed: string, path: string): string | 
 	return output === 'dist'
 		? axis === 'src'
 			? face
-			: axis === 'bin'
-				? 'bin'
+			: axis === 'bin' || axis === 'reporter'
+				? axis
 				: undefined
 		: undefined
 }
@@ -1529,8 +1494,8 @@ export function scanDistributionSourceMaps(installed: string): readonly string[]
 									: Buffer.from(payload[2], 'base64').toString('utf8'),
 							)
 			if (
-				!isDistributionRecord(map) ||
-				!isDistributionNames(map.sources) ||
+				!isRecord(map) ||
+				!arrayOf(isString)(map.sources) ||
 				(map.sourceRoot !== undefined && typeof map.sourceRoot !== 'string')
 			) {
 				throw new Error('Unreadable source map')
@@ -1696,8 +1661,7 @@ export function checkDistributionManifest(installed: string, scratch: string): r
 		if (result.status !== 0)
 			throw new Error(`npm pkg fix failed: ${readDistributionOutput(result)}`)
 		const after = readDistributionJSON(path)
-		if (!isDistributionRecord(before) || !isDistributionRecord(after))
-			throw new Error('Unreadable manifest')
+		if (!isRecord(before) || !isRecord(after)) throw new Error('Unreadable manifest')
 		return [...new Set([...Object.keys(before), ...Object.keys(after)])]
 			.filter((key) => !isDeepStrictEqual(before[key], after[key]))
 			.sort()
@@ -1749,7 +1713,7 @@ export function buildDistributionCases(
 				writeDistributionFile(join(root, 'module/package.json'), '{ "type": "module" }\n')
 				writeDistributionFile(join(root, 'commonjs/package.json'), '{ "type": "commonjs" }\n')
 				const manifest = readDistributionJSON(join(root, 'package.json'))
-				if (!isDistributionRecord(manifest) || !isDistributionRecord(manifest.exports)) {
+				if (!isRecord(manifest) || !isRecord(manifest.exports)) {
 					throw new Error('The classifier fixture declares no exports map')
 				}
 				const mappings = manifest.exports
@@ -1874,7 +1838,7 @@ export function buildDistributionCases(
 					},
 					expected: {
 						undeclared: [],
-						partitioned: [...stage.subpaths].sort(),
+						partitioned: stage.subpaths.toSorted(),
 						unreachable: [],
 						untypable: [],
 					},

@@ -8,8 +8,10 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
 	closeSync,
+	cpSync,
 	existsSync,
 	globSync,
+	lstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -1260,7 +1262,7 @@ describe('root configuration', () => {
 						if (output === undefined) throw new Error(`${wrapper} carries no output`)
 						const expected =
 							environment === 'bin'
-								? 'dist/bin'
+								? `dist/${environment}`
 								: environment === 'showcase'
 									? 'showcase'
 									: `dist/${axis}/${environment}`
@@ -1546,6 +1548,130 @@ describe('root configuration', () => {
 			scratch.destroy()
 		}
 	})
+
+	// A workspace publishes each `src/bin` module other than `main`: a direct lowercase `.ts` child
+	// that no centralized file names. The case copies the workspace's build inputs into a scratch
+	// directory under `tmp/`, so the real `dist/` stays as the last build left it, builds the
+	// library environments and the bin there through the workspace's own wrappers, and reads what
+	// each module ships. A child Node process loads each built module, as a host tool does, and
+	// its default must be a value an environment it imports exports. A workspace with no such
+	// module builds nothing here.
+	it('builds each src/bin module to one ES module whose default an environment exports', async () => {
+		const wrapper = 'configs/src/vite.bin.config.ts'
+		const directory = resolve(POLICY_ROOT, 'src/bin')
+		const modules = existsSync(directory)
+			? readdirSync(directory)
+					.filter(
+						(file) => /^[a-z][a-z0-9]*\.ts$/u.test(file) && !CENTRAL_SOURCE_FILES.includes(file),
+					)
+					.map((file) => file.slice(0, -'.ts'.length))
+			: []
+		expect(existsSync(resolve(POLICY_ROOT, wrapper))).toBe(modules.length > 0)
+		const published = modules.filter((name) => name !== 'main')
+		if (published.length === 0) return
+		mkdirSync(resolve(POLICY_ROOT, 'tmp'), { recursive: true })
+		const scratch = createPolicyScratch({
+			parent: resolve(POLICY_ROOT, 'tmp'),
+			prefix: 'config-bin-',
+		})
+		try {
+			for (const path of ['package.json', 'tsconfig.json', 'vite.config.ts', 'configs', 'src']) {
+				cpSync(resolve(POLICY_ROOT, path), join(scratch.path, path), { recursive: true })
+			}
+			const environments = ['core', 'server'].filter((environment) =>
+				existsSync(resolve(POLICY_ROOT, 'src', environment)),
+			)
+			for (const config of [
+				...environments.map((environment) => `configs/src/vite.${environment}.config.ts`),
+				wrapper,
+			]) {
+				await build({
+					configFile: join(scratch.path, config),
+					root: scratch.path,
+					mode: 'production',
+					logLevel: 'silent',
+				})
+			}
+			const output = join(scratch.path, 'dist/bin')
+			// Rolldown strips a source shebang, so the executable carries the banner and no module does.
+			const executable = join(output, 'main.js')
+			expect({
+				file: 'main.js',
+				shebang: existsSync(executable)
+					? readFileSync(executable, 'utf8').startsWith('#!/usr/bin/env node\n')
+					: undefined,
+			}).toStrictEqual({ file: 'main.js', shebang: modules.includes('main') ? true : undefined })
+			for (const name of published) {
+				const source = readFileSync(join(directory, `${name}.ts`), 'utf8')
+				const imported = [...source.matchAll(/from ["']@src\/([a-z][a-z0-9-]*)["']/gu)].flatMap(
+					(match) => (match[1] === undefined ? [] : [match[1]]),
+				)
+				const code = readFileSync(join(output, `${name}.js`), 'utf8')
+				// Each reading names its file, so a failure's diff states which output kept the alias. The
+				// bundler and the extractor each choose their own quote, so a specifier is read without one.
+				expect({
+					file: `${name}.js`,
+					alias: code.includes('@src/'),
+					built: imported.every((environment) => code.includes(`../src/${environment}/index.js`)),
+					shebang: code.startsWith('#!'),
+				}).toStrictEqual({ file: `${name}.js`, alias: false, built: true, shebang: false })
+				const typed = join(output, `${name}.d.ts`)
+				const declaration = existsSync(typed) ? readFileSync(typed, 'utf8') : ''
+				expect({
+					file: `${name}.d.ts`,
+					present: existsSync(typed),
+					alias: declaration.includes('@src/'),
+					built: imported.every((environment) =>
+						declaration.includes(`../src/${environment}/index.js`),
+					),
+					exported: declaration.includes('export default'),
+				}).toStrictEqual({
+					file: `${name}.d.ts`,
+					present: true,
+					alias: false,
+					built: true,
+					exported: true,
+				})
+				// The distribution scan refuses a module map that names no `src/bin/` source.
+				const map = join(output, `${name}.js.map`)
+				const parsed: unknown = existsSync(map) ? JSON.parse(readFileSync(map, 'utf8')) : undefined
+				const sources: unknown =
+					typeof parsed === 'object' && parsed !== null
+						? Object.getOwnPropertyDescriptor(parsed, 'sources')?.value
+						: undefined
+				const listed = Array.isArray(sources)
+					? sources.flatMap((entry: unknown) =>
+							typeof entry === 'string'
+								? [relative(scratch.path, resolve(output, entry)).replaceAll('\\', '/')]
+								: [],
+						)
+					: []
+				expect({
+					file: `${name}.js.map`,
+					entry: listed.includes(`src/bin/${name}.ts`),
+				}).toStrictEqual({ file: `${name}.js.map`, entry: true })
+				const loaded = spawnSync(
+					process.execPath,
+					[
+						'--input-type=module',
+						'--eval',
+						`const module = await import(${JSON.stringify(pathToFileURL(join(output, `${name}.js`)).href)})\nconst values = []\nfor (const href of ${JSON.stringify(imported.map((environment) => pathToFileURL(join(scratch.path, `dist/src/${environment}/index.js`)).href))}) values.push(...Object.values(await import(href)))\nprocess.stdout.write(JSON.stringify({ defined: module.default !== undefined, owned: values.includes(module.default) }))`,
+					],
+					{ encoding: 'utf8' },
+				)
+				expect({ file: `${name}.js`, status: loaded.status, stderr: loaded.stderr }).toStrictEqual({
+					file: `${name}.js`,
+					status: 0,
+					stderr: '',
+				})
+				expect(JSON.parse(loaded.stdout)).toStrictEqual({ defined: true, owned: true })
+			}
+		} finally {
+			scratch.destroy()
+		}
+		// Three real builds, two of them with a declaration roll-up that runs the compiler and the
+		// extractor. The budget carries slack over that because the cost is contention, not work.
+	}, 120_000)
 
 	it('registers proof scripts in the correct gate', () => {
 		const manifest: unknown = JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8'))
@@ -4443,6 +4569,21 @@ createSomething({
 						}),
 					)
 				}),
+				// A bin module in the form a relative server import would take: only the
+				// `@src/server` alias reaches `output.paths`, so this import would bundle a server copy.
+				...(
+					[
+						[
+							'src/bin/reporter.ts',
+							"import { ProgressReporter } from '../server/index.js'\n\nexport default ProgressReporter\ndebugger\n",
+							true,
+						],
+					] as const
+				).map(([file, content, refusal]): [string, boolean] => {
+					mkdirSync(dirname(resolve(scratch, file)), { recursive: true })
+					writeFileSync(resolve(scratch, file), content)
+					return [file, refusal]
+				}),
 				...(
 					[
 						['probe.config.ts', 'typescript', true],
@@ -4474,12 +4615,15 @@ createSomething({
 						if (
 							!Array.isArray(files) ||
 							!files.some(
-								(file: unknown) => typeof file === 'string' && file.startsWith('src/vue/'),
+								(file: unknown) =>
+									typeof file === 'string' &&
+									(file.startsWith('src/vue/') || file.startsWith('src/bin/')),
 							)
 						)
 							continue
 						const rules: unknown = Object.getOwnPropertyDescriptor(block, 'rules')?.value
-						if (typeof rules !== 'object' || rules === null) throw new Error('Missing Vue rules')
+						if (typeof rules !== 'object' || rules === null)
+							throw new Error('Missing boundary rules')
 						Reflect.set(rules, 'no-restricted-imports', 'off')
 					}
 					writeFileSync(resolve(scratch, '.oxlintrc.json'), JSON.stringify(parsed))
@@ -4509,6 +4653,11 @@ createSomething({
 			).toThrow('deeply equal')
 			expect(control).toContainEqual({ path: 'src/vue/refused3.ts', expected: true, actual: false })
 			expect(control).toContainEqual({ path: 'src/vue/refused8.ts', expected: true, actual: false })
+			expect(control).toContainEqual({
+				path: 'src/bin/reporter.ts',
+				expected: true,
+				actual: false,
+			})
 		} finally {
 			fixture.destroy()
 		}
@@ -4828,6 +4977,23 @@ createSomething({
 					'}',
 				].join('\n'),
 			)
+			// The default-export exemption names the direct `src/bin` modules alone. The module's `debugger`
+			// statement is its arrival control, and a server module and a `main.ts` in another
+			// folder carry the same default export and must each still draw the rule.
+			for (const path of [
+				'src/bin/reporter.ts',
+				'src/server/reporter.ts',
+				'src/violations/main.ts',
+			]) {
+				scratch.write(
+					path,
+					[
+						"import { SampleReporter } from '@src/server'",
+						'debugger',
+						'export default SampleReporter',
+					].join('\n'),
+				)
+			}
 			scratch.write(
 				'src/clean/CleanMember.ts',
 				[
@@ -4874,6 +5040,8 @@ createSomething({
 					'--format',
 					'json',
 					'src/violations',
+					'src/bin',
+					'src/server',
 					'app',
 					'scripts',
 					'tests',
@@ -4986,6 +5154,29 @@ createSomething({
 			expect(violationCodes).toContain(
 				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
 			)
+			expect(violationCodes).toContain(
+				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'src/bin/reporter.ts')}`,
+			)
+			expect(violationCodes).not.toContain(
+				`import(no-default-export) ${normalizePolicyFilename(comparisonRoot, 'src/bin/reporter.ts')}`,
+			)
+			// The module's `@src/server` import is the form the `src/bin` boundary admits, and the
+			// placement rules read a lowercase module beside `main.ts` as no misplaced file.
+			expect(violationCodes).not.toContain(
+				`eslint(no-restricted-imports) ${normalizePolicyFilename(comparisonRoot, 'src/bin/reporter.ts')}`,
+			)
+			expect(
+				violationCodes.filter(
+					(code) =>
+						code.startsWith('policy(') &&
+						code.endsWith(` ${normalizePolicyFilename(comparisonRoot, 'src/bin/reporter.ts')}`),
+				),
+			).toStrictEqual([])
+			for (const path of ['src/server/reporter.ts', 'src/violations/main.ts']) {
+				expect(violationCodes).toContain(
+					`import(no-default-export) ${normalizePolicyFilename(comparisonRoot, path)}`,
+				)
+			}
 			expect(violationCodes).not.toContain(
 				`policy(no-host-line-endings) ${normalizePolicyFilename(comparisonRoot, 'scripts/read.ts')}`,
 			)
@@ -5194,6 +5385,7 @@ describe('configuration helpers', () => {
 			'readCompilerOutput',
 			'resolveCompiler',
 			'rewriteCoreSpecifier',
+			'rewriteSourceSpecifier',
 			'sourceFallback',
 			'workspacePath',
 		]
@@ -5289,6 +5481,26 @@ describe('configuration helpers', () => {
 		}
 	})
 
+	it('resolves a package root from a path the host reports as absent or beneath a file', () => {
+		const scratch = createPolicyScratch({ prefix: 'orkestrel-config-lstat-' })
+		try {
+			const packageRoot = resolve(scratch.path, 'node_modules/@sample/package')
+			const source = resolve(packageRoot, 'src/index.ts')
+			mkdirSync(dirname(source), { recursive: true })
+			writeFileSync(resolve(packageRoot, 'package.json'), '{"name":"@sample/package"}', 'utf8')
+			writeFileSync(source, 'export {}\n', 'utf8')
+			const expected = realpathSync.native(packageRoot)
+			const absent = resolve(packageRoot, 'src/absent.ts')
+			const beneathFile = resolve(source, 'child')
+			expect(lstatSync(absent, { throwIfNoEntry: false })).toBeUndefined()
+			expect(lstatSync(beneathFile, { throwIfNoEntry: false })).toBeUndefined()
+			expect(configHelpers.packageRootOf('@sample/package', absent)).toBe(expected)
+			expect(configHelpers.packageRootForResolved(beneathFile)).toBe(expected)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('returns a producer value, or undefined when the producer throws', () => {
 		expect(configHelpers.attemptValue(() => decodeURI('%20'))).toBe(' ')
 		expect(configHelpers.attemptValue(() => decodeURI('%E0%A4%A'))).toBeUndefined()
@@ -5364,7 +5576,7 @@ describe('configuration helpers', () => {
 			expect(fresh.building).toBe(false)
 			expect(fresh.output).toBe(configHelpers.WORKSPACE_ROOT)
 			expect(fresh.root).toBe(configHelpers.WORKSPACE_ROOT)
-			expect(fresh.source).toBe('')
+			expect(fresh.entries).toStrictEqual({})
 			expect(new configHelpers.BuildState('C:/output').output).toBe('C:/output')
 
 			const entry = resolve(scratch.path, 'index.ts')
@@ -5379,13 +5591,34 @@ describe('configuration helpers', () => {
 			expect(buildState.building).toBe(true)
 			expect(buildState.output).toBe(resolve(scratch.path, 'out'))
 			expect(buildState.root).toBe(realpathSync.native(scratch.path))
-			expect(buildState.source).toBe(entry)
+			expect(buildState.entries).toStrictEqual({ index: entry })
+			// A named entry map keeps its names; a list names each member by its file's stem.
+			const tool = resolve(scratch.path, 'reporter.ts')
+			const named = new configHelpers.BuildState()
+			named.resolve(
+				await resolveConfig(
+					{
+						...inline,
+						build: { outDir: 'out', lib: { entry: { main: entry, tool }, formats: ['es'] } },
+					},
+					'build',
+				),
+			)
+			expect(named.entries).toStrictEqual({ main: entry, tool })
+			const listed = new configHelpers.BuildState()
+			listed.resolve(
+				await resolveConfig(
+					{ ...inline, build: { outDir: 'out', lib: { entry: [entry, tool], formats: ['es'] } } },
+					'build',
+				),
+			)
+			expect(listed.entries).toStrictEqual({ index: entry, reporter: tool })
 
 			// The control: a serve command is not a build, and a config with no library entry has no source.
 			const serveState = new configHelpers.BuildState()
 			serveState.resolve(await resolveConfig({ ...inline, build: { outDir: 'out' } }, 'serve'))
 			expect(serveState.building).toBe(false)
-			expect(serveState.source).toBe('')
+			expect(serveState.entries).toStrictEqual({})
 		} finally {
 			scratch.destroy()
 		}
@@ -5419,11 +5652,11 @@ describe('configuration helpers', () => {
 			expect(Object.getOwnPropertyNames(configHelpers.BuildState.prototype).sort()).toEqual([
 				'building',
 				'constructor',
+				'entries',
 				'locate',
 				'output',
 				'resolve',
 				'root',
-				'source',
 				'trust',
 			])
 		} finally {
@@ -5767,6 +6000,17 @@ describe('configuration helpers', () => {
 			`from '${name}/browser'`,
 		)
 		expect(configHelpers.rewriteBrowserSpecifier("from './sibling.js'")).toBe("from './sibling.js'")
+		expect(
+			configHelpers.rewriteSourceSpecifier(
+				'import { Reporter } from \'@src/server\'\nimport type { Shape } from "@src/core"',
+			),
+		).toBe(
+			'import { Reporter } from \'../src/server/index.js\'\nimport type { Shape } from "../src/core/index.js"',
+		)
+		// A specifier past the environment, and a mention outside quotes, are no environment alias.
+		expect(configHelpers.rewriteSourceSpecifier("from '@src/core/types.js' // @src/server")).toBe(
+			"from '@src/core/types.js' // @src/server",
+		)
 
 		// The mechanism the roll-up proof's skip reads: an absent package rejects resolution.
 		expect(() => createRequire(import.meta.url).resolve('@absent/declaration-extractor')).toThrow(

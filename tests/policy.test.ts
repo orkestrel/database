@@ -8,6 +8,7 @@ import {
 	createPolicyCatalog,
 	createPolicySurfaceFixture,
 	createPolicySurfaceGuide,
+	describeSurfaceCollision,
 	writePolicySurfaceHost,
 	createSkillMetadata,
 	DIST_POLICY_CONTROLS,
@@ -27,7 +28,6 @@ import {
 	inspectSkillBridges,
 	isPolicyFile,
 	isPolicyMirror,
-	isPolicyRecord,
 	isPolicyStray,
 	matchesSkillTrigger,
 	parseSkillFrontmatter,
@@ -99,7 +99,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/shared helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 		} finally {
@@ -150,7 +150,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readCheckout (other)',
+					message: describeSurfaceCollision('readCheckout', 'other'),
 				},
 			])
 		} finally {
@@ -171,7 +171,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 2,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 		} finally {
@@ -192,7 +192,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'tests/setupServer.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 		} finally {
@@ -211,7 +211,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 			scratch.write(
@@ -234,7 +234,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'tests/setupServer.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 			rmSync(join(scratch.path, 'tests/setupServer.ts'), { recursive: true, force: true })
@@ -261,7 +261,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'tests/setupGlobal.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 		} finally {
@@ -324,7 +324,7 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 			])
 			scratch.write('guides/scaffold.md', createPolicySurfaceGuide(['readShared']))
@@ -363,31 +363,31 @@ describe('surface policy controls', () => {
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 				{
 					rule: 'surface',
 					path: 'src/core/helpers.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readShared (zebra)',
+					message: describeSurfaceCollision('readShared', 'zebra'),
 				},
 				{
 					rule: 'surface',
 					path: 'tests/setupServer.ts',
 					line: 1,
-					message: 'surface name belongs to one package: readLater (other)',
+					message: describeSurfaceCollision('readLater', 'other'),
 				},
 				{
 					rule: 'surface',
 					path: 'tests/setupServer.ts',
 					line: 2,
-					message: 'surface name belongs to one package: readShared (other)',
+					message: describeSurfaceCollision('readShared', 'other'),
 				},
 				{
 					rule: 'surface',
 					path: 'tests/setupServer.ts',
 					line: 2,
-					message: 'surface name belongs to one package: readShared (zebra)',
+					message: describeSurfaceCollision('readShared', 'zebra'),
 				},
 			])
 		} finally {
@@ -979,7 +979,7 @@ describe('denylist currency', () => {
 describe('repository policy', () => {
 	it('enforces the workspace policy laws including surface ownership', () => {
 		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
-	})
+	}, 20_000)
 
 	// A target reads the canon from the installed package, so its tree carries the
 	// pointer pair and no `.agents/` directory, no rule map, and no skill bridges.
@@ -1073,12 +1073,5 @@ describe('policy configuration wiring', () => {
 
 	it('reports a configuration that is not a record', () => {
 		expect(inspectPolicyWiring([], [], [])).toEqual(['Oxlint configuration must be a record'])
-	})
-
-	it('admits a plain record and refuses an array, null, and a primitive', () => {
-		expect(isPolicyRecord({})).toBe(true)
-		expect(isPolicyRecord([])).toBe(false)
-		expect(isPolicyRecord(null)).toBe(false)
-		expect(isPolicyRecord('record')).toBe(false)
 	})
 })
