@@ -365,6 +365,34 @@ export interface MigrationInput {
 	readonly metadata?: DriverMetadata
 }
 
+/** Represents one aggregate a read reduces its rows to. */
+export interface Aggregate {
+	readonly operation: AggregateOperation
+	readonly column: FieldPath
+}
+
+/**
+ * Represents a read as a driver plans it: a query, and the aggregate over its rows when the
+ * read computes one.
+ */
+export interface ReadInput extends QueryInput {
+	readonly aggregate?: Aggregate
+}
+
+/**
+ * Represents the split of one read between the engine and the core.
+ *
+ * @remarks
+ * `native` is the part the driver's `records`, `stream`, or `aggregate` answers; `residual` is
+ * the part the core's engine runs over those rows. A side that carries nothing is `{}`: a clause
+ * the side does not hold is an absent key, never an empty list, so a read is wholly native when
+ * `residual` equals `{}`. {@link DriverInterface} states the invariants a plan obeys.
+ */
+export interface ReadPlan {
+	readonly native: ReadInput
+	readonly residual: ReadInput
+}
+
 /**
  * Declares the storage operations available only inside a driver's transaction scope.
  *
@@ -372,8 +400,9 @@ export interface MigrationInput {
  * A driver owns acquisition, commit or rollback, release, and lifetime. This
  * capability exposes storage work only: it has no public `commit` / `rollback`,
  * cannot start a nested transaction, and throws `CONFLICT` after its scope
- * settles. Optional native read and migration hooks mirror the owning driver;
- * callers fall back to `scan` when a native read hook is absent.
+ * settles. The scoped capability declares each native member the owning driver
+ * declares — `plan`, `records`, `stream`, `aggregate`, and the migration hooks —
+ * under the rule {@link DriverInterface} states.
  */
 export interface StorageInterface {
 	/**
@@ -405,11 +434,19 @@ export interface StorageInterface {
 	 */
 	clear(table: string): Promise<void>
 	/**
-	 * Reads the rows matching a {@link QueryInput} natively — an optional hook.
+	 * Splits a read into the part the engine answers natively and the residual the core runs —
+	 * an optional hook.
+	 */
+	plan?(table: string, input: ReadInput): ReadPlan
+	/**
+	 * Reads the rows matching the native side of a plan — an optional hook.
+	 *
+	 * @remarks
+	 * Without an `order`, the rows come in ascending key order.
 	 */
 	records?(table: string, input: QueryInput): Promise<readonly Row[]>
 	/**
-	 * Computes an aggregate over a column natively — an optional hook.
+	 * Computes an aggregate over the rows matching the native side of a plan — an optional hook.
 	 */
 	aggregate?(
 		table: string,
@@ -418,7 +455,10 @@ export interface StorageInterface {
 		input: QueryInput,
 	): Promise<number | undefined>
 	/**
-	 * Iterates the natively filtered rows lazily — an optional hook.
+	 * Iterates the rows matching the native side of a plan lazily — an optional hook.
+	 *
+	 * @remarks
+	 * The rows come in the input's `order`, and without one in ascending key order.
 	 */
 	stream?(table: string, input: QueryInput): AsyncIterable<Row>
 	/**
@@ -436,27 +476,48 @@ export interface StorageInterface {
 }
 
 /**
- * Declares the storage primitive every backend implements — the whole of the bridge.
+ * Declares the storage contract a backend implements: its engine's native operations first,
+ * and the core's engine only for the residual its plan returns.
  *
  * @remarks
- * The required surface is deliberately minimal: keyed read / write / atomic
- * insert / delete, an ordered `scan`, a key listing, and a `snapshot` that
- * backs transactions — the irreducible primitive. There is **no** required
- * query, count, or aggregate here: all of that is one query engine in the core
- * (`helpers.ts`) running over `scan`, so a new backend implements a handful of
- * tiny methods rather than re-deriving WHERE compilation. `open` receives a
- * derived {@link TableSchema}`[]` (columns, types, primary, indexes) so a
- * native backend can build real tables and indexes; a scan-only backend reads
- * only `name`. The optional `records?` / `aggregate?` are native overrides the
- * engine falls back from. The API is async (Promises) because IndexedDB is;
- * synchronous backends resolve immediately. Lookups that may miss return
- * `undefined` / `false` rather than throwing. Metadata has the same ownership
- * boundary across every implementation: `stamp` and `migrate` snapshot
- * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply
- * frozen snapshot. A durable driver returns `undefined` only when it proves the
- * metadata record or durable store is absent. Existing unreadable or malformed
- * durable state fails `open` / `metadata` closed; it is never treated as fresh,
- * rewritten, or repaired automatically.
+ * **Native first.** A driver answers every part of a read or a write with its engine's native
+ * operation wherever the engine has one: filtering, ordering, paging, counting, aggregating,
+ * batch writes, keyed batch reads, streaming, and transactions. The core runs its own engine
+ * only over the residual a driver's plan returns, and a driver returns a part as residual only
+ * when its engine has no operation with the contract's meaning. A fallback on an engine that
+ * has the native operation is a defect.
+ *
+ * `plan` states the rule structurally: it splits each read into a `native` and a `residual`
+ * {@link ReadPlan}, and the core has no other source of work. A plan obeys these invariants,
+ * and `scanDriver` checks each one:
+ *
+ * - Every clause of the input appears in `native`, in `residual`, or in both. A condition in
+ *   both is a prefilter: the engine applies a superset form and the core rechecks it.
+ * - `order` goes whole to one side.
+ * - `native` carries `limit` and `offset` only when `residual` holds no condition and no order.
+ * - `native` carries `aggregate` only when `residual` holds no condition.
+ * - When every connector is `and`, `residual.conditions` holds the conditions the engine did
+ *   not answer exactly. When any connector is `or`, `residual.conditions` is empty or is the
+ *   complete list, and the engine's form replaces each condition it cannot answer with a
+ *   constant true, which keeps the fold a superset.
+ * - A side that carries nothing is `{}`: a clause the side does not hold is an absent key,
+ *   never an empty list. A read is wholly native when `residual` equals `{}`.
+ * - A driver that declares `plan` declares `records` and `stream`, and declares `aggregate`
+ *   when any plan it returns keeps an aggregate native. A driver without `plan` answers
+ *   nothing natively, and the core treats the whole read as residual over `scan`.
+ *
+ * Every write is admitted through the table's contract, so every stored row conforms; a
+ * stored row that fails the contract on read is corruption, and the read raises `DRIVER`.
+ *
+ * `open` receives a derived {@link TableSchema}`[]` (columns, types, primary, indexes) so a
+ * native backend can build real tables and indexes; a scan-only backend reads only `name`.
+ * The API is async because IndexedDB is; synchronous backends resolve immediately. Lookups
+ * that may miss return `undefined` / `false` rather than throwing. Metadata has the same
+ * ownership boundary across every implementation: `stamp` and `migrate` snapshot
+ * {@link DriverMetadata} at entry, while `metadata` returns a distinct deeply frozen
+ * snapshot. A durable driver returns `undefined` only when it proves the metadata record or
+ * durable store is absent. Existing unreadable or malformed durable state fails `open` /
+ * `metadata` closed; it is never treated as fresh, rewritten, or repaired automatically.
  */
 export interface DriverInterface extends StorageInterface {
 	/**
