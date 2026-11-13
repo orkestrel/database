@@ -56,6 +56,7 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
   - A planner consultation rules each design question on evidence, and independent refuters verify each proposal ahead of a writer.
   - Publication runs on the user's one-time code, in one upload call that covers every release-ready repository of a wave in layer order.
   - The session lists, per wave, what each dependent outside these four repositories changes (§ Sequence step 4); the sessions that own those repositories make the change.
+  - None of database, relation, sqlite, or indexeddb depends on `@orkestrel/toolbox`; toolbox may depend on them.
 - **Next:** rule § Open decisions, then the coverage wave in layer order.
 
 ## Sequence
