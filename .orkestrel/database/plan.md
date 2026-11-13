@@ -31,7 +31,7 @@
 - The paging wave's Core unit also makes the core engine's `any` and `none` linear in rows: `matchesCondition` builds one `Set` of a condition's scalar values per condition and keeps `equalsValue` for a non-scalar value (taverna's `native-b` reading, 2026-11-13: an `id any` over 1000 keys on a fixture driver ran rows × keys, and two book cases went from about 1 s to 14-17 s). This is the residual engine's own cost; the native path is unchanged.
 - 2026-11-13: the paging wave's units landed: Contract `9684cf6`, Core `ca7e133`, SQLite `f95d4db`, IndexedDB port `211c36c`, Prose `195570f`, and the `matchesMember` rename `a592a5b`. Their acceptance readings at 2000 rows, 1500 matching, and a page of 10 are asserted in `tests/src/server/drivers/SQLiteDriver.test.ts` § "native-first paging readings". A page reads 10 rows, `count` is one aggregate with zero rows, and a read inside `transaction` never scans.
 - Scaffold's `.claude/rules/architecture.md` § System constraints carries the native-first rule as of scaffold `c3fea9938`; the guide no longer cites the scan-first default.
-- The `@orkestrel/sqlite` and `@orkestrel/indexeddb` header comments still state the scan-first default. The coverage wave corrects indexeddb's in its `rangePrefix` release, and sqlite's in a release of its own beside it, because no other wave changes sqlite.
+- The `@orkestrel/sqlite` and `@orkestrel/indexeddb` header comments still state the scan-first default. The coverage wave corrects indexeddb's in its `rangePrefix` release. Sqlite's comment rides its next functional release; by the user's ruling of 2026-11-13, no release ships for a comment alone.
 - Next: the paging wave's review round, then its release.
 
 ## Sequence
