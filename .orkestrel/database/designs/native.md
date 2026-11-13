@@ -321,3 +321,171 @@ Each of these changes published behavior. I recommend every row. The paging wave
 - **Strings with an unpaired surrogate.** How `node:sqlite` binds one is unread; the `starts` successor and the text-order claim exclude them until a boundary test reads it.
 - **`JSONDriver.ts` beyond the lines cited.** I read its hook list and line 740 only; the journal unit reads the remaining lines.
 - **The compiled `dist` against each checkout.** As in the audit, unconfirmed; I read source at each release commit.
+
+## Addendum: taverna's six points
+
+Ruled 2026-11-13 on `research/intake.md` § Message 3, against the commits the ruling names. The addendum amends the ruling in these places and adds the rest:
+
+- **§ 4 Busy timeout.** The default is withdrawn. `timeout` stays unset unless the application sets it.
+- **§ 4 `get(keys)` and `any`.** An `any` on the primary key pins the primary key as the access path.
+- **§ 2 Members, Coverage row for `SQLiteDriverOptions`.** `pragmas.journal_mode` alone gains a default.
+- **§ 2 plan invariants.** A side that carries nothing is the empty object.
+- **§ 8 SQLite completion acceptance.** The two-driver reading changes, as Point 1 states.
+
+### Evidence
+
+I read the driver's open, close, and table validation (`database/src/server/drivers/SQLiteDriver.ts:138-225`, `710-842`), the gate (`server/helpers.ts:140-182`), the sentinel (`server/helpers.ts:324-330`), the list compile (`server/compilers.ts:285-302`), the options (`server/types.ts:42-48`), the factory's return type (`server/factories.ts:77`), the wrapper's `pragma` (`sqlite/src/server/SQLiteDatabase.ts:146-148`, `sqlite/src/server/types.ts:175`), and every `any` in relation's source (`relation/src/core/Model.ts:364-373`, `400-403`, `435-438`, `454-463`, `495-498`).
+
+The following readings come from inline `node:sqlite` probes run 2026-11-13 on Node 22.23.5, which bundles SQLite 3.54.1. Each ran in memory except the two-connection reading, which used a scratch file that the probe removed. No probe file is kept.
+
+| Reading | Result |
+| --- | --- |
+| `PRAGMA compile_options` | `DEFAULT_SYNCHRONOUS=2`, `DEFAULT_WAL_SYNCHRONOUS=2`, `MAX_VARIABLE_NUMBER=32766`, `MAX_LENGTH=1000000000`, `ENABLE_FTS5` |
+| `PRAGMA synchronous` on a file after `journal_mode = WAL` | 2, which is `FULL` |
+| `PRAGMA journal_mode = WAL` on `:memory:` | Returns `memory` and raises nothing |
+| A 3000-row table with a text primary key and a tenant index, no `sqlite_stat1`: `id IN (SELECT value FROM json_each(?)) AND organization_id = ?` | Searches the tenant index for a list of 2, 50, and 2000 keys |
+| The same read as `id IN (?, …)` | Searches the primary key at 2 keys and the tenant index at 12 keys |
+| The same read with `+organization_id = ?` | Searches the primary key, and returns the 17 rows the unpinned read returns at 50 keys |
+| The same read after `PRAGMA optimize` on that connection | `sqlite_stat1` exists, and the read searches the primary key at 2, 50, and 2000 keys |
+| An `INTEGER PRIMARY KEY` table, the same read | Searches the tenant index as `(organization_id=? AND rowid=?)` in both list forms, and the rowid when pinned |
+| `parent IN (…) AND tag = ?`, both columns under plain indexes | Searches the `tag` index in both list forms without statistics, and the `parent` index after `PRAGMA optimize` |
+| A 40000-element list bound as one `json_each` parameter | Returns 40000 values |
+| `SELECT * FROM pragma_optimize(-1)` | Runs, so the function form exists for an action pragma |
+| A file under WAL, two connections on one thread, one holding `BEGIN IMMEDIATE` | A second `BEGIN IMMEDIATE` with a 400 ms timeout is refused after 526 ms. With no timeout it is refused in under 1 ms. A read on the second connection returns during the write. The second write completes after the holder commits. |
+
+### Point 1: the WAL default, `synchronous`, and the busy timeout
+
+**Wave: coverage.** Taverna sets both pragmas itself, so the paging wave carries nothing for this point.
+
+- **The WAL default issues `journal_mode` and nothing else.** The driver never issues `PRAGMA synchronous`. The value is the engine build's default unless the application sets it, and on the build read here it is `FULL` under WAL.
+- **Where the default applies.** When `pragmas` holds no `journal_mode` key, compared without regard to case, the driver issues `journal_mode = WAL` ahead of the application's entries (`SQLiteDriver.ts:165-167`). An application's `synchronous` entry therefore runs after it. § 4's exclusions for `':memory:'` and `readonly` stand.
+- **A refused mode raises nothing.** The engine returns the mode it kept. An application that requires WAL reads it with `pragma('journal_mode')`, per Point 5.
+- **No default busy timeout.** The wait runs on the calling thread. When the holder is another connection on that thread, the holder cannot advance during the wait, so the wait always runs out; the probe reads 526 ms for a 400 ms timeout. Under one driver per file, the supported shape, nothing contends and the timeout does nothing. A default therefore turns an immediate retryable refusal into a stall of the whole event loop. The timeout resolves contention only when the holder runs on another thread or in another process, and the application alone has that fact.
+- **What the guide states in its place.** Set `timeout` only when another process or worker thread opens the file. The wait blocks the event loop for up to its length. Two connections on one thread never resolve by waiting, so share one driver. A refusal is `DRIVER` with `context.retryable`, and the application decides whether to retry.
+- **`BEGIN IMMEDIATE` stands.** It moves the refusal to the start of a scope, ahead of any work, and it lets a set timeout apply.
+- **§ 8 acceptance, replacing the two-driver reading.** With two drivers on one file and one thread, while one holds a write scope: the other's scope is refused at `BEGIN IMMEDIATE` with a retryable `DRIVER` and no wait, a read on it returns, and its scope completes after the holder settles. With the holder on a worker thread and an explicit `timeout`, the waiting scope completes. `pragma('synchronous')` returns the same value with the WAL default as on a connection the driver did not configure.
+
+Rejected: an awaited retry inside the driver, because it is polling and the retry budget is application policy. Rejected: keeping the 5000 ms default, for the stall the preceding list states.
+
+### Point 2: `equals` and `any` with non-null operands on an optional column
+
+**Wave: paging for SQLite, coverage for IndexedDB.**
+
+- **SQLite: § 4 already makes them native, and the paging wave ships them.** The refusal at `server/helpers.ts:147` is removed with the gate. It is not carried into the planner, so a read of one clause plans with an empty residual.
+- **The forms.** `equals` compiles to `column = ?`, and `any` to `column IN (SELECT value FROM json_each(?))`. Each is exact for a non-null operand under every flag combination. A SQL `NULL` cell equals no operand. On a column that is both optional and nullable, the sentinel is an empty blob for `text` and the text `null` for `integer`, `real`, and `boolean` (`server/helpers.ts:329`), and neither equals an operand of the column's storage class.
+- **`not` and `none`** keep the `OR … IS NULL` forms (`compilers.ts:216`, `291-302`). A `null` operand follows § 4.
+- **Paging acceptance, added to the SQLite unit.** An `any` over `K` keys on an optional foreign-key column, as the only clause, returns the matching rows from the driver with zero `scan` calls. The operator matrix runs `equals` and `any` under each flag combination.
+- **IndexedDB.** An index holds no entry for a row whose field is absent or `null`, and a non-null operand matches no such row. `equals` and `any` with non-null operands therefore drive an index access path on an optional or nullable column. § 5's required-column rule covers `below`, `to`, an order, `minimum`, and `maximum` only. The coverage wave's IndexedDB plans unit carries it. Whether the 0.0.23 one-condition planner already admits these was not reread; the paging port keeps what it does.
+
+### Point 3: an `any` list past the bound-parameter limit
+
+**Wave: paging.**
+
+- **Confirmed.** The `json_each` form covers every `any` relation issues: the primary-key loads (`Model.ts:364-373`, `454-463`) and the foreign-key, junction, and tagged loads (`Model.ts:400-403`, `435-438`, `495-498`). Each goes through `Table.records`, so relation changes nothing to gain it. `none` takes the same form.
+- **What 0.0.23 does.** It binds one parameter per value (`compilers.ts:285-302`), and the build read here refuses a statement past 32766 parameters.
+- **No chunking and no driver bound.** The list is one parameter. The engine's `MAX_LENGTH` bounds the JSON text, at 1000000000 bytes on the build read here, and a 40000-element list ran.
+- **Encoding.** The compiler encodes each operand in its stored form, a boolean as 1 or 0, and then encodes the list as JSON. An empty list keeps its constant forms.
+- **IndexedDB.** `any` is one `get(keys)` call or one range per value inside one transaction, and no parameter limit applies.
+- **The result is unbounded too.** A load returns every related row of every listed key. Whether relation pages an include is unread, and it is relation's question.
+
+Lines 622 and 639 do not exist in `relation/src/core/Model.ts`, which holds 526 lines at `a7712ce`, and the checkout holds no build that carries them. The five sites cited here are every `any` in the package's source.
+
+### Point 4: statistics and the plan for `id IN (…) AND organization_id = ?`
+
+This point takes a compile form and a statistics call. The compile form settles taverna's named read without statistics.
+
+**The primary-key pin. Wave: paging.**
+
+- **Finding.** On a file with no `sqlite_stat1`, the `json_each` form searches the tenant index at every list length, because the form hides the length from the planner. The 0.0.23 form does the same from 12 keys. The paging wave introduces the `json_each` form, so the paging wave carries the repair.
+- **Rule.** When every connector is `and` and one condition is `any` on the primary key, the compiler writes each column reference of every other condition behind the unary `+`. The engine then keeps the primary key as the access path, and the read costs at most one key lookup per listed key on any file.
+- **`equals` on the primary key needs no pin.** The engine reads a unique index as one row.
+- **Proof duty.** The unary `+` also removes the column's affinity from the comparison. The driver binds each operand in the column's storage class, and the differential matrix runs the pinned forms against the core engine.
+- **Acceptance, added to the SQLite unit.** On a file with no `sqlite_stat1`, `EXPLAIN QUERY PLAN` reports a primary-key search for `any` on the primary key beside an indexed `equals`, for a short list and a long list, and again with an order on an indexed column. The pinned read returns the rows the core engine returns.
+
+**`PRAGMA optimize`. Wave: coverage.**
+
+- **The driver runs it at open and at close, on a writable connection.** `close` issues `PRAGMA optimize` ahead of the wrapper's `close` (`SQLiteDriver.ts:219-225`). `open` issues `PRAGMA optimize = 0x10002` after its schema transaction (`SQLiteDriver.ts:170-204`), which checks every table and so covers a process that ended without `close`. A `readonly` connection runs neither.
+- **A busy refusal at close does not stop the close.** Statistics change cost only, and the following open runs the check again.
+- **Growth inside one process.** The driver starts no timer, under the no-polling law, and it keeps no write counter. The application calls `pragma('optimize')` at the moment it chooses, for example after a bulk load. The probe shows that the call on a connection that grew a file from empty writes `sqlite_stat1` and moves both mis-planned reads to the selective index.
+- **What statistics still decide.** A choice between two plain indexes, such as relation's tagged load (`Model.ts:495-505`), plans through the less selective index without statistics in both list forms. The paging wave neither repairs that nor makes it worse.
+- **Acceptance.** A file grown from empty and closed holds `sqlite_stat1` at reopen. The unit records the open time of a large file that holds no statistics, with the call and without it.
+
+Rejected: a dedicated `optimize` member, because `pragma` in Point 5 already carries the call. Rejected: per-value parameters up to the engine limit with `json_each` past it, because it keeps two forms and still mis-plans from 12 keys.
+
+### Point 5: reading a connection setting back
+
+**Wave: coverage.**
+
+- **The SQLite driver exposes it, as `pragma`.** The database does not: a pragma is an engine fact, the core is host-independent, and the application holds the driver it constructs.
+- **Shape.** `createSQLiteDriver` returns `DriverInterface` (`factories.ts:77`), which hides any driver member. `server/types.ts` gains the following interface, the factory returns it, and `SQLiteDriver` implements it.
+
+```ts
+/** Represents the SQLite driver: the storage contract plus a read of one connection pragma. */
+export interface SQLiteDriverInterface extends DriverInterface {
+	pragma(name: string): SQLiteValue | undefined
+}
+```
+
+- **Meaning.** `pragma(name)` runs `PRAGMA name` with no value and returns the first value the engine answers, or `undefined` when it answers no row. A name the engine treats as an action runs that action; that is how `pragma('optimize')` serves Point 4.
+- **No setter.** The `pragmas` option stays the one place a setting is written, at open.
+- **Name check.** The wrapper interpolates the name (`sqlite/src/server/SQLiteDatabase.ts:146-148`). The driver refuses a name that is not ASCII letters, digits, and underscores with `VALIDATION`, ahead of the wrapper call.
+- **Scope.** A root member, absent from the transaction capability.
+- **Acceptance.** `pragma('synchronous')` returns 2 after `pragmas: { synchronous: 'FULL' }`. `pragma('journal_mode')` returns `wal` on a file opened with the default. A malformed name raises `VALIDATION`. The guide gains the interface's method table.
+
+Rejected: an allowlist of setting names, because the set moves with the engine version. Rejected: the `pragma_NAME` function form as a read-only guard, because the probe shows `pragma_optimize` exists.
+
+### Point 6: undeclared indexes at open
+
+**Wave: coverage.**
+
+- **Finding.** `open` creates each declared index the file lacks (`SQLiteDriver.ts:189-201`), raises on an undeclared unique index (`SQLiteDriver.ts:775-785`), and leaves every other undeclared index in place. A versioned database drops an index through its migration (`compilers.ts:578`). An unversioned database stamps no metadata (`core/DatabaseContext.ts:361`), so `open` deploys the declared schema (`SQLiteDriver.ts:173`) and nothing ever drops.
+- **Ruling: `open` reconciles the indexes both ways.** Inside the open transaction, after validation, it drops every index on a deployed table whose `origin` is `c` and whose name the deployed schema does not derive. After `open`, the file's created indexes equal the deployed schema's indexes.
+- **One rule serves both cases.** The deployed schema is the stored schema when one exists and the declared schema otherwise. For a versioned database the migration then moves the deployed schema to the declared one, as it does in 0.0.23.
+- **No name filter.** The driver owns the file; it already refuses an undeclared trigger and an undeclared unique index. An index is derived data, so a drop loses no row.
+- **`readonly`.** A `readonly` open drops nothing.
+- **Acceptance.** A file opened with two declared indexes and reopened with one of them lists that one through `pragma_index_list`, with its rows unchanged. `EXPLAIN QUERY PLAN` for a read on the dropped column reports a scan.
+
+Rejected: raising on an undeclared plain index. An undeclared unique index changes what a write accepts, which is why it raises; a plain index changes cost only. Rejected: a stored record of the declared indexes for an unversioned database, because it is a second fact that can drift from the file.
+
+### Planner export names
+
+These names are final; the "recommended" marks in § 2 are withdrawn. The paging release's handover names each row.
+
+| 0.0.23 export | Paging release |
+| --- | --- |
+| `matchesQueryExactly(input, schema)` | `planSQLiteQuery(input, schema)`, which returns a `ReadPlan`. A read is wholly native when `residual` equals `{}`. |
+| `compileQuerySQL(input, schema)` | Keeps its name and signature. Pass it `planSQLiteQuery(input, schema).native`. Its text changes: one `json_each` parameter for `any` and `none`, a range for `starts`, the pinned terms, and the tie term. |
+| `matchesConditionExactly`, `matchesOrderExactly`, `matchesAggregateExactly`, `EXACT_COLUMN_STORAGE`, `EXACT_RANGE_COLUMN_STORAGE` | Removed. `planSQLiteQuery` answers each question. |
+| `selectPlan`, `QueryPlan` from `@orkestrel/database/browser` | `planIndexedDBQuery`, `AccessPlan`. |
+
+- **Plan invariant, added to § 2 and to `scanDriver`.** A side of a plan that carries nothing is `{}`: a clause the side does not hold is an absent key, never an empty list. That makes "wholly native" one equality check for taverna's census test and for the core.
+- **Taverna's index-plan test** compiles `compileQuerySQL(planSQLiteQuery(input, schema).native, schema)` and reads `EXPLAIN QUERY PLAN` as it does on 0.0.23. An assertion on SQL text changes its expected text.
+- **A live driver** answers the same question through `driver.plan(table, input)`.
+
+### Waves
+
+The following table places each point. The text wave gains nothing from these points.
+
+| Point | Paging | Coverage |
+| --- | --- | --- |
+| WAL, `synchronous`, timeout | Nothing | The WAL default with no `synchronous`; no default `timeout`; the guide text; the replaced acceptance |
+| Optional-column `equals` and `any` | SQLite forms and the one-clause acceptance | The IndexedDB access path |
+| Long `any` lists | The `json_each` form for `any` and `none` | Nothing beyond § 8 |
+| Statistics | The primary-key pin and its `EXPLAIN QUERY PLAN` acceptance | `PRAGMA optimize` at open and close |
+| Reading a setting | Nothing | `SQLiteDriverInterface.pragma` |
+| Undeclared indexes | Nothing | The index reconcile at `open` |
+| Export names | The names and the empty-side invariant | Nothing |
+
+The paging wave grows by the pin, the one-clause acceptance, and the empty-side invariant. Each sits inside a unit § 8 already names, and none adds a unit.
+
+### Unread
+
+- **Taverna's `load` arm C.** The claim comes from `research/intake.md`; the measurement was not read. The two-connection probe reproduces the same-thread wait.
+- **The declared floor.** Every probe ran on Node 22.23.5 with SQLite 3.54.1. The SQLite version Node 22.12.0 bundles is unread, and so is whether its `PRAGMA optimize` bounds its own analysis. `SELECT sqlite_version()` on 22.12.0 settles it; when that engine does not bound the analysis, the driver sets `analysis_limit` ahead of each call.
+- **The engine's documentation for `PRAGMA optimize`.** The open-and-close pairing and the `0x10002` mask are recalled, not reread. The unit reads the page before it writes the call.
+- **A busy timeout with the holder on a worker thread.** Not probed; the replaced acceptance proves it.
+- **The plan of a pinned read that carries an order on an indexed column.** The added acceptance reads it.
+- **`IndexedDBDriver.open` and its index handling.** Unread. The engine changes an index only inside a version change, so what an unversioned IndexedDB database does with a dropped declaration is open, and the coverage wave reads it.
+- **A `readonly` open of a file that lacks a declared index.** Unread.
+- **`core/DatabaseContext.ts` beyond lines 290, 361, and 370.** I read the lines a search for the version check returned and no others.
+- **Whether taverna declares a tagged relation, and whether relation pages an include.** Unread.

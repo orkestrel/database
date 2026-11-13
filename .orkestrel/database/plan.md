@@ -26,9 +26,9 @@
   - ties follow the final order term's direction;
   - `sum` and `average` use the engine's arithmetic;
   - a batch applies all rows or none.
-- Open: taverna's six points in `research/intake.md` § Message 3 need an addendum to the design before the SQLite paging unit starts. Points 2 and 3 bear on the paging wave: an optional column's `equals`/`any`, and an `any` list past the bound-parameter limit.
-- Taverna's tests import `matchesQueryExactly` and `compileQuerySQL`. The design moves the exactness predicates to the planner exports (`designs/native.md` § 8, "What each dependent changes"), so the paging release's handover names each rename.
-- Next: the design addendum for § Message 3, then the paging wave's Contract and Core unit.
+- Taverna's six points are ruled in `designs/native.md` § Addendum. The paging wave gains the primary-key pin (unary `+` on the other conditions when an `any` is on the primary key), native `equals`/`any` on optional and nullable columns, and the empty-residual invariant. The coverage wave gains the `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize` at close and open, `SQLiteDriverInterface.pragma(name)`, and the drop of undeclared indexes at open.
+- Taverna's tests import `matchesQueryExactly` and `compileQuerySQL`. The paging release renames `matchesQueryExactly` to `planSQLiteQuery(input, schema)` and keeps `compileQuerySQL` with changed SQL text (§ Addendum); the handover names both.
+- Next: the paging wave's Contract and Core unit.
 
 ## Sequence
 
