@@ -464,7 +464,7 @@ describe('transactions', () => {
 		const memory = createMemoryDriver()
 		const cleanups = createRecorder<[]>()
 		const driver = createMemoryAdapter(memory, {
-			stream(table) {
+			scan(table) {
 				return new IteratorSource(
 					new RecordingIterator(memory.scan(table)[Symbol.asyncIterator](), cleanups.handler),
 				)

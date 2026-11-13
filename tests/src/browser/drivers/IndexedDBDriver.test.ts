@@ -433,7 +433,7 @@ describe('IndexedDBDriver — storage primitives over the wrapper', () => {
 })
 
 describe('IndexedDBDriver — Database integration', () => {
-	it('shares imported schema, guards before paging, binds raw keys, and reopens the union', async () => {
+	it('shares imported schema, raises on a nonconforming row, binds raw keys, and reopens the union', async () => {
 		const composed = mintDatabase('database-idb-composed')
 		await deleteDatabase(composed)
 		const firstDriver = createIndexedDBDriver(composed)
@@ -449,9 +449,13 @@ describe('IndexedDBDriver — Database integration', () => {
 			await firstDriver.write('users', 'a', { id: 'unbound-a', name: '' })
 			await firstDriver.write('users', 'b', { id: 'unbound-b', name: 'Valid' })
 			await logs.table('logs').set({ id: 'l1', message: 'started' })
-			expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
-			expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
-			expect(await users.count()).toBe(1)
+			await expect(users.records({ limit: 1 })).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { table: 'users', key: 'a' },
+			})
+			await expect(collect(users.scan({ limit: 1 }))).rejects.toMatchObject({ code: 'DRIVER' })
+			expect(await users.records({ offset: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
+			expect(await users.count()).toBe(2)
 			const diagnostic = await users
 				.set({ id: 'payload-secret', name: '' })
 				.catch((caught: unknown) => caught)

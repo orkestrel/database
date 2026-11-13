@@ -19,6 +19,22 @@ import {
 } from '@orkestrel/contract'
 
 /**
+ * Checks whether a value is a scalar: not an object and not a function.
+ *
+ * @param value - The value to test
+ * @returns True if `value` is `null` or a primitive; false otherwise
+ *
+ * @example
+ * ```ts
+ * isScalar('a') // true
+ * isScalar({}) // false
+ * ```
+ */
+export function isScalar(value: unknown): boolean {
+	return value === null || (typeof value !== 'object' && typeof value !== 'function')
+}
+
+/**
  * Checks whether a value is a usable database key.
  *
  * @param value - The value to test

@@ -7,6 +7,7 @@ import {
 	isMigration,
 	isMigrationInput,
 	isMigrationStep,
+	isScalar,
 	isTableSchema,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
@@ -96,5 +97,17 @@ describe('database boundary validators', () => {
 			expect(isDriverMetadata(value)).toBe(false)
 			expect(isMigrationInput(value)).toBe(false)
 		}
+	})
+})
+
+describe('isScalar', () => {
+	it('accepts null and every primitive', () => {
+		for (const value of [null, undefined, true, 0, Number.NaN, 'a', 1n, Symbol('s')]) {
+			expect(isScalar(value)).toBe(true)
+		}
+	})
+
+	it('refuses an object, an array, and a function', () => {
+		for (const value of [{}, [], new Date(0), Math.max]) expect(isScalar(value)).toBe(false)
 	})
 })

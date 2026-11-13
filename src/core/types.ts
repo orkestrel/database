@@ -849,28 +849,29 @@ export interface TableInterface<T = Row> {
 	 */
 	keys(): Promise<readonly Key[]>
 	/**
-	 * Reads the contract-valid rows matching an optional {@link QueryInput}.
+	 * Reads the rows matching an optional {@link QueryInput}.
+	 *
+	 * @remarks
+	 * Every write is admitted through the contract, so every stored row conforms; a returned
+	 * row that fails the contract is corruption and raises `DRIVER` with `table`, `key`,
+	 * and the contract's `faults`. No read skips a row.
 	 */
 	records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]>
 	/**
-	 * Counts contract-valid rows matching `input`'s conditions.
+	 * Counts the stored rows matching `input`'s conditions.
 	 *
 	 * @remarks
-	 * Paging is ignored. Like `records()` / `scan()`, `count()` narrows every
-	 * candidate through the table contract, so a non-conforming stored row does
-	 * not consume the count.
+	 * Paging is ignored. `count()` is `aggregate('count')`, and it reads the stored set
+	 * `records()` reads, so the two agree for one input.
 	 */
 	count(input?: QueryInput, options?: OperationOptions): Promise<number>
 	/**
-	 * Computes an aggregate over `column` across rows matching `input`'s
+	 * Computes an aggregate over `column` across the stored rows matching `input`'s
 	 * conditions.
 	 *
 	 * @remarks
-	 * Unlike {@link TableInterface.count}, `aggregate` operates on stored rows
-	 * without the contract guard that `records()` / `scan()` apply — a
-	 * non-conforming stored row still contributes to the aggregate (or to the
-	 * `count` operation's tally) when it matches the conditions, even though
-	 * it would never appear in `records()`'s output.
+	 * Paging is ignored. An aggregate returns no row, so it asserts no row against the
+	 * contract.
 	 */
 	aggregate(
 		operation: AggregateOperation,
@@ -883,10 +884,10 @@ export interface TableInterface<T = Row> {
 	 *
 	 * @remarks
 	 * `input`'s `conditions` / `offset` / `limit` are honored lazily as rows
-	 * stream; `order` is intentionally ignored — streaming yields driver
-	 * key-order, sorted output is `records()`'s job. Breaking out of the
+	 * stream; `order` is intentionally ignored — streaming yields ascending key
+	 * order, sorted output is `records()`'s job. Breaking out of the
 	 * iteration early closes the underlying source. The signal (if any) is
-	 * checked before each yield.
+	 * checked before each yield. A yielded row that fails the contract raises `DRIVER`.
 	 */
 	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T>
 	/**

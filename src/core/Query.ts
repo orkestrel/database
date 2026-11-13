@@ -67,6 +67,11 @@ export class Query<T = Row> implements QueryInterface<T> {
 				...(this.#offset !== undefined ? { offset: this.#offset } : {}),
 			})
 		}
+		if (this.#orders.length === 0) {
+			const rows: T[] = []
+			for await (const row of this.stream()) rows.push(row)
+			return rows
+		}
 		const fetched = await this.#table.records({
 			conditions: this.#conditions,
 			order: this.#orders,

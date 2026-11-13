@@ -1,4 +1,4 @@
-import type { DatabaseEventMap, QueryInput, TableSchema, StorageInterface } from '@src/core'
+import type { DatabaseEventMap, TableSchema, StorageInterface } from '@src/core'
 import { conformDriver, createDatabase, isDatabaseError, planMigration } from '@src/core'
 import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
@@ -7,7 +7,6 @@ import { dirname } from 'node:path'
 import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-	buildCondition,
 	DatabaseFixture,
 	DatabaseSwitch,
 	DatabaseCounter,
@@ -196,7 +195,7 @@ describe('JSONDriver — keyed CRUD', () => {
 })
 
 describe('JSONDriver — Database integration', () => {
-	it('shares imported schema, guards before paging, and preserves primary identity across reopen', async () => {
+	it('shares imported schema, raises on a nonconforming row, and preserves primary identity across reopen', async () => {
 		const database = createDatabase({
 			driver: fixture.value.driver,
 			tables: { users: { id: stringShape(), name: stringShape({ min: 1 }) } },
@@ -211,9 +210,13 @@ describe('JSONDriver — Database integration', () => {
 		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Valid' })
 		await logs.table('logs').set({ id: 'l1', message: 'started' })
 
-		expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
-		expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid' }])
-		expect(await users.count()).toBe(1)
+		await expect(users.records({ limit: 1 })).rejects.toMatchObject({
+			code: 'DRIVER',
+			context: { table: 'users', key: 'a' },
+		})
+		await expect(collect(users.scan({ limit: 1 }))).rejects.toMatchObject({ code: 'DRIVER' })
+		expect(await users.records({ offset: 1 })).toEqual([{ id: 'b', name: 'Valid' }])
+		expect(await users.count()).toBe(2)
 		const diagnostic = await users
 			.set({ id: 'payload-secret', name: '' })
 			.catch((caught: unknown) => caught)
@@ -1099,42 +1102,23 @@ describe('JSONDriver — migrate', () => {
 	})
 })
 
-describe('JSONDriver — stream', () => {
-	it('yields condition-matched rows honoring a limit, from the file-backed store', async () => {
-		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
-		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
-		await fixture.value.driver.write('users', 'c', { id: 'c', name: 'Ada', age: 40, active: true })
-		const input: QueryInput = { conditions: [buildCondition('name', 'equals', ['Ada'])] }
-		const rows = []
-		for await (const row of fixture.value.driver.stream('users', input)) rows.push(row)
-		expect(rows.map((row) => row.id).sort()).toEqual(['a', 'c'])
-
-		const limited = []
-		for await (const row of fixture.value.driver.stream('users', { limit: 1 })) limited.push(row)
-		expect(limited).toHaveLength(1)
-	})
-
-	it('rejects invalid direct paging and accepts a zero limit', async () => {
-		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
-		expect(() => fixture.value.driver.stream('users', { offset: -1 })).toThrow(
-			'Query offset must be a nonnegative integer',
-		)
-		expect(await collect(fixture.value.driver.stream('users', { limit: 0 }))).toEqual([])
+describe('JSONDriver — native members', () => {
+	it('declares no plan and no stream, so the core answers every read over scan', () => {
+		expect(fixture.value.driver).not.toHaveProperty('plan')
+		expect(fixture.value.driver).not.toHaveProperty('stream')
 	})
 })
 
 describe('JSONDriver — transaction', () => {
-	it('terminalizes root scan and stream continuations resumed inside a transaction', async () => {
+	it('terminalizes a root scan continuation resumed inside a transaction', async () => {
 		await fixture.value.driver.write('users', 'a', { id: 'a', name: 'Ada', age: 36, active: true })
 		await fixture.value.driver.write('users', 'b', { id: 'b', name: 'Bo', age: 22, active: false })
 		await fixture.value.driver.write('users', 'c', { id: 'c', name: 'Cy', age: 40, active: true })
 		const scan = fixture.value.driver.scan('users')[Symbol.asyncIterator]()
-		const stream = fixture.value.driver.stream('users', {})[Symbol.asyncIterator]()
 		expect((await scan.next()).done).toBe(false)
-		expect((await stream.next()).done).toBe(false)
 
 		await fixture.value.driver.transaction(async (transaction) => {
-			for (const iterator of [scan, stream]) {
+			for (const iterator of [scan]) {
 				await expect(iterator.next()).rejects.toMatchObject({
 					code: 'CONFLICT',
 					message: 'A transaction is active on this driver',

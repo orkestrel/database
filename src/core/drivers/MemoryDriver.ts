@@ -1,5 +1,4 @@
 import type {
-	QueryInput,
 	DriverInterface,
 	DriverMetadata,
 	Key,
@@ -16,15 +15,12 @@ import {
 	checkAbort,
 	compareValues,
 	equalsValue,
-	matchesQuery,
 	migrateRows,
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
-	validatePage,
 } from '../helpers.js'
 import { isKey } from '../validators.js'
-import { StreamPage } from '../StreamPage.js'
 
 /**
  * Implements the reference {@link DriverInterface} — nested maps, no I/O.
@@ -33,7 +29,7 @@ import { StreamPage } from '../StreamPage.js'
  * The in-between made concrete: it runs identically in a browser or on a server,
  * so it is the storage behind tests, ephemeral caches, and any code that wants
  * the database API without a persistent backend. Rows are deep-copied (through
- * `structuredClone`) in and out — at `write`, `read`, `scan`, `stream`, and both
+ * `structuredClone`) in and out — at `write`, `read`, `scan`, and both
  * snapshot capture and restore — so a caller mutating a nested field of an input
  * row, a returned row, or a row mutated in place between snapshot and rollback
  * can never perturb stored state; a shallow `{ ...row }` spread
@@ -108,36 +104,6 @@ export class MemoryDriver implements DriverInterface {
 			const row = store.get(key)
 			if (row !== undefined) yield structuredClone(row)
 		}
-	}
-
-	/**
-	 * Iterates rows lazily with native filtering — the {@link DriverInterface.stream} hook.
-	 *
-	 * @remarks
-	 * Iterates the table's keys in the same key order `scan` and `keys` yield
-	 * (sorted by {@link compareValues}), testing each row against
-	 * `input.conditions` (through {@link matchesQuery}) before counting it
-	 * toward `offset` / `limit`. Both are applied lazily as matches are found —
-	 * `offset` matches are skipped without being yielded, and iteration stops the
-	 * instant `limit` yields have been produced, so a large table is never fully
-	 * walked for a small page. `input.order` is ignored (the same contract as
-	 * `TableInterface.scan` and `QueryInterface.stream`): streaming yields key
-	 * order, sorted output is `records()`'s job. Rows yield copy-out, and an
-	 * unknown table mirrors `scan`'s empty-yield behavior.
-	 *
-	 * @param table - The table to stream
-	 * @param input - The filter / offset / limit to apply lazily
-	 *
-	 * @example
-	 * ```ts
-	 * for await (const row of driver.stream('users', { conditions, limit: 10 })) {
-	 *   // one matched row at a time, in key order
-	 * }
-	 * ```
-	 */
-	stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		validatePage(input)
-		return this.#stream(table, input)
 	}
 
 	async clear(table: string): Promise<void> {
@@ -359,24 +325,6 @@ export class MemoryDriver implements DriverInterface {
 			case 'index.remove':
 				this.#require(tables, step.table)
 				break
-		}
-	}
-
-	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		const store = this.#store(table)
-		const conditions = input.conditions
-		const offset = input.offset ?? 0
-		const limit = input.limit
-		const page = new StreamPage(offset)
-		for (const key of this.#ordered(table)) {
-			if (limit !== undefined && page.count >= limit) return
-			const row = store.get(key)
-			if (row === undefined) continue
-			if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
-				continue
-			}
-			if (!page.next()) continue
-			yield structuredClone(row)
 		}
 	}
 

@@ -1,4 +1,4 @@
-import type { ColumnSchema, TableSchema } from './types.js'
+import type { ColumnSchema, ReadInput, Row, TableSchema } from './types.js'
 
 // Database constants — frozen plain data.
 
@@ -79,4 +79,119 @@ export const CONFORMANCE_POSTS_SCHEMA: TableSchema = Object.freeze({
 export const CONFORMANCE_SCHEMA: readonly TableSchema[] = Object.freeze([
 	CONFORMANCE_USERS_SCHEMA,
 	CONFORMANCE_POSTS_SCHEMA,
+])
+
+/**
+ * Holds the `users` rows the conformance differential seeds: ties, an absent `age`, ASCII and
+ * non-ASCII case variants, a supplementary-plane character, an empty name, and a `[`.
+ *
+ * @remarks
+ * No pair of names sets a supplementary-plane character against U+E000 to U+FFFF, the one
+ * case where the engine's binary text order and the core's code-unit order differ, so that
+ * case is the differential's one exemption.
+ */
+export const CONFORMANCE_ROWS: readonly Row[] = Object.freeze([
+	Object.freeze({ id: 'a', name: 'Ada', age: 36 }),
+	Object.freeze({ id: 'b', name: 'ada', age: 36 }),
+	Object.freeze({ id: 'c', name: 'Émile', age: 17 }),
+	Object.freeze({ id: 'd', name: 'émile' }),
+	Object.freeze({ id: 'e', name: 'Zoë', age: 0 }),
+	Object.freeze({ id: 'f', name: 'x😀y', age: -5 }),
+	Object.freeze({ id: 'g', name: '', age: 65 }),
+	Object.freeze({ id: 'h', name: 'Ada Lovelace', age: 36, meta: Object.freeze({ tag: 'a' }) }),
+	Object.freeze({ id: 'i', name: 'a[b]c', age: 18 }),
+])
+
+/**
+ * Holds the reads the conformance differential runs over {@link CONFORMANCE_ROWS}: every
+ * operator on a required text column and an optional integer column, `null` operands, `or`
+ * folds, a nested path, orders with ties, a page, and every aggregate.
+ */
+export const CONFORMANCE_READS: readonly ReadInput[] = Object.freeze([
+	{ conditions: [{ column: 'name', operator: 'equals', values: ['Ada'], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'equals', values: [36], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'equals', values: [null], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'not', values: ['Ada'], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'not', values: [36], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'not', values: [null], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'above', values: [17], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'below', values: [18], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'from', values: [17], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'to', values: [0], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'between', values: [0, 36], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'above', values: ['Zo'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'below', values: ['a'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'between', values: ['A', 'b'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'like', values: ['ada%'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'like', values: ['x_y'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'like', values: ['%MILE'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'glob', values: ['a[b]*'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'glob', values: ['A*'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'glob', values: ['x?y'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'starts', values: ['Ada'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'starts', values: [''], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'ends', values: ['ile'], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'any', values: ['Ada', 'Zoë'], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'any', values: [36, 0], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'any', values: [], connector: 'and' }] },
+	{ conditions: [{ column: 'id', operator: 'any', values: ['a', 'c', 'h'], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'none', values: [36], connector: 'and' }] },
+	{ conditions: [{ column: 'name', operator: 'none', values: ['Ada'], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'none', values: [], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'absent', values: [], connector: 'and' }] },
+	{ conditions: [{ column: 'age', operator: 'present', values: [], connector: 'and' }] },
+	{
+		conditions: [{ column: ['meta', 'tag'], operator: 'equals', values: ['a'], connector: 'and' }],
+	},
+	{
+		conditions: [
+			{ column: 'id', operator: 'any', values: ['a', 'b', 'c', 'h'], connector: 'and' },
+			{ column: 'age', operator: 'equals', values: [36], connector: 'and' },
+		],
+	},
+	{
+		conditions: [
+			{ column: 'name', operator: 'equals', values: ['Ada'], connector: 'and' },
+			{ column: 'age', operator: 'equals', values: [17], connector: 'or' },
+		],
+	},
+	{
+		conditions: [
+			{ column: 'name', operator: 'like', values: ['x_y'], connector: 'and' },
+			{ column: ['meta', 'tag'], operator: 'equals', values: ['a'], connector: 'or' },
+		],
+	},
+	{ order: [{ column: 'name', direction: 'ascending' }] },
+	{ order: [{ column: 'name', direction: 'descending' }] },
+	{ order: [{ column: 'age', direction: 'ascending' }] },
+	{ order: [{ column: 'age', direction: 'descending' }], limit: 3, offset: 1 },
+	{
+		order: [
+			{ column: 'age', direction: 'ascending' },
+			{ column: 'name', direction: 'descending' },
+		],
+	},
+	{ order: [{ column: ['meta', 'tag'], direction: 'descending' }] },
+	{
+		conditions: [{ column: 'age', operator: 'above', values: [0], connector: 'and' }],
+		order: [{ column: 'age', direction: 'ascending' }],
+		limit: 2,
+		offset: 1,
+	},
+	{ limit: 4, offset: 2 },
+	{
+		conditions: [{ column: 'age', operator: 'above', values: [0], connector: 'and' }],
+		aggregate: { operation: 'count', column: 'id' },
+	},
+	{ aggregate: { operation: 'sum', column: 'age' } },
+	{ aggregate: { operation: 'average', column: 'age' } },
+	{
+		conditions: [{ column: 'name', operator: 'like', values: ['a%'], connector: 'and' }],
+		aggregate: { operation: 'minimum', column: 'age' },
+	},
+	{ aggregate: { operation: 'maximum', column: 'age' } },
+	{
+		conditions: [{ column: ['meta', 'tag'], operator: 'equals', values: ['a'], connector: 'and' }],
+		aggregate: { operation: 'sum', column: 'age' },
+	},
 ])

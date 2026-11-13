@@ -11,6 +11,18 @@ import {
 import {
 	applyQuery,
 	captureFailure,
+	collectRows,
+	collectScalars,
+	compactReadInput,
+	comparePlans,
+	CONFORMANCE_ROWS,
+	CONFORMANCE_SCHEMA,
+	findPlanFaults,
+	foldASCII,
+	matchesMember,
+	prepareScalars,
+	readPlannedAggregate,
+	readPlannedRows,
 	auditDriver,
 	bindRowKey,
 	checkAbort,
@@ -59,7 +71,7 @@ import {
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
-import { captureError } from '@orkestrel/test'
+import { captureError, collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
@@ -70,6 +82,7 @@ import {
 	createWholeSnapshotDriver,
 	createDoublyBrokenDriver,
 	createCrashingDriver,
+	createPlannedDriver,
 } from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
@@ -349,20 +362,20 @@ describe('matchesGlobPattern', () => {
 })
 
 describe('matchesWildcardSegment', () => {
-	it('matches each unit literally or through the single wildcard at the offset', () => {
-		expect(matchesWildcardSegment('hello', 'l_o', 2, '_')).toBe(true)
-		expect(matchesWildcardSegment('hello', 'l_o', 1, '_')).toBe(false)
-		expect(matchesWildcardSegment('hello', '', 5, '_')).toBe(true)
+	it('matches each code point literally or through the single wildcard at the offset', () => {
+		expect(matchesWildcardSegment(Array.from('hello'), Array.from('l_o'), 2, '_')).toBe(true)
+		expect(matchesWildcardSegment(Array.from('hello'), Array.from('l_o'), 1, '_')).toBe(false)
+		expect(matchesWildcardSegment(Array.from('hello'), [], 5, '_')).toBe(true)
 	})
 
 	it('fails an offset that leaves the segment outside the value', () => {
-		expect(matchesWildcardSegment('hello', 'lo', 4, '_')).toBe(false)
-		expect(matchesWildcardSegment('hello', 'he', -1, '_')).toBe(false)
+		expect(matchesWildcardSegment(Array.from('hello'), Array.from('lo'), 4, '_')).toBe(false)
+		expect(matchesWildcardSegment(Array.from('hello'), Array.from('he'), -1, '_')).toBe(false)
 	})
 
-	it('compares UTF-16 code units, so the single wildcard spans one unit of an astral character', () => {
-		expect(matchesWildcardSegment('😀', '_', 1, '_')).toBe(true)
-		expect(matchesWildcardSegment('😀', '__', 1, '_')).toBe(false)
+	it('compares code points, so the single wildcard spans a whole astral character', () => {
+		expect(matchesWildcardSegment(Array.from('😀'), ['_'], 0, '_')).toBe(true)
+		expect(matchesWildcardSegment(Array.from('😀'), ['_', '_'], 0, '_')).toBe(false)
 	})
 })
 
@@ -1265,5 +1278,232 @@ describe('conformDriver (fail-fast over scanDriver)', () => {
 		expect(isDatabaseError(error)).toBe(true)
 		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('CONFORMANCE')
 		expect(isDatabaseError(error) ? error.context?.check : undefined).toBe('copy-in')
+	})
+})
+
+describe('foldASCII', () => {
+	it('folds the ASCII capitals and leaves every other character unchanged', () => {
+		expect(foldASCII('Émile ADA')).toBe('Émile ada')
+		expect(foldASCII('ÀÉÎ')).toBe('ÀÉÎ')
+	})
+})
+
+describe('like and glob — the engine semantics SQLite shares', () => {
+	it('folds ASCII letters only under like', () => {
+		expect(matchesLikePattern('Émile', 'émile')).toBe(false)
+		expect(matchesLikePattern('ÉMILE', 'Émile')).toBe(true)
+		expect(matchesLikePattern('ADA', 'ada')).toBe(true)
+	})
+
+	it('matches one code point with the single wildcard', () => {
+		expect(matchesLikePattern('x😀y', 'x_y')).toBe(true)
+		expect(matchesLikePattern('x😀y', 'x__y')).toBe(false)
+		expect(matchesGlobPattern('x😀y', 'x?y')).toBe(true)
+		expect(matchesGlobPattern('x😀y', 'x??y')).toBe(false)
+	})
+})
+
+describe('sortRows — the tie rule', () => {
+	const rows = [
+		{ id: 'a', age: 1 },
+		{ id: 'b', age: 1 },
+		{ id: 'c', age: 0 },
+	]
+
+	it('keeps the input order of a tie when the final term ascends', () => {
+		expect(
+			sortRows(rows, [{ column: 'age', direction: 'ascending' }]).map((row) => row.id),
+		).toEqual(['c', 'a', 'b'])
+	})
+
+	it('reverses the input order of a tie when the final term descends', () => {
+		expect(
+			sortRows(rows, [{ column: 'age', direction: 'descending' }]).map((row) => row.id),
+		).toEqual(['b', 'a', 'c'])
+	})
+})
+
+describe('collectScalars, matchesMember, and prepareScalars', () => {
+	it('collects the scalar operands and leaves objects out', () => {
+		const scalars = collectScalars(['a', 1, null, undefined, Number.NaN, { b: 2 }])
+		expect([...scalars]).toEqual(['a', 1, null, undefined, Number.NaN])
+	})
+
+	it('matches a scalar by lookup and an object structurally', () => {
+		expect(matchesMember('a', ['a', 'b'])).toBe(true)
+		expect(matchesMember(-0, [0])).toBe(true)
+		expect(matchesMember(Number.NaN, [Number.NaN])).toBe(true)
+		expect(matchesMember('1', [1])).toBe(false)
+		expect(matchesMember({ b: 1 }, [{ b: 1 }])).toBe(true)
+		expect(matchesMember({ b: 1 }, ['b'])).toBe(false)
+	})
+
+	it('answers from the prepared set it is handed', () => {
+		expect(matchesMember('a', ['a'], new Set(['z']))).toBe(false)
+		expect(matchesCondition({ id: 'z' }, buildCondition('id', 'any', ['a']), new Set(['z']))).toBe(
+			true,
+		)
+	})
+
+	it('prepares one set per condition, empty for every operator but any and none', () => {
+		const prepared = prepareScalars([
+			buildCondition('id', 'any', ['a']),
+			buildCondition('id', 'equals', ['a']),
+			buildCondition('id', 'none', ['b']),
+		])
+		expect(prepared.map((set) => [...set])).toEqual([['a'], [], ['b']])
+	})
+
+	it('folds a query through the prepared sets as it does without them', () => {
+		const conditions = [
+			buildCondition('id', 'any', ['a', 'b']),
+			buildCondition('id', 'none', ['b']),
+		]
+		const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+		const prepared = prepareScalars(conditions)
+		expect(rows.filter((row) => matchesQuery(row, conditions, prepared))).toEqual([{ id: 'a' }])
+		expect(rows.filter((row) => matchesQuery(row, conditions))).toEqual([{ id: 'a' }])
+	})
+})
+
+describe('compactReadInput', () => {
+	it('drops an empty list and keeps every present clause', () => {
+		expect(compactReadInput({ conditions: [], order: [], limit: 10 })).toEqual({ limit: 10 })
+		expect(compactReadInput({})).toEqual({})
+		const aggregate = { operation: 'count' as const, column: 'id' }
+		expect(compactReadInput({ offset: 0, aggregate })).toEqual({ offset: 0, aggregate })
+	})
+})
+
+describe('findPlanFaults', () => {
+	const equals = buildCondition('name', 'equals', ['Ada'])
+	const above = buildCondition('age', 'above', [1])
+	const order = [{ column: 'age', direction: 'ascending' as const }]
+
+	it('accepts a plan that splits every clause', () => {
+		expect(
+			findPlanFaults(
+				{ conditions: [equals, above], order, limit: 1 },
+				{ native: { conditions: [equals] }, residual: { conditions: [above], order, limit: 1 } },
+			),
+		).toEqual([])
+	})
+
+	it('reports a lost or invented clause as coverage', () => {
+		expect(findPlanFaults({ conditions: [equals] }, { native: {}, residual: {} })).toEqual([
+			'coverage',
+		])
+		expect(findPlanFaults({}, { native: { conditions: [equals] }, residual: {} })).toEqual([
+			'coverage',
+		])
+		expect(findPlanFaults({ limit: 1 }, { native: {}, residual: {} })).toEqual(['coverage'])
+	})
+
+	it('reports an order split or duplicated across sides', () => {
+		expect(findPlanFaults({ order }, { native: { order }, residual: { order } })).toEqual(['order'])
+	})
+
+	it('reports a native page over a residual filter', () => {
+		expect(
+			findPlanFaults(
+				{ conditions: [above], limit: 1 },
+				{ native: { limit: 1 }, residual: { conditions: [above] } },
+			),
+		).toEqual(['page'])
+	})
+
+	it('reports a native aggregate over a residual filter', () => {
+		const aggregate = { operation: 'sum' as const, column: 'age' }
+		expect(
+			findPlanFaults(
+				{ conditions: [above], aggregate },
+				{ native: { aggregate }, residual: { conditions: [above] } },
+			),
+		).toEqual(['aggregate'])
+	})
+
+	it('reports a partial residual filter for an or read', () => {
+		const either = buildCondition('age', 'above', [1], 'or')
+		expect(
+			findPlanFaults(
+				{ conditions: [equals, either] },
+				{ native: { conditions: [equals] }, residual: { conditions: [either] } },
+			),
+		).toEqual(['or'])
+	})
+
+	it('reports an empty list as a side that does not carry nothing as {}', () => {
+		expect(findPlanFaults({}, { native: {}, residual: { conditions: [] } })).toEqual(['empty'])
+	})
+})
+
+describe('readPlannedRows, readPlannedAggregate, collectRows, and comparePlans', () => {
+	it('answers a planned read and a scan-only read alike', async () => {
+		const planned = createPlannedDriver()
+		const memory = createMemoryDriver()
+		for (const driver of [planned, memory]) {
+			await driver.open(CONFORMANCE_SCHEMA)
+			for (const row of CONFORMANCE_ROWS) {
+				const key = extractKey(row, 'id')
+				if (key !== undefined) await driver.write('users', key, row)
+			}
+		}
+		const input = { conditions: [buildCondition('age', 'above', [17])], limit: 2 }
+		const aggregate = { operation: 'sum' as const, column: 'age' }
+		expect(await readPlannedRows(planned, 'users', input)).toEqual(
+			await readPlannedRows(memory, 'users', input),
+		)
+		expect(await readPlannedAggregate(planned, 'users', input, aggregate)).toBe(
+			await readPlannedAggregate(memory, 'users', input, aggregate),
+		)
+		expect((await collectRows(memory.scan('users'))).map((row) => row.id)).toEqual(
+			CONFORMANCE_ROWS.map((row) => row.id),
+		)
+		expect(await collect(comparePlans(planned, 'plan'))).toEqual([])
+	})
+
+	it('reports an answer that differs from the core engine', async () => {
+		const driver = createPlannedDriver('ignored')
+		await driver.open(CONFORMANCE_SCHEMA)
+		for (const row of CONFORMANCE_ROWS) {
+			const key = extractKey(row, 'id')
+			if (key !== undefined) await driver.write('users', key, row)
+		}
+		const findings = await collect(comparePlans(driver, 'plan'))
+		expect(findings.length).toBeGreaterThan(0)
+		expect(new Set(findings.map((finding) => finding.check))).toEqual(
+			new Set(['plan-differential']),
+		)
+	})
+})
+
+describe('scanDriver — the plan phase', () => {
+	it('passes a planned driver that answers every read exactly', async () => {
+		expect(await auditDriver(() => createPlannedDriver())).toEqual([])
+	})
+
+	it('reports a dropped condition as an invariant and a differential finding', async () => {
+		const checks = (await auditDriver(() => createPlannedDriver('dropped'))).map(
+			(finding) => finding.check,
+		)
+		expect(checks).toContain('plan-invariant')
+		expect(checks).toContain('plan-differential')
+		expect(checks).toContain('plan-scoped-invariant')
+	})
+
+	it('reports an empty residual list as the empty invariant', async () => {
+		const findings = await auditDriver(() => createPlannedDriver('listed'))
+		const [first] = findings
+		expect(first?.check).toBe('plan-invariant')
+		expect(first?.context.faults).toEqual(['empty'])
+	})
+
+	it('reports a transaction capability that lacks the native members', async () => {
+		const findings = await auditDriver(() => createPlannedDriver('unscoped'))
+		expect(findings.map((finding) => finding.check)).toEqual(['plan-capability'])
+		expect(findings[0]?.context).toEqual({
+			expected: { plan: true, records: true, stream: true, aggregate: true },
+			actual: { plan: false, records: false, stream: false, aggregate: false },
+		})
 	})
 })

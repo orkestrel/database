@@ -1,9 +1,9 @@
-import type { Condition, Migration, TableSchema } from '@src/core'
+import type { Migration, TableSchema } from '@src/core'
 import { conformDriver, createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { emptyRows, createUnclonableMetadata, tableSchemas } from '../../../setup.js'
+import { createUnclonableMetadata, tableSchemas } from '../../../setup.js'
 
 // The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
 // schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
@@ -222,93 +222,11 @@ describe('MemoryDriver', () => {
 		expect(await driver.read('t', 'a')).toEqual({ id: 'a', meta: { tags: ['x'] } })
 	})
 
-	describe('stream', () => {
-		it('yields condition-matched rows only, in key order', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'c', { id: 'c', n: 3 })
-			await driver.write('t', 'a', { id: 'a', n: 1 })
-			await driver.write('t', 'b', { id: 'b', n: 2 })
-			const conditions: readonly Condition[] = [
-				{ column: 'n', operator: 'above', values: [1], connector: 'and' },
-			]
-			const rows = await collect(driver.stream?.('t', { conditions }) ?? emptyRows())
-			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
-		})
-
-		it('applies offset then limit lazily', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'a', { id: 'a' })
-			await driver.write('t', 'b', { id: 'b' })
-			await driver.write('t', 'c', { id: 'c' })
-			await driver.write('t', 'd', { id: 'd' })
-			const rows = await collect(driver.stream?.('t', { offset: 1, limit: 2 }) ?? emptyRows())
-			expect(rows.map((row) => row.id)).toEqual(['b', 'c'])
-		})
-
-		it('rejects invalid direct paging and accepts a zero limit', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'a', { id: 'a' })
-			expect(() => driver.stream?.('t', { limit: -1 })).toThrow(
-				expect.objectContaining({
-					code: 'VALIDATION',
-					context: { field: 'limit', value: -1 },
-				}),
-			)
-			const empty = driver.stream?.('t', { limit: 0 })
-			if (empty === undefined) throw new Error('Expected stream capability')
-			expect(await collect(empty)).toEqual([])
-		})
-
-		it('ignores input.order (yields key order regardless)', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'b', { id: 'b', n: 2 })
-			await driver.write('t', 'a', { id: 'a', n: 1 })
-			const rows = await collect(
-				driver.stream?.('t', { order: [{ column: 'n', direction: 'descending' }] }) ?? emptyRows(),
-			)
-			expect(rows.map((row) => row.id)).toEqual(['a', 'b'])
-		})
-
-		it('yields copy-out rows, isolated from later mutation', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'a', { id: 'a', n: 1 })
-			const [row] = await collect(driver.stream?.('t', {}) ?? emptyRows())
-			if (row) row.n = 999
-			expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
-		})
-
-		it('terminates cleanly on an early break', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('t'))
-			await driver.write('t', 'a', { id: 'a' })
-			await driver.write('t', 'b', { id: 'b' })
-			await driver.write('t', 'c', { id: 'c' })
-			const seen: string[] = []
-			const source = driver.stream?.('t', {})
-			if (source !== undefined) {
-				for await (const row of source) {
-					if (typeof row.id === 'string') seen.push(row.id)
-					if (seen.length === 2) break
-				}
-			}
-			expect(seen).toEqual(['a', 'b'])
-		})
-
-		it('yields nothing for an empty declared table and rejects an unknown table', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('users'))
-			expect(await collect(driver.stream?.('users', {}) ?? emptyRows())).toEqual([])
-			await expect(
-				collect(driver.stream?.('missing', {}) ?? driver.scan('missing')),
-			).rejects.toMatchObject({
-				code: 'NOT_FOUND',
-			})
-		})
+	it('declares no plan and no stream, so the core answers every read over scan', () => {
+		const driver = createMemoryDriver()
+		expect(driver.plan).toBeUndefined()
+		expect(driver.stream).toBeUndefined()
+		expect(driver.records).toBeUndefined()
 	})
 
 	describe('migrate', () => {

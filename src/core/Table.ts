@@ -9,6 +9,8 @@ import type {
 	KeyFunction,
 	QueryInterface,
 	OperationOptions,
+	ReadInput,
+	ReadPlan,
 	Row,
 	TableEventMap,
 	TableInterface,
@@ -21,11 +23,12 @@ import { DatabaseError } from './errors.js'
 import {
 	applyQuery,
 	checkAbort,
+	compactReadInput,
 	computeAggregate,
 	equalsValue,
 	extractKey,
-	filterRows,
 	matchesQuery,
+	prepareScalars,
 	validatePage,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
@@ -41,9 +44,10 @@ import { StreamPage } from './StreamPage.js'
  * (admitting lossless repairs and refusing an undeclared, missing, or lossy column
  * with a `VALIDATION` throw carrying the contract's `faults`),
  * reads come back through the contract guard (narrowing a stored {@link Row} to
- * the table's type — no assertion), and `contract` is exposed for
- * introspection and seeding. The driver only stores and scans; all querying is
- * the shared core engine in `helpers.ts`.
+ * the table's type, and raising `DRIVER` for a stored row that fails it), and `contract`
+ * is exposed for introspection and seeding. Each read runs the driver's plan under the
+ * native-first rule {@link DriverInterface} states: the driver answers the native side, and
+ * the core's engine runs the residual and nothing else.
  *
  * @remarks
  * - **Observable.** The owned {@link emitter} ({@link TableEventMap}) carries the
@@ -155,57 +159,58 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			const candidate: QueryInput = {
+			const plan = this.#plan({
 				...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
 				...(input?.order === undefined ? {} : { order: input.order }),
+				...(input?.limit === undefined ? {} : { limit: input.limit }),
+				...(input?.offset === undefined ? {} : { offset: input.offset }),
+			})
+			const residual = plan.residual
+			if (Object.keys(residual).length === 0 && this.#driver.records !== undefined) {
+				const rows = await this.#driver.records(this.#name, plan.native)
+				return rows.map((row) => this.#assert(row))
 			}
-			const native = await this.#driver.records?.(this.#name, candidate)
-			const source = native ?? applyQuery(await this.#collect(), candidate)
-			const rows: T[] = []
-			for (const row of source) {
-				if (this.#guard(row)) rows.push(row)
+			if (residual.order === undefined) {
+				const rows: T[] = []
+				for await (const row of this.#select(plan.native, residual, options)) {
+					rows.push(this.#assert(row))
+				}
+				return rows
 			}
-			const offset = input?.offset ?? 0
-			const limit = input?.limit
-			return rows.slice(offset, limit === undefined ? undefined : offset + limit)
+			const matched: Row[] = []
+			const filter = residual.conditions === undefined ? {} : { conditions: residual.conditions }
+			for await (const row of this.#select(plan.native, filter, options)) matched.push(row)
+			return applyQuery(matched, {
+				order: residual.order,
+				...(residual.limit === undefined ? {} : { limit: residual.limit }),
+				...(residual.offset === undefined ? {} : { offset: residual.offset }),
+			}).map((row) => this.#assert(row))
 		})
 	}
 
 	/**
-	 * Counts contract-valid rows matching `input`'s conditions.
+	 * Counts the stored rows matching `input`'s conditions.
 	 *
 	 * @remarks
-	 * Paging is ignored. Candidate rows use the driver's native `records` hook
-	 * when present, then the table contract guard determines the count so legacy
-	 * invalid rows cannot make `count()` disagree with `records()`.
+	 * Paging is ignored. The count is the `count` aggregate, so it reads the stored set
+	 * `records()` reads: a native plan counts in the engine and returns no row.
 	 *
 	 * @param input - Optional conditions to filter by (paging is ignored)
 	 * @param options - `{ signal }` to abort
-	 * @returns The count of matching contract-valid rows
+	 * @returns The count of matching stored rows
 	 */
 	async count(input?: QueryInput, options?: OperationOptions): Promise<number> {
 		validatePage(input)
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			const conditions = input?.conditions
-			const candidate: QueryInput = conditions === undefined ? {} : { conditions }
-			const native = await this.#driver.records?.(this.#name, candidate)
-			const rows = native ?? filterRows(await this.#collect(), conditions ?? [])
-			return Iterator.from(rows).reduce((count, row) => count + (this.#guard(row) ? 1 : 0), 0)
+			return (await this.#compute('count', this.#key, input, options)) ?? 0
 		})
 	}
 
 	/**
-	 * Computes an aggregate over `column` across rows matching `input`'s
+	 * Computes an aggregate over `column` across the stored rows matching `input`'s
 	 * conditions.
-	 *
-	 * @remarks
-	 * Unlike {@link count}, `aggregate` operates on stored rows without the
-	 * contract guard {@link records} / {@link scan} apply — a non-conforming
-	 * stored row still contributes to the computed aggregate when it matches
-	 * the conditions, even though it would never appear in `records()`'s
-	 * output.
 	 *
 	 * @param operation - The aggregate to compute
 	 * @param column - The column to aggregate
@@ -223,16 +228,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			// Aggregate over filtered (not paged) rows — native hook, native records, or scan.
-			const conditions = input?.conditions
-			const filter: QueryInput = conditions ? { conditions } : {}
-			// `?.()` is `undefined` only when the driver lacks the method; a present
-			// hook returns a Promise (whose resolved value may itself be `undefined`).
-			const native = this.#driver.aggregate?.(this.#name, operation, column, filter)
-			if (native !== undefined) return native
-			const rows = await this.#driver.records?.(this.#name, filter)
-			const matched = rows ?? filterRows(await this.#collect(), input?.conditions ?? [])
-			return computeAggregate(matched, operation, column)
+			return this.#compute(operation, column, input, options)
 		})
 	}
 
@@ -240,14 +236,13 @@ export class Table<T = Row> implements TableInterface<T> {
 	 * Streams the table's rows matching `input`, applying offset/limit paging.
 	 *
 	 * @remarks
-	 * `input.limit` counts rows that pass both the input conditions and the
-	 * table's contract guard. Native streams receive only the conditions; this
-	 * table rechecks them, narrows each candidate, and applies offset/limit last,
-	 * matching {@link records} when storage contains legacy invalid rows.
+	 * The rows come in ascending key order; `input.order` is ignored. A native plan pages
+	 * in the engine; otherwise the table applies the residual conditions as rows stream and
+	 * stops at `offset + limit` matches.
 	 *
 	 * @param input - Optional conditions plus offset/limit paging
 	 * @param options - `{ signal }` to abort mid-stream
-	 * @returns An async iterable of matching, guard-conforming rows
+	 * @returns An async iterable of matching rows
 	 */
 	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
 		validatePage(input)
@@ -348,14 +343,42 @@ export class Table<T = Row> implements TableInterface<T> {
 	async *#scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
 		checkAbort(options?.signal)
 		await this.#ready()
-		const conditions = input?.conditions
-		const offset = input?.offset ?? 0
-		const limit = input?.limit
-		const page = new StreamPage(offset)
+		const plan = this.#plan({
+			...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
+			...(input?.limit === undefined ? {} : { limit: input.limit }),
+			...(input?.offset === undefined ? {} : { offset: input.offset }),
+		})
+		for await (const row of this.#select(plan.native, plan.residual, options)) {
+			yield this.#assert(row)
+		}
+	}
+
+	// Ask the driver for its plan; a driver without the native members leaves the whole read
+	// residual over `scan`.
+	#plan(input: ReadInput): ReadPlan {
+		const read = compactReadInput(input)
+		const driver = this.#driver
+		if (driver.plan === undefined || driver.records === undefined || driver.stream === undefined) {
+			return { native: {}, residual: read }
+		}
+		return driver.plan(this.#name, read)
+	}
+
+	// Stream the native side, apply the residual conditions, and window by the residual page,
+	// stopping at `offset + limit` matches. The residual order is the caller's.
+	async *#select(
+		native: ReadInput,
+		residual: ReadInput,
+		options?: OperationOptions,
+	): AsyncIterable<Row> {
+		const conditions = residual.conditions ?? []
+		const scalars = prepareScalars(conditions)
+		const limit = residual.limit
+		const page = new StreamPage(residual.offset ?? 0)
 		const source =
-			this.#driver.stream === undefined
+			this.#driver.plan === undefined || this.#driver.stream === undefined
 				? this.#driver.scan(this.#name)
-				: this.#driver.stream(this.#name, conditions === undefined ? {} : { conditions })
+				: this.#driver.stream(this.#name, native)
 		const iterator = source[Symbol.asyncIterator]()
 		try {
 			while (true) {
@@ -367,17 +390,36 @@ export class Table<T = Row> implements TableInterface<T> {
 				checkAbort(options?.signal)
 				if (step.done === true) return
 				const row = step.value
-				if (conditions !== undefined && conditions.length > 0 && !matchesQuery(row, conditions)) {
-					continue
-				}
-				const narrowed = this.#cast(row)
-				if (narrowed === undefined) continue
+				if (conditions.length > 0 && !matchesQuery(row, conditions, scalars)) continue
 				if (!page.next()) continue
-				yield narrowed
+				yield row
 			}
 		} finally {
 			await iterator.return?.()
 		}
+	}
+
+	// Run an aggregate read: the engine computes it when the plan keeps it native; otherwise
+	// the residual conditions filter the native rows and the core reduces them, asserting none.
+	async #compute(
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput | undefined,
+		options: OperationOptions | undefined,
+	): Promise<number | undefined> {
+		const plan = this.#plan({
+			...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
+			aggregate: { operation, column },
+		})
+		const { aggregate, ...native } = plan.native
+		if (aggregate !== undefined && this.#driver.aggregate !== undefined) {
+			return this.#driver.aggregate(this.#name, aggregate.operation, aggregate.column, native)
+		}
+		const filter =
+			plan.residual.conditions === undefined ? {} : { conditions: plan.residual.conditions }
+		const rows: Row[] = []
+		for await (const row of this.#select(native, filter, options)) rows.push(row)
+		return computeAggregate(rows, operation, column)
 	}
 
 	// Run a single-item operation across each item in order — the batch overloads
@@ -400,7 +442,8 @@ export class Table<T = Row> implements TableInterface<T> {
 
 	// Read and narrow one row (assumes the driver is connected).
 	async #read(key: Key): Promise<T | undefined> {
-		return this.#cast(await this.#driver.read(this.#name, key))
+		const row = await this.#driver.read(this.#name, key)
+		return row === undefined ? undefined : this.#assert(row)
 	}
 
 	async #readCursor(key: Key): Promise<T | undefined> {
@@ -521,13 +564,6 @@ export class Table<T = Row> implements TableInterface<T> {
 		checkAbort(signal)
 	}
 
-	// Gather the table's full contents from the driver's ordered scan.
-	async #collect(): Promise<readonly Row[]> {
-		const rows: Row[] = []
-		for await (const row of this.#driver.scan(this.#name)) rows.push(row)
-		return rows
-	}
-
 	// Copy the input and assign a generated key when the key column is empty.
 	#prepare(row: T): Row {
 		if (!isRecord(row)) {
@@ -589,9 +625,19 @@ export class Table<T = Row> implements TableInterface<T> {
 		return key
 	}
 
-	// Narrow a stored row to the table's type through the contract guard.
-	#cast(row: Row | undefined): T | undefined {
-		return row !== undefined && this.#guard(row) ? row : undefined
+	// Narrow a stored row to the table's type, raising DRIVER for a row that fails the contract.
+	#assert(row: Row): T {
+		if (this.#guard(row)) return row
+		const admission = admitValue(this.#contract, row)
+		const faults = admission.success ? [] : admission.error.faults
+		const [fault] = faults
+		throw new DatabaseError(
+			'DRIVER',
+			fault === undefined
+				? `Stored row failed the '${this.#name}' contract`
+				: `Stored row failed the '${this.#name}' contract: ${describeFaultLine(fault, this.#contract.schema)}`,
+			{ table: this.#name, key: extractKey(row, this.#key), faults },
+		)
 	}
 
 	#track<R>(operation: () => Promise<R>): Promise<R> {

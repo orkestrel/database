@@ -18,6 +18,9 @@ import type {
 	ConditionOperator,
 	ConditionConnector,
 	QueryInput,
+	OperationOptions,
+	ReadInput,
+	ReadPlan,
 	DatabaseInterface,
 	DriverInterface,
 	DriverMetadata,
@@ -31,7 +34,15 @@ import type {
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { FieldPath } from '@orkestrel/contract'
 import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
-import { createDatabase, createMemoryDriver } from '@src/core'
+import {
+	applyQuery,
+	collectRows,
+	compactReadInput,
+	computeAggregate,
+	createDatabase,
+	createMemoryDriver,
+	StreamPage,
+} from '@src/core'
 
 // ── Database test fixtures ────────────────────────────────────────────────────
 // Shared, environment-agnostic scenario builders for the `database` module's tests — a
@@ -328,11 +339,10 @@ export interface RecordingAggregate {
 
 /**
  * Wraps the real Memory driver in a {@link DriverInterface} that ALSO implements the
- * optional native `records` / `aggregate` hooks and records each call (see
- * `.claude/rules/architecture.md` § System constraints). Rows are
- * stored (so a scan WOULD return them), but the two hooks
- * short-circuit to a fixed sentinel and record what they were handed, so a test can
- * prove `Table` preferred the hook over the scan engine.
+ * optional native `plan` / `records` / `stream` / `aggregate` hooks and records each call.
+ * Its plan keeps every read native. Rows are stored (so a scan WOULD return them), but the
+ * read hooks short-circuit to a fixed sentinel and record what they were handed, so a test
+ * can prove `Table` called the hook rather than the scan engine.
  */
 export interface RecordingDriverInterface extends DriverInterface {
 	/** The native filtered-read hook (always present here) — records its input. */
@@ -434,7 +444,9 @@ export class RecordingDriverFixture {
 		this.#undefined = aggregatesUndefined
 		this.#driver = {
 			...createMemoryAdapter(this.#memory, { snapshot: () => this.#memory.snapshot() }),
+			plan: this.#planCall.bind(this),
 			records: this.#recordsCall.bind(this),
+			stream: this.#streamCall.bind(this),
 			aggregate: this.#aggregateCall.bind(this),
 		}
 	}
@@ -448,6 +460,16 @@ export class RecordingDriverFixture {
 	}
 	get aggregateCalls(): readonly RecordingAggregate[] {
 		return this.#aggregates
+	}
+
+	// Keep every read native, so the core calls the records, stream, and aggregate hooks.
+	#planCall(_table: string, input: ReadInput): ReadPlan {
+		return { native: input, residual: {} }
+	}
+
+	async *#streamCall(_table: string, input: QueryInput): AsyncIterable<Row> {
+		this.#records.push(input)
+		yield { ...RECORDING_ROW }
 	}
 
 	async #recordsCall(_table: string, input: QueryInput): Promise<readonly Row[]> {
@@ -464,6 +486,361 @@ export class RecordingDriverFixture {
 		this.#aggregates.push({ operation, column, input })
 		return this.#undefined ? undefined : RECORDING_AGGREGATE
 	}
+}
+
+/** Names a {@link StorageInterface} member a {@link StorageRecorder} observes. */
+export type StorageMember =
+	| 'read'
+	| 'write'
+	| 'insert'
+	| 'delete'
+	| 'keys'
+	| 'scan'
+	| 'clear'
+	| 'plan'
+	| 'records'
+	| 'stream'
+	| 'aggregate'
+
+/** Shapes one driver call a {@link StorageRecorder} observed: the member and the rows it returned. */
+export interface StorageCall {
+	readonly member: StorageMember
+	readonly rows: number
+	readonly scoped: boolean
+}
+
+/** Shapes the calls and returned rows of one member across a slice of a recorder's log. */
+export interface StorageTally {
+	readonly calls: number
+	readonly rows: number
+}
+
+/**
+ * Totals the calls and returned rows of one member across recorded calls.
+ *
+ * @param calls - The recorded calls to read
+ * @param member - The member to total
+ * @returns The member's call count and row total
+ */
+export function tallyCalls(calls: readonly StorageCall[], member: StorageMember): StorageTally {
+	const matched = calls.filter((call) => call.member === member)
+	return { calls: matched.length, rows: matched.reduce((total, call) => total + call.rows, 0) }
+}
+
+/**
+ * Wraps a real driver and records the rows each storage member returns, inside a transaction
+ * scope too — the rows-read instrument of the native-first acceptance readings.
+ */
+export class StorageRecorder {
+	readonly #source: DriverInterface
+	readonly #driver: DriverInterface
+	readonly #calls: StorageCall[] = []
+
+	constructor(source: DriverInterface) {
+		this.#source = source
+		this.#driver = this.#root(source)
+	}
+
+	get driver(): DriverInterface {
+		return this.#driver
+	}
+
+	get source(): DriverInterface {
+		return this.#source
+	}
+
+	get calls(): readonly StorageCall[] {
+		return this.#calls
+	}
+
+	/**
+	 * Runs one operation and returns its value with the driver calls it made.
+	 *
+	 * @param operation - The operation to observe
+	 * @returns The operation's value and the calls recorded while it ran
+	 */
+	async measure<R>(
+		operation: () => Promise<R>,
+	): Promise<{ readonly value: R; readonly calls: readonly StorageCall[] }> {
+		const mark = this.#calls.length
+		const value = await operation()
+		return { value, calls: this.#calls.slice(mark) }
+	}
+
+	#root(source: DriverInterface): DriverInterface {
+		const base: DriverInterface = {
+			...this.#wrap(source, false),
+			open: source.open.bind(source),
+			close: source.close.bind(source),
+			snapshot: source.snapshot.bind(source),
+		}
+		if (source.transaction === undefined) return base
+		return {
+			...base,
+			transaction: <R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R> =>
+				this.#transaction(source, scope),
+		}
+	}
+
+	#wrap(storage: StorageInterface, scoped: boolean): StorageInterface {
+		return {
+			read: this.#read.bind(this, storage, scoped),
+			write: this.#write.bind(this, storage, scoped),
+			insert: this.#insert.bind(this, storage, scoped),
+			delete: this.#delete.bind(this, storage, scoped),
+			keys: this.#keys.bind(this, storage, scoped),
+			scan: this.#scan.bind(this, storage, scoped),
+			clear: this.#clear.bind(this, storage, scoped),
+			...(storage.migrate === undefined ? {} : { migrate: storage.migrate.bind(storage) }),
+			...(storage.metadata === undefined ? {} : { metadata: storage.metadata.bind(storage) }),
+			...(storage.stamp === undefined ? {} : { stamp: storage.stamp.bind(storage) }),
+			...(storage.plan === undefined ? {} : { plan: this.#plan.bind(this, storage, scoped) }),
+			...(storage.records === undefined
+				? {}
+				: { records: this.#records.bind(this, storage, scoped) }),
+			...(storage.stream === undefined ? {} : { stream: this.#stream.bind(this, storage, scoped) }),
+			...(storage.aggregate === undefined
+				? {}
+				: { aggregate: this.#aggregate.bind(this, storage, scoped) }),
+		}
+	}
+
+	#transaction<R>(
+		source: DriverInterface,
+		scope: (storage: StorageInterface) => Promise<R>,
+	): Promise<R> {
+		if (source.transaction === undefined) throw new Error('The source declares no transaction')
+		return source.transaction((storage) => scope(this.#wrap(storage, true)))
+	}
+
+	async #read(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		key: Key,
+	): Promise<Row | undefined> {
+		const row = await storage.read(table, key)
+		this.#calls.push({ member: 'read', rows: row === undefined ? 0 : 1, scoped })
+		return row
+	}
+
+	async #write(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		key: Key,
+		row: Row,
+		options?: OperationOptions,
+	): Promise<void> {
+		await storage.write(table, key, row, options)
+		this.#calls.push({ member: 'write', rows: 0, scoped })
+	}
+
+	async #insert(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		key: Key,
+		row: Row,
+		options?: OperationOptions,
+	): Promise<void> {
+		await storage.insert(table, key, row, options)
+		this.#calls.push({ member: 'insert', rows: 0, scoped })
+	}
+
+	async #delete(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		key: Key,
+		options?: OperationOptions,
+	): Promise<boolean> {
+		const removed = await storage.delete(table, key, options)
+		this.#calls.push({ member: 'delete', rows: 0, scoped })
+		return removed
+	}
+
+	async #keys(storage: StorageInterface, scoped: boolean, table: string): Promise<readonly Key[]> {
+		const keys = await storage.keys(table)
+		this.#calls.push({ member: 'keys', rows: 0, scoped })
+		return keys
+	}
+
+	#scan(storage: StorageInterface, scoped: boolean, table: string): AsyncIterable<Row> {
+		return this.#iterate('scan', storage.scan(table), scoped)
+	}
+
+	async #clear(storage: StorageInterface, scoped: boolean, table: string): Promise<void> {
+		await storage.clear(table)
+		this.#calls.push({ member: 'clear', rows: 0, scoped })
+	}
+
+	#plan(storage: StorageInterface, scoped: boolean, table: string, input: ReadInput): ReadPlan {
+		if (storage.plan === undefined) throw new Error('The storage declares no plan')
+		const split = storage.plan(table, input)
+		this.#calls.push({ member: 'plan', rows: 0, scoped })
+		return split
+	}
+
+	async #records(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		input: QueryInput,
+	): Promise<readonly Row[]> {
+		if (storage.records === undefined) throw new Error('The storage declares no records')
+		const rows = await storage.records(table, input)
+		this.#calls.push({ member: 'records', rows: rows.length, scoped })
+		return rows
+	}
+
+	#stream(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		input: QueryInput,
+	): AsyncIterable<Row> {
+		if (storage.stream === undefined) throw new Error('The storage declares no stream')
+		return this.#iterate('stream', storage.stream(table, input), scoped)
+	}
+
+	async #aggregate(
+		storage: StorageInterface,
+		scoped: boolean,
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		if (storage.aggregate === undefined) throw new Error('The storage declares no aggregate')
+		const value = await storage.aggregate(table, operation, column, input)
+		this.#calls.push({ member: 'aggregate', rows: 0, scoped })
+		return value
+	}
+
+	// Count the rows one iteration yields, recorded when the consumer stops or the source ends.
+	async *#iterate(
+		member: StorageMember,
+		source: AsyncIterable<Row>,
+		scoped: boolean,
+	): AsyncIterable<Row> {
+		const counter = new StreamPage(0)
+		try {
+			for await (const row of source) {
+				counter.next()
+				yield row
+			}
+		} finally {
+			this.#calls.push({ member, rows: counter.count, scoped })
+		}
+	}
+}
+
+/**
+ * Names how {@link createPlannedDriver} splits and answers a read: `native` keeps every read
+ * native and answers it exactly; `dropped` loses the first condition from both sides;
+ * `listed` writes an empty residual condition list; `ignored` keeps conditions native but
+ * answers without them; `unscoped` hands its transaction scope a storage without `plan`.
+ */
+export type PlannedSplit = 'native' | 'dropped' | 'listed' | 'ignored' | 'unscoped'
+
+/**
+ * Splits a read the way a {@link PlannedSplit} driver does.
+ *
+ * @param split - The split behavior
+ * @param input - The read to split
+ * @returns The plan
+ */
+export function splitPlannedRead(split: PlannedSplit, input: ReadInput): ReadPlan {
+	if (split === 'listed') return { native: input, residual: { conditions: [] } }
+	if (split !== 'dropped') return { native: input, residual: {} }
+	return {
+		native: compactReadInput({ ...input, conditions: input.conditions?.slice(1) ?? [] }),
+		residual: {},
+	}
+}
+
+/**
+ * Answers the native side of a plan the way a {@link PlannedSplit} driver does, over the
+ * Memory driver's scan.
+ *
+ * @param memory - The Memory driver holding the rows
+ * @param table - The table to read
+ * @param input - The native side
+ * @param split - The split behavior
+ * @returns The rows the driver answers
+ */
+export async function readPlannedSplit(
+	memory: DriverInterface,
+	table: string,
+	input: QueryInput,
+	split: PlannedSplit,
+): Promise<readonly Row[]> {
+	const read = split === 'ignored' ? compactReadInput({ ...input, conditions: [] }) : input
+	return applyQuery(await collectRows(memory.scan(table)), read)
+}
+
+/**
+ * Streams the native side of a plan the way a {@link PlannedSplit} driver does.
+ *
+ * @param memory - The Memory driver holding the rows
+ * @param table - The table to read
+ * @param input - The native side
+ * @param split - The split behavior
+ * @yields The rows the driver answers
+ */
+export async function* streamPlannedSplit(
+	memory: DriverInterface,
+	table: string,
+	input: QueryInput,
+	split: PlannedSplit,
+): AsyncIterable<Row> {
+	for (const row of await readPlannedSplit(memory, table, input, split)) yield row
+}
+
+/**
+ * Runs a transaction scope the way a {@link PlannedSplit} driver does: over the planned
+ * driver, or over a storage without `plan` for `unscoped`, restoring the rows on rejection.
+ *
+ * @param memory - The Memory driver holding the rows
+ * @param storage - The planned storage
+ * @param split - The split behavior
+ * @param scope - The transaction scope
+ * @returns The scope's value
+ */
+export async function runPlannedTransaction<R>(
+	memory: DriverInterface,
+	storage: StorageInterface,
+	split: PlannedSplit,
+	scope: (storage: StorageInterface) => Promise<R>,
+): Promise<R> {
+	const rollback = await memory.snapshot()
+	try {
+		return await scope(split === 'unscoped' ? createMemoryAdapter(memory) : storage)
+	} catch (error) {
+		await rollback()
+		throw error
+	}
+}
+
+/**
+ * Creates a Memory-backed driver that declares `plan`, `records`, `stream`, `aggregate`, and
+ * `transaction`, splitting each read by a {@link PlannedSplit}.
+ *
+ * @param split - The split behavior; Default: `native`
+ * @returns The driver
+ */
+export function createPlannedDriver(split: PlannedSplit = 'native'): DriverInterface {
+	const memory = createMemoryDriver()
+	const driver: DriverInterface = createMemoryAdapter(memory, {
+		plan: (_table, input) => splitPlannedRead(split, input),
+		records: (table, input) => readPlannedSplit(memory, table, input, split),
+		stream: (table, input) => streamPlannedSplit(memory, table, input, split),
+		aggregate: async (table, operation, column, input) =>
+			computeAggregate(await readPlannedSplit(memory, table, input, split), operation, column),
+		transaction: (scope) => runPlannedTransaction(memory, driver, split, scope),
+	})
+	return driver
 }
 
 /** Counts protocol transitions within one test scenario. */

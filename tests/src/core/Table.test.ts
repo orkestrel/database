@@ -1,6 +1,12 @@
 import type { TableEvent } from '../../setup.js'
-import type { QueryInput, Key, TableEventMap } from '@src/core'
-import { captureFailure, createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
+import type { Condition, QueryInput, Key, TableEventMap } from '@src/core'
+import {
+	applyQuery,
+	captureFailure,
+	createDatabase,
+	createMemoryDriver,
+	isDatabaseError,
+} from '@src/core'
 import {
 	describeFaultLine,
 	integerShape,
@@ -611,7 +617,7 @@ describe('Table — records / count / aggregate (engine path)', () => {
 		).toBe(2)
 	})
 
-	it('guards raw rows before paging and counting', async () => {
+	it('raises DRIVER for a returned stored row that fails the contract, and counts it', async () => {
 		const driver = createMemoryDriver()
 		const db = createDatabase({
 			driver,
@@ -628,9 +634,15 @@ describe('Table — records / count / aggregate (engine path)', () => {
 		await driver.write('users', 'a', { id: 'a', name: '', age: 1 })
 		await driver.write('users', 'b', { id: 'b', name: 'Valid', age: 2 })
 
-		expect(await users.records({ limit: 1 })).toEqual([{ id: 'b', name: 'Valid', age: 2 }])
-		expect(await collect(users.scan({ limit: 1 }))).toEqual([{ id: 'b', name: 'Valid', age: 2 }])
-		expect(await users.count()).toBe(1)
+		const failure = await captureFailure(() => users.records({ limit: 1 }))
+		if (!isDatabaseError(failure)) throw new Error('Expected a DatabaseError')
+		expect(failure.code).toBe('DRIVER')
+		expect(failure.context).toMatchObject({ table: 'users', key: 'a' })
+		expect(failure.context?.faults).toHaveLength(1)
+		await expect(collect(users.scan({ limit: 1 }))).rejects.toMatchObject({ code: 'DRIVER' })
+		await expect(users.get('a')).rejects.toMatchObject({ code: 'DRIVER' })
+		expect(await users.records({ offset: 1 })).toEqual([{ id: 'b', name: 'Valid', age: 2 }])
+		expect(await users.count()).toBe(2)
 	})
 
 	it('aggregate computes over the matched (not paged) rows', async () => {
@@ -721,54 +733,41 @@ describe('Table — scan (lazy streaming)', () => {
 		).rejects.toMatchObject({ code: 'ABORTED' })
 	})
 
-	it('refines a native stream and strips paging before dispatch', async () => {
+	it('streams the native side of a plan and runs only the residual', async () => {
 		const streamCalls: QueryInput[] = []
 		const memory = createMemoryDriver()
 		const driver = createMemoryAdapter(memory, {
-			async open(schema) {
-				await memory.open(schema)
+			plan(_table, input) {
+				const [first, ...rest] = input.conditions ?? []
+				return {
+					native: first === undefined ? {} : { conditions: [first] },
+					residual: {
+						...(rest.length > 0 ? { conditions: rest } : {}),
+						...(input.limit === undefined ? {} : { limit: input.limit }),
+						...(input.offset === undefined ? {} : { offset: input.offset }),
+					},
+				}
 			},
-			async close() {
-				await memory.close()
+			async records(table, input) {
+				return applyQuery(await collect(memory.scan(table)), input)
 			},
-			async read(table, key) {
-				return memory.read(table, key)
-			},
-			async write(table, key, row, options) {
-				await memory.write(table, key, row, options)
-			},
-			async insert(table, key, row, options) {
-				await memory.insert(table, key, row, options)
-			},
-			async delete(table, key, options) {
-				return memory.delete(table, key, options)
-			},
-			async keys(table) {
-				return memory.keys(table)
-			},
-			scan(table) {
-				return memory.scan(table)
-			},
-			async clear(table) {
-				await memory.clear(table)
-			},
-			async snapshot(tables) {
-				return memory.snapshot(tables)
-			},
-			async *stream(_table, input) {
+			async *stream(table, input) {
 				streamCalls.push(input)
-				yield { id: 'native', name: 'Native', age: 7 }
+				for (const row of applyQuery(await collect(memory.scan(table)), input)) yield row
 			},
 		})
 		const users = createDatabase({ driver, tables: HOOK_TABLES }).table('users')
-		const input: QueryInput = {
-			conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
-			offset: 2,
-			limit: 1,
-		}
-		const rows = await collect(users.scan(input))
-		expect(rows).toEqual([])
-		expect(streamCalls).toEqual([{ conditions: input.conditions }])
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+			{ id: 'u3', name: 'Cy', age: 50 },
+			{ id: 'u4', name: 'Di', age: 12 },
+		])
+		const above: Condition = { column: 'age', operator: 'above', values: [20], connector: 'and' }
+		const named: Condition = { column: 'name', operator: 'not', values: ['Bo'], connector: 'and' }
+		const rows = await collect(users.scan({ conditions: [above, named], offset: 1, limit: 1 }))
+		expect(rows.map((row) => row.id)).toEqual(['u3'])
+		expect(streamCalls).toEqual([{ conditions: [above] }])
 	})
 })
 
@@ -838,8 +837,8 @@ describe('Table — native hook dispatch', () => {
 		expect(input.conditions).toHaveLength(1)
 	})
 
-	it('count narrows rows from the records hook and ignores paging', async () => {
-		const { driver, recordsCalls } = createRecordingDriver()
+	it('count is the native count aggregate and ignores paging', async () => {
+		const { driver, aggregateCalls, recordsCalls } = createRecordingDriver()
 		const users = createDatabase({ driver, tables: HOOK_TABLES }).table('users')
 		await users.set({ id: 'stored', name: 'Stored', age: 30 })
 
@@ -849,12 +848,17 @@ describe('Table — native hook dispatch', () => {
 			offset: 5,
 		})
 
-		expect(total).toBe(1)
-		expect(recordsCalls).toEqual([
+		expect(total).toBe(RECORDING_AGGREGATE)
+		expect(aggregateCalls).toEqual([
 			{
-				conditions: [{ column: 'age', operator: 'above', values: [0], connector: 'and' }],
+				operation: 'count',
+				column: 'id',
+				input: {
+					conditions: [{ column: 'age', operator: 'above', values: [0], connector: 'and' }],
+				},
 			},
 		])
+		expect(recordsCalls).toHaveLength(0)
 	})
 
 	it('aggregate prefers the native aggregate hook (conditions only) over records and the scan', async () => {

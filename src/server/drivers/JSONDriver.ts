@@ -1,5 +1,4 @@
 import type {
-	QueryInput,
 	DriverInterface,
 	DriverMetadata,
 	Key,
@@ -25,7 +24,6 @@ import {
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
-	validatePage,
 } from '@src/core'
 import { attempt, isArray, isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -52,10 +50,8 @@ import { matchesAbsentPath } from '../helpers.js'
  * `ENOENT` for a plain absence, and `ENOTDIR` for a path whose parent is not a
  * directory, which no later write could find either; every other read failure or
  * invalid existing document fails closed without publication, mutation, or
- * automatic repair. It implements the optional native `stream` hook that
- * `TableInterface.scan` prefers over `scan`, and neither `records` nor
- * `aggregate`, so the core engine's `matchesQuery` answers every query on
- * either path. For development, small datasets, and portable / inspectable
+ * automatic repair. It declares no `plan`, so the core engine answers every
+ * query over `scan`. For development, small datasets, and portable / inspectable
  * data; for large or concurrent workloads reach for a SQLite-backed driver.
  *
  * Metadata crosses {@link cloneDriverMetadata} at parsed-file ingress, public and
@@ -129,24 +125,6 @@ export class JSONDriver implements DriverInterface {
 
 	scan(table: string): AsyncIterable<Row> {
 		return new DriverIterator(this.#scan(table)[Symbol.asyncIterator](), () => this.#root())
-	}
-
-	/**
-	 * Iterates rows lazily with native filtering — delegates to the inner {@link MemoryDriver}.
-	 *
-	 * @remarks
-	 * Semantics are the memory driver's own: `input.conditions` filters, `offset`
-	 * / `limit` page lazily, and `input.order` is ignored (streaming yields key
-	 * order; sorted output is `records()`'s job).
-	 *
-	 * @param table - The table to stream
-	 * @param input - The filter / offset / limit to apply lazily
-	 */
-	stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		validatePage(input)
-		return new DriverIterator(this.#stream(table, input)[Symbol.asyncIterator](), () =>
-			this.#root(),
-		)
 	}
 
 	async clear(table: string): Promise<void> {
@@ -240,11 +218,6 @@ export class JSONDriver implements DriverInterface {
 	async *#scan(table: string): AsyncIterable<Row> {
 		await this.#chain
 		for await (const row of this.#memory.scan(table)) yield row
-	}
-
-	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
-		await this.#chain
-		for await (const row of this.#memory.stream(table, input)) yield row
 	}
 
 	async #open(declared: readonly TableSchema[]): Promise<void> {

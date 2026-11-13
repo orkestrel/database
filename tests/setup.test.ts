@@ -23,7 +23,10 @@ import {
 	seedRankRows,
 	seedCursorDatabase,
 	seedUsersTable,
+	splitPlannedRead,
+	StorageRecorder,
 	tableSchemas,
+	tallyCalls,
 	userRows,
 } from './setup.js'
 
@@ -239,11 +242,10 @@ describe('createMemoryAdapter', () => {
 	it('exposes only the required primitives, hiding the memory driver optional hooks', () => {
 		const memory = createMemoryDriver()
 		const adapter = createMemoryAdapter(memory)
-		expect(typeof memory.stream).toBe('function')
 		expect(typeof memory.migrate).toBe('function')
 		expect(typeof memory.metadata).toBe('function')
 		expect(typeof memory.stamp).toBe('function')
-		expect(adapter.stream).toBeUndefined()
+		expect(adapter.plan).toBeUndefined()
 		expect(adapter.migrate).toBeUndefined()
 		expect(adapter.metadata).toBeUndefined()
 		expect(adapter.stamp).toBeUndefined()
@@ -368,5 +370,41 @@ describe('createRecordingDriver', () => {
 		const { recording, users } = recordUsersTable(true)
 		expect(await users.aggregate('sum', 'age')).toBeUndefined()
 		expect(recording.aggregateCalls.map(({ operation }) => operation)).toEqual(['sum'])
+	})
+})
+
+describe('StorageRecorder and tallyCalls', () => {
+	it('records the rows each member returns, and marks the scoped calls', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		await recorder.driver.open(tableSchemas('users'))
+		await recorder.driver.write('users', 'a', { id: 'a' })
+		await recorder.driver.write('users', 'b', { id: 'b' })
+		const { value, calls } = await recorder.measure(async () => {
+			const rows = await collect(recorder.driver.scan('users'))
+			const row = await recorder.driver.read('users', 'missing')
+			return { rows: rows.length, row }
+		})
+		expect(value).toEqual({ rows: 2, row: undefined })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, rows: 2 })
+		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, rows: 0 })
+		expect(calls.every((call) => !call.scoped)).toBe(true)
+		expect(recorder.driver.transaction).toBeUndefined()
+		expect(recorder.source.stream).toBeUndefined()
+	})
+})
+
+describe('splitPlannedRead', () => {
+	it('keeps a read native, drops its first condition, or lists an empty residual', () => {
+		const first = buildCondition('id', 'equals', ['a'])
+		const second = buildCondition('id', 'not', ['b'])
+		expect(splitPlannedRead('native', { conditions: [first] })).toEqual({
+			native: { conditions: [first] },
+			residual: {},
+		})
+		expect(splitPlannedRead('dropped', { conditions: [first, second] })).toEqual({
+			native: { conditions: [second] },
+			residual: {},
+		})
+		expect(splitPlannedRead('listed', {})).toEqual({ native: {}, residual: { conditions: [] } })
 	})
 })

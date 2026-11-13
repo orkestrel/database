@@ -1,5 +1,6 @@
 import type { ContractShape, FieldPath } from '@orkestrel/contract'
 import type {
+	Aggregate,
 	AggregateOperation,
 	ColumnMap,
 	ColumnSchema,
@@ -13,7 +14,10 @@ import type {
 	MigrationStep,
 	Order,
 	PrimaryMap,
+	ReadInput,
+	ReadPlan,
 	Row,
+	StorageInterface,
 	TableMap,
 	TableSchema,
 } from './types.js'
@@ -35,6 +39,8 @@ import {
 } from '@orkestrel/contract'
 import {
 	CONFORMANCE_POSTS_SCHEMA,
+	CONFORMANCE_READS,
+	CONFORMANCE_ROWS,
 	CONFORMANCE_SCHEMA,
 	CONFORMANCE_USERS_SCHEMA,
 	DEFAULT_PRIMARY,
@@ -42,7 +48,7 @@ import {
 } from './constants.js'
 import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
-import { isKey } from './validators.js'
+import { isKey, isScalar } from './validators.js'
 
 // The query engine. Every backend's `scan` yields rows; these pure helpers do
 // the filtering, ordering, paging, and aggregation once, so a driver never
@@ -77,6 +83,33 @@ export function validatePage(input?: QueryInput): void {
 			field: 'offset',
 			value: isFiniteNumber(offset) ? offset : String(offset),
 		})
+	}
+}
+
+/**
+ * Drops each clause a read does not hold, so an absent clause is an absent key.
+ *
+ * @remarks
+ * An empty condition list and an empty order become absent keys, the shape a
+ * {@link ReadPlan} side takes, so a read with no clause is `{}`.
+ *
+ * @param input - The read to compact
+ * @returns The read with only its present clauses
+ *
+ * @example
+ * ```ts
+ * compactReadInput({ conditions: [], order: [], limit: 10 }) // { limit: 10 }
+ * ```
+ */
+export function compactReadInput(input: ReadInput): ReadInput {
+	return {
+		...(input.conditions !== undefined && input.conditions.length > 0
+			? { conditions: input.conditions }
+			: {}),
+		...(input.order !== undefined && input.order.length > 0 ? { order: input.order } : {}),
+		...(input.limit === undefined ? {} : { limit: input.limit }),
+		...(input.offset === undefined ? {} : { offset: input.offset }),
+		...(input.aggregate === undefined ? {} : { aggregate: input.aggregate }),
 	}
 }
 
@@ -221,33 +254,52 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 // === Pattern matching
 
 /**
- * Checks whether a fixed-length wildcard segment matches a value at an offset.
+ * Folds the ASCII letters of a text to lower case, leaving every other character unchanged.
  *
  * @remarks
- * Compares UTF-16 code units: `single` matches any one unit, and every other segment
- * unit matches itself. An offset that leaves the segment outside the value fails.
+ * The fold `LIKE` applies: SQLite's `LIKE` folds only `A` through `Z`, so `É` and `é` stay
+ * distinct.
  *
- * @param value - The value to read
- * @param segment - The segment, holding no any-run wildcard
- * @param at - The value offset the segment starts at
- * @param single - The single-char wildcard char
- * @returns True if every segment unit matches the value unit at its offset; false otherwise
+ * @param text - The text to fold
+ * @returns The text with each ASCII capital replaced by its small letter
  *
  * @example
  * ```ts
- * matchesWildcardSegment('hello', 'l_o', 2, '_') // true
+ * foldASCII('Émile ADA') // 'Émile ada'
+ * ```
+ */
+export function foldASCII(text: string): string {
+	return text.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+}
+
+/**
+ * Checks whether a fixed-length wildcard segment matches a value at an offset.
+ *
+ * @remarks
+ * Compares code points: `single` matches any one code point, and every other segment
+ * code point matches itself. An offset that leaves the segment outside the value fails.
+ *
+ * @param value - The value's code points
+ * @param segment - The segment's code points, holding no any-run wildcard
+ * @param at - The value offset the segment starts at
+ * @param single - The single-character wildcard
+ * @returns True if every segment code point matches the value code point at its offset; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesWildcardSegment(['h', 'e', 'l', 'l', 'o'], ['l', '_', 'o'], 2, '_') // true
  * ```
  */
 export function matchesWildcardSegment(
-	value: string,
-	segment: string,
+	value: readonly string[],
+	segment: readonly string[],
 	at: number,
 	single: string,
 ): boolean {
 	return (
 		at >= 0 &&
 		at + segment.length <= value.length &&
-		segment.split('').every((unit, offset) => unit === single || unit === value[at + offset])
+		segment.every((point, offset) => point === single || point === value[at + offset])
 	)
 }
 
@@ -256,30 +308,25 @@ export function matchesWildcardSegment(
  * engine behind {@link matchesLikePattern} and {@link matchesGlobPattern}.
  *
  * @remarks
- * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is catastrophic on a hostile pattern:
- * `.*` segments separated by literals, matched against a long non-matching input, blow
- * up super-linearly — and JS has no atomic groups / possessive quantifiers to bound it,
- * while a `LIKE` / `GLOB` pattern is a caller-supplied operand this package cannot
- * trust. This builds no regex. It splits the pattern on `any` into fixed-length
- * segments, anchors the first at the value's start and the last at its end, and places
- * each middle segment at its leftmost match after the one before it, which is the only
- * placement a match needs, so the work is O(value × pattern) at worst, never the
- * exponential / polynomial backtracking a regex would do. The pattern length is capped
- * at {@link MAX_PATTERN_LENGTH} (a `VALIDATION` {@link DatabaseError} over it), bounding
- * the pattern factor so a match stays linear in the value length whatever the pattern.
+ * A backtracking RegExp (`a%b%c` → `^a.*b.*c$`) is catastrophic on a malformed pattern, and
+ * a `LIKE` / `GLOB` pattern is a caller-supplied operand this package cannot trust. This
+ * builds no regex. It splits the pattern on `any` into fixed-length segments, anchors the
+ * first at the value's start and the last at its end, and places each middle segment at its
+ * leftmost match after the one before it, which is the only placement a match needs, so the
+ * work is O(value × pattern) at worst. The pattern length is capped at
+ * {@link MAX_PATTERN_LENGTH} (a `VALIDATION` {@link DatabaseError} over it).
  *
- * The `any` wildcard matches any run (including empty); `single` matches exactly one
- * UTF-16 code unit; every other pattern char matches itself literally (a pattern `.` /
- * `(` / `\` is a literal — the regex-metacharacter hazard is gone with the regex). The
- * pattern splits on `any` before any literal comparison, so a value that literally
- * contains the wildcard char never shadows the wildcard. Case folding is applied to
- * both sides when `fold` is set.
+ * The `any` wildcard matches any run (including empty); `single` matches exactly one code
+ * point, as SQLite's `LIKE` and `GLOB` do; every other pattern character matches itself
+ * literally. The pattern splits on `any` before any literal comparison, so a value that
+ * literally contains the wildcard never shadows the wildcard. When `fold` is set, both sides
+ * fold through {@link foldASCII}.
  *
  * @param value - The value to test
  * @param pattern - The wildcard pattern
- * @param any - The any-run wildcard char (`%` for `LIKE`, `*` for `GLOB`)
- * @param single - The single-char wildcard char (`_` for `LIKE`, `?` for `GLOB`)
- * @param fold - Whether to match case-insensitively (`LIKE` folds; `GLOB` does not)
+ * @param any - The any-run wildcard (`%` for `LIKE`, `*` for `GLOB`)
+ * @param single - The single-character wildcard (`_` for `LIKE`, `?` for `GLOB`)
+ * @param fold - If `true`, folds ASCII letters on both sides; if `false`, compares exactly
  * @returns True if `value` matches `pattern`; false otherwise
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
  */
@@ -297,12 +344,14 @@ export function matchesWildcardPattern(
 			{ length: pattern.length, limit: MAX_PATTERN_LENGTH },
 		)
 	}
-	const haystack = fold ? value.toLowerCase() : value
-	const needle = fold ? pattern.toLowerCase() : pattern
+	const haystack = Array.from(fold ? foldASCII(value) : value)
+	const needle = fold ? foldASCII(pattern) : pattern
 	// Only a one-unit wildcard ever equalled a pattern unit, so any other `any` stays literal.
-	const segments = any.length === 1 ? needle.split(any) : [needle]
-	const head = segments[0] ?? ''
-	const tail = segments.at(-1) ?? ''
+	const segments = (any.length === 1 ? needle.split(any) : [needle]).map((segment) =>
+		Array.from(segment),
+	)
+	const head = segments[0] ?? []
+	const tail = segments.at(-1) ?? []
 	if (segments.length === 1) {
 		return haystack.length === head.length && matchesWildcardSegment(haystack, head, 0, single)
 	}
@@ -316,35 +365,33 @@ export function matchesWildcardPattern(
 	}
 	const reached = segments.slice(1, -1).reduce<number | undefined>((from, segment) => {
 		if (from === undefined) return undefined
-		const at = segment.includes(single)
-			? new Array<undefined>(Math.max(0, end - segment.length - from + 1))
-					.keys()
-					.map((offset) => from + offset)
-					.find((candidate) => matchesWildcardSegment(haystack, segment, candidate, single))
-			: haystack.indexOf(segment, from)
-		return at === undefined || at < 0 || at + segment.length > end ? undefined : at + segment.length
+		const at = new Array<undefined>(Math.max(0, end - segment.length - from + 1))
+			.keys()
+			.map((offset) => from + offset)
+			.find((candidate) => matchesWildcardSegment(haystack, segment, candidate, single))
+		return at === undefined ? undefined : at + segment.length
 	}, head.length)
 	return reached !== undefined
 }
 
 /**
- * Matches a value against a SQL `LIKE` pattern, folding case.
+ * Matches a value against a SQL `LIKE` pattern, folding ASCII case.
  *
  * @remarks
- * `%` matches any run of characters (including none) and `_` matches exactly one
- * character; every other pattern character matches itself literally. Runs on
- * {@link matchesWildcardPattern}, so the match is linear in the value length and
- * the pattern is capped at {@link MAX_PATTERN_LENGTH}.
+ * `%` matches any run of characters (including none) and `_` matches exactly one code
+ * point; every other pattern character matches itself literally. Only the ASCII letters fold,
+ * as in SQLite's `LIKE`. Runs on {@link matchesWildcardPattern}, so the match is linear in
+ * the value length and the pattern is capped at {@link MAX_PATTERN_LENGTH}.
  *
  * @param value - The value to test
  * @param pattern - The `LIKE` pattern
- * @returns True if `value` matches `pattern` under case folding; false otherwise
+ * @returns True if `value` matches `pattern` under ASCII case folding; false otherwise
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
  *
  * @example
  * ```ts
- * matchesLikePattern('Hello', 'h%o') // true — `%` spans any run, and case folds
- * matchesLikePattern('Hello', 'h_llo') // true — `_` matches exactly one character
+ * matchesLikePattern('Hello', 'h%o') // true — `%` spans any run, and ASCII case folds
+ * matchesLikePattern('Émile', 'émile') // false — only ASCII letters fold
  * ```
  */
 export function matchesLikePattern(value: string, pattern: string): boolean {
@@ -355,11 +402,10 @@ export function matchesLikePattern(value: string, pattern: string): boolean {
  * Matches a value against a `GLOB` pattern, preserving case.
  *
  * @remarks
- * `*` matches any run of characters (including none) and `?` matches exactly one
- * character; every other pattern character matches itself literally, so a
- * character class such as `[a-z]` is not interpreted. Runs on
- * {@link matchesWildcardPattern}, so the match is linear in the value length and
- * the pattern is capped at {@link MAX_PATTERN_LENGTH}.
+ * `*` matches any run of characters (including none) and `?` matches exactly one code
+ * point; every other pattern character matches itself literally, so a character class such
+ * as `[a-z]` is not interpreted. Runs on {@link matchesWildcardPattern}, so the match is
+ * linear in the value length and the pattern is capped at {@link MAX_PATTERN_LENGTH}.
  *
  * @param value - The value to test
  * @param pattern - The `GLOB` pattern
@@ -379,6 +425,27 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
 // === Condition matching
 
 /**
+ * Collects the scalar operands of a membership list into one set.
+ *
+ * @remarks
+ * A scalar is `undefined`, `null`, a boolean, a number, a string, a bigint, or a symbol. The
+ * set compares by SameValueZero, the comparison {@link equalsValue} applies to a scalar, so
+ * `any` and `none` test a scalar field with one lookup instead of one comparison per
+ * operand. Object operands stay out of the set; {@link equalsValue} compares them.
+ *
+ * @param values - The operands of an `any` or `none` condition
+ * @returns The set of scalar operands
+ *
+ * @example
+ * ```ts
+ * collectScalars(['a', 1, { b: 2 }]).has('a') // true
+ * ```
+ */
+export function collectScalars(values: readonly unknown[]): ReadonlySet<unknown> {
+	return new Set(values.filter(isScalar))
+}
+
+/**
  * Evaluates one {@link Condition} against a row — the per-operator predicate.
  *
  * @remarks
@@ -386,20 +453,22 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  * string is one column; an array descends a nested value) — and applies the
  * operator. Range operators (`above` / `below` / `from` / `to` / `between`) use
  * {@link compareValues}, the total order; the equality family (`equals` / `not`
- * / `any` / `none`) uses {@link equalsValue} — structural equality, not the total
- * order's rank-5-collapses-all-objects behavior, so `equals` on an object/array
- * operand only matches a structurally-equal value, never every row holding any
- * object. This is a semantics change from ranking: `equalsValue` is SameValueZero
- * on leaves, so `NaN` now equals `NaN` under `equals` / `any` (it never matched
- * anything under the old rank-based comparison). `like` / `glob` / `starts` /
- * `ends` match only strings; `absent` / `present` test nullishness. Total — a
- * type mismatch is a non-match.
+ * / `any` / `none`) uses {@link equalsValue}, structural equality with SameValueZero
+ * leaves, so `NaN` equals `NaN` under `equals` / `any`. `any` and `none` test the field
+ * through {@link matchesMember}. `like` / `glob` / `starts` / `ends` match only strings;
+ * `absent` / `present` test nullishness. Total — a type mismatch is a non-match.
  *
  * @param row - The row to test
  * @param condition - The condition to apply
+ * @param scalars - The condition's scalar operands from {@link collectScalars}. Default:
+ *   collected on this call
  * @returns True if the row satisfies the condition; false otherwise
  */
-export function matchesCondition(row: Row, condition: Condition): boolean {
+export function matchesCondition(
+	row: Row,
+	condition: Condition,
+	scalars?: ReadonlySet<unknown>,
+): boolean {
 	const value = resolveField(row, condition.column)
 	const first = condition.values[0]
 	const second = condition.values[1]
@@ -427,14 +496,42 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
 		case 'ends':
 			return isString(value) && isString(first) && value.endsWith(first)
 		case 'any':
-			return condition.values.some((candidate) => equalsValue(value, candidate))
+			return matchesMember(value, condition.values, scalars)
 		case 'none':
-			return !condition.values.some((candidate) => equalsValue(value, candidate))
+			return !matchesMember(value, condition.values, scalars)
 		case 'absent':
 			return value === undefined || value === null
 		case 'present':
 			return value !== undefined && value !== null
 	}
+}
+
+/**
+ * Checks whether a value equals one operand of a membership list.
+ *
+ * @remarks
+ * A scalar value is one lookup in `scalars`; a non-scalar value compares with each operand
+ * through {@link equalsValue}.
+ *
+ * @param value - The field value to test
+ * @param values - The membership list
+ * @param scalars - The list's scalar operands from {@link collectScalars}. Default: collected
+ *   on this call
+ * @returns True if `value` equals an operand; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesMember('a', ['a', 'b']) // true
+ * matchesMember({ b: 1 }, [{ b: 1 }]) // true
+ * ```
+ */
+export function matchesMember(
+	value: unknown,
+	values: readonly unknown[],
+	scalars?: ReadonlySet<unknown>,
+): boolean {
+	if (isScalar(value)) return (scalars ?? collectScalars(values)).has(value)
+	return values.some((candidate) => equalsValue(value, candidate))
 }
 
 /**
@@ -444,16 +541,22 @@ export function matchesCondition(row: Row, condition: Condition): boolean {
  * Evaluated left-to-right: the first condition seeds the result, and each later
  * condition combines with `&&` (`and`) or `||` (`or`). An empty list matches
  * every row. There is no operator precedence — conditions combine in the order
- * the query builder recorded them.
+ * the query builder recorded them. A caller that folds many rows passes `scalars` from
+ * {@link prepareScalars}, so each `any` and `none` builds its set once per read.
  *
  * @param row - The row to test
  * @param conditions - The conditions to fold
+ * @param scalars - One scalar set per condition, by position. Default: collected on this call
  * @returns True if the row satisfies the combined conditions; false otherwise
  */
-export function matchesQuery(row: Row, conditions: readonly Condition[]): boolean {
+export function matchesQuery(
+	row: Row,
+	conditions: readonly Condition[],
+	scalars?: ReadonlyArray<ReadonlySet<unknown>>,
+): boolean {
 	return (
-		Iterator.from(conditions).reduce<boolean | undefined>((previous, condition) => {
-			const match = matchesCondition(row, condition)
+		conditions.entries().reduce<boolean | undefined>((previous, [index, condition]) => {
+			const match = matchesCondition(row, condition, scalars?.[index])
 			return previous === undefined
 				? match
 				: condition.connector === 'or'
@@ -464,12 +567,35 @@ export function matchesQuery(row: Row, conditions: readonly Condition[]): boolea
 }
 
 /**
+ * Collects one scalar set per condition, by position — the `scalars` argument of
+ * {@link matchesQuery}.
+ *
+ * @param conditions - The conditions a read folds
+ * @returns One {@link collectScalars} set per `any` or `none` condition, and an empty set for
+ *   every other condition
+ *
+ * @example
+ * ```ts
+ * prepareScalars([{ column: 'id', operator: 'any', values: ['a'], connector: 'and' }])[0]?.has('a') // true
+ * ```
+ */
+export function prepareScalars(
+	conditions: readonly Condition[],
+): ReadonlyArray<ReadonlySet<unknown>> {
+	return conditions.map((condition) =>
+		collectScalars(
+			condition.operator === 'any' || condition.operator === 'none' ? condition.values : [],
+		),
+	)
+}
+
+/**
  * Filters rows by a list of conditions — the shared basis for a table's count
  * and aggregate paths (no sort/page, unlike {@link applyQuery}).
  *
  * @remarks
  * An empty condition list matches every row (returned as-is, no copy). Folds
- * each row through {@link matchesQuery}.
+ * each row through {@link matchesQuery} with the scalar sets built once.
  *
  * @param rows - The rows to filter
  * @param conditions - The conditions to apply (empty matches everything)
@@ -485,7 +611,8 @@ export function matchesQuery(row: Row, conditions: readonly Condition[]): boolea
  */
 export function filterRows(rows: readonly Row[], conditions: readonly Condition[]): readonly Row[] {
 	if (conditions.length === 0) return rows
-	return rows.filter((row) => matchesQuery(row, conditions))
+	const scalars = prepareScalars(conditions)
+	return rows.filter((row) => matchesQuery(row, conditions, scalars))
 }
 
 // === Ordering & paging
@@ -495,25 +622,39 @@ export function filterRows(rows: readonly Row[], conditions: readonly Condition[
  *
  * @remarks
  * Applies the terms in priority order — the first term that distinguishes two
- * rows decides — using {@link compareValues}, reversing for `descending`.
+ * rows decides — using {@link compareValues}, reversing for `descending`. Rows the terms
+ * cannot distinguish keep their input order when the final term ascends and reverse it when
+ * the final term descends, so over rows in ascending key order a tie resolves by primary key
+ * in the direction of the final term.
  *
  * @param rows - The rows to sort
  * @param order - The ordering terms in priority order
  * @returns A new, sorted array
+ *
+ * @example
+ * ```ts
+ * sortRows([{ id: 'a', age: 1 }, { id: 'b', age: 1 }], [{ column: 'age', direction: 'descending' }])
+ * // => [{ id: 'b', age: 1 }, { id: 'a', age: 1 }]
+ * ```
  */
 export function sortRows(rows: readonly Row[], order: readonly Order[]): readonly Row[] {
-	const sorted = [...rows]
-	sorted.sort((left, right) => {
-		for (const term of order) {
-			const comparison = compareValues(
-				resolveField(left, term.column),
-				resolveField(right, term.column),
-			)
-			if (comparison !== 0) return term.direction === 'descending' ? -comparison : comparison
-		}
-		return 0
-	})
-	return sorted
+	const descending = order.at(-1)?.direction === 'descending'
+	return [...rows.entries()]
+		.sort(([leftIndex, left], [rightIndex, right]) => {
+			const decided = order
+				.values()
+				.map((term) => {
+					const comparison = compareValues(
+						resolveField(left, term.column),
+						resolveField(right, term.column),
+					)
+					return term.direction === 'descending' ? -comparison : comparison
+				})
+				.find((comparison) => comparison !== 0)
+			if (decided !== undefined) return decided
+			return descending ? rightIndex - leftIndex : leftIndex - rightIndex
+		})
+		.map(([, row]) => row)
 }
 
 /**
@@ -522,8 +663,8 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
  * @remarks
  * The whole portable read pipeline in one place: conditions filter, `order`
  * sorts, and `offset` / `limit` window the result. Each step is skipped when its
- * part of the input is absent. The reference {@link DriverInterface} backends
- * lean on this rather than each re-deriving it.
+ * part of the input is absent. A plan's residual applies through it over the rows the
+ * plan's native side returns.
  *
  * @param rows - The rows to process (typically a table's full `scan`)
  * @param input - The read specification, or `undefined` for all rows as-is
@@ -531,11 +672,7 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
  */
 export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly Row[] {
 	validatePage(input)
-	const conditions = input?.conditions
-	const filtered =
-		conditions !== undefined && conditions.length > 0
-			? rows.filter((row) => matchesQuery(row, conditions))
-			: rows
+	const filtered = filterRows(rows, input?.conditions ?? [])
 	const order = input?.order
 	const sorted = order !== undefined && order.length > 0 ? sortRows(filtered, order) : filtered
 	const offset = input?.offset ?? 0
@@ -1140,6 +1277,204 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 // === Conformance
 
 /**
+ * Lists the invariants a {@link ReadPlan} breaks for the read it splits.
+ *
+ * @remarks
+ * Checks each invariant {@link DriverInterface} states: every clause on a side, and no
+ * clause the read lacks; `order` whole on one side; a native page only over an empty
+ * residual filter and order; a native aggregate only over an empty residual filter; an `or`
+ * read's residual filter empty or complete; and each side free of an absent-valued key or an
+ * empty list. Exactness is the differential's question, not this one.
+ *
+ * @param input - The read the plan splits
+ * @param plan - The plan to check
+ * @returns The names of the broken invariants, empty when the plan obeys every one
+ *
+ * @example
+ * ```ts
+ * findPlanFaults({ limit: 1 }, { native: {}, residual: { limit: 1 } }) // []
+ * findPlanFaults({ limit: 1 }, { native: {}, residual: {} }) // ['coverage']
+ * ```
+ */
+export function findPlanFaults(input: ReadInput, plan: ReadPlan): readonly string[] {
+	const { native, residual } = plan
+	const conditions = input.conditions ?? []
+	const sides = [...(native.conditions ?? []), ...(residual.conditions ?? [])]
+	const covered =
+		conditions.every((condition) => sides.some((side) => equalsValue(side, condition))) &&
+		sides.every((side) => conditions.some((condition) => equalsValue(side, condition))) &&
+		(input.limit === undefined
+			? native.limit === undefined && residual.limit === undefined
+			: native.limit === input.limit || residual.limit === input.limit) &&
+		(input.offset === undefined
+			? native.offset === undefined && residual.offset === undefined
+			: native.offset === input.offset || residual.offset === input.offset) &&
+		(input.aggregate === undefined
+			? native.aggregate === undefined && residual.aggregate === undefined
+			: equalsValue(native.aggregate, input.aggregate) ||
+				equalsValue(residual.aggregate, input.aggregate))
+	const ordered =
+		input.order === undefined || input.order.length === 0
+			? native.order === undefined && residual.order === undefined
+			: (equalsValue(native.order, input.order) && residual.order === undefined) ||
+				(equalsValue(residual.order, input.order) && native.order === undefined)
+	const paged =
+		(native.limit === undefined && native.offset === undefined) ||
+		(residual.conditions === undefined && residual.order === undefined)
+	const reduced = native.aggregate === undefined || residual.conditions === undefined
+	const folded =
+		!conditions.slice(1).some((condition) => condition.connector === 'or') ||
+		residual.conditions === undefined ||
+		equalsValue(residual.conditions, conditions)
+	const compact = [native, residual].every((side) =>
+		Object.values(side).every(
+			(value) => value !== undefined && !(isArray(value) && value.length === 0),
+		),
+	)
+	return [
+		...(covered ? [] : ['coverage']),
+		...(ordered ? [] : ['order']),
+		...(paged ? [] : ['page']),
+		...(reduced ? [] : ['aggregate']),
+		...(folded ? [] : ['or']),
+		...(compact ? [] : ['empty']),
+	]
+}
+
+/**
+ * Reads the rows of a read through a storage's plan: the native side from `records` or
+ * `stream`, then the residual through {@link applyQuery} — the planned side of the
+ * conformance differential.
+ *
+ * @remarks
+ * A storage without `plan` answers the whole read as residual over `scan`.
+ *
+ * @param storage - The storage to read
+ * @param table - The table to read
+ * @param input - The read, without an aggregate
+ * @returns The rows the plan answers
+ */
+export async function readPlannedRows(
+	storage: StorageInterface,
+	table: string,
+	input: QueryInput,
+): Promise<readonly Row[]> {
+	const read = compactReadInput(input)
+	if (storage.plan === undefined || storage.records === undefined || storage.stream === undefined) {
+		return applyQuery(await collectRows(storage.scan(table)), read)
+	}
+	const plan = storage.plan(table, read)
+	if (Object.keys(plan.residual).length === 0) return storage.records(table, plan.native)
+	return applyQuery(await collectRows(storage.stream(table, plan.native)), plan.residual)
+}
+
+/**
+ * Computes an aggregate read through a storage's plan: `aggregate` when the plan keeps it
+ * native, otherwise the core's reduction over the native rows the residual filter keeps —
+ * the planned side of the conformance differential.
+ *
+ * @param storage - The storage to read
+ * @param table - The table to read
+ * @param input - The read's conditions
+ * @param aggregate - The aggregate to compute
+ * @returns The aggregate value, or `undefined` when undefined for the rows
+ */
+export async function readPlannedAggregate(
+	storage: StorageInterface,
+	table: string,
+	input: QueryInput,
+	aggregate: Aggregate,
+): Promise<number | undefined> {
+	const read = compactReadInput({
+		...(input.conditions === undefined ? {} : { conditions: input.conditions }),
+		aggregate,
+	})
+	if (storage.plan === undefined || storage.records === undefined || storage.stream === undefined) {
+		const rows = filterRows(await collectRows(storage.scan(table)), read.conditions ?? [])
+		return computeAggregate(rows, aggregate.operation, aggregate.column)
+	}
+	const plan = storage.plan(table, read)
+	const { aggregate: kept, ...native } = plan.native
+	if (kept !== undefined && storage.aggregate !== undefined) {
+		return storage.aggregate(table, kept.operation, kept.column, native)
+	}
+	const rows = filterRows(
+		await collectRows(storage.stream(table, native)),
+		plan.residual.conditions ?? [],
+	)
+	return computeAggregate(rows, aggregate.operation, aggregate.column)
+}
+
+/**
+ * Collects every row an async iterable yields, in order.
+ *
+ * @param source - The rows to collect
+ * @returns The rows as an array
+ *
+ * @example
+ * ```ts
+ * await collectRows(createMemoryDriver().scan('users')) // rows in key order
+ * ```
+ */
+export async function collectRows(source: AsyncIterable<Row>): Promise<readonly Row[]> {
+	const rows: Row[] = []
+	for await (const row of source) rows.push(row)
+	return rows
+}
+
+/**
+ * Compares a storage's planned answer to every conformance read against the core engine's
+ * answer over its `scan`, and checks each plan's invariants.
+ *
+ * @remarks
+ * The storage holds {@link CONFORMANCE_ROWS} in `users`. Each read in
+ * {@link CONFORMANCE_READS} yields one finding per broken plan invariant and one per answer
+ * that differs from {@link applyQuery} or {@link computeAggregate} over the scanned rows.
+ *
+ * @param storage - The seeded storage to read
+ * @param check - The finding's `check` prefix
+ * @yields One {@link ConformanceFinding} per broken invariant or differing answer
+ */
+export async function* comparePlans(
+	storage: StorageInterface,
+	check: string,
+): AsyncIterable<ConformanceFinding> {
+	const scanned = await collectRows(storage.scan('users'))
+	for (const input of CONFORMANCE_READS) {
+		const read = compactReadInput(input)
+		const faults =
+			storage.plan === undefined ? [] : findPlanFaults(read, storage.plan('users', read))
+		if (faults.length > 0) {
+			yield {
+				check: check + '-invariant',
+				message: 'a plan must obey every invariant DriverInterface states',
+				context: { table: 'users', input, faults },
+			}
+		}
+		const { aggregate, ...query } = input
+		const expected =
+			aggregate === undefined
+				? applyQuery(scanned, query)
+				: computeAggregate(
+						filterRows(scanned, query.conditions ?? []),
+						aggregate.operation,
+						aggregate.column,
+					)
+		const actual =
+			aggregate === undefined
+				? await readPlannedRows(storage, 'users', query)
+				: await readPlannedAggregate(storage, 'users', query, aggregate)
+		if (!equalsValue(actual, expected)) {
+			yield {
+				check: check + '-differential',
+				message: "a planned read must answer what the core engine answers over the driver's scan",
+				context: { table: 'users', input, expected, actual },
+			}
+		}
+	}
+}
+
+/**
  * Walks the driver-conformance battery against a fresh {@link DriverInterface}
  * per phase, yielding one {@link ConformanceFinding} per violated invariant —
  * the shared invariant suite every backend (in-memory, SQLite, IndexedDB)
@@ -1169,7 +1504,11 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
  * rows and a plan referencing an unknown table throws `DatabaseError`
  * `MIGRATION`; when `stream` exists, it yields only condition-matching rows
  * and honors `offset`/`limit`; when `transaction` exists, `commit` persists
- * and `rollback` restores; when both `metadata` and `stamp` exist, a fresh
+ * and `rollback` restores; when `plan` exists, the driver declares `records` and `stream`,
+ * every plan over {@link CONFORMANCE_READS} obeys the invariants {@link DriverInterface}
+ * states, each planned read answers what the core engine answers over `scan` (the binary
+ * text order is the one exemption, and {@link CONFORMANCE_ROWS} holds no case of it), and a
+ * transaction capability declares each native member its driver declares; when both `metadata` and `stamp` exist, a fresh
  * store's `metadata()` is `undefined`, and after
  * `stamp({ version, schema })`, `metadata()` returns the exact stamped value.
  *
@@ -1807,6 +2146,79 @@ export async function* scanDriver(
 		} catch (error) {
 			yield {
 				check: 'metadata-stamp',
+				message: isError(error) ? error.message : String(error),
+				context: { error },
+			}
+		}
+	}
+
+	// m2. plan (presence-gated): the native members, the invariants, the differential against
+	// the core engine over scan, and the transaction capability's mirror of the native members.
+	planPhase: {
+		try {
+			const driver = factory()
+			if (driver.plan === undefined) break planPhase
+			if (driver.records === undefined || driver.stream === undefined) {
+				yield {
+					check: 'plan-members',
+					message: 'a driver that declares plan must declare records and stream',
+					context: { records: driver.records !== undefined, stream: driver.stream !== undefined },
+				}
+				break planPhase
+			}
+			await driver.open(CONFORMANCE_SCHEMA)
+			for (const row of CONFORMANCE_ROWS) {
+				const key = extractKey(row, 'id')
+				if (key !== undefined) await driver.write('users', key, row)
+			}
+			const aggregated = CONFORMANCE_READS.some(
+				(input) =>
+					input.aggregate !== undefined &&
+					driver.plan?.('users', compactReadInput(input)).native.aggregate !== undefined,
+			)
+			if (aggregated && driver.aggregate === undefined) {
+				yield {
+					check: 'plan-members',
+					message: 'a driver whose plan keeps an aggregate native must declare aggregate',
+					context: { aggregate: false },
+				}
+			}
+			for await (const finding of comparePlans(driver, 'plan')) yield finding
+			if (driver.transaction === undefined) {
+				await driver.close()
+				break planPhase
+			}
+			const scoped = await driver.transaction(async (storage) => {
+				const findings: ConformanceFinding[] = []
+				for await (const finding of comparePlans(storage, 'plan-scoped')) findings.push(finding)
+				return {
+					findings,
+					members: {
+						plan: storage.plan !== undefined,
+						records: storage.records !== undefined,
+						stream: storage.stream !== undefined,
+						aggregate: storage.aggregate !== undefined,
+					},
+				}
+			})
+			await driver.close()
+			const expected = {
+				plan: true,
+				records: true,
+				stream: true,
+				aggregate: driver.aggregate !== undefined,
+			}
+			if (!equalsValue(scoped.members, expected)) {
+				yield {
+					check: 'plan-capability',
+					message: 'a transaction capability must declare each native member its driver declares',
+					context: { expected, actual: scoped.members },
+				}
+			}
+			for (const finding of scoped.findings) yield finding
+		} catch (error) {
+			yield {
+				check: 'plan',
 				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
