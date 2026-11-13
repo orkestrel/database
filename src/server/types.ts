@@ -22,6 +22,14 @@ export interface CompiledSQL {
 }
 
 /**
+ * Names how a flat SQLite column stores absence and explicit `null`: `required` stores
+ * neither, `optional` and `nullable` store SQL `NULL`, and `both` stores absence as
+ * `NULL` and explicit `null` as a sentinel. The `@orkestrel/database/server` entry point
+ * exports this type.
+ */
+export type ColumnAbsence = 'required' | 'optional' | 'nullable' | 'both'
+
+/**
  * Configures {@link import('./factories.js').createSQLiteDriver}. The
  * `@orkestrel/database/server` entry point exports this type.
  *

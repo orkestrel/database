@@ -1,17 +1,20 @@
 import type {
-	AggregateOperation,
+	Aggregate,
 	ColumnSchema,
 	ColumnStorage,
 	Condition,
-	QueryInput,
 	Order,
+	ReadInput,
+	ReadPlan,
 	Row,
 	TableSchema,
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
-import { DatabaseError, findColumn } from '@src/core'
+import type { ColumnAbsence } from './types.js'
+import { compactReadInput, DatabaseError, findColumn, MAX_PATTERN_LENGTH } from '@src/core'
 import {
+	attempt,
 	cloneJSONValue,
 	isBigInt,
 	isBoolean,
@@ -22,14 +25,13 @@ import {
 	isUint8Array,
 	preview,
 } from '@orkestrel/contract'
-import { EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE } from './constants.js'
 
-// The server environment's pure helpers: the SQLite ↔ JS bridge, and the
-// filesystem-error classification the file-backed driver reads. Encoding refuses
-// incompatible present values; decoding omits malformed storage. `encodeRow` /
+// The server environment's pure helpers: the SQLite planner, the SQLite ↔ JS bridge, and
+// the filesystem-error classification the file-backed driver reads. Encoding refuses
+// incompatible present values; decoding raises on malformed storage. `encodeRow` /
 // `decodeRow` lift the per-cell codecs across a whole schema; the SQL
 // `quoteIdentifier` contains identifier input. The SQL emitters live together
-// in `compilers.ts`; this module owns exactness, codecs, value extraction, and
+// in `compilers.ts`; this module owns the planner, codecs, value extraction, and
 // persisted-name derivation. Its SQLite import is type-only and cannot couple
 // the emitted JavaScript to the native package.
 
@@ -67,25 +69,21 @@ export function matchesAbsentPath(error: unknown): boolean {
 	return error.code === 'ENOENT' || error.code === 'ENOTDIR'
 }
 
-// === Exactness (native ↔ engine parity gating)
+// === Native coverage (the SQLite planner)
 //
-// SQLiteDriver's `records` / `count` / `aggregate` / `stream` compile a
-// `QueryInput` straight to SQL with NO engine re-filter — a huge perf win, but
-// only sound for a condition/order whose compiled SQL provably matches the
-// core engine's `matchesCondition` / `sortRows` semantics for every value a
-// contract-validated write can store ("declared-type trust"). These guards
-// decide, per condition/order/input, whether that proof holds; when it does
-// not, the driver falls back to a full scan refined through the same core
-// engine that answers every query for `MemoryDriver` and `JSONDriver` — exact →
-// native, otherwise → refine, never a silent semantics drift.
+// SQLiteDriver answers each read through `planSQLiteQuery`: every clause SQLite answers with
+// the contract's meaning goes to the plan's native side, which `compileQuerySQL` compiles,
+// and only the rest goes to the residual the core runs. A flat declared `text`, `integer`,
+// `real`, or `boolean` column is native under every operator, with the forms chosen from the
+// column's flags; a nested path and a `json` or `blob` column stay residual.
 
 /**
- * Reports whether a value's runtime type matches a column's declared exact type
- * — the operand side of the declared-type-trust proof.
+ * Reports whether an operand has the storage class a declared column stores, so a bound
+ * operand compares as the stored values do.
  *
  * @remarks
- * `text` ↔ string, `integer` / `real` ↔ finite number (`NaN` / `±Infinity`
- * fail), `boolean` ↔ boolean. Backs {@link matchesConditionExactly}'s operand checks.
+ * `text` ↔ string, `integer` ↔ finite integer, `real` ↔ finite number, `boolean` ↔
+ * boolean. Every other storage answers `false`.
  *
  * @param value - The condition operand to test
  * @param storage - The column's declared portable storage type
@@ -94,163 +92,280 @@ export function matchesAbsentPath(error: unknown): boolean {
  * @example
  * ```ts
  * matchesDeclaredStorage('Ada', 'text') // true
- * matchesDeclaredStorage(Number.NaN, 'integer') // false — only finite numbers
+ * matchesDeclaredStorage(1.5, 'integer') // false — only finite integers
  * ```
  */
 export function matchesDeclaredStorage(value: unknown, storage: ColumnStorage): boolean {
-	if (storage === 'text') return isString(value)
-	if (storage === 'boolean') return isBoolean(value)
-	return isFiniteNumber(value)
-}
-
-/**
- * Reports whether one {@link Condition} compiles to SQL that is provably
- * identical to the core engine's `matchesCondition` for every value its
- * column's declared type can store.
- *
- * @remarks
- * `false` for a nested `FieldPath` (an array) or a column absent from `schema`.
- * `absent` / `present` are exact unless a column is both optional and nullable.
- * In that combined case the storage sentinel for explicit `null` is not SQL
- * `NULL`, while the core treats both absence and explicit `null` as absent.
- * Every scalar operator refines when the column is optional
- * OR nullable, because SQL null semantics and the core total order differ.
- * Required non-null `equals` / `not` require an operand matching the declared
- * storage and exclude `json` / `blob`. `above` / `below` / `from` / `to` /
- * `between` are exact only for {@link EXACT_RANGE_COLUMN_STORAGE} (`integer` /
- * `real` / `boolean`) — a `text` column's range conditions refine, because
- * SQLite's default BINARY collation orders TEXT by Unicode code point while
- * the core engine's `compareValues` orders JS strings by UTF-16 code unit,
- * and the two diverge for supplementary-plane characters (see
- * {@link EXACT_COLUMN_STORAGE}'s remarks for the full rationale).
- * `any` / `none` require a non-empty list where every element matches (an empty
- * list is exact under neither: the engine's `any([])` matches nothing while
- * `none([])` matches everything, and SQL `IN ()` is a syntax error) — these
- * stay exact on `text` (byte equality is collation-independent and engine-
- * identical). `starts` / `ends` are exact only on a `text` column with a
- * string operand (case-sensitive `substr` compile, see {@link compileConditionSQL}) —
- * likewise collation-independent. `like` / `glob` are never exact — SQLite
- * `LIKE` folds case ASCII-only against the engine's Unicode fold, and `GLOB`
- * has character classes the engine treats literally.
- *
- * @param condition - The condition to test
- * @param schema - The table's schema
- * @returns True if `condition` is exact; false otherwise
- */
-export function matchesConditionExactly(condition: Condition, schema: TableSchema): boolean {
-	if (!isString(condition.column)) return false
-	const column = findColumn(condition.column, schema)
-	if (column === undefined) return false
-	if (condition.operator === 'absent' || condition.operator === 'present') {
-		return !(column.optional && column.nullable)
-	}
-	if (column.optional || column.nullable) return false
-	if (!EXACT_COLUMN_STORAGE.includes(column.storage)) return false
-	const first = condition.values[0]
-	const second = condition.values[1]
-	switch (condition.operator) {
-		case 'equals':
-		case 'not':
-			return matchesDeclaredStorage(first, column.storage)
-		case 'above':
-		case 'below':
-		case 'from':
-		case 'to':
-			return (
-				EXACT_RANGE_COLUMN_STORAGE.includes(column.storage) &&
-				matchesDeclaredStorage(first, column.storage)
-			)
-		case 'between':
-			return (
-				EXACT_RANGE_COLUMN_STORAGE.includes(column.storage) &&
-				matchesDeclaredStorage(first, column.storage) &&
-				matchesDeclaredStorage(second, column.storage)
-			)
-		case 'any':
-		case 'none':
-			return (
-				condition.values.length > 0 &&
-				condition.values.every((value) => matchesDeclaredStorage(value, column.storage))
-			)
-		case 'starts':
-		case 'ends':
-			return column.storage === 'text' && isString(first)
-		case 'like':
-		case 'glob':
+	switch (storage) {
+		case 'text':
+			return isString(value)
+		case 'boolean':
+			return isBoolean(value)
+		case 'integer':
+			return isFiniteNumber(value) && isInteger(value)
+		case 'real':
+			return isFiniteNumber(value)
+		case 'json':
+		case 'blob':
 			return false
 	}
 }
 
 /**
- * Reports whether one {@link Order} term's column compiles to an `ORDER BY`
- * that matches the engine's {@link import('@src/core').sortRows} exactly.
+ * Resolves the declared column a field path names when SQLite answers it natively: a flat
+ * path to a declared `text`, `integer`, `real`, or `boolean` column.
+ *
+ * @param path - The field path a condition, an order term, or an aggregate names
+ * @param schema - The table's schema
+ * @returns The declared column, or `undefined` for a nested path, an undeclared column, or
+ *   a `json` or `blob` column
+ *
+ * @example
+ * ```ts
+ * findNativeColumn('age', schema) // { name: 'age', storage: 'integer', … }
+ * findNativeColumn(['meta', 'tag'], schema) // undefined
+ * ```
+ */
+export function findNativeColumn(path: FieldPath, schema: TableSchema): ColumnSchema | undefined {
+	if (!isString(path)) return undefined
+	const column = findColumn(path, schema)
+	if (column === undefined || column.storage === 'json' || column.storage === 'blob') {
+		return undefined
+	}
+	return column
+}
+
+/**
+ * Reports whether SQLite answers one {@link Condition} with the core engine's meaning.
  *
  * @remarks
- * `false` for a nested `FieldPath`, a column absent from `schema`, or a
- * declared type outside {@link EXACT_RANGE_COLUMN_STORAGE} (`integer` / `real` /
- * `boolean`). `text` is not exact here: SQLite's default BINARY collation
- * orders TEXT by Unicode code point while the core engine's `compareValues`
- * orders JS strings by UTF-16 code unit, and the two diverge for
- * supplementary-plane characters (see {@link EXACT_COLUMN_STORAGE}'s remarks) —
- * a `text` order term refines through the core engine instead. The column must
- * also be required and non-null: an optional or nullable column refines, because
- * SQL orders its `NULL`s ahead of every value while the core total order ranks
- * `undefined` before `null` before every other value.
+ * The column must be a flat declared `text`, `integer`, `real`, or `boolean` column. Under
+ * every flag combination: `absent` and `present` always; `equals` and `not` with a `null`
+ * operand or an operand of the column's storage class; `above`, `below`, `from`, `to`, and
+ * `between` with operands of that class (text included, under the engine's binary order);
+ * `any` and `none` when every operand has that class; `like` and `glob` on a `text` column
+ * with a string pattern no longer than {@link MAX_PATTERN_LENGTH}; `starts` and `ends` on a
+ * `text` column with a string operand.
+ *
+ * @param condition - The condition to test
+ * @param schema - The table's schema
+ * @returns True if SQLite answers the condition natively; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesNativeCondition({ column: 'name', operator: 'like', values: ['a%'], connector: 'and' }, schema) // true
+ * ```
+ */
+export function matchesNativeCondition(condition: Condition, schema: TableSchema): boolean {
+	const column = findNativeColumn(condition.column, schema)
+	if (column === undefined) return false
+	const [first, second] = condition.values
+	switch (condition.operator) {
+		case 'absent':
+		case 'present':
+			return true
+		case 'equals':
+		case 'not':
+			return first === null || matchesDeclaredStorage(first, column.storage)
+		case 'above':
+		case 'below':
+		case 'from':
+		case 'to':
+			return matchesDeclaredStorage(first, column.storage)
+		case 'between':
+			return (
+				matchesDeclaredStorage(first, column.storage) &&
+				matchesDeclaredStorage(second, column.storage)
+			)
+		case 'any':
+		case 'none':
+			return condition.values.every((value) => matchesDeclaredStorage(value, column.storage))
+		case 'like':
+		case 'glob':
+			return column.storage === 'text' && isString(first) && first.length <= MAX_PATTERN_LENGTH
+		case 'starts':
+		case 'ends':
+			return column.storage === 'text' && isString(first)
+	}
+}
+
+/**
+ * Reports whether SQLite orders by one {@link Order} term with the core engine's meaning.
+ *
+ * @remarks
+ * The term must name a flat declared `text`, `integer`, `real`, or `boolean` column that is
+ * not both optional and nullable: SQL places `NULL` lowest in both directions, which is the
+ * core's place for an absent or `null` value, while the sentinel of a column with both flags
+ * sorts among the column's values.
  *
  * @param order - The order term to test
  * @param schema - The table's schema
- * @returns True if `order` is exact; false otherwise
+ * @returns True if SQLite orders by the term natively; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesNativeOrder({ column: 'name', direction: 'descending' }, schema) // true
+ * ```
  */
-export function matchesOrderExactly(order: Order, schema: TableSchema): boolean {
-	if (!isString(order.column)) return false
-	const column = findColumn(order.column, schema)
-	if (column === undefined) return false
-	return !column.optional && !column.nullable && EXACT_RANGE_COLUMN_STORAGE.includes(column.storage)
+export function matchesNativeOrder(order: Order, schema: TableSchema): boolean {
+	const column = findNativeColumn(order.column, schema)
+	return column !== undefined && !(column.optional && column.nullable)
 }
 
 /**
- * Reports whether a whole {@link QueryInput} is exact — every condition and
- * every order term is exact. `limit` / `offset` never affect exactness (SQL
- * `LIMIT` / `OFFSET` are always engine-identical).
+ * Reports whether SQLite computes an {@link Aggregate} with the contract's meaning.
  *
  * @remarks
- * The gate {@link import('./drivers/SQLiteDriver.js').SQLiteDriver} checks before
- * trusting a native SQL read over a full-scan refine through the core engine.
+ * `count` always. `sum`, `average`, `minimum`, and `maximum` on a flat declared `integer` or
+ * `real` column that is not both optional and nullable, under the engine's arithmetic.
  *
- * @param input - The query input to test
+ * @param aggregate - The aggregate to test
  * @param schema - The table's schema
- * @returns True if every part of `input` is exact; false otherwise
+ * @returns True if SQLite computes the aggregate natively; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesNativeAggregate({ operation: 'sum', column: 'age' }, schema) // true
+ * ```
  */
-export function matchesQueryExactly(input: QueryInput, schema: TableSchema): boolean {
-	const conditions = input.conditions ?? []
-	const order = input.order ?? []
+export function matchesNativeAggregate(aggregate: Aggregate, schema: TableSchema): boolean {
+	if (aggregate.operation === 'count') return true
+	const column = findNativeColumn(aggregate.column, schema)
 	return (
-		conditions.every((condition) => matchesConditionExactly(condition, schema)) &&
-		order.every((term) => matchesOrderExactly(term, schema))
+		column !== undefined &&
+		(column.storage === 'integer' || column.storage === 'real') &&
+		!(column.optional && column.nullable)
 	)
 }
 
 /**
- * Reports whether SQLite can execute an aggregate exactly like the core engine.
+ * Splits a read into the part SQLite answers natively and the residual the core runs — the
+ * SQLite driver's `plan`.
  *
- * @param operation - Aggregate operation
- * @param column - Aggregate field
- * @param schema - Current table schema
- * @returns True if native aggregation is exact; false otherwise
+ * @remarks
+ * When every connector is `and`, each condition SQLite answers goes native and the rest go
+ * residual. When any connector is `or`, the conditions go native together or residual
+ * together. The order goes native when SQLite orders by every term; the page goes native
+ * when the residual holds no condition and no order; the aggregate goes native when the
+ * residual holds no condition and SQLite computes it. A side that carries nothing is `{}`,
+ * so a read is wholly native when `residual` equals `{}`. Pass the native side to
+ * {@link compileQuerySQL} for its SQL.
+ *
+ * @param input - The read to split
+ * @param schema - The table's schema
+ * @returns The plan
+ *
+ * @example
+ * ```ts
+ * planSQLiteQuery({ conditions: [{ column: 'name', operator: 'like', values: ['a%'], connector: 'and' }], limit: 10 }, schema)
+ * // { native: { conditions: [ … ], limit: 10 }, residual: {} }
+ * ```
  */
-export function matchesAggregateExactly(
-	operation: AggregateOperation,
-	column: FieldPath,
-	schema: TableSchema,
-): boolean {
-	if (operation === 'count') return true
-	if (operation === 'sum' || operation === 'average' || !isString(column)) return false
-	const declared = findColumn(column, schema)
+export function planSQLiteQuery(input: ReadInput, schema: TableSchema): ReadPlan {
+	const read = compactReadInput(input)
+	const conditions = read.conditions ?? []
+	const answered = conditions.filter((condition) => matchesNativeCondition(condition, schema))
+	const folded = conditions.slice(1).some((condition) => condition.connector === 'or')
+	const whole = answered.length === conditions.length
+	const native = whole ? conditions : folded ? [] : answered
+	const residual = whole
+		? []
+		: folded
+			? conditions
+			: conditions.filter((condition) => !answered.includes(condition))
+	const order = read.order ?? []
+	const ordered = order.every((term) => matchesNativeOrder(term, schema))
+	const paged = residual.length === 0 && ordered
+	const aggregate = read.aggregate
+	const reduced =
+		aggregate !== undefined && residual.length === 0 && matchesNativeAggregate(aggregate, schema)
+	return {
+		native: compactReadInput({
+			conditions: native,
+			order: ordered ? order : [],
+			...(paged && read.limit !== undefined ? { limit: read.limit } : {}),
+			...(paged && read.offset !== undefined ? { offset: read.offset } : {}),
+			...(reduced ? { aggregate } : {}),
+		}),
+		residual: compactReadInput({
+			conditions: residual,
+			order: ordered ? [] : order,
+			...(!paged && read.limit !== undefined ? { limit: read.limit } : {}),
+			...(!paged && read.offset !== undefined ? { offset: read.offset } : {}),
+			...(aggregate !== undefined && !reduced ? { aggregate } : {}),
+		}),
+	}
+}
+
+/**
+ * Classifies how a flat column stores absence and explicit `null`, by its flags.
+ *
+ * @remarks
+ * An undeclared column reads as `optional`: SQL `NULL` is its only absent value.
+ *
+ * @param declared - The declared flat column, or `undefined` for an undeclared one
+ * @returns The column's absence shape
+ *
+ * @example
+ * ```ts
+ * classifyAbsence({ name: 'bio', storage: 'text', optional: true, nullable: true }) // 'both'
+ * ```
+ */
+export function classifyAbsence(declared: ColumnSchema | undefined): ColumnAbsence {
+	if (declared === undefined) return 'optional'
+	if (declared.optional && declared.nullable) return 'both'
+	if (declared.nullable) return 'nullable'
+	return declared.optional ? 'optional' : 'required'
+}
+
+/**
+ * Reports whether a WHERE fold pins its column references: every connector is `and` and one
+ * condition is `any` on the primary key.
+ *
+ * @param conditions - The conditions to fold
+ * @param schema - The table's schema
+ * @returns True if the fold pins every condition but the primary-key `any`; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesPrimaryPin([{ column: 'id', operator: 'any', values: ['a'], connector: 'and' }], schema) // true
+ * ```
+ */
+export function matchesPrimaryPin(conditions: readonly Condition[], schema: TableSchema): boolean {
 	return (
-		declared !== undefined &&
-		(declared.storage === 'integer' || declared.storage === 'real') &&
-		!(declared.optional && declared.nullable)
+		!conditions.slice(1).some((condition) => condition.connector === 'or') &&
+		conditions.some(
+			(condition) => condition.operator === 'any' && condition.column === schema.primary,
+		)
 	)
+}
+
+/**
+ * Computes the least text above every text that starts with a prefix, in code-point order —
+ * the exclusive upper bound of the `starts` range.
+ *
+ * @remarks
+ * Increments the final code point, skipping the surrogate range. A final U+10FFFF drops and
+ * carries to the code point before it. A prefix of U+10FFFF code points alone has no upper
+ * bound.
+ *
+ * @param prefix - The prefix, holding no unpaired surrogate
+ * @returns The successor, or `undefined` when no text bounds the prefix's range
+ *
+ * @example
+ * ```ts
+ * computeSuccessor('ab') // 'ac'
+ * computeSuccessor('a\u{10FFFF}') // 'b'
+ * computeSuccessor('퟿') // ''
+ * ```
+ */
+export function computeSuccessor(prefix: string): string | undefined {
+	const points = Array.from(prefix)
+	const kept = points.findLastIndex((point) => (point.codePointAt(0) ?? 0) < 0x10ffff)
+	if (kept < 0) return undefined
+	const code = (points[kept]?.codePointAt(0) ?? 0) + 1
+	const next = code === 0xd800 ? 0xe000 : code
+	return points.slice(0, kept).join('') + String.fromCodePoint(next)
 }
 
 /**
@@ -359,14 +474,16 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
  * the exact inverse of {@link encodeValue}.
  *
  * @remarks
- * Stored values must use the declared SQLite storage class. SQL `NULL` decodes
- * to explicit `null` only for nullable-only columns and otherwise to absence.
- * Optional-and-nullable sentinels decode to explicit `null`; malformed values
- * decode to `undefined` so {@link decodeRow} omits them.
+ * SQL `NULL` decodes to explicit `null` only for a nullable-only column and otherwise to
+ * absence. An optional-and-nullable sentinel decodes to explicit `null`. A stored value whose
+ * storage class does not match its declaration, or malformed JSON text, is corruption: it
+ * raises `DRIVER` with `context` plus the column, and never decodes to absence.
  *
  * @param value - The stored SQLite value
  * @param column - The declared storage and absence/null contract
- * @returns The decoded JS value, or `undefined` for absence/malformed storage
+ * @param context - The fault context the caller names, such as `table` and `key`
+ * @returns The decoded JS value, or `undefined` for absence
+ * @throws A `DRIVER` {@link DatabaseError} when the stored value does not match its declaration
  *
  * @example
  * ```ts
@@ -374,7 +491,11 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
  * decodeValue('{"a":1}', jsonColumn) // { a: 1 }
  * ```
  */
-export function decodeValue(value: SQLiteValue, column: ColumnSchema): unknown {
+export function decodeValue(
+	value: SQLiteValue,
+	column: ColumnSchema,
+	context: Readonly<Record<string, unknown>> = {},
+): unknown {
 	if (value === null) return column.nullable && !column.optional ? null : undefined
 	if (
 		column.optional &&
@@ -385,18 +506,40 @@ export function decodeValue(value: SQLiteValue, column: ColumnSchema): unknown {
 	) {
 		return null
 	}
+	const decoded = decodeStoredValue(value, column)
+	if (decoded !== undefined) return decoded
+	throw new DatabaseError(
+		'DRIVER',
+		`Stored value in column ${preview(column.name)} does not match its declaration`,
+		{ ...context, column: column.name, storage: column.storage },
+	)
+}
+
+/**
+ * Decodes a present stored value by its column's declared storage.
+ *
+ * @param value - The stored SQLite value, not `NULL` and not a sentinel
+ * @param column - The declared storage
+ * @returns The decoded JS value, or `undefined` when the value does not match the declaration
+ *
+ * @example
+ * ```ts
+ * decodeStoredValue(1, booleanColumn) // true
+ * decodeStoredValue('yes', booleanColumn) // undefined
+ * ```
+ */
+export function decodeStoredValue(value: SQLiteValue, column: ColumnSchema): unknown {
 	switch (column.storage) {
 		case 'boolean':
 			if (value === 0 || value === 0n) return false
 			if (value === 1 || value === 1n) return true
 			return undefined
-		case 'json':
+		case 'json': {
 			if (!isString(value)) return undefined
-			try {
-				return structuredClone(cloneJSONValue(JSON.parse(value)))
-			} catch {
-				return undefined
-			}
+			const parsed = attempt<unknown>(() => JSON.parse(value))
+			if (!parsed.success) return undefined
+			return structuredClone(cloneJSONValue(parsed.value))
+		}
 		case 'integer':
 			return isBigInt(value) || (isFiniteNumber(value) && isInteger(value)) ? value : undefined
 		case 'real':
@@ -478,7 +621,8 @@ export function extractValues(
  * Decodes each declared column with {@link decodeValue} and **omits** any column
  * whose decoded value is `undefined` — so an absent / `NULL` optional column does
  * not surface as `{ bio: undefined }`, matching how the contract's optional
- * columns expect absence. Nullable-only SQL `NULL` cells remain explicit
+ * columns expect absence. A cell that does not match its declaration raises `DRIVER` with
+ * `table`, `column`, and `key`. Nullable-only SQL `NULL` cells remain explicit
  * `null`; optional-and-nullable columns use their storage-class sentinel.
  *
  * @param row - The stored SQLite row
@@ -491,11 +635,12 @@ export function extractValues(
  * ```
  */
 export function decodeRow(row: SQLiteRow, schema: TableSchema): Row {
+	const context = { table: schema.name, key: row[schema.primary] }
 	const result: Row = {}
 	for (const column of schema.columns) {
 		const value = row[column.name]
 		if (value === undefined) continue
-		const decoded = decodeValue(value, column)
+		const decoded = decodeValue(value, column, context)
 		if (decoded !== undefined) result[column.name] = decoded
 	}
 	return result

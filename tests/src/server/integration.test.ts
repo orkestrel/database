@@ -9,7 +9,7 @@ import {
 	sortById,
 } from '../../setupServer.js'
 import type { DatabaseInterface } from '@src/core'
-import { createDatabase, createMemoryDriver } from '@src/core'
+import { createDatabase, createMemoryDriver, equalsValue } from '@src/core'
 import { createSQLiteDriver } from '@src/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseFixture, collectRankStreamIds } from '../../setup.js'
@@ -44,9 +44,13 @@ describe('cross-backend parity — MemoryDriver vs SQLiteDriver', () => {
 		it(`rows match the reference engine — ${testCase.name}`, async () => {
 			const expected = await testCase.execute(memory.value.table('users'))
 			const actual = await testCase.execute(sqlite.value.table('users'))
-			expect(testCase.ordered === true ? actual : sortById(actual)).toEqual(
-				testCase.ordered === true ? expected : sortById(expected),
+			const shown = testCase.ordered === true ? actual : sortById(actual)
+			const engine = testCase.ordered === true ? expected : sortById(expected)
+			const ids = engine.map((row) => row.id)
+			expect(testCase.binary === undefined ? shown : shown.map((row) => row.id)).toEqual(
+				testCase.binary ?? engine,
 			)
+			expect(testCase.binary !== undefined && equalsValue(ids, testCase.binary)).toBe(false)
 		})
 	}
 
@@ -54,7 +58,8 @@ describe('cross-backend parity — MemoryDriver vs SQLiteDriver', () => {
 		it(`scalar matches the reference engine — ${testCase.name}`, async () => {
 			const expected = await testCase.execute(memory.value.table('users'))
 			const actual = await testCase.execute(sqlite.value.table('users'))
-			expect(actual).toBe(expected)
+			expect(actual).toBe(testCase.binary ?? expected)
+			expect(testCase.binary !== undefined && expected === testCase.binary).toBe(false)
 		})
 	}
 

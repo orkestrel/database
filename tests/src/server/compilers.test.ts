@@ -1,6 +1,6 @@
 import { INDEXED_SCHEMA } from '../../setupServer.js'
 import { COMPILER_SCHEMA as SCHEMA, compile } from '../../setupServer.js'
-import type { QueryInput } from '@src/core'
+import type { QueryInput, TableSchema } from '@src/core'
 import {
 	compileAggregateSQL,
 	compileBoundSQL,
@@ -119,14 +119,14 @@ describe('schema and migration compilers', () => {
 describe('compileQuerySQL — operators', () => {
 	it('compiles equals to `= ?` with the encoded operand', () => {
 		expect(compile({ conditions: [cond('age', 'equals', [36])] })).toEqual({
-			sql: 'WHERE "age" = ? ORDER BY "id"',
+			sql: 'WHERE "age" = ? ORDER BY "id" ASC',
 			parameters: [36],
 		})
 	})
 
 	it('encodes a boolean operand to 1 / 0', () => {
 		expect(compile({ conditions: [cond('active', 'equals', [true])] })).toEqual({
-			sql: 'WHERE "active" = ? ORDER BY "id"',
+			sql: 'WHERE "active" = ? ORDER BY "id" ASC',
 			parameters: [1],
 		})
 	})
@@ -136,17 +136,17 @@ describe('compileQuerySQL — operators', () => {
 		// column too, so `not` must also match the `IS NULL` row — SQL's raw
 		// `!= ?` alone would exclude it (NULL comparisons are never true).
 		expect(compile({ conditions: [cond('age', 'not', [36])] })).toEqual({
-			sql: 'WHERE ("age" != ? OR "age" IS NULL) ORDER BY "id"',
+			sql: 'WHERE ("age" != ? OR "age" IS NULL) ORDER BY "id" ASC',
 			parameters: [36],
 		})
 	})
 
 	it('compiles above / from to raw > / >= (a NULL column never matches)', () => {
 		expect(compile({ conditions: [cond('age', 'above', [18])] }).sql).toBe(
-			'WHERE "age" > ? ORDER BY "id"',
+			'WHERE "age" > ? ORDER BY "id" ASC',
 		)
 		expect(compile({ conditions: [cond('age', 'from', [18])] }).sql).toBe(
-			'WHERE "age" >= ? ORDER BY "id"',
+			'WHERE "age" >= ? ORDER BY "id" ASC',
 		)
 	})
 
@@ -154,11 +154,11 @@ describe('compileQuerySQL — operators', () => {
 		// The engine's `compareValues(undefined, 18) < 0` matches an absent/NULL
 		// column (rank 0 < any scalar's rank), so `below` / `to` must match it too.
 		expect(compile({ conditions: [cond('age', 'below', [18])] })).toEqual({
-			sql: 'WHERE ("age" < ? OR "age" IS NULL) ORDER BY "id"',
+			sql: 'WHERE ("age" < ? OR "age" IS NULL) ORDER BY "id" ASC',
 			parameters: [18],
 		})
 		expect(compile({ conditions: [cond('age', 'to', [18])] })).toEqual({
-			sql: 'WHERE ("age" <= ? OR "age" IS NULL) ORDER BY "id"',
+			sql: 'WHERE ("age" <= ? OR "age" IS NULL) ORDER BY "id" ASC',
 			parameters: [18],
 		})
 	})
@@ -169,41 +169,44 @@ describe('compileQuerySQL — operators', () => {
 		// `not null` matches unconditionally, which no `!= ? OR IS NULL` shape
 		// can express (it would only match the IS NULL row).
 		expect(compile({ conditions: [cond('age', 'not', [null])] })).toEqual({
-			sql: 'WHERE 1 ORDER BY "id"',
+			sql: 'WHERE 1 ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
 	it('compiles between to BETWEEN ? AND ?', () => {
 		expect(compile({ conditions: [cond('age', 'between', [18, 65])] })).toEqual({
-			sql: 'WHERE "age" BETWEEN ? AND ? ORDER BY "id"',
+			sql: 'WHERE "age" BETWEEN ? AND ? ORDER BY "id" ASC',
 			parameters: [18, 65],
 		})
 	})
 
 	it('compiles like and glob to their raw operators', () => {
 		expect(compile({ conditions: [cond('name', 'like', ['A%'])] }).sql).toBe(
-			'WHERE "name" LIKE ? ORDER BY "id"',
+			'WHERE "name" LIKE ? ORDER BY "id" ASC',
 		)
 		expect(compile({ conditions: [cond('name', 'glob', ['A*'])] }).sql).toBe(
-			'WHERE "name" GLOB ? ORDER BY "id"',
+			'WHERE "name" GLOB ? ORDER BY "id" ASC',
 		)
 	})
 
-	it('compiles starts to a case-sensitive substr(col, 1, N) = ? check (N = code-point count)', () => {
-		// Case-sensitive and exact — replaces the old LIKE-based compile (which
-		// was ASCII-only case-INsensitive, diverging from the engine's
-		// case-sensitive startsWith). N is a code-point count by using Array.from,
-		// not `.length` (matters for astral characters).
+	it('compiles starts to the index range >= prefix AND < successor', () => {
 		expect(compile({ conditions: [cond('name', 'starts', ['A_d%'])] })).toEqual({
-			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", 1, 4) = ?) ORDER BY "id"',
-			parameters: ['A_d%'],
+			sql: 'WHERE ("name" >= ? AND "name" < ?) ORDER BY "id" ASC',
+			parameters: ['A_d%', 'A_d&'],
+		})
+	})
+
+	it('compiles starts on a prefix of U+10FFFF alone to an open range over text', () => {
+		expect(compile({ conditions: [cond('name', 'starts', ['\u{10FFFF}'])] })).toEqual({
+			sql: 'WHERE (typeof("name") = \'text\' AND "name" >= ?) ORDER BY "id" ASC',
+			parameters: ['\u{10FFFF}'],
 		})
 	})
 
 	it('compiles ends to a case-sensitive substr(col, -N) = ? check', () => {
 		expect(compile({ conditions: [cond('name', 'ends', ['x'])] })).toEqual({
-			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", -1) = ?) ORDER BY "id"',
+			sql: 'WHERE (typeof("name") = \'text\' AND substr("name", -1) = ?) ORDER BY "id" ASC',
 			parameters: ['x'],
 		})
 	})
@@ -211,56 +214,60 @@ describe('compileQuerySQL — operators', () => {
 	it('compiles an empty-string starts / ends operand to a bare text-typeof check', () => {
 		// The engine: every string cell starts with / ends with ''.
 		expect(compile({ conditions: [cond('name', 'starts', [''])] })).toEqual({
-			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
+			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id" ASC',
 			parameters: [],
 		})
 		expect(compile({ conditions: [cond('name', 'ends', [''])] })).toEqual({
-			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id"',
+			sql: 'WHERE typeof("name") = \'text\' ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
-	it('compiles a non-empty any to IN (?, ?)', () => {
+	it('compiles a non-empty any to one json_each parameter', () => {
 		expect(compile({ conditions: [cond('id', 'any', ['u1', 'u2'])] })).toEqual({
-			sql: 'WHERE "id" IN (?, ?) ORDER BY "id"',
-			parameters: ['u1', 'u2'],
+			sql: 'WHERE "id" IN (SELECT value FROM json_each(?)) ORDER BY "id" ASC',
+			parameters: ['["u1","u2"]'],
+		})
+	})
+
+	it('encodes a boolean list in its stored form', () => {
+		expect(compile({ conditions: [cond('active', 'any', [true, false])] })).toEqual({
+			sql: 'WHERE "active" IN (SELECT value FROM json_each(?)) ORDER BY "id" ASC',
+			parameters: ['[1,0]'],
 		})
 	})
 
 	it('collapses an empty any to the constant 0 (matches nothing)', () => {
 		expect(compile({ conditions: [cond('id', 'any', [])] })).toEqual({
-			sql: 'WHERE 0 ORDER BY "id"',
+			sql: 'WHERE 0 ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
-	it('compiles a non-empty none to `(NOT IN (?, ?) OR IS NULL)`', () => {
-		// An absent/NULL column never rank-equals a listed scalar, so the engine's
-		// `none` matches it too — plain `NOT IN` alone would exclude it (SQL's
-		// three-valued `NULL NOT IN (...)` is never true).
+	it('compiles a non-empty none to NOT IN json_each OR IS NULL', () => {
 		expect(compile({ conditions: [cond('id', 'none', ['u1', 'u2'])] })).toEqual({
-			sql: 'WHERE ("id" NOT IN (?, ?) OR "id" IS NULL) ORDER BY "id"',
-			parameters: ['u1', 'u2'],
+			sql: 'WHERE ("id" NOT IN (SELECT value FROM json_each(?)) OR "id" IS NULL) ORDER BY "id" ASC',
+			parameters: ['["u1","u2"]'],
 		})
 	})
 
 	it('collapses an empty none to the constant 1 (matches all)', () => {
 		expect(compile({ conditions: [cond('id', 'none', [])] })).toEqual({
-			sql: 'WHERE 1 ORDER BY "id"',
+			sql: 'WHERE 1 ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
 	it('compiles absent to IS NULL with no parameters', () => {
 		expect(compile({ conditions: [cond('meta', 'absent', [])] })).toEqual({
-			sql: 'WHERE "meta" IS NULL ORDER BY "id"',
+			sql: 'WHERE "meta" IS NULL ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
 	it('compiles present to IS NOT NULL with no parameters', () => {
 		expect(compile({ conditions: [cond('meta', 'present', [])] })).toEqual({
-			sql: 'WHERE "meta" IS NOT NULL ORDER BY "id"',
+			sql: 'WHERE "meta" IS NOT NULL ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
@@ -270,7 +277,7 @@ describe('compileQuerySQL — operators', () => {
 		// operand binds as `9` — NOT JSON.stringify(9) = '9' (a string), which would
 		// match zero rows. This is the operand-encoding fix.
 		expect(compile({ conditions: [cond(['meta', 'info', 'score'], 'equals', [9])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.info.score\') = ? ORDER BY "id"',
+			sql: 'WHERE json_extract("meta", \'$.info.score\') = ? ORDER BY "id" ASC',
 			parameters: [9],
 		})
 	})
@@ -279,7 +286,7 @@ describe('compileQuerySQL — operators', () => {
 		// A nested string operand binds as `green`, not JSON.stringify('green') =
 		// '"green"' — json_extract returns the string unquoted.
 		expect(compile({ conditions: [cond(['payload', 'tag'], 'equals', ['green'])] })).toEqual({
-			sql: 'WHERE json_extract("payload", \'$.tag\') = ? ORDER BY "id"',
+			sql: 'WHERE json_extract("payload", \'$.tag\') = ? ORDER BY "id" ASC',
 			parameters: ['green'],
 		})
 	})
@@ -288,7 +295,7 @@ describe('compileQuerySQL — operators', () => {
 		// A JSON boolean comes back from json_extract as integer 1/0, so `true` binds
 		// as `1` — not JSON.stringify(true) = 'true'.
 		expect(compile({ conditions: [cond(['payload', 'flag'], 'equals', [true])] })).toEqual({
-			sql: 'WHERE json_extract("payload", \'$.flag\') = ? ORDER BY "id"',
+			sql: 'WHERE json_extract("payload", \'$.flag\') = ? ORDER BY "id" ASC',
 			parameters: [1],
 		})
 	})
@@ -298,7 +305,7 @@ describe('compileQuerySQL — operators', () => {
 		// key can't terminate the json-path string literal and inject SQL. The
 		// operand binds as the raw string `v` (the native json_extract scalar).
 		expect(compile({ conditions: [cond(['meta', "x'y"], 'equals', ['v'])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.x\'\'y\') = ? ORDER BY "id"',
+			sql: 'WHERE json_extract("meta", \'$.x\'\'y\') = ? ORDER BY "id" ASC',
 			parameters: ['v'],
 		})
 	})
@@ -309,7 +316,7 @@ describe('compileQuerySQL — operators', () => {
 		// present JSON null, matching the engine's `compareValues(null, null) === 0`
 		// (absent decodes to `undefined`, which does NOT equal `null`).
 		expect(compile({ conditions: [cond(['meta', 'note'], 'equals', [null])] })).toEqual({
-			sql: 'WHERE json_type("meta", \'$.note\') = \'null\' ORDER BY "id"',
+			sql: 'WHERE json_type("meta", \'$.note\') = \'null\' ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
@@ -319,7 +326,7 @@ describe('compileQuerySQL — operators', () => {
 		// excludes only a present JSON null — matching the engine's
 		// `compareValues(value, null) !== 0`.
 		expect(compile({ conditions: [cond(['meta', 'note'], 'not', [null])] })).toEqual({
-			sql: 'WHERE (json_type("meta", \'$.note\') IS NULL OR json_type("meta", \'$.note\') != \'null\') ORDER BY "id"',
+			sql: 'WHERE (json_type("meta", \'$.note\') IS NULL OR json_type("meta", \'$.note\') != \'null\') ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
@@ -329,25 +336,76 @@ describe('compileQuerySQL — operators', () => {
 		// `IS NULL` clause catches both — matching the engine, where both an
 		// undefined (rank 0) and a null (rank 1) nested value rank below any scalar.
 		expect(compile({ conditions: [cond(['meta', 'score'], 'below', [18])] })).toEqual({
-			sql: 'WHERE (json_extract("meta", \'$.score\') < ? OR json_extract("meta", \'$.score\') IS NULL) ORDER BY "id"',
+			sql: 'WHERE (json_extract("meta", \'$.score\') < ? OR json_extract("meta", \'$.score\') IS NULL) ORDER BY "id" ASC',
 			parameters: [18],
 		})
 	})
 
-	it('compiles a nested none to `(NOT IN (...) OR json_extract IS NULL)`', () => {
+	it('compiles a nested none to NOT IN json_each OR json_extract IS NULL', () => {
 		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', ['a', 'b'])] })).toEqual({
-			sql: 'WHERE (json_extract("meta", \'$.tag\') NOT IN (?, ?) OR json_extract("meta", \'$.tag\') IS NULL) ORDER BY "id"',
-			parameters: ['a', 'b'],
+			sql: 'WHERE (json_extract("meta", \'$.tag\') NOT IN (SELECT value FROM json_each(?)) OR json_extract("meta", \'$.tag\') IS NULL) ORDER BY "id" ASC',
+			parameters: ['["a","b"]'],
 		})
 	})
 
-	it('leaves a FLAT equals(null) as `= ?` binding [null] (nested-only fix)', () => {
-		// A flat column with a null operand is unchanged: encodeValue(null) is NULL,
-		// and a null flat column decodes to absent, so `= NULL` and the engine already
-		// agree (both match nothing). Applying IS NULL here would be a new divergence.
+	it('compiles a flat equals(null) and not(null) by the column flags', () => {
 		expect(compile({ conditions: [cond('meta', 'equals', [null])] })).toEqual({
-			sql: 'WHERE "meta" = ? ORDER BY "id"',
-			parameters: [null],
+			sql: 'WHERE "meta" IS NULL ORDER BY "id" ASC',
+			parameters: [],
+		})
+		expect(compile({ conditions: [cond('age', 'equals', [null])] })).toEqual({
+			sql: 'WHERE 0 ORDER BY "id" ASC',
+			parameters: [],
+		})
+		expect(compile({ conditions: [cond('meta', 'not', [null])] })).toEqual({
+			sql: 'WHERE "meta" IS NOT NULL ORDER BY "id" ASC',
+			parameters: [],
+		})
+	})
+
+	it('reads the sentinel of a column that is both optional and nullable', () => {
+		const both: TableSchema = {
+			...SCHEMA,
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'bio', storage: 'text', optional: true, nullable: true },
+				{ name: 'rank', storage: 'integer', optional: true, nullable: true },
+			],
+		}
+		expect(compileConditionSQL(cond('bio', 'equals', [null]), both)).toEqual({
+			sql: 'typeof("bio") = \'blob\'',
+			parameters: [],
+		})
+		expect(compileConditionSQL(cond('rank', 'above', [1]), both)).toEqual({
+			sql: '("rank" > ? AND typeof("rank") != \'text\')',
+			parameters: [1],
+		})
+		expect(compileConditionSQL(cond('rank', 'below', [1]), both)).toEqual({
+			sql: '("rank" < ? OR ("rank" IS NULL OR typeof("rank") = \'text\'))',
+			parameters: [1],
+		})
+		expect(compileConditionSQL(cond('bio', 'like', ['a%']), both)).toEqual({
+			sql: '("bio" LIKE ? AND typeof("bio") = \'text\')',
+			parameters: ['a%'],
+		})
+	})
+
+	it('escapes a glob class bracket, which the core reads literally', () => {
+		expect(compileConditionSQL(cond('name', 'glob', ['a[b]*']), SCHEMA)).toEqual({
+			sql: '"name" GLOB ?',
+			parameters: ['a[[]b]*'],
+		})
+	})
+
+	it('pins every other condition and the order behind an any on the primary key', () => {
+		expect(
+			compile({
+				conditions: [cond('id', 'any', ['u1']), cond('age', 'equals', [36])],
+				order: [{ column: 'age', direction: 'descending' }],
+			}),
+		).toEqual({
+			sql: 'WHERE ("id" IN (SELECT value FROM json_each(?)) AND +"age" = ?) ORDER BY +"age" DESC, "id" DESC',
+			parameters: ['["u1"]', 36],
 		})
 	})
 })
@@ -364,8 +422,8 @@ describe('compileQuerySQL — parenthesization', () => {
 		// (((age >= ? OR starts(name)) AND active = ?)) — the fold wraps each step,
 		// matching the engine's left-to-right matchesQuery (NOT SQL precedence).
 		expect(compile(input)).toEqual({
-			sql: 'WHERE (("age" >= ? OR (typeof("name") = \'text\' AND substr("name", 1, 1) = ?)) AND "active" = ?) ORDER BY "id"',
-			parameters: [18, 'A', 1],
+			sql: 'WHERE (("age" >= ? OR ("name" >= ? AND "name" < ?)) AND "active" = ?) ORDER BY "id" ASC',
+			parameters: [18, 'A', 'B', 1],
 		})
 	})
 
@@ -373,7 +431,7 @@ describe('compileQuerySQL — parenthesization', () => {
 		const input: QueryInput = {
 			conditions: [cond('age', 'from', [18], 'or'), cond('active', 'equals', [true], 'and')],
 		}
-		expect(compile(input).sql).toBe('WHERE ("age" >= ? AND "active" = ?) ORDER BY "id"')
+		expect(compile(input).sql).toBe('WHERE ("age" >= ? AND "active" = ?) ORDER BY "id" ASC')
 	})
 })
 
@@ -392,7 +450,7 @@ describe('compileQuerySQL — order and paging', () => {
 					{ column: 'name', direction: 'ascending' },
 				],
 			}),
-		).toEqual({ sql: 'ORDER BY "age" DESC, "name" ASC, "id"', parameters: [] })
+		).toEqual({ sql: 'ORDER BY "age" DESC, "name" ASC, "id" ASC', parameters: [] })
 	})
 
 	it('does NOT double-append when the explicit order already includes the primary', () => {
@@ -411,25 +469,25 @@ describe('compileQuerySQL — order and paging', () => {
 	it('appends the primary tie-breaker to a single explicit non-primary term', () => {
 		// A lone explicit term that is not the primary still gets `, "id"` appended.
 		expect(compile({ order: [{ column: 'age', direction: 'ascending' }] })).toEqual({
-			sql: 'ORDER BY "age" ASC, "id"',
+			sql: 'ORDER BY "age" ASC, "id" ASC',
 			parameters: [],
 		})
 	})
 
 	it('compiles LIMIT then OFFSET when both present (with the default key order)', () => {
 		expect(compile({ limit: 10, offset: 5 })).toEqual({
-			sql: 'ORDER BY "id" LIMIT ? OFFSET ?',
+			sql: 'ORDER BY "id" ASC LIMIT ? OFFSET ?',
 			parameters: [10, 5],
 		})
 	})
 
 	it('compiles LIMIT alone (with the default key order)', () => {
-		expect(compile({ limit: 10 })).toEqual({ sql: 'ORDER BY "id" LIMIT ?', parameters: [10] })
+		expect(compile({ limit: 10 })).toEqual({ sql: 'ORDER BY "id" ASC LIMIT ?', parameters: [10] })
 	})
 
 	it('compiles offset-only to LIMIT -1 OFFSET ? (with the default key order)', () => {
 		expect(compile({ offset: 5 })).toEqual({
-			sql: 'ORDER BY "id" LIMIT -1 OFFSET ?',
+			sql: 'ORDER BY "id" ASC LIMIT -1 OFFSET ?',
 			parameters: [5],
 		})
 	})
@@ -443,7 +501,7 @@ describe('compileQuerySQL — order and paging', () => {
 				offset: 2,
 			}),
 		).toEqual({
-			sql: 'WHERE "age" >= ? ORDER BY "age" ASC, "id" LIMIT ? OFFSET ?',
+			sql: 'WHERE "age" >= ? ORDER BY "age" ASC, "id" ASC LIMIT ? OFFSET ?',
 			parameters: [18, 5, 2],
 		})
 	})
@@ -453,11 +511,11 @@ describe('compileQuerySQL — order and paging', () => {
 		// records read yields rows in key order, matching a primary-key-ordered `scan`
 		// and the core engine over an unordered scan (the parity safety net depends
 		// on this).
-		expect(compile({})).toEqual({ sql: 'ORDER BY "id"', parameters: [] })
+		expect(compile({})).toEqual({ sql: 'ORDER BY "id" ASC', parameters: [] })
 	})
 
 	it('compiles an undefined input to the same default key order', () => {
-		expect(compileQuerySQL(undefined, SCHEMA)).toEqual({ sql: 'ORDER BY "id"', parameters: [] })
+		expect(compileQuerySQL(undefined, SCHEMA)).toEqual({ sql: 'ORDER BY "id" ASC', parameters: [] })
 	})
 
 	it('rejects invalid paging before compiling query SQL', () => {
@@ -486,10 +544,10 @@ describe('compileConditionSQL', () => {
 		})
 	})
 
-	it('builds a case-sensitive starts compileConditionSQL (substr(col, 1, N) = ?)', () => {
+	it('builds a starts compileConditionSQL as the index range', () => {
 		expect(compileConditionSQL(cond('name', 'starts', ['A_d%']), SCHEMA)).toEqual({
-			sql: '(typeof("name") = \'text\' AND substr("name", 1, 4) = ?)',
-			parameters: ['A_d%'],
+			sql: '("name" >= ? AND "name" < ?)',
+			parameters: ['A_d%', 'A_d&'],
 		})
 	})
 
@@ -556,7 +614,7 @@ describe('compileWhereSQL', () => {
 
 describe('compileOrderSQL', () => {
 	it('returns ORDER BY the primary key alone for an undefined order', () => {
-		expect(compileOrderSQL(undefined, SCHEMA)).toBe('ORDER BY "id"')
+		expect(compileOrderSQL(undefined, SCHEMA)).toBe('ORDER BY "id" ASC')
 	})
 
 	it('appends the primary key (ASC) as the tie-breaker after explicit non-primary terms', () => {
@@ -568,7 +626,7 @@ describe('compileOrderSQL', () => {
 				],
 				SCHEMA,
 			),
-		).toBe('ORDER BY "age" DESC, "name" ASC, "id"')
+		).toBe('ORDER BY "age" DESC, "name" ASC, "id" ASC')
 	})
 
 	it('does not double-append when an explicit term is already the primary', () => {
@@ -579,7 +637,7 @@ describe('compileOrderSQL', () => {
 
 	it('compiles a nested FieldPath order term to json_extract', () => {
 		expect(compileOrderSQL([{ column: ['meta', 'score'], direction: 'ascending' }], SCHEMA)).toBe(
-			'ORDER BY json_extract("meta", \'$.score\') ASC, "id"',
+			'ORDER BY json_extract("meta", \'$.score\') ASC, "id" ASC',
 		)
 	})
 })

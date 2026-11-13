@@ -20,14 +20,22 @@ import type {
 	StorageInterface,
 } from '@src/core'
 import {
+	applyQuery,
 	computeAggregate,
 	conformDriver,
+	readPlannedAggregate,
 	createDatabase,
 	createMemoryDriver,
 	isDatabaseError,
 	planMigration,
 } from '@src/core'
-import { createSQLiteDriver, schemaToIndexes, schemaToTable } from '@src/server'
+import {
+	compileQuerySQL,
+	createSQLiteDriver,
+	planSQLiteQuery,
+	schemaToIndexes,
+	schemaToTable,
+} from '@src/server'
 import {
 	booleanShape,
 	integerShape,
@@ -39,12 +47,13 @@ import {
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
 import { collect, createRecorders } from '@orkestrel/test'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
 	buildCondition,
 	DatabaseFixture,
 	DatabaseSwitch,
 	createUnclonableMetadata,
+	tallyCalls,
 } from '../../../setup.js'
 import {
 	SQLITE_SCHEMA as SCHEMA,
@@ -57,6 +66,14 @@ import {
 	collectExpectedIds,
 	collectSQLiteRecords,
 	createForeignKeyFixture,
+	createExplainDatabase,
+	createMatrixTables,
+	createPagingDatabase,
+	EXPLAIN_SCHEMA,
+	explainRead,
+	matrixReads,
+	pagingRows,
+	pinnedRead,
 	replaceTransactionFailure,
 	tempDatabasePath,
 } from '../../../setupServer.js'
@@ -869,15 +886,13 @@ describe('SQLiteDriver — native aggregate', () => {
 			context: { field: 'limit', value: -1 },
 		})
 		await expect(
-			computeSQLiteAggregate(driver.value, 'count', 'age', {
-				offset: Number.POSITIVE_INFINITY,
-			}),
+			driver.value.aggregate?.('users', 'count', 'age', { offset: Number.POSITIVE_INFINITY }),
 		).rejects.toMatchObject({
 			code: 'VALIDATION',
 			context: { field: 'offset', value: 'Infinity' },
 		})
 		expect(await records.call(driver.value, 'users', { limit: 0 })).toEqual([])
-		expect(await computeSQLiteAggregate(driver.value, 'count', 'age', { limit: 0 })).toBe(4)
+		expect(await driver.value.aggregate?.('users', 'count', 'age', { limit: 0 })).toBe(4)
 	})
 
 	it('sums, averages, and takes the min/max of a numeric column', async () => {
@@ -920,7 +935,15 @@ describe('SQLiteDriver — native aggregate', () => {
 			const operations: readonly AggregateOperation[] = ['sum', 'average', 'minimum', 'maximum']
 			for (const operation of operations) {
 				const expected = computeAggregate(rows, operation, 'value')
-				const actual = await target.aggregate?.('values', operation, 'value', {})
+				const actual = await readPlannedAggregate(
+					target,
+					'values',
+					{},
+					{ operation, column: 'value' },
+				)
+				expect(
+					target.plan?.('values', { aggregate: { operation, column: 'value' } })?.residual,
+				).toEqual({ aggregate: { operation, column: 'value' } })
 				expect(actual).toBe(expected)
 				expect(actual).toBe(10)
 			}
@@ -930,7 +953,7 @@ describe('SQLiteDriver — native aggregate', () => {
 		}
 	})
 
-	it('refines adversarial safe-integer and real accumulation to exact core order', async () => {
+	it('computes sum and average with the engine arithmetic, which differs from the core at the precision edge', async () => {
 		const schema: readonly TableSchema[] = [
 			{
 				name: 'integers',
@@ -988,12 +1011,12 @@ describe('SQLiteDriver — native aggregate', () => {
 				const rows = await collect(memory.scan(entry.table))
 				const operations: readonly AggregateOperation[] = ['sum', 'average']
 				for (const operation of operations) {
-					const expected = computeAggregate(rows, operation, 'value')
+					const core = computeAggregate(rows, operation, 'value')
 					const actual = await target.aggregate?.(entry.table, operation, 'value', {})
-					expect(actual).toBe(expected)
-					expect(actual).toBe(
+					expect(core).toBe(
 						operation === 'average' ? entry.expected / entry.rows.length : entry.expected,
 					)
+					expect(actual).toBe(operation === 'average' ? entry.raw / entry.rows.length : entry.raw)
 				}
 			}
 			native.connect()
@@ -2298,7 +2321,7 @@ describe('SQLiteDriver — stream laziness', () => {
 		}
 	})
 
-	it('omits malformed stored JSON and remains closable', async () => {
+	it('raises DRIVER for malformed stored JSON and remains closable', async () => {
 		const temp = tempDatabasePath()
 		const onDisk = createSQLiteDriver({ path: temp.path })
 		const native = createSQLiteDatabase({ path: temp.path })
@@ -2315,7 +2338,10 @@ describe('SQLiteDriver — stream laziness', () => {
 			native.prepare('UPDATE "users" SET "meta" = ? WHERE "id" = ?').execute(['{bad', 'u1'])
 			const stream = onDisk.stream?.('users', {})
 			if (stream === undefined) throw new Error('Expected stream capability')
-			expect(await collect(stream)).toEqual([{ id: 'u1', name: 'Ada', age: 36, active: true }])
+			await expect(collect(stream)).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { table: 'users', key: 'u1', column: 'meta' },
+			})
 		} finally {
 			native.close()
 			await onDisk.close()
@@ -2691,13 +2717,15 @@ describe('SQLiteDriver — exact ↔ refine gating (the audit fix)', () => {
 		expect(sum).toBe(computeAggregate(rows, 'sum', 'rank'))
 	})
 
-	it('aggregate sum over a text column always refines (never a provably-exact numeric column)', async () => {
+	it('aggregate sum over a text column plans residual and answers through the core', async () => {
 		const rows = await collectSQLiteRecords(refineDriver.value, 'users', {})
 		const expected = computeAggregate(rows, 'sum', 'name')
-		const native =
-			refineDriver.value.aggregate === undefined
-				? undefined
-				: await refineDriver.value.aggregate('users', 'sum', 'name', {})
+		const aggregate = { operation: 'sum' as const, column: 'name' }
+		expect(refineDriver.value.plan?.('users', { aggregate })).toEqual({
+			native: {},
+			residual: { aggregate },
+		})
+		const native = await readPlannedAggregate(refineDriver.value, 'users', {}, aggregate)
 		expect(native).toBe(expected)
 		expect(native).toBeUndefined() // parseNumber('Ada' / 'ada') is undefined — no numeric cells
 	})
@@ -2773,4 +2801,197 @@ describe('SQLiteDriver — options (path, readonly, pragmas)', () => {
 		await readonlyDriver.close()
 		temp.cleanup()
 	})
+})
+
+describe('SQLiteDriver — native-first paging readings', () => {
+	const fixture = createPagingDatabase()
+	const lines = fixture.database.table('lines')
+	const book = buildCondition('book', 'equals', ['b1'])
+	const like = buildCondition('text', 'like', ['line 01%'])
+	const parents = buildCondition('parent', 'any', ['p0', 'p3', 'p6'])
+
+	beforeAll(async () => {
+		await lines.set(pagingRows())
+	})
+
+	afterAll(async () => {
+		await fixture.database.close()
+	})
+
+	it('reads one page of an integer order from the driver with no scan', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			lines.records({
+				conditions: [book],
+				order: [{ column: 'position', direction: 'ascending' }],
+				limit: 10,
+				offset: 20,
+			}),
+		)
+		expect(value.map((row) => row.position)).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28, 29])
+		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 10 })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+	})
+
+	it('reads one page of a descending text order from the driver with no scan', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			lines.records({
+				conditions: [book],
+				order: [{ column: 'text', direction: 'descending' }],
+				limit: 10,
+				offset: 20,
+			}),
+		)
+		expect(value.map((row) => row.position)).toEqual([
+			1479, 1478, 1477, 1476, 1475, 1474, 1473, 1472, 1471, 1470,
+		])
+		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 10 })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+	})
+
+	it('counts in one aggregate call that returns no row', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			lines.count({ conditions: [book] }),
+		)
+		expect(value).toBe(1500)
+		expect(tallyCalls(calls, 'aggregate')).toEqual({ calls: 1, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+	})
+
+	it('reads the rows a like matches from the driver with no scan', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			lines.records({ conditions: [like] }),
+		)
+		expect(value).toHaveLength(100)
+		expect(fixture.recorder.driver.plan?.('lines', { conditions: [like] })?.residual).toEqual({})
+		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 100 })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+	})
+
+	it('plans a one-clause any on an optional key column with an empty residual', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			lines.records({ conditions: [parents] }),
+		)
+		const expected = pagingRows().filter(
+			(row) => row.parent === 'p0' || row.parent === 'p3' || row.parent === 'p6',
+		)
+		expect(value.map((row) => row.id)).toEqual(expected.map((row) => row.id))
+		expect(fixture.recorder.driver.plan?.('lines', { conditions: [parents] })?.residual).toEqual({})
+		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: expected.length })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+	})
+
+	it('repeats each reading inside a transaction', async () => {
+		const { value, calls } = await fixture.recorder.measure(() =>
+			fixture.database.transaction(async (transaction) => {
+				const scoped = transaction.table('lines')
+				const page = await scoped.records({
+					conditions: [book],
+					order: [{ column: 'text', direction: 'ascending' }],
+					limit: 10,
+					offset: 20,
+				})
+				const count = await scoped.count({ conditions: [book] })
+				const matched = await scoped.records({ conditions: [like] })
+				const related = await scoped.records({ conditions: [parents] })
+				return { page: page.length, count, matched: matched.length, related: related.length }
+			}),
+		)
+		expect(value).toEqual({ page: 10, count: 1500, matched: 100, related: 42 })
+		const scoped = calls.filter((call) => call.scoped)
+		expect(tallyCalls(scoped, 'records')).toEqual({ calls: 3, rows: 152 })
+		expect(tallyCalls(scoped, 'aggregate')).toEqual({ calls: 1, rows: 0 })
+		expect(tallyCalls(scoped, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(scoped, 'stream')).toEqual({ calls: 0, rows: 0 })
+	})
+})
+
+describe('SQLiteDriver — EXPLAIN QUERY PLAN of the native plan', () => {
+	for (const statistics of [false, true]) {
+		it(`searches an index for starts, an indexed any, and a pinned primary-key any ${statistics ? 'with' : 'without'} sqlite_stat1`, () => {
+			const database = createExplainDatabase()
+			try {
+				if (statistics) database.execute('ANALYZE')
+				const stat = database
+					.prepare('SELECT count(*) AS "count" FROM "sqlite_schema" WHERE "name" = ?')
+					.get(['sqlite_stat1'])
+				expect(stat?.count).toBe(statistics ? 1 : 0)
+				expect(
+					explainRead(database, {
+						conditions: [buildCondition('text', 'starts', ['line 01'])],
+					}),
+				).toContain('SEARCH lines USING INDEX idx_5_lines_4_text (text>? AND text<?)')
+				expect(
+					explainRead(database, {
+						conditions: [buildCondition('parent', 'any', ['p0', 'p3'])],
+					}),
+				).toContain('SEARCH lines USING INDEX idx_5_lines_6_parent (parent=?)')
+				for (const count of [2, 50, 2000]) {
+					for (const ordered of [false, true]) {
+						expect(explainRead(database, pinnedRead(count, ordered))).toMatch(
+							/^SEARCH lines USING INDEX sqlite_autoindex_lines_1 \(id=\?\)/,
+						)
+					}
+				}
+			} finally {
+				database.close()
+			}
+		})
+	}
+
+	it('returns the rows the core engine returns for the pinned read', () => {
+		const database = createExplainDatabase()
+		try {
+			const rows = database.prepare('SELECT * FROM "lines"').all()
+			for (const ordered of [false, true]) {
+				const input = pinnedRead(50, ordered)
+				const compiled = compileQuerySQL(
+					planSQLiteQuery(input, EXPLAIN_SCHEMA).native,
+					EXPLAIN_SCHEMA,
+				)
+				const native = database
+					.prepare('SELECT * FROM "lines" ' + compiled.sql)
+					.all(compiled.parameters)
+					.map((row) => row.id)
+				const engine = applyQuery(rows, input).map((row) => row.id)
+				expect(native).toEqual(engine)
+				expect(native.length).toBeGreaterThan(0)
+			}
+		} finally {
+			database.close()
+		}
+	})
+})
+
+describe('SQLiteDriver — operator, storage, and flag matrix against the core engine', () => {
+	const flags = [
+		{ optional: false, nullable: false },
+		{ optional: true, nullable: false },
+		{ optional: false, nullable: true },
+		{ optional: true, nullable: true },
+	]
+	for (const storage of ['text', 'integer', 'real', 'boolean'] as const) {
+		for (const { optional, nullable } of flags) {
+			it(`answers every read like the core on ${storage} (optional ${optional}, nullable ${nullable})`, async () => {
+				const { sqlite, memory } = await createMatrixTables(storage, optional, nullable)
+				try {
+					for (const input of matrixReads(storage)) {
+						const actual = await sqlite.table('cells').records(input)
+						const expected = await memory.table('cells').records(input)
+						expect({ input, rows: actual }).toEqual({ input, rows: expected })
+					}
+					const numeric = storage === 'integer' || storage === 'real'
+					const operations = numeric ? (['sum', 'average', 'minimum', 'maximum'] as const) : []
+					for (const operation of operations) {
+						expect(await sqlite.table('cells').aggregate(operation, 'value')).toBe(
+							await memory.table('cells').aggregate(operation, 'value'),
+						)
+					}
+				} finally {
+					await sqlite.close()
+					await memory.close()
+				}
+			})
+		}
+	}
 })

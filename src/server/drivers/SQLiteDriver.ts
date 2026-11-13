@@ -6,6 +6,8 @@ import type {
 	Key,
 	MigrationInput,
 	OperationOptions,
+	ReadInput,
+	ReadPlan,
 	Row,
 	TableSchema,
 	StorageInterface,
@@ -23,21 +25,16 @@ import {
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import type { SQLiteDriverOptions } from '../types.js'
 import {
-	applyQuery,
 	bindRowKey,
 	cloneDriverMetadata,
 	cloneMigrationInput,
-	computeAggregate,
 	checkAbort,
 	DatabaseError,
 	DriverIterator,
-	StreamPage,
-	filterRows,
 	equalsValue,
 	extractKey,
 	isDatabaseError,
 	isKey,
-	matchesQuery,
 	migrateRows,
 	normalizeDriverSchema,
 	planMigration,
@@ -59,10 +56,8 @@ import {
 	encodeValue,
 	extractValues,
 	deriveSQLiteIndexName,
-	matchesAggregateExactly,
-	matchesConditionExactly,
-	matchesQueryExactly,
 	matchesSQLiteAffinity,
+	planSQLiteQuery,
 	quoteIdentifier,
 } from '../helpers.js'
 import { SQLiteTransaction } from '../SQLiteTransaction.js'
@@ -258,28 +253,22 @@ export class SQLiteDriver implements DriverInterface {
 		await this.#clear(table)
 	}
 
-	// A QueryInput whose compiled SQL is provably identical to the core engine's
-	// semantics (see `matchesConditionExactly` / `matchesOrderExactly` /
-	// `matchesQueryExactly`) runs the fast native path; otherwise this driver
-	// fetches a full scan and refines it through the same core engine that
-	// answers every query for `MemoryDriver` and `JSONDriver` — exact → native,
-	// otherwise → refine, never a silent semantics drift between backends.
+	/**
+	 * Splits a read into the part SQLite answers natively and the residual the core runs.
+	 *
+	 * @param table - The declared table to read
+	 * @param input - The read to split
+	 * @returns The plan {@link planSQLiteQuery} returns for the table's schema
+	 */
+	plan(table: string, input: ReadInput): ReadPlan {
+		this.#root()
+		return planSQLiteQuery(input, this.#table(table))
+	}
+
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)
 		this.#root()
-		const schema = this.#table(table)
-		if (matchesQueryExactly(input, schema)) {
-			return this.#guard(() => {
-				const { sql, parameters } = compileQuerySQL(input, schema)
-				const rows = this.#require()
-					.prepare('SELECT * FROM ' + quoteIdentifier(table) + (sql === '' ? '' : ' ' + sql))
-					.all(parameters)
-				return rows.map((row) => decodeRow(row, schema))
-			})
-		}
-		const rows: Row[] = []
-		for await (const row of this.#scan(table)) rows.push(row)
-		return applyQuery(rows, input)
+		return this.#records(table, input)
 	}
 
 	async aggregate(
@@ -290,45 +279,9 @@ export class SQLiteDriver implements DriverInterface {
 	): Promise<number | undefined> {
 		validatePage(input)
 		this.#root()
-		const schema = this.#table(table)
-		const conditions = input.conditions ?? []
-		const conditionsExact = conditions.every((condition) =>
-			matchesConditionExactly(condition, schema),
-		)
-		// `count` ignores `column` entirely (COUNT(*) over rows), so only the
-		// conditions need to be exact; every other aggregate coerces the column
-		// numerically (parseNumber) — only a flat, declared integer/real column
-		// is provably exact (a text/json/blob column may hold non-numeric cells
-		// the engine skips through parseNumber, which SQL's numeric aggregates do not).
-		const columnExact = matchesAggregateExactly(operation, column, schema)
-		if (conditionsExact && columnExact) {
-			return this.#guard(() => {
-				// WHERE-only compile — same rationale as `count`: paging must never
-				// apply to the single aggregate row.
-				const { sql, parameters } = compileWhereSQL(conditions, schema)
-				const value = this.#require()
-					.prepare(
-						'SELECT ' +
-							compileAggregateSQL(operation, column) +
-							' AS value FROM ' +
-							quoteIdentifier(table) +
-							(sql === '' ? '' : ' ' + sql),
-					)
-					.get(parameters)?.value
-				// Over zero matched rows SUM/AVG/MIN/MAX are SQL NULL → undefined (the
-				// engine agrees); COUNT(*) is 0. A clean numeric column coerces as the
-				// engine does.
-				return value === null || value === undefined ? undefined : Number(value)
-			})
-		}
-		const rows: Row[] = []
-		for await (const row of this.#scan(table)) rows.push(row)
-		return computeAggregate(filterRows(rows, conditions), operation, column)
+		return this.#aggregate(table, operation, column, input)
 	}
 
-	// `order` is intentionally ignored (per DriverInterface.stream — streaming
-	// yields unsorted), so the native gate checks only `conditions`; `offset` /
-	// `limit` are always engine-identical under either path.
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		validatePage(input)
 		return new DriverIterator(this.#stream(table, input)[Symbol.asyncIterator](), () =>
@@ -633,34 +586,49 @@ export class SQLiteDriver implements DriverInterface {
 		}
 	}
 
+	async #records(table: string, input: QueryInput): Promise<readonly Row[]> {
+		const schema = this.#table(table)
+		return this.#guard(() => {
+			const { sql, parameters } = compileQuerySQL(input, schema)
+			return this.#require()
+				.prepare('SELECT * FROM ' + quoteIdentifier(table) + ' ' + sql)
+				.all(parameters)
+				.map((row) => decodeRow(row, schema))
+		})
+	}
+
+	async #aggregate(
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		const schema = this.#table(table)
+		return this.#guard(() => {
+			// The WHERE clause alone: paging never applies to the one aggregate row.
+			const { sql, parameters } = compileWhereSQL(input.conditions ?? [], schema)
+			const value = this.#require()
+				.prepare(
+					'SELECT ' +
+						compileAggregateSQL(operation, column) +
+						' AS value FROM ' +
+						quoteIdentifier(table) +
+						(sql === '' ? '' : ' ' + sql),
+				)
+				.get(parameters)?.value
+			// Over zero matched rows SUM / AVG / MIN / MAX are SQL NULL, the core's undefined.
+			return value === null || value === undefined ? undefined : Number(value)
+		})
+	}
+
 	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		const schema = this.#table(table)
-		const conditions = input.conditions ?? []
-		if (conditions.every((condition) => matchesConditionExactly(condition, schema))) {
-			const compiled = compileQuerySQL(
-				{
-					conditions,
-					...(input.limit !== undefined ? { limit: input.limit } : {}),
-					...(input.offset !== undefined ? { offset: input.offset } : {}),
-				},
-				schema,
-			)
-			for await (const row of this.#iterate(
-				schema,
-				'SELECT * FROM ' + quoteIdentifier(table) + (compiled.sql === '' ? '' : ' ' + compiled.sql),
-				compiled.parameters,
-			)) {
-				yield row
-			}
-			return
-		}
-		const offset = input.offset ?? 0
-		const limit = input.limit
-		const page = new StreamPage(offset)
-		for await (const row of this.#scan(table)) {
-			if (limit !== undefined && page.count >= limit) return
-			if (conditions.length > 0 && !matchesQuery(row, conditions)) continue
-			if (!page.next()) continue
+		const compiled = compileQuerySQL(input, schema)
+		for await (const row of this.#iterate(
+			schema,
+			'SELECT * FROM ' + quoteIdentifier(table) + ' ' + compiled.sql,
+			compiled.parameters,
+		)) {
 			yield row
 		}
 	}
@@ -930,6 +898,10 @@ export class SQLiteDriver implements DriverInterface {
 			keys: this.#keysTransaction.bind(this, token),
 			scan: this.#scanTransaction.bind(this, token),
 			clear: this.#clearTransaction.bind(this, token),
+			plan: this.#planTransaction.bind(this, token),
+			records: this.#recordsTransaction.bind(this, token),
+			stream: this.#streamTransaction.bind(this, token),
+			aggregate: this.#aggregateTransaction.bind(this, token),
 			migrate: this.#migrateTransaction.bind(this, token),
 			metadata: this.#metadataTransaction.bind(this, token),
 			stamp: this.#stampTransaction.bind(this, token),
@@ -986,6 +958,44 @@ export class SQLiteDriver implements DriverInterface {
 		return new DriverIterator(this.#scan(table)[Symbol.asyncIterator](), () => {
 			this.#requireTransaction(token)
 		})
+	}
+
+	#planTransaction(token: SQLiteTransaction, table: string, input: ReadInput): ReadPlan {
+		this.#requireTransaction(token)
+		return planSQLiteQuery(input, this.#table(table))
+	}
+
+	async #recordsTransaction(
+		token: SQLiteTransaction,
+		table: string,
+		input: QueryInput,
+	): Promise<readonly Row[]> {
+		validatePage(input)
+		this.#requireTransaction(token)
+		return this.#records(table, input)
+	}
+
+	#streamTransaction(
+		token: SQLiteTransaction,
+		table: string,
+		input: QueryInput,
+	): AsyncIterable<Row> {
+		validatePage(input)
+		return new DriverIterator(this.#stream(table, input)[Symbol.asyncIterator](), () => {
+			this.#requireTransaction(token)
+		})
+	}
+
+	async #aggregateTransaction(
+		token: SQLiteTransaction,
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		validatePage(input)
+		this.#requireTransaction(token)
+		return this.#aggregate(table, operation, column, input)
 	}
 
 	async #clearTransaction(token: SQLiteTransaction, table: string): Promise<void> {

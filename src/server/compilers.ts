@@ -11,8 +11,15 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { CompiledSQL } from './types.js'
 import { DatabaseError, findColumn, validatePage } from '@src/core'
-import { isString } from '@orkestrel/contract'
-import { deriveSQLiteIndexName, encodeValue, quoteIdentifier } from './helpers.js'
+import { isFiniteNumber, isString } from '@orkestrel/contract'
+import {
+	classifyAbsence,
+	computeSuccessor,
+	deriveSQLiteIndexName,
+	encodeValue,
+	matchesPrimaryPin,
+	quoteIdentifier,
+} from './helpers.js'
 import { inferValueStorage } from './inferers.js'
 
 /**
@@ -102,210 +109,237 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
 	return 'json_type(' + quoteIdentifier(column) + ", '$" + rest + "')"
 }
 
-// The `QueryInput` → parameterized SQL compiler — the native-query payoff. It turns
-// a portable `QueryInput` (the same one the core engine's `applyQuery` folds)
-// into the `WHERE` / `ORDER BY` / `LIMIT` tail of a `SELECT`, with bound `?`
-// parameters in clause order. Its WHERE fold parenthesizes left-to-right to match the
-// engine's `matchesQuery` exactly (NOT SQL's AND-over-OR precedence), so a
-// native read and an engine read agree on every query (the parity test). Branches
-// are centralized and public — no operator logic buried in closures.
-// This module speaks pure strings and values without loading the native package.
+// The `QueryInput` → parameterized SQL compiler. It turns the native side of a
+// `planSQLiteQuery` plan into the `WHERE` / `ORDER BY` / `LIMIT` tail of a `SELECT`, with
+// bound `?` parameters in clause order. Its WHERE fold parenthesizes left-to-right to match
+// the engine's `matchesQuery` (NOT SQL's AND-over-OR precedence). This module speaks pure
+// strings and values without loading the native package.
 
 /**
- * Compiles one condition to its `<column> <operator>` SQL fragment and the parameters
- * it binds — engine-exact under SQL's three-valued NULL logic.
+ * Compiles one condition to its SQL fragment and the parameters it binds, with the core
+ * engine's meaning under SQL's three-valued `NULL` logic.
  *
  * @remarks
- * Every operand is run through `encodeValue`, so a bound value matches the SQL
- * the column side compiles to. A flat column encodes operands with its declared
- * schema type (a flat `json` column → `JSON.stringify`); a nested `FieldPath`
- * encodes each operand as the native scalar `json_extract` returns, derived from
- * the operand's runtime type (per-operand, since `between` / `any` / `none` can
- * mix types). `any` / `none` collapse an empty list to a constant (`0` matches
- * nothing, `1` matches all) with no parameters.
+ * Every operand is run through `encodeValue`: a flat column encodes operands with its
+ * declared storage, and a nested `FieldPath` encodes each operand as the native scalar
+ * `json_extract` returns. The core's total order ranks an absent value and `null` below
+ * every value, so `below`, `to`, `not`, and `none` match them; the fragments add the
+ * column's null test, chosen from its flags. A column that is both optional and nullable
+ * stores explicit `null` as a sentinel — an empty blob for `text` and the text `null`
+ * otherwise — so its null test and its value test read `typeof(…)`.
  *
- * The core engine's total order ranks `undefined` (rank 0) below `null`
- * (rank 1) (see `compareValues`), so a missing/`NULL` column matches
- * `below` / `to` / a scalar `not` / `none` — the opposite of raw SQL, where a
- * comparison against `NULL` is `NULL` (excluded). This fragment replicates the
- * engine exactly. Truth table (`value` = the engine's decoded field read; a
- * flat column's stored `NULL` decodes to `undefined` per `decodeRow`, so a
- * flat `value` is never a present `null` — only a nested path can be
- * present-but-`null`):
- *
- * ```text
- * operator            | value=undefined (absent)      | value=null (nested only) | value=scalar
- * --------------------|--------------------------------|---------------------------|-------------
- * equals, first=null  | no match                       | MATCH                     | no match
- * equals, first=X     | no match                       | no match                  | value===X
- * not, first=null     | MATCH (flat: unconditionally;  | no match                  | MATCH
- *                     |   nested: absent still matches)|                           |
- * not, first=X        | MATCH                          | MATCH                     | value!==X
- * below/to, first=X   | MATCH (rank 0 < rank(X))       | MATCH (rank 1 < rank(X))  | rank compare
- * none, list=[…]       | MATCH (no scalar rank-equal)   | MATCH                     | not-in-list
- * any, list=[…]        | no match                       | no match                  | in-list
- * above/from/between  | no match                       | no match                  | rank compare
- * like/glob/starts/…  | no match (not a string)        | no match                  | string test
- * present              | false                          | false                     | true
- * absent                | true                           | true                      | false
- * ```
- *
- * A flat SQL `NULL` represents absence or explicit null according to its
- * {@link ColumnSchema}; optional-and-nullable columns use a storage-class
- * sentinel to distinguish the two. The native exactness gate therefore
- * refines every optional or nullable scalar comparison through the core engine.
- * This compiler still emits a total SQL fragment for direct consumers.
- *
- * A nested path can be present-but-`null` (a stored JSON `null`), which
- * `json_extract` reads back as SQL `NULL` — indistinguishable from an absent
- * path. `json_type(col, path)` disambiguates them (`'null'` for present-null,
- * SQL `NULL` for absent), so nested `equals` / `not` against a `null` operand
- * compile through `json_type` instead of `IS NULL` / `IS NOT NULL`.
- *
- * Every other MATCH-on-null-or-absent row is expressed uniformly (flat and
- * nested alike) as `(<column> <op> ? OR <column> IS NULL)` — for a nested
- * path, `json_extract` already collapses both absent and present-null to SQL
- * `NULL`, so `IS NULL` catches both in one clause; for a flat column there is
- * only the absent case to catch.
+ * - `starts` compiles to the index range `column >= ? AND column < ?`, whose upper bound is
+ *   {@link computeSuccessor} of the prefix; `ends` reads `substr`.
+ * - `any` and `none` bind the whole list as one JSON parameter,
+ *   `column IN (SELECT value FROM json_each(?))`; an empty list is a constant.
+ * - `like` and `glob` match text values only; `glob` writes each `[` as `[[]`, because the
+ *   core treats a `[` literally.
+ * - `pinned` writes the column behind the unary `+`, which keeps the engine off its index:
+ *   {@link compileWhereSQL} pins every other condition when one is `any` on the primary
+ *   key.
  *
  * @param condition - The condition to compile
- * @param schema - The table's schema (for declared column types)
+ * @param schema - The table's schema (for declared column types and flags)
+ * @param pinned - If `true`, writes the column reference behind the unary `+`; if `false`,
+ *   writes it bare. Default: `false`
  * @returns The SQL fragment and its bound parameters
  *
  * @example
  * ```ts
  * compileConditionSQL({ column: 'age', operator: 'above', values: [18], connector: 'and' }, schema)
  * // { sql: '"age" > ?', parameters: [18] }
- * compileConditionSQL({ column: 'age', operator: 'below', values: [18], connector: 'and' }, schema)
- * // { sql: '("age" < ? OR "age" IS NULL)', parameters: [18] }
+ * compileConditionSQL({ column: 'name', operator: 'starts', values: ['Ad'], connector: 'and' }, schema)
+ * // { sql: '("name" >= ? AND "name" < ?)', parameters: ['Ad', 'Ae'] }
  * ```
  */
-export function compileConditionSQL(condition: Condition, schema: TableSchema): CompiledSQL {
-	const column = compileFieldSQL(condition.column)
+export function compileConditionSQL(
+	condition: Condition,
+	schema: TableSchema,
+	pinned = false,
+): CompiledSQL {
+	const column = (pinned ? '+' : '') + compileFieldSQL(condition.column)
 	const nested = !isString(condition.column)
 	const declared = isString(condition.column) ? findColumn(condition.column, schema) : undefined
+	const flags = nested ? 'nested' : classifyAbsence(declared)
+	const sentinel = declared?.storage === 'text' || declared?.storage === 'json' ? 'blob' : 'text'
+	const absent =
+		flags === 'both'
+			? '(' + column + ' IS NULL OR typeof(' + column + ") = '" + sentinel + "')"
+			: column + ' IS NULL'
+	const valued = flags === 'both' ? ' AND typeof(' + column + ") != '" + sentinel + "'" : ''
+	// A flat text column without a sentinel holds only text or NULL, so a text test needs no
+	// `typeof`; a sentinel, a nested path, or another storage can hold a non-text value.
+	const texted = declared?.storage === 'text' && flags !== 'both' && flags !== 'nested'
+	const textual = texted ? '' : ' AND typeof(' + column + ") = 'text'"
 	const first = condition.values[0]
 	const second = condition.values[1]
-	const nullOperand = first === null || first === undefined
-	// The nested `json_type` read — built only when `condition.column` is an
-	// array (a nested path) — disambiguates a present JSON `null` from an
-	// absent path under `equals` / `not` (see the truth table above).
-	const jsonType = !isString(condition.column) ? compileJSONTypeSQL(condition.column) : ''
+	// The nested `json_type` read disambiguates a present JSON `null` from an absent path.
+	const jsonType = isString(condition.column) ? '' : compileJSONTypeSQL(condition.column)
 	switch (condition.operator) {
 		case 'equals': {
-			if (nullOperand && nested) {
-				return { sql: jsonType + " = 'null'", parameters: [] }
+			if (first === null || first === undefined) {
+				if (flags === 'nested') return { sql: jsonType + " = 'null'", parameters: [] }
+				if (flags === 'nullable') return { sql: column + ' IS NULL', parameters: [] }
+				if (flags === 'both') {
+					return { sql: 'typeof(' + column + ") = '" + sentinel + "'", parameters: [] }
+				}
+				return { sql: '0', parameters: [] }
 			}
-			const sql = column + ' = ?'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
+			return compileBoundSQL(column + ' = ?', [first], nested, declared)
 		}
 		case 'not': {
-			if (nullOperand) {
-				if (nested) {
+			if (first === null || first === undefined) {
+				if (flags === 'nested') {
 					return {
 						sql: '(' + jsonType + ' IS NULL OR ' + jsonType + " != 'null')",
 						parameters: [],
 					}
 				}
-				// A flat column's decoded value is never a present null, so
-				// `compareValues(value, null)` is nonzero for every row (absent or
-				// scalar) — the engine's `not null` matches unconditionally.
+				if (flags === 'nullable') return { sql: column + ' IS NOT NULL', parameters: [] }
+				if (flags === 'both') {
+					return { sql: 'typeof(' + column + ") != '" + sentinel + "'", parameters: [] }
+				}
 				return { sql: '1', parameters: [] }
 			}
-			const sql = '(' + column + ' != ? OR ' + column + ' IS NULL)'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
+			return compileBoundSQL(
+				'(' + column + ' != ? OR ' + column + ' IS NULL)',
+				[first],
+				nested,
+				declared,
+			)
 		}
-		case 'above': {
-			const sql = column + ' > ?'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'below': {
-			const sql = '(' + column + ' < ? OR ' + column + ' IS NULL)'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'from': {
-			const sql = column + ' >= ?'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'to': {
-			const sql = '(' + column + ' <= ? OR ' + column + ' IS NULL)'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'between': {
-			const sql = column + ' BETWEEN ? AND ?'
-			const values = [first, second]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'like': {
-			const sql = column + ' LIKE ?'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
-		case 'glob': {
-			const sql = column + ' GLOB ?'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
-		}
+		case 'above':
+			return compileBoundSQL(wrapValued(column + ' > ?', valued), [first], nested, declared)
+		case 'below':
+			return compileBoundSQL('(' + column + ' < ? OR ' + absent + ')', [first], nested, declared)
+		case 'from':
+			return compileBoundSQL(wrapValued(column + ' >= ?', valued), [first], nested, declared)
+		case 'to':
+			return compileBoundSQL('(' + column + ' <= ? OR ' + absent + ')', [first], nested, declared)
+		case 'between':
+			return compileBoundSQL(
+				wrapValued(column + ' BETWEEN ? AND ?', valued),
+				[first, second],
+				nested,
+				declared,
+			)
+		case 'like':
+			return compileBoundSQL(wrapValued(column + ' LIKE ?', textual), [first], nested, declared)
+		case 'glob':
+			return compileBoundSQL(
+				wrapValued(column + ' GLOB ?', textual),
+				[isString(first) ? first.replaceAll('[', '[[]') : first],
+				nested,
+				declared,
+			)
 		case 'starts': {
-			// Case-sensitive, exact compile (replaces the old LIKE-based one, which
-			// was ASCII-only case-INsensitive — a mismatch with the engine's
-			// case-sensitive `String.startsWith`). `substr` counts code points, so
-			// the length is a code-point count (`Array.from`), not `.length`. An
-			// empty operand matches every text-column value (the engine: every
-			// string starts with '').
-			const text = isString(first) ? first : ''
-			if (text === '') {
-				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
+			// An empty prefix matches every text value, as every string starts with ''.
+			const prefix = isString(first) ? first : ''
+			if (prefix === '') return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
+			const successor = computeSuccessor(prefix)
+			if (successor === undefined) {
+				return compileBoundSQL(
+					'(typeof(' + column + ") = 'text' AND " + column + ' >= ?)',
+					[prefix],
+					nested,
+					declared,
+				)
 			}
-			const length = Array.from(text).length
-			const sql =
-				'(typeof(' + column + ") = 'text' AND substr(" + column + ', 1, ' + length + ') = ?)'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
+			return compileBoundSQL(
+				'(' + column + ' >= ? AND ' + column + ' < ?)',
+				[prefix, successor],
+				nested,
+				declared,
+			)
 		}
 		case 'ends': {
-			// Mirror of `starts`: `substr(<col>, -N)` (SQLite's 2-arg form counts
-			// from the right when N is negative) reads the last N code points.
-			const text = isString(first) ? first : ''
-			if (text === '') {
-				return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
-			}
-			const length = Array.from(text).length
-			const sql =
-				'(typeof(' + column + ") = 'text' AND substr(" + column + ', -' + length + ') = ?)'
-			const values = [first]
-			return compileBoundSQL(sql, values, nested, declared)
+			// `substr(<col>, -N)` reads the last N code points.
+			const suffix = isString(first) ? first : ''
+			if (suffix === '') return { sql: 'typeof(' + column + ") = 'text'", parameters: [] }
+			return compileBoundSQL(
+				'(typeof(' +
+					column +
+					") = 'text' AND substr(" +
+					column +
+					', -' +
+					String(Array.from(suffix).length) +
+					') = ?)',
+				[suffix],
+				nested,
+				declared,
+			)
 		}
 		case 'any': {
 			if (condition.values.length === 0) return { sql: '0', parameters: [] }
-			const sql = column + ' IN (' + condition.values.map(() => '?').join(', ') + ')'
-			const values = condition.values
-			return compileBoundSQL(sql, values, nested, declared)
+			return compileListSQL(column + ' IN ', '', condition.values, nested, declared)
 		}
 		case 'none': {
 			if (condition.values.length === 0) return { sql: '1', parameters: [] }
-			const sql =
-				'(' +
-				column +
-				' NOT IN (' +
-				condition.values.map(() => '?').join(', ') +
-				') OR ' +
-				column +
-				' IS NULL)'
-			const values = condition.values
-			return compileBoundSQL(sql, values, nested, declared)
+			return compileListSQL(
+				'(' + column + ' NOT IN ',
+				' OR ' + column + ' IS NULL)',
+				condition.values,
+				nested,
+				declared,
+			)
 		}
 		case 'absent':
-			return { sql: column + ' IS NULL', parameters: [] }
+			return { sql: absent, parameters: [] }
 		case 'present':
-			return { sql: column + ' IS NOT NULL', parameters: [] }
+			return { sql: wrapValued(column + ' IS NOT NULL', valued), parameters: [] }
 	}
+}
+
+/**
+ * Parenthesizes a fragment when a guard term joins it, and leaves a bare fragment bare.
+ *
+ * @param fragment - The SQL fragment
+ * @param guard - The joined guard term, or `''` for none
+ * @returns The fragment, parenthesized when `guard` is not empty
+ *
+ * @example
+ * ```ts
+ * wrapValued('"age" > ?', '') // '"age" > ?'
+ * wrapValued('"age" > ?', ' AND "age" IS NOT NULL') // '("age" > ? AND "age" IS NOT NULL)'
+ * ```
+ */
+export function wrapValued(fragment: string, guard: string): string {
+	return guard === '' ? fragment : '(' + fragment + guard + ')'
+}
+
+/**
+ * Compiles a membership list as one bound JSON parameter read through `json_each`, or as one
+ * parameter per operand when an encoded operand has no JSON form.
+ *
+ * @param head - The SQL ahead of the list
+ * @param tail - The SQL after the list
+ * @param values - The operands
+ * @param nested - If `true`, encodes each operand by its runtime type; if `false`, by the
+ *   declared column
+ * @param declared - The declared flat column
+ * @returns The SQL fragment and its bound parameters
+ *
+ * @example
+ * ```ts
+ * compileListSQL('"id" IN ', '', ['a', 'b'], false, idColumn)
+ * // { sql: '"id" IN (SELECT value FROM json_each(?))', parameters: ['["a","b"]'] }
+ * ```
+ */
+export function compileListSQL(
+	head: string,
+	tail: string,
+	values: readonly unknown[],
+	nested: boolean,
+	declared: ColumnSchema | undefined,
+): CompiledSQL {
+	const encoded = compileBoundSQL('', values, nested, declared).parameters
+	if (encoded.every((value) => isString(value) || isFiniteNumber(value))) {
+		return {
+			sql: head + '(SELECT value FROM json_each(?))' + tail,
+			parameters: [JSON.stringify(encoded)],
+		}
+	}
+	return { sql: head + '(' + values.map(() => '?').join(', ') + ')' + tail, parameters: encoded }
 }
 
 /**
@@ -337,11 +371,10 @@ export function compileBoundSQL(
  * left-to-right so the grouping matches the engine's `matchesQuery` fold.
  *
  * @remarks
- * The first condition's connector is ignored, per the {@link Condition} types.
- * Every fragment (see {@link compileConditionSQL}'s truth table) replicates the core
- * engine's total order exactly under SQL's three-valued NULL logic, so this
- * clause matches `applyQuery` row-for-row over the same table — a native
- * `records` / `count` read never disagrees with a scan-and-filter fallback.
+ * The first condition's connector is ignored, per the {@link Condition} types. When every
+ * connector is `and` and one condition is `any` on the primary key, every other condition's
+ * column reference is pinned behind the unary `+`, so the engine keeps the primary key as
+ * the access path on any file, with or without `sqlite_stat1`.
  *
  * @param conditions - The conditions to fold
  * @param schema - The table's schema
@@ -357,57 +390,66 @@ export function compileWhereSQL(
 	conditions: readonly Condition[],
 	schema: TableSchema,
 ): CompiledSQL {
-	const [first, ...remaining] = conditions
-	if (first === undefined) return { sql: '', parameters: [] }
-	const head = compileConditionSQL(first, schema)
-	const fragments = remaining.map((condition) => {
-		const next = compileConditionSQL(condition, schema)
-		const operator = condition.connector === 'or' ? 'OR' : 'AND'
-		return { sql: ' ' + operator + ' ' + next.sql + ')', parameters: next.parameters }
+	const pinned = matchesPrimaryPin(conditions, schema)
+	const compiled = conditions.map((condition) =>
+		compileConditionSQL(
+			condition,
+			schema,
+			pinned && !(condition.operator === 'any' && condition.column === schema.primary),
+		),
+	)
+	const [head, ...remaining] = compiled
+	if (head === undefined) return { sql: '', parameters: [] }
+	const fragments = remaining.map((next, index) => {
+		const operator = conditions[index + 1]?.connector === 'or' ? 'OR' : 'AND'
+		return ' ' + operator + ' ' + next.sql + ')'
 	})
-	const opening = '('.repeat(fragments.length)
-	const tail = fragments.map((part) => part.sql).join('')
 	return {
-		sql: 'WHERE ' + opening + head.sql + tail,
-		parameters: [...head.parameters, ...fragments.flatMap((part) => part.parameters)],
+		sql: 'WHERE ' + '('.repeat(fragments.length) + head.sql + fragments.join(''),
+		parameters: compiled.flatMap((part) => part.parameters),
 	}
 }
 
 /**
- * Compiles the ORDER BY clause from the order terms, always ending with the
- * primary key as the final determinant.
+ * Compiles the ORDER BY clause from the order terms, ending with the primary key in the
+ * direction of the final term.
  *
  * @remarks
- * The native `records` read then resolves ties in key order, matching a
- * primary-key-ordered `scan` and the core engine's stable `sortRows` over a
- * key-ordered scan (and IndexedDB's key-ordered reads), so a native read equals
- * the scan path — native ↔ engine parity. SQLite without an
- * `ORDER BY` returns rowid (insertion) order, and an explicit order alone breaks
- * ties by rowid too — both diverge from every key-ordered backend. The
- * tie-breaker is ASCENDING regardless of the explicit directions: the engine's
- * stable sort runs over key-ascending input, so equal rows stay in
- * ascending-key order whichever way the explicit terms point. Skipped when the
- * primary is already an explicit order term (no double-append).
+ * Ties resolve by primary key in the direction of the final order term, ascending when the
+ * read has no order, so a read without an order returns ascending key order. The primary
+ * term is skipped when the primary is already an explicit order term. `pinned` writes each
+ * explicit term behind the unary `+`, so an order keeps the engine on the primary-key access
+ * path {@link compileWhereSQL} pins.
  *
  * @param order - The explicit order terms, or `undefined`
  * @param schema - The table's schema (for the primary key)
- * @returns The `ORDER BY …` clause, or an empty string when there is nothing to order by
+ * @param pinned - If `true`, writes each explicit term behind the unary `+`; if `false`, bare.
+ *   Default: `false`
+ * @returns The `ORDER BY …` clause
  *
  * @example
  * ```ts
  * compileOrderSQL([{ column: 'age', direction: 'descending' }], schema)
- * // 'ORDER BY "age" DESC, "id"'
+ * // 'ORDER BY "age" DESC, "id" DESC'
  * ```
  */
-export function compileOrderSQL(order: readonly Order[] | undefined, schema: TableSchema): string {
+export function compileOrderSQL(
+	order: readonly Order[] | undefined,
+	schema: TableSchema,
+	pinned = false,
+): string {
 	const terms = (order ?? []).map(
-		(term) => compileFieldSQL(term.column) + (term.direction === 'descending' ? ' DESC' : ' ASC'),
+		(term) =>
+			(pinned ? '+' : '') +
+			compileFieldSQL(term.column) +
+			(term.direction === 'descending' ? ' DESC' : ' ASC'),
 	)
 	const ordersByPrimary = (order ?? []).some(
 		(term) => isString(term.column) && term.column === schema.primary,
 	)
-	if (!ordersByPrimary) terms.push(quoteIdentifier(schema.primary))
-	return terms.length === 0 ? '' : 'ORDER BY ' + terms.join(', ')
+	const tie = order?.at(-1)?.direction === 'descending' ? ' DESC' : ' ASC'
+	const tail = ordersByPrimary ? [] : [quoteIdentifier(schema.primary) + tie]
+	return 'ORDER BY ' + [...terms, ...tail].join(', ')
 }
 
 /**
@@ -444,21 +486,12 @@ export function compilePageSQL(limit: number | undefined, offset: number | undef
  * its bound parameters in clause order.
  *
  * @remarks
- * The driver's native `records` / `count` path: it assembles
- * `[where, orderBy, limitOffset]` (each possibly empty) into one clause so a
- * `SELECT * FROM <table> <clause>` runs the whole read in the engine instead of
- * over a JS `scan`. The WHERE fold is parenthesized **left-to-right** to mirror
- * the core engine's `matchesQuery` (not SQL's native AND-over-OR precedence),
- * so a native and an engine read return identical rows. Each operand is encoded
- * through `encodeValue`: a flat column uses its declared schema type, while a nested
- * `FieldPath` (a `json_extract` read) encodes each operand as the native scalar
- * the extract returns — derived from the operand's runtime type — so it compares.
- * Every operator maps per the databases guide's operator table, with
- * `starts` / `ends` compiling to a code-point `substr` slice guarded by
- * `typeof(<column>) = 'text'` (case-sensitive, matching the engine's
- * `String.prototype.startsWith` / `endsWith`) and an empty `any` / `none` list
- * collapsing to a constant. An `undefined` input (or one with no parts)
- * compiles to an empty clause.
+ * Pass it the native side of {@link planSQLiteQuery}. It assembles
+ * `[where, orderBy, limitOffset]` into one clause so a `SELECT * FROM <table> <clause>`
+ * runs the read in the engine: {@link compileWhereSQL} folds the conditions left-to-right
+ * and pins them behind a primary-key `any`, and {@link compileOrderSQL} ends the order with
+ * the primary key in the final term's direction. Each operand is encoded through
+ * `encodeValue`.
  *
  * @param input - The read specification, or `undefined` for all rows
  * @param schema - The table's schema (column types for operand encoding)
@@ -467,13 +500,14 @@ export function compilePageSQL(limit: number | undefined, offset: number | undef
  * @example
  * ```ts
  * compileQuerySQL({ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] }, schema)
- * // { sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18] }
+ * // { sql: 'WHERE "age" >= ? ORDER BY "id" ASC', parameters: [18] }
  * ```
  */
 export function compileQuerySQL(input: QueryInput | undefined, schema: TableSchema): CompiledSQL {
 	validatePage(input)
-	const where = compileWhereSQL(input?.conditions ?? [], schema)
-	const orderBy = compileOrderSQL(input?.order, schema)
+	const conditions = input?.conditions ?? []
+	const where = compileWhereSQL(conditions, schema)
+	const orderBy = compileOrderSQL(input?.order, schema, matchesPrimaryPin(conditions, schema))
 	const page = compilePageSQL(input?.limit, input?.offset)
 	const sql = [where.sql, orderBy, page.sql].filter((part) => part !== '').join(' ')
 	return {

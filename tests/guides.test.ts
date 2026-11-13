@@ -92,11 +92,10 @@ await new GuideCommand({
 		compileFieldSQL,
 		compileQuerySQL,
 		deriveSQLiteIndexName,
-		matchesAggregateExactly,
-		matchesConditionExactly,
-		matchesOrderExactly,
-		matchesQueryExactly,
+		matchesNativeAggregate,
+		matchesNativeCondition,
 		matchesSQLiteAffinity,
+		planSQLiteQuery,
 		quoteIdentifier,
 		schemaToIndexes,
 		schemaToTable,
@@ -480,7 +479,7 @@ await new GuideCommand({
 					{ conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] },
 					schema,
 				),
-			).toEqual({ sql: 'WHERE "age" >= ? ORDER BY "id"', parameters: [18] })
+			).toEqual({ sql: 'WHERE "age" >= ? ORDER BY "id" ASC', parameters: [18] })
 		})
 
 		it('the SQL emitters return what the fence claims (guides/database.md:2140-2148)', () => {
@@ -489,29 +488,35 @@ await new GuideCommand({
 			expect(compileColumnSQL('integer')).toBe('INTEGER')
 			expect(compileFieldSQL(['profile', 'score'])).toBe('json_extract("profile", \'$.score\')')
 			expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
-			expect(matchesAggregateExactly('minimum', 'age', schema)).toBe(true)
+			expect(matchesNativeAggregate({ operation: 'minimum', column: 'age' }, schema)).toBe(true)
 			expect(matchesSQLiteAffinity('INTEGER', 'integer')).toBe(true)
 			expect(schemaToTable(schema)).toContain('CREATE TABLE IF NOT EXISTS')
 			expect(schemaToIndexes(schema)).toEqual([])
 		})
 
-		it('the exactness predicates return what the fence claims (guides/database.md:2197-2212)', () => {
-			const exact: Condition = { column: 'age', operator: 'above', values: [18], connector: 'and' }
-			const notExact: Condition = {
+		it('the planner returns what the fence claims', () => {
+			const native: Condition = { column: 'age', operator: 'above', values: [18], connector: 'and' }
+			const residual: Condition = {
 				column: 'age',
 				operator: 'above',
 				values: [null],
 				connector: 'and',
 			}
-			expect(matchesConditionExactly(exact, schema)).toBe(true)
-			expect(matchesConditionExactly(notExact, schema)).toBe(false)
-			expect(matchesOrderExactly({ column: 'age', direction: 'ascending' }, schema)).toBe(true)
+			expect(matchesNativeCondition(native, schema)).toBe(true)
+			expect(matchesNativeCondition(residual, schema)).toBe(false)
 			expect(
-				matchesQueryExactly(
-					{ conditions: [exact], order: [{ column: 'age', direction: 'ascending' }] },
+				planSQLiteQuery(
+					{ conditions: [native], order: [{ column: 'age', direction: 'ascending' }], limit: 10 },
 					schema,
 				),
-			).toBe(true)
+			).toEqual({
+				native: {
+					conditions: [native],
+					order: [{ column: 'age', direction: 'ascending' }],
+					limit: 10,
+				},
+				residual: {},
+			})
 		})
 	})
 

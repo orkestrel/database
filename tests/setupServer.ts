@@ -1,6 +1,7 @@
 import type { ColumnSchema } from '@src/core'
 import type { DatabaseInterface, IndexMap, RowOf, TableInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
+import { StorageRecorder } from './setup.js'
 import {
 	booleanShape,
 	integerShape,
@@ -10,9 +11,16 @@ import {
 	optionalShape,
 	stringShape,
 } from '@orkestrel/contract'
-import type { AggregateOperation, QueryInput, Row } from '@src/core'
+import type {
+	AggregateOperation,
+	ColumnMap,
+	ConditionOperator,
+	QueryInput,
+	ReadInput,
+	Row,
+} from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
-import { applyQuery } from '@src/core'
+import { applyQuery, readPlannedAggregate, readPlannedRows } from '@src/core'
 import { collect } from '@orkestrel/test'
 import type { JSONDriver } from '@src/server'
 import type { TeardownInterface } from '@orkestrel/test'
@@ -30,8 +38,15 @@ import type { ExportKeyword, SurfaceSymbol } from '@orkestrel/guide'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { computeSymbolKey } from '@orkestrel/guide'
 import { createRequire } from 'node:module'
+import type { SQLiteDatabaseInterface } from '@orkestrel/sqlite'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
-import { compileQuerySQL, createSQLiteDriver } from '@src/server'
+import {
+	compileQuerySQL,
+	createSQLiteDriver,
+	planSQLiteQuery,
+	schemaToIndexes,
+	schemaToTable,
+} from '@src/server'
 import { createScratch } from '@orkestrel/test/server'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
@@ -1058,9 +1073,7 @@ export async function computeSQLiteAggregate(
 	column: FieldPath,
 	input: QueryInput,
 ): Promise<number | undefined> {
-	const hook = target.aggregate
-	if (hook === undefined) throw new Error('SQLiteDriver is missing its native aggregate hook')
-	return hook.call(target, 'users', operation, column, input)
+	return readPlannedAggregate(target, 'users', input, { operation, column })
 }
 
 export async function collectEngineRows(
@@ -1074,7 +1087,7 @@ export async function collectSQLiteIds(
 	target: SQLiteDriver,
 	input: QueryInput,
 ): Promise<readonly string[]> {
-	const rows = target.records === undefined ? [] : await target.records('users', input)
+	const rows = await readPlannedRows(target, 'users', input)
 	return rows.map((row) => String(row.id)).sort()
 }
 
@@ -1090,9 +1103,7 @@ export async function collectSQLiteRecords(
 	table: string,
 	input: QueryInput,
 ): Promise<readonly Row[]> {
-	const hook = target.records
-	if (hook === undefined) throw new Error('SQLiteDriver is missing its native records hook')
-	return hook.call(target, table, input)
+	return readPlannedRows(target, table, input)
 }
 
 export const USERS = {
@@ -1236,12 +1247,16 @@ export function sortById(rows: readonly UserRow[]): readonly UserRow[] {
 export interface RowCase {
 	readonly name: string
 	readonly ordered?: boolean
+	// The ids SQLite returns under its binary text order, for a case the text-order exemption names.
+	readonly binary?: readonly string[]
 	execute(users: UsersTable): Promise<readonly UserRow[]>
 }
 
 // A scalar-returning case (count / an aggregate) — compared directly.
 export interface ScalarCase {
 	readonly name: string
+	// The value SQLite returns under its binary text order, for a case the text-order exemption names.
+	readonly binary?: number
 	execute(users: UsersTable): Promise<number | undefined>
 }
 
@@ -1608,14 +1623,13 @@ export const ROW_CASES: readonly RowCase[] = [
 				.collect(),
 	},
 
-	// ── non-BMP text RANGE parity (FIX 1 — code point vs. code unit) ─────
-	// Threshold '' sits between u8's lead surrogate (0xD83D) and u9's
-	// code unit (0xE050): a code-unit (engine) comparison puts u8 BELOW the
-	// threshold while a code-point (SQLite BINARY) comparison would put it
-	// ABOVE — `matchesConditionExactly` now refines these through the engine so both
-	// backends agree.
+	// ── the text-order exemption: code point vs. code unit ──
+	// The threshold sits between u8's lead surrogate (0xD83D) and its code point (U+1F600):
+	// the core puts u8 below it and SQLite's binary order puts it above. Each case names the
+	// ids SQLite returns.
 	{
 		name: 'above on non-BMP text (name) — code point vs. code unit divergence',
+		binary: ['u8', 'u9'],
 		execute: (users) =>
 			users
 				.query()
@@ -1624,6 +1638,7 @@ export const ROW_CASES: readonly RowCase[] = [
 	},
 	{
 		name: 'below on non-BMP text (name) — code point vs. code unit divergence',
+		binary: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7'],
 		execute: (users) =>
 			users
 				.query()
@@ -1632,6 +1647,7 @@ export const ROW_CASES: readonly RowCase[] = [
 	},
 	{
 		name: 'from on non-BMP text (name) — code point vs. code unit divergence',
+		binary: ['u8', 'u9'],
 		execute: (users) =>
 			users
 				.query()
@@ -1640,6 +1656,7 @@ export const ROW_CASES: readonly RowCase[] = [
 	},
 	{
 		name: 'to on non-BMP text (name) — code point vs. code unit divergence',
+		binary: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7'],
 		execute: (users) =>
 			users
 				.query()
@@ -1648,6 +1665,7 @@ export const ROW_CASES: readonly RowCase[] = [
 	},
 	{
 		name: 'between on non-BMP text (name) — code point vs. code unit divergence',
+		binary: [],
 		execute: (users) =>
 			users
 				.query()
@@ -1663,11 +1681,13 @@ export const ROW_CASES: readonly RowCase[] = [
 	// ── ordering ──────────────────────────────────────────────────────────
 	{
 		name: 'ascending on text (name)',
+		binary: ['u1', 'u6', 'u5', 'u7', 'u2', 'u4', 'u3', 'u9', 'u8'],
 		ordered: true,
 		execute: (users) => users.query().order({ column: 'name', direction: 'ascending' }).collect(),
 	},
 	{
 		name: 'descending on text (name)',
+		binary: ['u8', 'u9', 'u3', 'u4', 'u2', 'u7', 'u5', 'u6', 'u1'],
 		ordered: true,
 		execute: (users) => users.query().order({ column: 'name', direction: 'descending' }).collect(),
 	},
@@ -1679,6 +1699,7 @@ export const ROW_CASES: readonly RowCase[] = [
 	},
 	{
 		name: 'descending on non-BMP text (name) with limit — code point vs. code unit divergence',
+		binary: ['u8', 'u9', 'u3', 'u4'],
 		ordered: true,
 		execute: (users) =>
 			users.query().order({ column: 'name', direction: 'descending' }).limit(4).collect(),
@@ -1821,6 +1842,7 @@ export const SCALAR_CASES: readonly ScalarCase[] = [
 	},
 	{
 		name: 'count over a non-BMP text (name) range — code point vs. code unit divergence',
+		binary: 2,
 		execute: (users) =>
 			users
 				.query()
@@ -2026,3 +2048,254 @@ export const REFINE_SCHEMA: readonly TableSchema[] = [
 		indexes: [],
 	},
 ]
+
+/** Holds the columns of the paging acceptance table, whose matching set far exceeds one page. */
+export const PAGING_TABLES = {
+	lines: {
+		id: stringShape(),
+		book: stringShape(),
+		position: integerShape(),
+		text: stringShape(),
+		parent: optionalShape(stringShape()),
+	},
+}
+
+/** Holds the indexes of the paging acceptance table: its filter, order, and foreign-key columns. */
+export const PAGING_INDEXES: IndexMap = { lines: [['book'], ['text'], ['parent']] }
+
+export type PagingRow = RowOf<typeof PAGING_TABLES.lines>
+
+/**
+ * Builds the paging acceptance rows: book `b1` holds positions 0 to 1499 and book `b2` holds
+ * 1500 to 1999, and every third row names one of 50 parents.
+ *
+ * @returns The rows in position order
+ */
+export function pagingRows(): readonly PagingRow[] {
+	return Array.from({ length: 2000 }, (_, position) => ({
+		id: 'line-' + String(position).padStart(4, '0'),
+		book: position < 1500 ? 'b1' : 'b2',
+		position,
+		text: 'line ' + String(position).padStart(4, '0'),
+		...(position % 3 === 0 ? { parent: 'p' + String(position % 50) } : {}),
+	}))
+}
+
+/**
+ * Creates the paging acceptance database over a recorded SQLite driver.
+ *
+ * @param path - The SQLite path; default `':memory:'`
+ * @returns The recorder and the database over its driver
+ */
+export function createPagingDatabase(path = ':memory:'): {
+	readonly recorder: StorageRecorder
+	readonly database: DatabaseInterface<typeof PAGING_TABLES>
+} {
+	const recorder = new StorageRecorder(createSQLiteDriver({ path }))
+	const database = createDatabase({
+		driver: recorder.driver,
+		tables: PAGING_TABLES,
+		indexes: PAGING_INDEXES,
+	})
+	return { recorder, database }
+}
+
+/** Holds the schema of the plan-reading table: a text primary key and four plain indexes. */
+export const EXPLAIN_SCHEMA: TableSchema = {
+	name: 'lines',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'organization_id', storage: 'text', optional: false, nullable: false },
+		{ name: 'text', storage: 'text', optional: false, nullable: false },
+		{ name: 'position', storage: 'integer', optional: false, nullable: false },
+		{ name: 'parent', storage: 'text', optional: true, nullable: false },
+	],
+	indexes: [['organization_id'], ['text'], ['parent'], ['position']],
+}
+
+/**
+ * Creates an in-memory SQLite database holding 3000 rows of {@link EXPLAIN_SCHEMA}, with no
+ * `sqlite_stat1` until the caller runs `ANALYZE`.
+ *
+ * @returns The connected database; the caller closes it
+ */
+export function createExplainDatabase(): SQLiteDatabaseInterface {
+	const database = createSQLiteDatabase({ path: ':memory:' })
+	database.connect()
+	database.execute(schemaToTable(EXPLAIN_SCHEMA))
+	for (const sql of schemaToIndexes(EXPLAIN_SCHEMA)) database.execute(sql)
+	const insert = database.prepare(
+		'INSERT INTO "lines" ("id", "organization_id", "text", "position", "parent") VALUES (?, ?, ?, ?, ?)',
+	)
+	database.transact(() => {
+		for (const position of Array.from({ length: 3000 }, (_, index) => index)) {
+			insert.execute([
+				'line-' + String(position).padStart(4, '0'),
+				'org-' + String(position % 5),
+				'line ' + String(position).padStart(4, '0'),
+				position,
+				position % 3 === 0 ? 'p' + String(position % 50) : null,
+			])
+		}
+	})
+	return database
+}
+
+/**
+ * Compiles the native side of a read's SQLite plan and returns its `EXPLAIN QUERY PLAN`
+ * details, joined by ` | `.
+ *
+ * @param database - The database holding {@link EXPLAIN_SCHEMA}
+ * @param input - The read to plan
+ * @returns The plan details
+ */
+export function explainRead(database: SQLiteDatabaseInterface, input: ReadInput): string {
+	const compiled = compileQuerySQL(planSQLiteQuery(input, EXPLAIN_SCHEMA).native, EXPLAIN_SCHEMA)
+	return database
+		.prepare('EXPLAIN QUERY PLAN SELECT * FROM "lines" ' + compiled.sql)
+		.all(compiled.parameters)
+		.map((row) => String(row.detail))
+		.join(' | ')
+}
+
+/**
+ * Builds the pinned read of the primary-key acceptance: `id any` over a list of keys beside
+ * an indexed `organization_id` equals, optionally ordered by the indexed `position`.
+ *
+ * @param count - The number of listed keys
+ * @param ordered - If `true`, orders by `position`; if `false`, adds no order
+ * @returns The read
+ */
+export function pinnedRead(count: number, ordered: boolean): ReadInput {
+	return {
+		conditions: [
+			{
+				column: 'id',
+				operator: 'any',
+				values: Array.from(
+					{ length: count },
+					(_, index) => 'line-' + String((index * 7) % 3000).padStart(4, '0'),
+				),
+				connector: 'and',
+			},
+			{ column: 'organization_id', operator: 'equals', values: ['org-1'], connector: 'and' },
+		],
+		...(ordered ? { order: [{ column: 'position', direction: 'ascending' as const }] } : {}),
+	}
+}
+
+/** Holds the stored values of each storage the operator matrix seeds, in ascending order. */
+export const MATRIX_VALUES = {
+	text: ['', 'Ada', 'ada', 'b', 'x😀y', 'zz', 'É'],
+	integer: [-5, 0, 1, 36, 100],
+	real: [-1.5, 0, 0.25, 36, 1e10],
+	boolean: [false, true],
+} as const
+
+/** Names a storage the operator matrix covers. */
+export type MatrixStorage = keyof typeof MATRIX_VALUES
+
+/**
+ * Creates the matrix databases for one storage and flag combination: one over SQLite and
+ * one over the Memory driver, each holding the storage's values, an absent row when the
+ * column is optional, and a `null` row when it is nullable.
+ *
+ * @param storage - The column storage
+ * @param optional - If `true`, the column accepts absence; if `false`, it does not
+ * @param nullable - If `true`, the column accepts `null`; if `false`, it does not
+ * @returns The SQLite and Memory tables, seeded identically
+ */
+export async function createMatrixTables(
+	storage: MatrixStorage,
+	optional: boolean,
+	nullable: boolean,
+): Promise<{
+	readonly sqlite: DatabaseInterface<{ readonly cells: ColumnMap }>
+	readonly memory: DatabaseInterface<{ readonly cells: ColumnMap }>
+}> {
+	const base =
+		storage === 'text'
+			? stringShape()
+			: storage === 'integer'
+				? integerShape()
+				: storage === 'real'
+					? numberShape()
+					: booleanShape()
+	const flagged = nullable ? nullableShape(base) : base
+	const shape = optional ? optionalShape(flagged) : flagged
+	const tables: { readonly cells: ColumnMap } = { cells: { id: stringShape(), value: shape } }
+	const sqlite = createDatabase({ driver: createSQLiteDriver({ path: ':memory:' }), tables })
+	const memory = createDatabase({ driver: createMemoryDriver(), tables })
+	const values: ReadonlyArray<string | number | boolean> = MATRIX_VALUES[storage]
+	const rows = [
+		...values.map((value, index) => ({ id: 'v' + String(index), value })),
+		...values.map((value, index) => ({ id: 'w' + String(index), value })),
+		...(optional ? [{ id: 'absent' }] : []),
+		...(nullable ? [{ id: 'null', value: null }] : []),
+	]
+	for (const database of [sqlite, memory]) {
+		await database.table('cells').set(rows)
+	}
+	return { sqlite, memory }
+}
+
+/**
+ * Builds a one-condition matrix read on the `value` column.
+ *
+ * @param operator - The operator
+ * @param operands - The operands
+ * @returns The read
+ */
+export function matrixCondition(
+	operator: ConditionOperator,
+	operands: readonly unknown[],
+): QueryInput {
+	return { conditions: [{ column: 'value', operator, values: operands, connector: 'and' }] }
+}
+
+/**
+ * Builds the matrix reads for one storage: every operator with operands of the storage's
+ * class, `null` operands, empty lists, the text operators on text, and orders with a page.
+ *
+ * @param storage - The column storage
+ * @returns The reads
+ */
+export function matrixReads(storage: MatrixStorage): readonly QueryInput[] {
+	const values: readonly unknown[] = MATRIX_VALUES[storage]
+	const low = values[1]
+	const high = values.at(-2)
+	const text =
+		storage === 'text'
+			? [
+					matrixCondition('like', ['a%']),
+					matrixCondition('like', ['x_y']),
+					matrixCondition('like', ['%A%']),
+					matrixCondition('glob', ['A*']),
+					matrixCondition('glob', ['x?y']),
+					matrixCondition('starts', ['a']),
+					matrixCondition('starts', ['']),
+					matrixCondition('ends', ['a']),
+				]
+			: []
+	return [
+		matrixCondition('equals', [low]),
+		matrixCondition('equals', [null]),
+		matrixCondition('not', [low]),
+		matrixCondition('not', [null]),
+		matrixCondition('above', [low]),
+		matrixCondition('below', [high]),
+		matrixCondition('from', [low]),
+		matrixCondition('to', [high]),
+		matrixCondition('between', [low, high]),
+		matrixCondition('any', [low, high]),
+		matrixCondition('any', []),
+		matrixCondition('none', [low]),
+		matrixCondition('none', []),
+		matrixCondition('absent', []),
+		matrixCondition('present', []),
+		...text,
+		{ order: [{ column: 'value', direction: 'ascending' }], limit: 5, offset: 1 },
+		{ order: [{ column: 'value', direction: 'descending' }], limit: 5, offset: 1 },
+	]
+}

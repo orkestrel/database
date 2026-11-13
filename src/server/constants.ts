@@ -1,47 +1,4 @@
-import type { ColumnStorage } from '@src/core'
-
-// The server surface's shared constants — reserved names its drivers claim and
-// the declared column groups that SQLite can query without engine refinement.
-
-/**
- * Lists the declared {@link ColumnStorage}s whose SQL equality comparisons (`equals` /
- * `not` / `any` / `none`) and `starts` / `ends` compiles are provably
- * engine-exact under declared-type trust — `text` / `integer` / `real` /
- * `boolean`; a `json` or `blob` column always refines instead.
- *
- * @remarks
- * This set governs equality and prefix/suffix matching only. Range
- * comparisons (`above` / `below` / `from` / `to` / `between`) and `ORDER BY`
- * are exact for `integer` / `real` / `boolean` but not for `text`: compiled
- * SQL orders/ranges under SQLite's default BINARY collation, which compares
- * TEXT byte-for-byte as UTF-8 — equivalent to Unicode code-point order —
- * while the core engine's `compareValues` orders JS strings with `<`, which
- * compares UTF-16 code-unit order. The two orders diverge for supplementary-
- * plane characters (code points ≥ U+10000, for example many emoji): a lead surrogate
- * (`\uD800`–`\uDBFF`) sorts below ``–`￿` in code-unit order, while
- * its code point sorts above them. So `matchesConditionExactly`'s range family and
- * `matchesOrderExactly` exclude `text`, refining through the core engine instead.
- */
-export const EXACT_COLUMN_STORAGE: readonly ColumnStorage[] = Object.freeze([
-	'text',
-	'integer',
-	'real',
-	'boolean',
-])
-
-/**
- * Lists the declared {@link ColumnStorage}s whose SQL range comparisons
- * (`above` / `below` / `from` / `to` / `between`) and `ORDER BY` compiles are
- * provably engine-exact — `integer` / `real` / `boolean` only. `text` is
- * excluded: see {@link EXACT_COLUMN_STORAGE}'s remarks for the BINARY-collation
- * (code-point) vs. JS `<` (code-unit) divergence on supplementary-plane
- * characters.
- */
-export const EXACT_RANGE_COLUMN_STORAGE: readonly ColumnStorage[] = Object.freeze([
-	'integer',
-	'real',
-	'boolean',
-])
+// The server surface's shared constants — the reserved names its drivers claim.
 
 /**
  * Names the reserved metadata table the {@link SQLiteDriver} creates on `open` to
