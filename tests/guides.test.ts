@@ -520,7 +520,7 @@ await new GuideCommand({
 		})
 	})
 
-	// The browser fence's `conditionToRange` / `selectPlan` claims return `IDBKeyRange`
+	// The browser fence's `conditionToRange` / `planIndexedDBQuery` claims return `IDBKeyRange`
 	// values, which this Node project has no host for; `tests/src/browser/helpers.test.ts`
 	// asserts them in real Chromium. The two host-independent claims transcribe here.
 	describe('flagship fences: browser helpers', () => {

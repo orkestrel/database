@@ -1,19 +1,15 @@
-import type { Condition, QueryInput, TableSchema } from '@src/core'
+import type { Condition, QueryInput, ReadInput, ReadPlan, TableSchema } from '@src/core'
 import type { IndexedDBError } from '@orkestrel/indexeddb'
 import type { StoreDefinition } from '@orkestrel/indexeddb'
-import type { QueryPlan } from './types.js'
+import type { AccessPlan } from './types.js'
 import { isString } from '@orkestrel/contract'
-import { compareValues, DatabaseError, findColumn, isKey } from '@src/core'
+import { compactReadInput, compareValues, DatabaseError, findColumn, isKey } from '@src/core'
 import { rangeAboveKey, rangeBelowKey, rangeFromKey, rangeToKey } from '@orkestrel/indexeddb'
 import { INDEXABLE_STORAGE } from './constants.js'
 
-// The IndexedDB driver's pushdown planner. A pure function over the portable
-// `QueryInput`: it decides which index (or the primary key) a read can narrow on
-// and the `IDBKeyRange` to use, so the driver fetches a candidate superset rather
-// than every row. The core engine then refines that superset to the exact result
-// — so a plan is only ever allowed to over-fetch, never to drop a matching row.
-// Anything it cannot prove range-exact (a non-comparison operator, a non-orderable
-// column type, a nested path, a non-scalar operand) falls through to a full scan.
+// The IndexedDB driver's planner. Pure functions over the portable `QueryInput`: they pick
+// the one condition an index or the primary key answers with an exact key range, which the
+// plan keeps native, and leave every other clause residual for the core engine.
 
 /**
  * Translates one {@link Condition} to the `IDBKeyRange` it maps to, when its
@@ -23,7 +19,7 @@ import { INDEXABLE_STORAGE } from './constants.js'
  * @remarks
  * Only the comparison operators (`equals`/`above`/`below`/`from`/`to`/`between`)
  * translate to a key range that a typed (string/number) column can back with an
- * IndexedDB store/index read — see {@link selectPlan} for the caveats that
+ * IndexedDB store/index read — see {@link findAccessCondition} for the caveats that
  * decide which of `below`/`to` may drive a secondary-index read versus the
  * primary store only (a column-type / absent-row concern, not a range-shape
  * one). `starts` is excluded — its prefix range can miss strings past U+FFFF;
@@ -81,105 +77,119 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
 }
 
 /**
- * Plans an IndexedDB read for a {@link QueryInput} — picks the index (or the primary
- * store) and {@link IDBKeyRange} to narrow by, falling back to a full scan.
+ * Finds the condition an IndexedDB read narrows on: the first one an index or the primary
+ * key answers with an exact key range.
  *
  * @remarks
- * Pushdown is sound only when every condition is `and`-joined: the engine folds
+ * Narrowing is sound only when every condition is `and`-joined: the engine folds
  * conditions left-to-right (`c1 && c2 && … && cn`), so the result is a subset of
- * each — narrowing on any one is then a valid superset. A single `or` breaks that
- * (a row can match through a later condition the range would exclude), so any `or`
- * forces a full scan. Otherwise it scans the conditions in order and selects the
- * **first** one that is provably range-exact and backed by a key: a comparison
- * operator (`conditionToRange`) over a single, orderable (`text`/`integer`/`real`)
- * column that is either the table's primary key (read the store directly with
- * `index` omitted) or has a single-column secondary index (named exactly the column — read
- * that index). A condition whose column is a nested {@link FieldPath} array
- * (descends a json value, not a key), is absent from the schema, is a non-orderable
- * type (`boolean`/`json`/`blob`), uses a non-comparison operator, or has a
- * non-scalar operand cannot push and is skipped.
+ * each. A single `or` breaks that, so any `or` finds nothing. Otherwise it scans the
+ * conditions in order and selects the **first** one that is range-exact and backed by a
+ * key: a comparison operator ({@link conditionToRange}) over a single, orderable
+ * (`text`/`integer`/`real`) column that is either the table's primary key or has a
+ * single-column secondary index named exactly the column. A nested {@link FieldPath}, a
+ * column absent from the schema, a non-orderable type (`boolean`/`json`/`blob`), a
+ * non-comparison operator, or a non-scalar operand cannot narrow and is skipped.
  *
- * **`below`/`to` may drive a secondary-index range only when the column has no
- * absent/null rows to lose — which this planner cannot verify from the schema
- * alone, so it restricts them to the primary store, where that is always true.**
- * The engine's total order (`compareValues`, see `@src/core`) ranks
- * `undefined` (absent) and `null` below every number/string, so
- * `matchesCondition('below' | 'to', …)` is true for a row whose field is absent
- * or `null` — but a secondary IndexedDB index has no entry for a row whose
- * indexed field is absent/`null`, so a `below`/`to` range read against that
- * index would silently drop those rows (they can never be over-fetched, only
- * missed — the one shape of lossiness this planner must never produce). The
- * table's primary key is exempt: a row's primary-key value is always present
- * and never `null` (it is the row's identity, enforced at write time), so a
- * `below`/`to` range against the primary store can never exclude an
- * absent/null-keyed row because no such row exists. `equals`/`above`/`from`/
- * `between` stay index-eligible on any orderable column, primary or secondary:
- * each is bounded below by a scalar (`equals`/`between`'s lower bound, `above`/
- * `from`'s lower bound), and every scalar strictly out-ranks `undefined`/`null`
- * in the total order, so an absent/null-valued row can never satisfy them — the
- * index's silence on such a row is harmless (it was never going to match).
- * **Declared-type trust caveat:** this reasoning holds under the contract that
- * an {@link INDEXABLE_STORAGE} column, once contract-validated at write time,
- * holds only `string | number | null` (or is absent) — never some other
- * runtime value that could rank differently; a driver bypassing the write
- * contract (writing raw rows directly to the store) could defeat this
- * argument, but that is out of scope for a planner reading validated schema
- * metadata.
+ * **`below`/`to` narrow on the primary key only.** The core's total order ranks an absent
+ * value and `null` below every number and string, so `below` and `to` match a row whose
+ * field is absent or `null`, and a secondary index holds no entry for that row; a range
+ * over the index would drop it. A row's primary key is always present, so the primary
+ * store is safe. `equals`/`above`/`from`/`between` stay index-eligible on any orderable
+ * column: each is bounded below by a scalar, which an absent or `null` value never meets.
+ * This holds for the values a contract-validated write stores in an
+ * {@link INDEXABLE_STORAGE} column: a string, a number, `null`, or absence.
  *
- * When no condition qualifies the plan is a full scan (`{}`) and the engine
- * does everything. The plan is always a superset of the
- * matching rows — the only correctness contract — so the driver may safely run
- * the exact engine over it.
- *
- * @param input - The read specification (its `conditions` drive the plan), or
- *   `undefined` for an unconditional read
+ * @param input - The read specification, or `undefined` for an unconditional read
  * @param schema - The table's schema — its `primary` key and column types
  * @param available - The secondary-index names that physically exist on the store
  *   (`store.indexes`); a single-column index is named exactly its column
- * @returns The index + range to read, narrowing to a superset (never lossy)
+ * @returns The condition to narrow on, or `undefined` when none qualifies
  *
  * @example
  * ```ts
- * selectPlan({ conditions: [eq('id', 'u1')] }, schema, []) // { range: only('u1') }
- * selectPlan({ conditions: [from('age', 18)] }, schema, ['age']) // { index: 'age', range: from(18) }
- * selectPlan({ conditions: [contains('name', 'a')] }, schema, []) // {}
+ * findAccessCondition({ conditions: [from('age', 18)] }, schema, ['age']) // the from condition
+ * findAccessCondition({ conditions: [like('name', 'a%')] }, schema, []) // undefined
  * ```
  */
-export function selectPlan(
+export function findAccessCondition(
 	input: QueryInput | undefined,
 	schema: TableSchema,
 	available: readonly string[],
-): QueryPlan {
+): Condition | undefined {
 	const conditions = input?.conditions ?? []
-	// A single condition's range is a superset of the result only when the result
-	// implies that condition — which holds iff every condition is `and`-joined (the
-	// fold is `c1 && c2 && … && cn`, so the result is a subset of each). A single
-	// `or` breaks that (a row can match through a later condition the range excludes),
-	// so any `or` forces a full scan. The first condition's connector only seeds the
-	// fold and is ignored (AGENTS — the `Condition.connector` contract).
-	if (conditions.slice(1).some((condition) => condition.connector === 'or')) {
-		return {}
-	}
-	for (const condition of conditions) {
+	if (conditions.slice(1).some((condition) => condition.connector === 'or')) return undefined
+	return conditions.find((condition) => {
 		// An array column is a nested FieldPath into a json value — not a key.
-		if (!isString(condition.column)) continue
+		if (!isString(condition.column)) return false
 		const column = findColumn(condition.column, schema)
-		if (column === undefined || !INDEXABLE_STORAGE.includes(column.storage)) {
-			continue
-		}
-		const range = conditionToRange(condition)
-		if (range === undefined) continue
-		if (condition.column === schema.primary) return { range }
-		// `below`/`to` can silently drop an absent/null-valued row from a secondary
-		// index (see @remarks) — only the primary store (handled above) is safe.
-		// Keep scanning: a later condition may still qualify.
-		if (condition.operator === 'below' || condition.operator === 'to') continue
-		if (available.includes(condition.column)) {
-			return { index: condition.column, range }
-		}
-		// The column is range-exact but has no usable index — keep looking.
+		if (column === undefined || !INDEXABLE_STORAGE.includes(column.storage)) return false
+		if (conditionToRange(condition) === undefined) return false
+		if (condition.column === schema.primary) return true
+		if (condition.operator === 'below' || condition.operator === 'to') return false
+		return available.includes(condition.column)
+	})
+}
+
+/**
+ * Derives the key-range read for the condition an IndexedDB read narrows on.
+ *
+ * @param condition - The access condition from {@link findAccessCondition}, or `undefined`
+ * @param schema - The table's schema — its `primary` key
+ * @returns The index and range to read; `{}` for a whole-store read
+ *
+ * @example
+ * ```ts
+ * deriveAccessPlan(eq('id', 'u1'), schema) // { range: only('u1') }
+ * deriveAccessPlan(from('age', 18), schema) // { index: 'age', range: from(18) }
+ * ```
+ */
+export function deriveAccessPlan(
+	condition: Condition | undefined,
+	schema: TableSchema,
+): AccessPlan {
+	if (condition === undefined || !isString(condition.column)) return {}
+	const range = conditionToRange(condition)
+	if (range === undefined) return {}
+	return condition.column === schema.primary ? { range } : { index: condition.column, range }
+}
+
+/**
+ * Splits a read into the part IndexedDB answers natively and the residual the core runs —
+ * the IndexedDB driver's `plan`.
+ *
+ * @remarks
+ * The native side holds the one condition {@link findAccessCondition} narrows on, answered
+ * by a key range over the primary store or an index. Every other clause — the remaining
+ * conditions, the order, the page, and the aggregate — is residual. A read with no access
+ * condition is a whole-store read with the whole read residual. A side that carries nothing
+ * is `{}`.
+ *
+ * @param input - The read to split
+ * @param schema - The table's schema
+ * @param available - The secondary-index names that physically exist on the store
+ * @returns The plan
+ *
+ * @example
+ * ```ts
+ * planIndexedDBQuery({ conditions: [from('age', 18), like('name', 'a%')], limit: 10 }, schema, ['age'])
+ * // { native: { conditions: [from('age', 18)] }, residual: { conditions: [like('name', 'a%')], limit: 10 } }
+ * ```
+ */
+export function planIndexedDBQuery(
+	input: ReadInput,
+	schema: TableSchema,
+	available: readonly string[],
+): ReadPlan {
+	const read = compactReadInput(input)
+	const access = findAccessCondition(read, schema, available)
+	return {
+		native: access === undefined ? {} : { conditions: [access] },
+		residual: compactReadInput({
+			...read,
+			conditions: (read.conditions ?? []).filter((condition) => condition !== access),
+		}),
 	}
-	return {}
 }
 
 /**
@@ -261,9 +271,9 @@ export function mapMigrationError(error: IndexedDBError): DatabaseError {
  * 'a_b'`) collides with a single-column index over a column literally named
  * `'a_b'` — the same name, two different key paths (`'a_b'` vs `['a', 'b']`),
  * which either throws a native `ConstraintError` from a duplicate
- * `createIndex` call at open, or (worse) lets {@link selectPlan}'s name-based
+ * `createIndex` call at open, or (worse) lets {@link findAccessCondition}'s name-based
  * lookup match the wrong index. A single-column index keeps the bare column
- * name — {@link selectPlan} matches `available.includes(condition.column)` by
+ * name — {@link findAccessCondition} matches `available.includes(condition.column)` by
  * that exact name, so a single-column index must stay named after its column
  * verbatim. A compound index instead encodes each column as a length-prefixed
  * segment (`'2#1:a1:b'`), so the boundary between columns is self-describing

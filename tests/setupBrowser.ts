@@ -1,6 +1,7 @@
 import type { DatabaseInterface, IndexMap, QueryInput, RowOf, TableInterface } from '@src/core'
 import { createDatabase, createMemoryDriver } from '@src/core'
-import { createIndexedDBDriver } from '@src/browser'
+import type { AccessPlan } from '@src/browser'
+import { createIndexedDBDriver, deriveAccessPlan, findAccessCondition } from '@src/browser'
 import {
 	booleanShape,
 	integerShape,
@@ -910,3 +911,33 @@ export const COLLISION_SCHEMA: TableSchema = {
 	],
 	indexes: [['a_b'], ['a', 'b']],
 }
+
+/**
+ * Selects the key-range read an IndexedDB read narrows on: the access plan of its access
+ * condition.
+ *
+ * @param input - The read, or `undefined` for an unconditional read
+ * @param schema - The table's schema
+ * @param available - The secondary-index names on the store
+ * @returns The index and range the driver reads
+ */
+export function selectAccess(
+	input: QueryInput | undefined,
+	schema: TableSchema,
+	available: readonly string[],
+): AccessPlan {
+	return deriveAccessPlan(findAccessCondition(input, schema, available), schema)
+}
+
+/**
+ * Holds the rows the 0.0.23 IndexedDB driver read for each read of `CONFORMANCE_READS` over
+ * `CONFORMANCE_ROWS` with an index on `age`: its planner narrowed on the first `and`-joined
+ * `equals`, `above`, `from`, or `between` over the index or a comparison over the primary
+ * key, and read the whole store of 9 rows otherwise. In read order: `age equals 36` and the
+ * `id any` with `age equals 36` read 3 rows; `age above 17` read 5; `age from 17`,
+ * `age between 0 and 36`, and the two reads on `age above 0` read 6.
+ */
+export const CONFORMANCE_ROWS_READ: readonly number[] = Object.freeze([
+	9, 3, 9, 9, 9, 9, 5, 9, 6, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+	3, 9, 9, 9, 9, 9, 9, 9, 9, 6, 9, 6, 9, 9, 9, 9, 9,
+])

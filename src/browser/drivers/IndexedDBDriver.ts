@@ -6,6 +6,8 @@ import type {
 	MigrationInput,
 	MigrationStep,
 	OperationOptions,
+	ReadInput,
+	ReadPlan,
 	Row,
 	TableSchema,
 } from '@src/core'
@@ -16,7 +18,7 @@ import type {
 	IndexedDBUpgradeContext,
 	StoreDefinition,
 } from '@orkestrel/indexeddb'
-import type { QueryPlan } from '../types.js'
+import type { AccessPlan } from '../types.js'
 import {
 	applyQuery,
 	bindRowKey,
@@ -39,11 +41,13 @@ import {
 } from '@src/core'
 import { createIndexedDBDatabase, isIndexedDBError } from '@orkestrel/indexeddb'
 import {
+	deriveAccessPlan,
 	deriveIndexedDBIndexName,
+	findAccessCondition,
 	mapIndexedDBError,
 	mapMigrationError,
+	planIndexedDBQuery,
 	schemaToStore,
-	selectPlan,
 } from '../helpers.js'
 import { METADATA_STORE } from '../constants.js'
 import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
@@ -66,14 +70,9 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * wrapper's native `getAll` / `getAllKeys`, and `snapshot` rolls back through one
  * atomic wrapper transaction.
  *
- * It also implements the optional native `records` / `stream` hooks:
- * `selectPlan` ({@link selectPlan}) turns the {@link QueryInput} into a
- * key-range pushdown over the primary key or a single-column secondary index,
- * fetching a candidate **superset** that the core engine (`applyQuery` /
- * `matchesQuery`) then refines — so a native read is byte-identical to a full
- * scan, only cheaper. Pushdown is conservative: only the exact-comparison
- * operators over orderable columns narrow to a range; everything else falls back
- * to a full scan + the engine.
+ * It declares `plan`, `records`, and `stream`: {@link planIndexedDBQuery} keeps native the
+ * one condition a key range over the primary key or a single-column secondary index
+ * answers, and leaves every other clause residual for the core engine.
  *
  * @remarks
  * This driver also implements `migrate` / `metadata` / `stamp`. `metadata` / `stamp`
@@ -235,13 +234,31 @@ export class IndexedDBDriver implements DriverInterface {
 		}
 	}
 
+	/**
+	 * Splits a read into the one condition a key range answers and the residual the core runs.
+	 *
+	 * @param table - The declared table to read
+	 * @param input - The read to split
+	 * @returns The plan {@link planIndexedDBQuery} returns for the table and its indexes
+	 */
+	plan(table: string, input: ReadInput): ReadPlan {
+		try {
+			return planIndexedDBQuery(input, this.#table(table), this.#store(table).indexes)
+		} catch (error) {
+			throw this.#wrap(error)
+		}
+	}
+
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)
 		try {
 			const schema = this.#table(table)
 			const store = this.#store(table)
-			const plan = selectPlan(input, schema, store.indexes)
-			return applyQuery(await this.#candidates(store, schema, plan), input)
+			const access = findAccessCondition(input, schema, store.indexes)
+			return applyQuery(
+				await this.#candidates(store, schema, deriveAccessPlan(access, schema)),
+				input,
+			)
 		} catch (error) {
 			throw this.#wrap(error)
 		}
@@ -496,12 +513,12 @@ export class IndexedDBDriver implements DriverInterface {
 		try {
 			const schema = this.#table(table)
 			const store = this.#store(table)
-			const plan = selectPlan(input, schema, store.indexes)
+			const access = findAccessCondition(input, schema, store.indexes)
 			const conditions = input.conditions ?? []
 			const offset = input.offset ?? 0
 			const limit = input.limit
 			const page = new StreamPage(offset)
-			for (const row of await this.#candidates(store, schema, plan)) {
+			for (const row of await this.#candidates(store, schema, deriveAccessPlan(access, schema))) {
 				if (limit !== undefined && page.count >= limit) break
 				if (!matchesQuery(row, conditions)) continue
 				if (!page.next()) continue
@@ -670,7 +687,7 @@ export class IndexedDBDriver implements DriverInterface {
 	async #candidates(
 		store: IndexedDBStoreInterface,
 		schema: TableSchema,
-		plan: QueryPlan,
+		plan: AccessPlan,
 	): Promise<readonly Row[]> {
 		if (plan.index === undefined) return store.records(plan.range)
 		const rows = [...(await store.index(plan.index).records(plan.range))]

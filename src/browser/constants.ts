@@ -7,10 +7,9 @@ import type { ColumnStorage } from '@src/core'
  * `text` / `integer` / `real` occupy IndexedDB's string / number key space, so a
  * column declared with one of them can back a store or index range read.
  * `boolean` / `json` / `blob` are not valid `IDBValidKey`s and a range over one
- * would silently miss rows, so `selectPlan` never pushes a condition down on
- * them and the core engine answers the read instead. A frozen array, matching
- * `EXACT_COLUMN_STORAGE` in `src/server`: a consumer holding it reads the
- * membership with `includes` and cannot change the driver's pushdown behavior.
+ * would miss rows, so `findAccessCondition` never narrows on them and the core engine
+ * answers those conditions instead. A frozen array: a consumer holding it reads the
+ * membership with `includes` and cannot change the driver's access paths.
  */
 export const INDEXABLE_STORAGE: readonly ColumnStorage[] = Object.freeze([
 	'text',

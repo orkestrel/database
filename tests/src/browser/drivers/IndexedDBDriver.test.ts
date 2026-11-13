@@ -1,13 +1,23 @@
 import type { UserRow } from '../../../setup.js'
-import type { DriverInterface, TableSchema, TableInterface } from '@src/core'
+import type { DriverInterface, Row, TableSchema, TableInterface } from '@src/core'
 import {
 	applyQuery,
 	captureFailure,
+	collectRows,
+	computeAggregate,
+	CONFORMANCE_POSTS_SCHEMA,
+	CONFORMANCE_READS,
+	CONFORMANCE_ROWS,
+	CONFORMANCE_USERS_SCHEMA,
 	conformDriver,
 	createDatabase,
 	createMemoryDriver,
+	extractKey,
+	filterRows,
 	isDatabaseError,
 	planMigration,
+	readPlannedAggregate,
+	readPlannedRows,
 } from '@src/core'
 import { createIndexedDBDriver, deriveIndexedDBIndexName, schemaToStore } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
@@ -21,8 +31,15 @@ import {
 	DatabaseFixture,
 	completeFixture,
 	createAbortingRow,
+	StorageRecorder,
+	tallyCalls,
 } from '../../../setup.js'
-import { deleteDatabase, putIndexedDBValue, mintDatabase } from '../../../setupBrowser.js'
+import {
+	CONFORMANCE_ROWS_READ,
+	deleteDatabase,
+	putIndexedDBValue,
+	mintDatabase,
+} from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
 // Chromium — the storage primitives the core database layer builds on,
@@ -2066,3 +2083,48 @@ import {
 	REVERSED_SCHEMA,
 	COLLISION_SCHEMA,
 } from '../../../setupBrowser.js'
+
+describe('IndexedDBDriver — rows read per conformance read', () => {
+	it('reads the 0.0.23 candidate set for every read and answers what the core answers', async () => {
+		const database = mintDatabase('database-idb-rows')
+		await deleteDatabase(database)
+		const recorder = new StorageRecorder(createIndexedDBDriver(database))
+		const planned = recorder.driver
+		try {
+			await planned.open([
+				{ ...CONFORMANCE_USERS_SCHEMA, indexes: [['age']] },
+				CONFORMANCE_POSTS_SCHEMA,
+			])
+			for (const row of CONFORMANCE_ROWS) {
+				const key = extractKey(row, 'id')
+				if (key !== undefined) await planned.write('users', key, row)
+			}
+			const scanned = await collectRows(planned.scan('users'))
+			const counts: number[] = []
+			for (const input of CONFORMANCE_READS) {
+				const { aggregate, ...query } = input
+				const { value, calls } = await recorder.measure<readonly Row[] | number | undefined>(() =>
+					aggregate === undefined
+						? readPlannedRows(planned, 'users', query)
+						: readPlannedAggregate(planned, 'users', query, aggregate),
+				)
+				expect({ input, value }).toEqual({
+					input,
+					value:
+						aggregate === undefined
+							? applyQuery(scanned, query)
+							: computeAggregate(
+									filterRows(scanned, query.conditions ?? []),
+									aggregate.operation,
+									aggregate.column,
+								),
+				})
+				counts.push(tallyCalls(calls, 'records').rows + tallyCalls(calls, 'stream').rows)
+			}
+			expect(counts).toEqual(CONFORMANCE_ROWS_READ)
+		} finally {
+			await planned.close()
+			await deleteDatabase(database)
+		}
+	})
+})

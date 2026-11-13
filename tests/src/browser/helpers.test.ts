@@ -1,5 +1,9 @@
 import { NULLABLE_SCHEMA, NULLABLE_INDEXES } from '../../setupBrowser.js'
-import { PLANNER_SCHEMA as SCHEMA, PLANNER_INDEXES as INDEXES } from '../../setupBrowser.js'
+import {
+	PLANNER_SCHEMA as SCHEMA,
+	PLANNER_INDEXES as INDEXES,
+	selectAccess,
+} from '../../setupBrowser.js'
 import type { IndexedDBErrorCode } from '@orkestrel/indexeddb'
 import { IndexedDBError } from '@orkestrel/indexeddb'
 import {
@@ -8,20 +12,18 @@ import {
 	INDEXABLE_STORAGE,
 	mapIndexedDBError,
 	mapMigrationError,
-	selectPlan,
+	planIndexedDBQuery,
 } from '@src/browser'
 import { describe, expect, it } from 'vitest'
 import { buildCondition } from '../../setup.js'
 
-// selectPlan — the IndexedDB pushdown planner (mirrors src/browser/helpers.ts).
-// Runs in real Chromium for `IDBKeyRange`. Asserts the chosen index AND the
-// returned range's bounds; the contract is that a plan only ever NARROWS to a
-// superset, so here we pin which operators / columns push to which range, and
-// which fall back to a full scan.
+// The IndexedDB planner (mirrors src/browser/helpers.ts). Runs in real Chromium for
+// `IDBKeyRange`. Asserts the chosen index AND the returned range's bounds: which operators
+// and columns narrow to which range, and which read the whole store.
 
-describe('selectPlan — pushable operators on the primary key', () => {
+describe('findAccessCondition and deriveAccessPlan — pushable operators on the primary key', () => {
 	it('equals → primary store, IDBKeyRange.only', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('id', 'equals', ['u3'])] },
 			SCHEMA,
 			INDEXES,
@@ -34,7 +36,11 @@ describe('selectPlan — pushable operators on the primary key', () => {
 	})
 
 	it('above → lowerBound exclusive', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'above', ['m'])] }, SCHEMA, INDEXES)
+		const plan = selectAccess(
+			{ conditions: [buildCondition('id', 'above', ['m'])] },
+			SCHEMA,
+			INDEXES,
+		)
 		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('m')
 		expect(plan.range?.lowerOpen).toBe(true)
@@ -42,7 +48,11 @@ describe('selectPlan — pushable operators on the primary key', () => {
 	})
 
 	it('below → upperBound exclusive', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'below', ['m'])] }, SCHEMA, INDEXES)
+		const plan = selectAccess(
+			{ conditions: [buildCondition('id', 'below', ['m'])] },
+			SCHEMA,
+			INDEXES,
+		)
 		expect(plan.index).toBeUndefined()
 		expect(plan.range?.upper).toBe('m')
 		expect(plan.range?.upperOpen).toBe(true)
@@ -50,21 +60,25 @@ describe('selectPlan — pushable operators on the primary key', () => {
 	})
 
 	it('from → lowerBound inclusive', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'from', ['m'])] }, SCHEMA, INDEXES)
+		const plan = selectAccess(
+			{ conditions: [buildCondition('id', 'from', ['m'])] },
+			SCHEMA,
+			INDEXES,
+		)
 		expect(plan.index).toBeUndefined()
 		expect(plan.range?.lower).toBe('m')
 		expect(plan.range?.lowerOpen).toBe(false)
 	})
 
 	it('to → upperBound inclusive', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'to', ['m'])] }, SCHEMA, INDEXES)
+		const plan = selectAccess({ conditions: [buildCondition('id', 'to', ['m'])] }, SCHEMA, INDEXES)
 		expect(plan.index).toBeUndefined()
 		expect(plan.range?.upper).toBe('m')
 		expect(plan.range?.upperOpen).toBe(false)
 	})
 
 	it('between → bound, both ends inclusive', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('id', 'between', ['a', 'z'])] },
 			SCHEMA,
 			INDEXES,
@@ -77,16 +91,20 @@ describe('selectPlan — pushable operators on the primary key', () => {
 	})
 })
 
-describe('selectPlan — pushable operators on a single-column secondary index', () => {
+describe('findAccessCondition and deriveAccessPlan — pushable operators on a single-column secondary index', () => {
 	it('a numeric secondary-index column reads that index by name', () => {
-		const plan = selectPlan({ conditions: [buildCondition('age', 'from', [18])] }, SCHEMA, INDEXES)
+		const plan = selectAccess(
+			{ conditions: [buildCondition('age', 'from', [18])] },
+			SCHEMA,
+			INDEXES,
+		)
 		expect(plan.index).toBe('age')
 		expect(plan.range?.lower).toBe(18)
 		expect(plan.range?.lowerOpen).toBe(false)
 	})
 
 	it('equals on the indexed column → IDBKeyRange.only on that index', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('age', 'equals', [41])] },
 			SCHEMA,
 			INDEXES,
@@ -98,7 +116,7 @@ describe('selectPlan — pushable operators on a single-column secondary index',
 
 	it('a range-exact column with NO index falls back to a full scan', () => {
 		// `name` is text (orderable) but has no secondary index → cannot push.
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('name', 'equals', ['Ada'])] },
 			SCHEMA,
 			INDEXES,
@@ -107,23 +125,27 @@ describe('selectPlan — pushable operators on a single-column secondary index',
 	})
 })
 
-describe('selectPlan — conditions that cannot push (full scan)', () => {
+describe('findAccessCondition and deriveAccessPlan — conditions that cannot push (full scan)', () => {
 	it('a non-orderable boolean column → full scan', () => {
-		const plan = selectPlan({ conditions: [buildCondition('active', 'equals', [true])] }, SCHEMA, [
-			'active',
-		])
+		const plan = selectAccess(
+			{ conditions: [buildCondition('active', 'equals', [true])] },
+			SCHEMA,
+			['active'],
+		)
 		expect(plan).toEqual({})
 	})
 
 	it('a json column → full scan', () => {
-		const plan = selectPlan({ conditions: [buildCondition('payload', 'equals', ['x'])] }, SCHEMA, [
-			'payload',
-		])
+		const plan = selectAccess(
+			{ conditions: [buildCondition('payload', 'equals', ['x'])] },
+			SCHEMA,
+			['payload'],
+		)
 		expect(plan).toEqual({})
 	})
 
 	it('a nested-array FieldPath (descends a json value) → full scan', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition(['payload', 'tag'], 'equals', ['green'])] },
 			SCHEMA,
 			INDEXES,
@@ -132,14 +154,16 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 	})
 
 	it('a column absent from the schema → full scan', () => {
-		const plan = selectPlan({ conditions: [buildCondition('missing', 'equals', ['x'])] }, SCHEMA, [
-			'missing',
-		])
+		const plan = selectAccess(
+			{ conditions: [buildCondition('missing', 'equals', ['x'])] },
+			SCHEMA,
+			['missing'],
+		)
 		expect(plan).toEqual({})
 	})
 
 	it('starts → full scan (prefix range can miss strings past U+FFFF)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('id', 'starts', ['u'])] },
 			SCHEMA,
 			INDEXES,
@@ -148,12 +172,16 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 	})
 
 	it('not → full scan (no single exact range)', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'not', ['u1'])] }, SCHEMA, INDEXES)
+		const plan = selectAccess(
+			{ conditions: [buildCondition('id', 'not', ['u1'])] },
+			SCHEMA,
+			INDEXES,
+		)
 		expect(plan).toEqual({})
 	})
 
 	it('any → full scan (membership, not a single range)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('id', 'any', [['u1', 'u2']])] },
 			SCHEMA,
 			INDEXES,
@@ -162,12 +190,12 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 	})
 
 	it('absent → full scan (existence, not a range)', () => {
-		const plan = selectPlan({ conditions: [buildCondition('id', 'absent', [])] }, SCHEMA, INDEXES)
+		const plan = selectAccess({ conditions: [buildCondition('id', 'absent', [])] }, SCHEMA, INDEXES)
 		expect(plan).toEqual({})
 	})
 
 	it('a non-string/number operand → full scan (not a usable key)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('id', 'equals', [{ nested: true }])] },
 			SCHEMA,
 			INDEXES,
@@ -176,16 +204,16 @@ describe('selectPlan — conditions that cannot push (full scan)', () => {
 	})
 
 	it('no conditions → full scan', () => {
-		expect(selectPlan({}, SCHEMA, INDEXES)).toEqual({})
-		expect(selectPlan(undefined, SCHEMA, INDEXES)).toEqual({})
+		expect(selectAccess({}, SCHEMA, INDEXES)).toEqual({})
+		expect(selectAccess(undefined, SCHEMA, INDEXES)).toEqual({})
 	})
 })
 
-describe('selectPlan — selection among several conditions', () => {
+describe('findAccessCondition and deriveAccessPlan — selection among several conditions', () => {
 	it('the FIRST qualifying condition wins', () => {
 		// First condition (name) cannot push (no index); second (age) is indexed and
 		// pushable → the plan picks the age index, not the unindexed name.
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('name', 'equals', ['Ada']),
@@ -200,7 +228,7 @@ describe('selectPlan — selection among several conditions', () => {
 	})
 
 	it('the primary key wins over a later indexed column when it comes first', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('id', 'equals', ['u1']),
@@ -216,7 +244,7 @@ describe('selectPlan — selection among several conditions', () => {
 	})
 
 	it('all-AND conditions push down (the result is a subset of each)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('age', 'from', [18]),
@@ -233,7 +261,7 @@ describe('selectPlan — selection among several conditions', () => {
 	it('ANY or-joined condition forces a full scan (a range would miss rows)', () => {
 		// `age >= 18 OR name = 'Ada'` — narrowing on the age range would drop a row
 		// matching only `name = 'Ada'` (age < 18), so no single range is a superset.
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('age', 'from', [18]),
@@ -247,7 +275,7 @@ describe('selectPlan — selection among several conditions', () => {
 	})
 
 	it('a later or-joined condition forces a scan even if an earlier pair is AND', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('id', 'equals', ['u1']),
@@ -264,7 +292,7 @@ describe('selectPlan — selection among several conditions', () => {
 	it("the first condition's connector is ignored (only c2.. matter)", () => {
 		// A lone condition whose connector is 'or' still pushes — the first connector
 		// only seeds the fold, so a single-condition input is always all-AND.
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('age', 'from', [18], 'or')] },
 			SCHEMA,
 			INDEXES,
@@ -306,12 +334,12 @@ describe('conditionToRange', () => {
 	})
 })
 
-describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a secondary index)', () => {
+describe('findAccessCondition and deriveAccessPlan — below/to lossy-pushdown fix (an absent/null row over a secondary index)', () => {
 	// A schema mirroring the audit reproduction: `age` is a NULLABLE integer with
 	// its own single-column secondary index.
 
 	it('below on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('age', 'below', [100])] },
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
@@ -320,7 +348,7 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 	})
 
 	it('to on a SECONDARY-indexed column never pushes (would drop absent/null rows)', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{ conditions: [buildCondition('age', 'to', [100])] },
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
@@ -329,14 +357,14 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 	})
 
 	it('below/to on the PRIMARY key still pushes (a primary key is never absent/null)', () => {
-		const below = selectPlan(
+		const below = selectAccess(
 			{ conditions: [buildCondition('id', 'below', ['m'])] },
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
 		)
 		expect(below.index).toBeUndefined()
 		expect(below.range?.upper).toBe('m')
-		const to = selectPlan(
+		const to = selectAccess(
 			{ conditions: [buildCondition('id', 'to', ['m'])] },
 			NULLABLE_SCHEMA,
 			NULLABLE_INDEXES,
@@ -347,28 +375,28 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 
 	it('equals/above/from/between on a SECONDARY-indexed column still push (a scalar lower bound excludes absent/null)', () => {
 		expect(
-			selectPlan(
+			selectAccess(
 				{ conditions: [buildCondition('age', 'equals', [30])] },
 				NULLABLE_SCHEMA,
 				NULLABLE_INDEXES,
 			).index,
 		).toBe('age')
 		expect(
-			selectPlan(
+			selectAccess(
 				{ conditions: [buildCondition('age', 'above', [30])] },
 				NULLABLE_SCHEMA,
 				NULLABLE_INDEXES,
 			).index,
 		).toBe('age')
 		expect(
-			selectPlan(
+			selectAccess(
 				{ conditions: [buildCondition('age', 'from', [30])] },
 				NULLABLE_SCHEMA,
 				NULLABLE_INDEXES,
 			).index,
 		).toBe('age')
 		expect(
-			selectPlan(
+			selectAccess(
 				{ conditions: [buildCondition('age', 'between', [10, 30])] },
 				NULLABLE_SCHEMA,
 				NULLABLE_INDEXES,
@@ -377,7 +405,7 @@ describe('selectPlan — below/to lossy-pushdown fix (an absent/null row over a 
 	})
 
 	it('a below/to condition that cannot push is skipped in favor of a LATER qualifying condition', () => {
-		const plan = selectPlan(
+		const plan = selectAccess(
 			{
 				conditions: [
 					buildCondition('age', 'below', [100]),
@@ -485,5 +513,41 @@ describe('INDEXABLE_STORAGE', () => {
 	it('is frozen and lists exactly the orderable column storages', () => {
 		expect(Object.isFrozen(INDEXABLE_STORAGE)).toBe(true)
 		expect(INDEXABLE_STORAGE).toEqual(['text', 'integer', 'real'])
+	})
+})
+
+describe('planIndexedDBQuery', () => {
+	const age = buildCondition('age', 'from', [18])
+	const name = buildCondition('name', 'like', ['a%'])
+
+	it('keeps the access condition native and every other clause residual', () => {
+		const order = [{ column: 'age', direction: 'ascending' as const }]
+		expect(
+			planIndexedDBQuery({ conditions: [name, age], order, limit: 10, offset: 2 }, SCHEMA, INDEXES),
+		).toEqual({
+			native: { conditions: [age] },
+			residual: { conditions: [name], order, limit: 10, offset: 2 },
+		})
+	})
+
+	it('reads the whole store when no condition narrows, and keeps an or read residual', () => {
+		expect(planIndexedDBQuery({ conditions: [name] }, SCHEMA, INDEXES)).toEqual({
+			native: {},
+			residual: { conditions: [name] },
+		})
+		const either = buildCondition('age', 'from', [18], 'or')
+		expect(planIndexedDBQuery({ conditions: [name, either] }, SCHEMA, INDEXES)).toEqual({
+			native: {},
+			residual: { conditions: [name, either] },
+		})
+		expect(planIndexedDBQuery({}, SCHEMA, INDEXES)).toEqual({ native: {}, residual: {} })
+	})
+
+	it('keeps an aggregate residual', () => {
+		const aggregate = { operation: 'count' as const, column: 'id' }
+		expect(planIndexedDBQuery({ conditions: [age], aggregate }, SCHEMA, INDEXES)).toEqual({
+			native: { conditions: [age] },
+			residual: { aggregate },
+		})
 	})
 })
