@@ -19,9 +19,11 @@ import {
 	findPlanFaults,
 	foldASCII,
 	matchesListed,
+	planRead,
 	prepareScalars,
 	readPlannedAggregate,
 	readPlannedRows,
+	streamPlannedRows,
 	auditDriver,
 	bindRowKey,
 	checkAbort,
@@ -82,6 +84,7 @@ import {
 	createDoublyBrokenDriver,
 	createCrashingDriver,
 	createPlannedDriver,
+	seedConformanceRows,
 	StorageRecorder,
 	tallyCalls,
 } from '../../setup.js'
@@ -1520,5 +1523,79 @@ describe('readPlannedRows — the read procedure Table runs', () => {
 		)
 		expect(value.map((row) => row.id)).toEqual(['a'])
 		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, rows: 1 })
+	})
+})
+
+describe('planRead', () => {
+	it('normalizes the read and leaves it whole as residual for a storage without plan', () => {
+		expect(
+			planRead(createMemoryDriver(), 'users', { conditions: [], order: [], limit: 2 }),
+		).toEqual({ native: {}, residual: { limit: 2 } })
+	})
+
+	it('asks a planned storage for its split of the normalized read', () => {
+		const condition = buildCondition('age', 'above', [1])
+		expect(
+			planRead(createPlannedDriver(), 'users', { conditions: [condition], order: [] }),
+		).toEqual({ native: { conditions: [condition] }, residual: {} })
+		expect(planRead(createPlannedDriver('listed'), 'users', {})).toEqual({
+			native: {},
+			residual: { conditions: [] },
+		})
+	})
+})
+
+describe('streamPlannedRows', () => {
+	it('applies the residual conditions and page over scan for a storage without plan', async () => {
+		const driver = createMemoryDriver()
+		await seedConformanceRows(driver)
+		const rows = await Array.fromAsync(
+			streamPlannedRows(
+				driver,
+				'users',
+				{},
+				{
+					conditions: [buildCondition('age', 'above', [17])],
+					offset: 1,
+					limit: 2,
+				},
+			),
+		)
+		expect(rows.map((row) => row.id)).toEqual(['b', 'g'])
+	})
+
+	it('streams the native side of a planned storage and runs the step around each pull', async () => {
+		const driver = createPlannedDriver()
+		await seedConformanceRows(driver)
+		const steps: number[] = []
+		const rows = await Array.fromAsync(
+			streamPlannedRows(
+				driver,
+				'users',
+				{ conditions: [buildCondition('name', 'starts', ['Ada'])] },
+				{},
+				async () => {
+					steps.push(steps.length)
+				},
+			),
+		)
+		expect(rows.map((row) => row.id)).toEqual(['a', 'h'])
+		expect(steps).toHaveLength(6)
+	})
+
+	it('propagates a step that throws after a pull and closes the source', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		await seedConformanceRows(recorder.driver)
+		const steps: number[] = []
+		const failure = await captureFailure(() =>
+			Array.fromAsync(
+				streamPlannedRows(recorder.driver, 'users', {}, {}, async () => {
+					steps.push(steps.length)
+					if (steps.length === 2) throw new Error('stopped')
+				}),
+			),
+		)
+		expect(failure).toEqual(new Error('stopped'))
+		expect(tallyCalls(recorder.calls, 'scan')).toEqual({ calls: 1, rows: 1 })
 	})
 })

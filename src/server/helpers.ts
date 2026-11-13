@@ -10,6 +10,7 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
 import { DatabaseError, findColumn, MAX_PATTERN_LENGTH, normalizeReadInput } from '@src/core'
+import { PRAGMA_NAMES } from './constants.js'
 import {
 	attempt,
 	cloneJSONValue,
@@ -335,6 +336,48 @@ export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage)
 	if (storage === 'text' || storage === 'json') return affinity === 'TEXT'
 	if (storage === 'blob') return affinity === 'BLOB'
 	return affinity === 'REAL'
+}
+
+// === Connection settings
+
+/**
+ * Validates the `pragmas` option of the SQLite driver: each name must be one of
+ * {@link PRAGMA_NAMES}, matched exactly, and each value a finite number or a bare keyword.
+ *
+ * @remarks
+ * A bare keyword is ASCII letters and underscores, such as `WAL` or `FULL`, so a value can
+ * neither chain a statement nor carry another setting. The check runs before the driver
+ * connects.
+ *
+ * @param pragmas - The PRAGMA names and values to apply at open, or `undefined` for none
+ * @throws A `VALIDATION` {@link DatabaseError} naming the refused pragma, and its value when
+ *   the value is refused
+ *
+ * @example
+ * ```ts
+ * validatePragmas({ journal_mode: 'WAL' }) // returns
+ * validatePragmas({ case_sensitive_like: 'ON' }) // throws VALIDATION
+ * ```
+ */
+export function validatePragmas(
+	pragmas: Readonly<Record<string, string | number>> | undefined,
+): void {
+	for (const [name, value] of Object.entries(pragmas ?? {})) {
+		if (!PRAGMA_NAMES.includes(name)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`SQLite pragma ${preview(name)} is refused: the driver admits only ${PRAGMA_NAMES.join(', ')}, which change no read result`,
+				{ pragma: name },
+			)
+		}
+		if (!(isFiniteNumber(value) || (isString(value) && /^[A-Za-z_]+$/.test(value)))) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`SQLite pragma ${preview(name)} takes a finite number or a bare keyword, not ${preview(value)}`,
+				{ pragma: name, value: preview(value) },
+			)
+		}
+	}
 }
 
 // === SQL identifiers

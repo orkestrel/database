@@ -21,7 +21,6 @@ import {
 	isInteger,
 	isNumber,
 	isString,
-	preview,
 } from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import type { SQLiteDriverOptions } from '../types.js'
@@ -60,9 +59,10 @@ import {
 	matchesSQLiteAffinity,
 	planSQLiteQuery,
 	quoteIdentifier,
+	validatePragmas,
 } from '../helpers.js'
 import { SQLiteTransaction } from '../SQLiteTransaction.js'
-import { METADATA_TABLE, REFUSED_PRAGMAS } from '../constants.js'
+import { METADATA_TABLE } from '../constants.js'
 
 /**
  * Implements the {@link DriverInterface} over SQLite — the server-native, trusted-mode
@@ -129,16 +129,7 @@ export class SQLiteDriver implements DriverInterface {
 				"SQLite path is required; pass a file path or ':memory:'",
 			)
 		}
-		const refused = Object.keys(options.pragmas ?? {}).find((name) =>
-			REFUSED_PRAGMAS.includes(name.toLowerCase()),
-		)
-		if (refused !== undefined) {
-			throw new DatabaseError(
-				'VALIDATION',
-				`SQLite pragma ${preview(refused)} is refused: it changes what a native like answers`,
-				{ pragma: refused },
-			)
-		}
+		validatePragmas(options.pragmas)
 		this.#path = options.path
 		this.#options = options
 	}

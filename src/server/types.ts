@@ -34,8 +34,8 @@ export interface CompiledSQL {
  * constraint enforcement, while omission retains the upstream default.
  * `pragmas` is an ordered record of PRAGMA name to value, applied through the
  * wrapper's `pragma()` right after `connect()`, in insertion order (for
- * example `{ journal_mode: 'WAL' }`); a `case_sensitive_like` entry throws `VALIDATION`,
- * because it changes what a native `like` answers. Core rows are number-typed — this driver
+ * example `{ journal_mode: 'WAL' }`). Each name must be one of `PRAGMA_NAMES` and each value
+ * a finite number or a bare keyword; anything else throws `VALIDATION`. Core rows are number-typed — this driver
  * never surfaces a `bigint`, so a stored integer beyond
  * `Number.MAX_SAFE_INTEGER` reads back imprecisely (the wrapper's own
  * `bigints` option is not exposed here).

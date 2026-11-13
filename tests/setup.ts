@@ -38,7 +38,10 @@ import {
 	applyQuery,
 	normalizeReadInput,
 	computeAggregate,
+	CONFORMANCE_ROWS,
+	CONFORMANCE_SCHEMA,
 	createDatabase,
+	extractKey,
 	createMemoryDriver,
 	StreamPage,
 } from '@src/core'
@@ -1321,3 +1324,16 @@ export const MIGRATION_USERS = schema({
 })
 
 export const FILTER_ROWS = [{ age: 30 }, { age: 12 }, { age: 45 }]
+
+/**
+ * Opens a driver on `CONFORMANCE_SCHEMA` and writes `CONFORMANCE_ROWS` into `users`.
+ *
+ * @param driver - The driver to seed
+ */
+export async function seedConformanceRows(driver: DriverInterface): Promise<void> {
+	await driver.open(CONFORMANCE_SCHEMA)
+	for (const row of CONFORMANCE_ROWS) {
+		const key = extractKey(row, 'id')
+		if (key !== undefined) await driver.write('users', key, row)
+	}
+}

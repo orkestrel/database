@@ -2829,12 +2829,61 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		try {
 			await expect(fallback.table('lines').records({ conditions: [like] })).rejects.toMatchObject({
 				code: 'DRIVER',
-				context: { table: 'lines', key: 'line-1999', column: 'book' },
+				context: { table: 'lines', key: 'line-1400', column: 'parent' },
 			})
 		} finally {
 			await fallback.close()
 		}
 		expect(await lines.records({ conditions: [like] })).toHaveLength(100)
+	})
+
+	it('streams no row outside the match, so a streaming fallback raises', async () => {
+		const fallback = createFallbackPagingDatabase(temp.path)
+		try {
+			await expect(
+				Array.fromAsync(fallback.table('lines').scan({ conditions: [like] })),
+			).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-1400', column: 'parent' } })
+		} finally {
+			await fallback.close()
+		}
+		expect(await Array.fromAsync(lines.scan({ conditions: [like] }))).toHaveLength(100)
+	})
+
+	it('computes sum, average, minimum, and maximum in the engine, so an aggregate fallback raises', async () => {
+		const expected = { sum: 1124250, average: 749.5, minimum: 0, maximum: 1499 }
+		const fallback = createFallbackPagingDatabase(temp.path)
+		try {
+			for (const operation of ['sum', 'average', 'minimum', 'maximum'] as const) {
+				await expect(
+					fallback.table('lines').aggregate(operation, 'position', { conditions: [book] }),
+				).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-1400', column: 'parent' } })
+				expect(await lines.aggregate(operation, 'position', { conditions: [book] })).toBe(
+					expected[operation],
+				)
+			}
+		} finally {
+			await fallback.close()
+		}
+	})
+
+	it('orders and pages in SQL, so a fallback that pages the filtered rows in the core raises', async () => {
+		const input = {
+			conditions: [book],
+			order: [{ column: 'position', direction: 'ascending' as const }],
+			limit: 10,
+			offset: 20,
+		}
+		expect(fixture.recorder.driver.plan?.('lines', input)).toEqual({ native: input, residual: {} })
+		const partial = createFallbackPagingDatabase(temp.path, true)
+		try {
+			await expect(partial.table('lines').records(input)).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { key: 'line-1400', column: 'parent' },
+			})
+		} finally {
+			await partial.close()
+		}
+		expect(await lines.records(input)).toHaveLength(10)
 	})
 
 	it('reads one page of an integer order from the driver with no scan', async () => {
@@ -3021,15 +3070,54 @@ describe('SQLiteDriver — operator, storage, and flag matrix against the core e
 	}
 })
 
-describe('SQLiteDriver — refused pragmas', () => {
-	it('refuses case_sensitive_like, which changes what a native like answers', () => {
-		for (const key of ['case_sensitive_like', 'CASE_SENSITIVE_LIKE']) {
-			expect(() => createSQLiteDriver({ path: ':memory:', pragmas: { [key]: 'ON' } })).toThrow(
-				expect.objectContaining({ code: 'VALIDATION', context: { pragma: key } }),
+describe('SQLiteDriver — the pragma allowlist', () => {
+	it('refuses every name outside the allowlist, each sidestep of a name check included', () => {
+		for (const name of [
+			'case_sensitive_like',
+			'CASE_SENSITIVE_LIKE',
+			'main.case_sensitive_like',
+			'"case_sensitive_like"',
+			' case_sensitive_like',
+			'case_sensitive_like ',
+			'JOURNAL_MODE',
+		]) {
+			expect(() => createSQLiteDriver({ path: ':memory:', pragmas: { [name]: 'ON' } })).toThrow(
+				expect.objectContaining({ code: 'VALIDATION', context: { pragma: name } }),
 			)
 		}
+	})
+
+	it('refuses encoding, which changes text order against the core', () => {
 		expect(() =>
-			createSQLiteDriver({ path: ':memory:', pragmas: { journal_mode: 'WAL' } }),
+			createSQLiteDriver({ path: ':memory:', pragmas: { encoding: 'UTF-16le' } }),
+		).toThrow(expect.objectContaining({ code: 'VALIDATION', context: { pragma: 'encoding' } }))
+	})
+
+	it('refuses the column-name pragmas, which change the names a row decodes by', () => {
+		expect(() =>
+			createSQLiteDriver({
+				path: ':memory:',
+				pragmas: { full_column_names: 'ON', short_column_names: 'OFF' },
+			}),
+		).toThrow(
+			expect.objectContaining({ code: 'VALIDATION', context: { pragma: 'full_column_names' } }),
+		)
+	})
+
+	it('refuses a value that is not a finite number or a bare keyword', () => {
+		for (const value of ['WAL; PRAGMA case_sensitive_like = ON', 'WAL ', "'WAL'", '', Number.NaN]) {
+			expect(() =>
+				createSQLiteDriver({ path: ':memory:', pragmas: { journal_mode: value } }),
+			).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
+		}
+	})
+
+	it('admits an allowlisted name with a keyword or a finite number', () => {
+		expect(() =>
+			createSQLiteDriver({
+				path: ':memory:',
+				pragmas: { journal_mode: 'WAL', synchronous: 1, cache_size: -2000, temp_store: 'MEMORY' },
+			}),
 		).not.toThrow()
 	})
 })

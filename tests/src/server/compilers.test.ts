@@ -11,6 +11,8 @@ import {
 	compilePageSQL,
 	compileWhereSQL,
 	compileConditionSQL,
+	compileGuardedSQL,
+	compileJoinedSQL,
 	schemaToIndexes,
 	schemaToTable,
 	stepToSQL,
@@ -693,5 +695,38 @@ describe('compilePageSQL', () => {
 			'Query offset must be a nonnegative integer',
 		)
 		expect(compilePageSQL(0, 0)).toEqual({ sql: 'LIMIT ? OFFSET ?', parameters: [0, 0] })
+	})
+})
+
+describe('compileJoinedSQL', () => {
+	it('returns the constant for no part and the part itself for one', () => {
+		expect(compileJoinedSQL([], ' OR ', '0')).toEqual({ sql: '0', parameters: [] })
+		expect(compileJoinedSQL([{ sql: '"a" = ?', parameters: [1] }], ' OR ', '0')).toEqual({
+			sql: '"a" = ?',
+			parameters: [1],
+		})
+	})
+
+	it('parenthesizes two or more parts and keeps their parameters in order', () => {
+		expect(
+			compileJoinedSQL(
+				[
+					{ sql: '"a" = ?', parameters: [1] },
+					{ sql: '"b" IS NULL', parameters: [] },
+					{ sql: '"c" < ?', parameters: [2] },
+				],
+				' AND ',
+				'1',
+			),
+		).toEqual({ sql: '("a" = ? AND "b" IS NULL AND "c" < ?)', parameters: [1, 2] })
+	})
+})
+
+describe('compileGuardedSQL', () => {
+	it('leaves a fragment bare without a guard and parenthesizes it with one', () => {
+		expect(compileGuardedSQL('"age" > ?', '')).toBe('"age" > ?')
+		expect(compileGuardedSQL('"age" > ?', ' AND typeof("age") != \'text\'')).toBe(
+			'("age" > ? AND typeof("age") != \'text\')',
+		)
 	})
 })

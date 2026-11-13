@@ -20,7 +20,13 @@ import type {
 	Row,
 } from '@src/core'
 import type { FieldPath } from '@orkestrel/contract'
-import { applyQuery, readPlannedAggregate, readPlannedRows } from '@src/core'
+import {
+	applyQuery,
+	computeAggregate,
+	filterRows,
+	readPlannedAggregate,
+	readPlannedRows,
+} from '@src/core'
 import { collect } from '@orkestrel/test'
 import type { JSONDriver } from '@src/server'
 import type { TeardownInterface } from '@orkestrel/test'
@@ -2334,9 +2340,10 @@ export function matrixSchema(
 }
 
 /**
- * Stores a blob in the `book` column of the paging row `line-1999`, which no paging
- * reading matches: a native read never decodes the row, and a read that decodes every row
- * raises `DRIVER` on it.
+ * Stores a blob in two paging rows a native read never decodes: the `book` of `line-1999`,
+ * which no paging reading matches, and the `parent` of `line-1400`, which matches
+ * `book = 'b1'` but sits outside every page. A read that decodes every row, or every row its
+ * filter matches, raises `DRIVER` on one of them.
  *
  * @param path - The SQLite file the paging database holds
  */
@@ -2347,6 +2354,9 @@ export function corruptPagingRow(path: string): void {
 		database
 			.prepare('UPDATE "lines" SET "book" = ? WHERE "id" = ?')
 			.execute([new Uint8Array([0]), 'line-1999'])
+		database
+			.prepare('UPDATE "lines" SET "parent" = ? WHERE "id" = ?')
+			.execute([new Uint8Array([0]), 'line-1400'])
 	} finally {
 		database.close()
 	}
@@ -2362,17 +2372,55 @@ export function corruptPagingRow(path: string): void {
  */
 export function createFallbackPagingDatabase(
 	path: string,
+	partial = false,
 ): DatabaseInterface<typeof PAGING_TABLES> {
 	return createDatabase({
-		driver: new FallbackSQLiteDriver({ path }),
+		driver: partial
+			? new PartialFallbackSQLiteDriver({ path })
+			: new FallbackSQLiteDriver({ path }),
 		tables: PAGING_TABLES,
 		indexes: PAGING_INDEXES,
 	})
 }
 
-/** Falls back inside `records`: decodes every row through `scan`, then filters in the core. */
+/**
+ * Falls back inside `records`, `stream`, and `aggregate`: decodes every row through `scan`,
+ * then answers in the core engine.
+ */
 export class FallbackSQLiteDriver extends SQLiteDriverClass {
 	override async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		return applyQuery(await Array.fromAsync(this.scan(table)), input)
+	}
+
+	override async *stream(table: string, input: QueryInput): AsyncIterable<Row> {
+		yield* applyQuery(await Array.fromAsync(this.scan(table)), input)
+	}
+
+	override async aggregate(
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		const rows = filterRows(await Array.fromAsync(this.scan(table)), input.conditions ?? [])
+		return computeAggregate(rows, operation, column)
+	}
+}
+
+/**
+ * Falls back in part inside `records`: runs the filter in SQL, then orders and pages the
+ * filtered rows in the core engine.
+ */
+export class PartialFallbackSQLiteDriver extends SQLiteDriverClass {
+	override async records(table: string, input: QueryInput): Promise<readonly Row[]> {
+		const filtered = await super.records(
+			table,
+			input.conditions === undefined ? {} : { conditions: input.conditions },
+		)
+		return applyQuery(filtered, {
+			...(input.order === undefined ? {} : { order: input.order }),
+			...(input.limit === undefined ? {} : { limit: input.limit }),
+			...(input.offset === undefined ? {} : { offset: input.offset }),
+		})
 	}
 }
