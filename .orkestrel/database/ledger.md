@@ -17,3 +17,9 @@
 | 2026-11-13 | Publication of database 0.0.24, the paging wave, and relation 0.0.22, its adoption                                                                                      | user                                                | `5e1b08d`, relation `772c20d`                                    |
 | 2026-11-13 | The order after the paging wave: open decisions, coverage wave, text wave, then the quality units; a planner consultation rules each design question and refuters verify it | user                                                | `plan.md` § State                                                |
 | 2026-11-13 | No package of the family depends on toolbox; toolbox may depend on them | user | `plan.md` § State |
+| 2026-11-13 | Evidence for the open decisions, and the coverage wave's terrain map | grok (Grok 4.7) | `designs/native.md` § Addendum: the open decisions |
+| 2026-11-13 | The open decisions, the raising read's code, and D1 to D5 | planner (Fable 5.2) | `designs/native.md` § Addendum: the open decisions |
+| 2026-11-13 | Two refuter rounds on the open-decision rulings, and one on the follow-up | reviewer (Opus 5.5) | `designs/native.md` § Addendum: the open decisions |
+| 2026-11-13 | The pragma guards and the header comment in sqlite | opus (Opus 5.5) | sqlite `12bca99` |
+| 2026-11-13 | Review and closure check of the sqlite unit (Sonnet for Opus-written work, Astra dark) | reviewer (Sonnet 5.5) | sqlite `12bca99` |
+| 2026-11-13 | Gate runs on sqlite and relation | verifier (Haiku 5.5) | sqlite `12bca99`, `1e8b0db`; relation `2590be0` |

@@ -57,7 +57,10 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
   - Publication runs on the user's one-time code, in one upload call that covers every release-ready repository of a wave in layer order.
   - The session lists, per wave, what each dependent outside these four repositories changes (§ Sequence step 4); the sessions that own those repositories make the change.
   - None of database, relation, sqlite, or indexeddb depends on `@orkestrel/toolbox`; toolbox may depend on them.
-- **Next:** rule § Open decisions, then the coverage wave in layer order.
+- **The open decisions are ruled** in `designs/native.md` § Addendum: the open decisions, from a `planner` consultation, two refuter rounds, and the probes it cites; three items wait on taverna's session (§ Open decisions).
+- **Each repository carries scaffold 0.0.135**: database `9a053b9`, relation `2590be0`, sqlite `1e8b0db`; indexeddb adopts it when its writer returns. Every gate passes except one vendored `tests/config.test.ts` case that raises `ENOTDIR` on Linux, owed to scaffold.
+- **Coverage wave, landed:** sqlite `12bca99`. In progress: the indexeddb rows (rangePrefix, the raising read, the index reconcile), and database's journal, batches, and contract cache.
+- **Next:** finish the indexeddb and database coverage units, then relation, then the release visit in layer order.
 
 ## Sequence
 
@@ -66,15 +69,17 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
    - **indexeddb:**
      - `rangePrefix` takes the exact successor;
      - the raising read on a non-record value, with invariant 7 of its guide rewritten;
-     - its header comment.
-   - **sqlite:**
-     - the pragma name and value check;
-     - its header comment.
+     - its header comment;
+     - the `RECORD` key naming from a back-to-back pair;
+     - missing declared indexes created after the `upgrade` callback, with the definition check, in both modes.
+   - **sqlite:** landed as `12bca99` (the pragma guards and the header comment).
    - **database:**
+     - the contract compiled once per table, and the query door, the operand-class check, and the ill-formed-text refusal of the open-decisions addendum;
+     - `StorageRecorder` exported, the tripwire and batch-commit instruments, and the bench files with wrapper-alone arms on both engines;
      - the IndexedDB plans of `designs/native.md` § 5: access-path ranking, `any`, `starts`, compound indexes, native order, paging and count, and batched streaming;
      - the before-image journal in place of `snapshot`;
      - the batches;
-     - the SQLite completion of § 4 and the Addendum: the statement cache, `BEGIN IMMEDIATE`, a `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize`, `pragma(name)`, the drop of undeclared indexes at open, and the rank expression for a column that is both optional and nullable.
+     - the SQLite completion of § 4 and the Addendum: the statement cache, `BEGIN IMMEDIATE`, a `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize = 0x10002` at a writable open, `pragma(name)`, the drop of undeclared indexes at open on both engines, the rank expression for a column that is both optional and nullable, the integer `sum` as `TOTAL`, the `RECORD` mapping, and the pragma guards at the driver's doors.
    - **relation:**
      - `link` and `unlink` as one insert and one delete;
      - primary-key loads through `get(keys)`;
@@ -82,24 +87,15 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
 3. **Text wave.** The design round of `designs/native.md` § 6, with taverna's search requirement read first, then one `@orkestrel/database` release.
 4. **At each wave's adoption, the dependents' sweep** of `designs/native.md` § 8 ("What each dependent changes") runs over agent, middleware, queue, relation, supervisor, taverna, terminal, toolbox, worker, workflow, and workspace. Each hit changes in the release that adopts the wave.
 5. **Quality and performance**, in the fresh session. The units of `research/strategies-database.md` § 3 that no wave holds, and the patterns of `research/strategies-agent.md` § 3. In this order:
-   1. the bench files and the round-trip recorder on both engines, because every later unit's acceptance reads them (DM1, DM6, A-M1, A-P12);
-   2. the check on every `pragmas` entry at open;
-   3. the remaining units, each with its reading against `tenets.md`.
+   1. the remaining units of `research/strategies-database.md` § 3, each with its reading against `tenets.md`; the bench files and instruments moved into the coverage wave, and `validatePragmas` at construction meets the `pragmas` check at open.
 
 ## Open decisions
 
-The fresh session rules these first.
+`designs/native.md` § Addendum: the open decisions rules every decision but the three taverna's session holds:
 
-- **The release bar.** It is the candidate list in `research/strategies-agent.md` § 4 Q1, plus this side's consequence: a read that runs the core engine on an engine that has the native operation.
-- **The differential's classes**, the bars and their baselines, the real client, and the recorder's home: `research/strategies-agent.md` § 4 Q2, Q3, Q8, and Q9.
-- **A bound on an `any` list and on an include's result,** or a stated limit (Q7).
-- **Whether `SQLITE_LOCKED` gains its own code** (Q11).
-- **Which assumptions of the residual path get a mutation** (Q12).
-- **The run-settled questions** of `research/strategies-database.md` § 5:
-  - the floor engine's SQLite version, FTS5, and `PRAGMA optimize` on Node 22.18.0;
-  - unpaired surrogates;
-  - an unversioned IndexedDB database with a dropped index declaration;
-  - taverna's IndexedDB reads.
+- the taverna commit, data slice, and Node version to pin as the real client;
+- taverna's IndexedDB reads, which decide whether the residual units of `research/strategies-database.md` § 3 take a consumer bar or a recorded stop, and whether the text wave builds an IndexedDB token store;
+- taverna's search requirement, which opens the text wave.
 
 ## Refused, with triggers
 
