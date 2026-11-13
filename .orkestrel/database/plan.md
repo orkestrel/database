@@ -57,6 +57,7 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
   - Publication runs on the user's one-time code, in one upload call that covers every release-ready repository of a wave in layer order.
   - The session lists, per wave, what each dependent outside these four repositories changes (§ Sequence step 4); the sessions that own those repositories make the change.
   - None of database, relation, sqlite, or indexeddb depends on `@orkestrel/toolbox`; toolbox may depend on them.
+- **A stats-free index reading** from taverna's `lines-c-page` (`research/intake.md` § Message 4). On a never-analyzed file, SQLite walked an `(organization_id, created_at, id)` order index for an account-filtered page (0.97 ms) instead of searching `account_id`. A compound `(account_id, created_at, id)` index searches by account and stops after the page with no sort (0.12 ms), with or without statistics. The coverage wave's `PRAGMA optimize` work and the DI tenets (DI2, DI3, DI6) read it first: an application that filters by a foreign key and pages by an order declares the compound index, and a plan never depends on statistics a file may lack.
 - **Next:** rule § Open decisions, then the coverage wave in layer order.
 
 ## Sequence
