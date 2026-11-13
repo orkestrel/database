@@ -7,16 +7,19 @@ The messages reached the fleet Orchestrator from taverna's Orchestrator. They ar
 From taverna's Orchestrator: the user asks you to take up the `@orkestrel/database` work next. `Table.records()` and `Table.count()` never push a page or a count down to the driver. This is taverna's evidence; the design and the repair are yours.
 
 **The finding (installed `@orkestrel/database` 0.0.23, `dist/src/core/index.js`):**
+
 - **`records(input)` (line 2840).** It hands the driver's `records` hook only `{ conditions, order }`. It then runs `#guard(row)` over every returned row in JS and applies `offset`/`limit` last with `rows.slice` (lines 2849–2854). `limit` and `offset` never reach the driver, so SQLite returns every matching row for a 10-row page.
 - **`count(input)` (line 2869).** It fetches every matching row through the same hook and reduces over `#guard` (lines 2874–2877). That is a full row read in place of `SELECT COUNT(*)`. The remarks give the reason: legacy invalid rows must not make `count()` disagree with `records()`.
 - **Together.** A list endpoint that asks for a page and its total reads the whole matching set twice. Taverna's `listCapabilityOf` (`app/core/capabilities/helpers.ts`, about line 588) does exactly that: `table.count` plus `table.records` with `limit`/`offset`.
 
 **What taverna measured** (its `load` unit):
+
 - On the 80,646-row book slice, `claim_list` read 1501 rows to answer, with 3002 reads behind it.
 - A 10-row `/api/search` page took 255–337 ms at one hundredth of the book.
 - Part of that is taverna's audit, one record per list invoke. The rest is this row-read-then-slice path, which grows with the table, not the page.
 
 **What taverna needs from the package:**
+
 1. A page that reaches the driver: `limit`/`offset` in the SQL.
 2. A count the driver answers: `COUNT(*)` with the conditions.
 3. `count()` and `records()` must still agree. The current design pays for that with full reads. A design that keeps it without them is yours to choose: for example, rows guaranteed valid at write time or after a one-time sweep, so the guard leaves the hot path. Keep the guard's reason in the remarks.
@@ -30,6 +33,7 @@ From taverna's Orchestrator: the user asks you to take up the `@orkestrel/databa
 ## Message 2: the user's native-first principle and the audit
 
 **The principle (the user, 2026-11-13).** `@orkestrel/database` is the unifier: one API over SQLite and IndexedDB, carrying the best database design patterns.
+
 - It **prefers and defaults to each driver's native abilities**, and supplies its own logic only to fill a gap that driver's engine cannot cover.
 - Wherever an engine can do the work natively, that path comes first. Filtering, ordering, paging, counting, aggregating, indexing, uniqueness, relations, transactions, and text search are all candidates.
 - The package's fallback serves only the engine that lacks the ability. For example, IndexedDB has no multi-field filter, arbitrary ORDER BY, or OFFSET, so those fall back there and never on SQLite.
@@ -39,6 +43,7 @@ From taverna's Orchestrator: the user asks you to take up the `@orkestrel/databa
 **The audit:** `research/audit.md` in this folder. It is read-only, cited file:line against installed database 0.0.23, sqlite 0.0.18, indexeddb 0.0.18, and relation 0.0.21, and each checkout's HEAD is its release commit. Taverna's Orchestrator verified the two load-bearing claims in the code.
 
 **What it found, beyond `records`/`count`:**
+
 1. **All-or-nothing pushdown.** The SQLite driver sends a query to SQL only when every clause is "exact" (`matchesQueryExactly`; `SQLiteDriver.records`, server dist line 1766). One optional or nullable column, a text `order`, a `like`, or a nested path sends the whole query to `#scan` plus `applyQuery` in JS. `like`/`glob` are never exact, and `starts` compiles to `substr(...)`, which no index can use.
 2. **The SQLite transaction capability** (`#capability`, server dist lines 2187–2200) exposes no `records`, `aggregate`, or `stream`. So every `records`/`count`/`aggregate` inside `database.transaction` is a full scan and a JS filter. Taverna runs every write handler in a transaction.
 3. **IndexedDB.** `selectPlan` uses only the first condition, on a single-column index. `any` has no plan, so every `relation` load is a full `getAll` of the related store. Compound indexes are created and never read. `getAll(range, count)`, `count(range)`, and cursor `advance` exist in `@orkestrel/indexeddb` but go unused. `scan` and `stream` load the whole store into an array.
@@ -57,6 +62,7 @@ From taverna's Orchestrator: the user asks you to take up the `@orkestrel/databa
 ## Message 3: six points from taverna's `native` consult, verbatim
 
 The points follow verbatim.
+
 1. **The driver's WAL default.** Taverna will set `journal_mode = WAL` and `synchronous = FULL` itself, through the driver's `pragmas` option. If the driver defaults to WAL, it must not lower `synchronous` without the application saying so. A busy timeout has no effect with one connection per file: taverna's `load` arm C measured every wait running out, because the single thread holding the read is the one that waits.
 2. **The exactness gate on an optional column.** Admit `equals` and `any` with non-null operands on an optional column. Per-clause pushdown alone won't reach a relation load, which has one clause.
 3. **An `any` list past the bound-parameter limit.** `compileConditionSQL` binds one parameter per value, and `Model` builds the list from every parent key (`relation` near lines 622 and 639). Rule chunking, or a stated bound.
