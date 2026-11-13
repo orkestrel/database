@@ -6,7 +6,7 @@ The messages reached the fleet Orchestrator from taverna's Orchestrator. They ar
 
 From taverna's Orchestrator: the user asks you to take up the `@orkestrel/database` work next. `Table.records()` and `Table.count()` never push a page or a count down to the driver. This is taverna's evidence; the design and the repair are yours.
 
-**The finding (installed `@orkestrel/database` 0.0.23, `dist/src/core/index.js`):**
+**The finding (installed `@orkestrel/database` 0.0.23, dist/src/core/index.js of https://registry.npmjs.org/@orkestrel/database/-/database-0.0.23.tgz):**
 
 - **`records(input)` (line 2840).** It hands the driver's `records` hook only `{ conditions, order }`. It then runs `#guard(row)` over every returned row in JS and applies `offset`/`limit` last with `rows.slice` (lines 2849–2854). `limit` and `offset` never reach the driver, so SQLite returns every matching row for a 10-row page.
 - **`count(input)` (line 2869).** It fetches every matching row through the same hook and reduces over `#guard` (lines 2874–2877). That is a full row read in place of `SELECT COUNT(*)`. The remarks give the reason: legacy invalid rows must not make `count()` disagree with `records()`.

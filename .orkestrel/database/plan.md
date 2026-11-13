@@ -46,14 +46,21 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
   - Full-text search belongs to `@orkestrel/database` (`designs/native.md` § 6). Taverna cancels its own word-index unit and is the text wave's first consumer.
   - No release ships for prose alone.
   - The quality-and-performance work runs in a fresh session on another machine, after these packages' current releases are published. This folder is that session's whole briefing: it cites only tracked files, commits, and published URLs.
-- **The Node floor is 22.18.0**, scaffold's `MINIMUM_NODE_VERSION`. `designs/native.md`'s "Node 22.12.0" reads as 22.18.0. The `>=22.12.0` in the `engines` field of database, indexeddb, and relation is stale, and each takes the fleet's range in its next functional release (`research/strategies-database.md` § 4).
+- **The paging wave is published.** The registry serves `@orkestrel/database` 0.0.24 (`5e1b08d`) and `@orkestrel/relation` 0.0.22 (`772c20d`), which pins database `^0.0.24`; each `main` holds its release commit. `@orkestrel/sqlite` 0.0.18 (`95e4408`) and `@orkestrel/indexeddb` 0.0.18 (`17e2a00`) are unchanged. Taverna adopts 0.0.24 in its own session, and its `load` readings return through the user.
+- **The Node floor is 22.18.0**, scaffold's `MINIMUM_NODE_VERSION`. `designs/native.md`'s "Node 22.12.0" reads as 22.18.0. Database 0.0.24 and relation 0.0.22 carry the fleet's range `^22.18.0 || >=24.4.0`; the `>=22.12.0` in indexeddb's `engines` field is stale, and it takes the fleet's range in its coverage-wave release (`research/strategies-database.md` § 4).
+- **Each repository adopts scaffold 0.0.135 and test 0.0.39 at its next release visit.** Database and relation pin scaffold `^0.0.134` and test `^0.0.38`; sqlite and indexeddb pin scaffold `^0.0.131` and test `^0.0.33`. The registry serves contract 0.0.23.
 - **Agent's Q13, statistics for the IndexedDB planner, is ruled by DI3 and DI5:** the ranking is by rule, with no selectivity model, until a reading reopens it (`research/strategies-database.md` § 1, DI3 and DI5).
 - **Scaffold's canon carries the native-first rule.** Its `.claude/rules/architecture.md` § System constraints has carried it since scaffold `c3fea9938`, and `AGENTS.md`'s minimal-API law points there.
-- **Next:** the paging wave's release preparation as database 0.0.24, then its publication on the user's code, then taverna's adoption.
+- **The user's rulings of 2026-11-13 for the session after the paging wave:**
+  - The order is § Open decisions, the coverage wave, the text wave, then the quality-and-performance units of § Sequence step 5.
+  - A planner consultation rules each design question on evidence, and independent refuters verify each proposal ahead of a writer.
+  - Publication runs on the user's one-time code, in one upload call that covers every release-ready repository of a wave in layer order.
+  - The session lists, per wave, what each dependent outside these four repositories changes (§ Sequence step 4); the sessions that own those repositories make the change.
+- **Next:** rule § Open decisions, then the coverage wave in layer order.
 
 ## Sequence
 
-1. **Paging wave.** One `@orkestrel/database` release: release preparation, publication, and taverna's adoption. Taverna's `lines-c` waits on it.
+1. **Paging wave.** Taverna's adoption of database 0.0.24, with its `load` readings re-measured against `research/intake.md`.
 2. **Coverage wave**, released in layer order: `@orkestrel/indexeddb`, then `@orkestrel/sqlite`, then `@orkestrel/database`, then `@orkestrel/relation`.
    - **indexeddb:**
      - `rangePrefix` takes the exact successor;
