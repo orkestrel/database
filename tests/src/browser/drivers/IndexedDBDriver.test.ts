@@ -3,7 +3,6 @@ import type { DriverInterface, Row, TableSchema, TableInterface } from '@src/cor
 import {
 	applyQuery,
 	captureFailure,
-	collectRows,
 	computeAggregate,
 	CONFORMANCE_POSTS_SCHEMA,
 	CONFORMANCE_READS,
@@ -2099,7 +2098,7 @@ describe('IndexedDBDriver — rows read per conformance read', () => {
 				const key = extractKey(row, 'id')
 				if (key !== undefined) await planned.write('users', key, row)
 			}
-			const scanned = await collectRows(planned.scan('users'))
+			const scanned = await Array.fromAsync(planned.scan('users'))
 			const counts: number[] = []
 			for (const input of CONFORMANCE_READS) {
 				const { aggregate, ...query } = input
@@ -2124,6 +2123,38 @@ describe('IndexedDBDriver — rows read per conformance read', () => {
 			expect(counts).toEqual(CONFORMANCE_ROWS_READ)
 		} finally {
 			await planned.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — stream order', () => {
+	it('yields the rows in the input order, and in key order without one', async () => {
+		const database = mintDatabase('database-idb-order')
+		await deleteDatabase(database)
+		const ordered = createIndexedDBDriver(database)
+		try {
+			await ordered.open([
+				{ ...CONFORMANCE_USERS_SCHEMA, indexes: [['age']] },
+				CONFORMANCE_POSTS_SCHEMA,
+			])
+			for (const row of CONFORMANCE_ROWS) {
+				const key = extractKey(row, 'id')
+				if (key !== undefined) await ordered.write('users', key, row)
+			}
+			const input = {
+				conditions: [buildCondition('age', 'from', [17])],
+				order: [{ column: 'age', direction: 'descending' as const }],
+				limit: 3,
+			}
+			const scanned = await Array.fromAsync(ordered.scan('users'))
+			const streamed = await Array.fromAsync(ordered.stream?.('users', input) ?? [])
+			expect(streamed.map((row) => row.id)).toEqual(applyQuery(scanned, input).map((row) => row.id))
+			expect(streamed.map((row) => row.id)).toEqual(['g', 'h', 'b'])
+			const keyed = await Array.fromAsync(ordered.stream?.('users', {}) ?? [])
+			expect(keyed.map((row) => row.id)).toEqual(scanned.map((row) => row.id))
+		} finally {
+			await ordered.close()
 			await deleteDatabase(database)
 		}
 	})

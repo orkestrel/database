@@ -92,8 +92,7 @@ await new GuideCommand({
 		compileFieldSQL,
 		compileQuerySQL,
 		deriveSQLiteIndexName,
-		matchesNativeAggregate,
-		matchesNativeCondition,
+		matchesSQLiteCondition,
 		matchesSQLiteAffinity,
 		planSQLiteQuery,
 		quoteIdentifier,
@@ -489,7 +488,9 @@ await new GuideCommand({
 			expect(compileColumnSQL('integer')).toBe('INTEGER')
 			expect(compileFieldSQL(['profile', 'score'])).toBe('json_extract("profile", \'$.score\')')
 			expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
-			expect(matchesNativeAggregate({ operation: 'minimum', column: 'age' }, schema)).toBe(true)
+			expect(
+				planSQLiteQuery({ aggregate: { operation: 'minimum', column: 'age' } }, schema).residual,
+			).toEqual({})
 			expect(matchesSQLiteAffinity('INTEGER', 'integer')).toBe(true)
 			expect(schemaToTable(schema)).toContain('CREATE TABLE IF NOT EXISTS')
 			expect(schemaToIndexes(schema)).toEqual([])
@@ -503,8 +504,8 @@ await new GuideCommand({
 				values: [null],
 				connector: 'and',
 			}
-			expect(matchesNativeCondition(native, schema)).toBe(true)
-			expect(matchesNativeCondition(residual, schema)).toBe(false)
+			expect(matchesSQLiteCondition(native, schema)).toBe(true)
+			expect(matchesSQLiteCondition(residual, schema)).toBe(false)
 			expect(
 				planSQLiteQuery(
 					{ conditions: [native], order: [{ column: 'age', direction: 'ascending' }], limit: 10 },

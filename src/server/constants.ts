@@ -10,3 +10,13 @@
  * reservation — the caller's concern to avoid, documented on the driver class.
  */
 export const METADATA_TABLE = '_metadata'
+
+/**
+ * Lists the PRAGMA names the {@link SQLiteDriver} refuses in its `pragmas` option, compared
+ * without regard to case.
+ *
+ * @remarks
+ * `case_sensitive_like` changes what SQLite's `LIKE` answers, so a native `like` would
+ * disagree with the core engine's ASCII fold that the plan relies on.
+ */
+export const REFUSED_PRAGMAS: readonly string[] = Object.freeze(['case_sensitive_like'])

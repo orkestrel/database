@@ -27,13 +27,12 @@ import {
 	cloneMigrationInput,
 	compareValues,
 	DatabaseError,
-	StreamPage,
 	equalsValue,
 	extractKey,
 	isKey,
 	isDatabaseError,
-	matchesQuery,
 	migrateRows,
+	normalizeReadInput,
 	normalizeDriverSchema,
 	planMigration,
 	projectMigrationSchema,
@@ -252,13 +251,7 @@ export class IndexedDBDriver implements DriverInterface {
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)
 		try {
-			const schema = this.#table(table)
-			const store = this.#store(table)
-			const access = findAccessCondition(input, schema, store.indexes)
-			return applyQuery(
-				await this.#candidates(store, schema, deriveAccessPlan(access, schema)),
-				input,
-			)
+			return await this.#read(table, input)
 		} catch (error) {
 			throw this.#wrap(error)
 		}
@@ -511,22 +504,24 @@ export class IndexedDBDriver implements DriverInterface {
 
 	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		try {
-			const schema = this.#table(table)
-			const store = this.#store(table)
-			const access = findAccessCondition(input, schema, store.indexes)
-			const conditions = input.conditions ?? []
-			const offset = input.offset ?? 0
-			const limit = input.limit
-			const page = new StreamPage(offset)
-			for (const row of await this.#candidates(store, schema, deriveAccessPlan(access, schema))) {
-				if (limit !== undefined && page.count >= limit) break
-				if (!matchesQuery(row, conditions)) continue
-				if (!page.next()) continue
-				yield row
-			}
+			for (const row of await this.#read(table, input)) yield row
 		} catch (error) {
 			throw this.#wrap(error)
 		}
+	}
+
+	// Read the key range of the input's access condition, which answers that condition
+	// exactly, and run the core engine over the input's other clauses only when one remains.
+	async #read(table: string, input: QueryInput): Promise<readonly Row[]> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const access = findAccessCondition(input, schema, store.indexes)
+		const rows = await this.#candidates(store, schema, deriveAccessPlan(access, schema))
+		const rest = normalizeReadInput({
+			...input,
+			conditions: (input.conditions ?? []).filter((condition) => condition !== access),
+		})
+		return Object.keys(rest).length === 0 ? rows : applyQuery(rows, rest)
 	}
 
 	// Run one point mutation inside an explicit readwrite transaction. The

@@ -390,6 +390,33 @@ describe('compileQuerySQL — operators', () => {
 		})
 	})
 
+	it('compiles undefined operands and lists holding null or undefined by the column flags', () => {
+		const both: TableSchema = {
+			...SCHEMA,
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'rank', storage: 'integer', optional: true, nullable: true },
+			],
+		}
+		expect(compileConditionSQL(cond('rank', 'equals', [undefined]), both).sql).toBe(
+			'"rank" IS NULL',
+		)
+		expect(compileConditionSQL(cond('rank', 'not', [undefined]), both).sql).toBe(
+			'"rank" IS NOT NULL',
+		)
+		expect(compileConditionSQL(cond('age', 'equals', [undefined]), SCHEMA).sql).toBe('0')
+		expect(compileConditionSQL(cond('rank', 'any', [1, null, undefined]), both)).toEqual({
+			sql: '("rank" IN (SELECT value FROM json_each(?)) OR typeof("rank") = \'text\' OR "rank" IS NULL)',
+			parameters: ['[1]'],
+		})
+		expect(compileConditionSQL(cond('rank', 'none', [1, null]), both)).toEqual({
+			sql: '(("rank" NOT IN (SELECT value FROM json_each(?)) OR "rank" IS NULL) AND NOT typeof("rank") = \'text\')',
+			parameters: ['[1]'],
+		})
+		expect(compileConditionSQL(cond('age', 'any', [null]), SCHEMA).sql).toBe('0')
+		expect(compileConditionSQL(cond('age', 'none', [null]), SCHEMA).sql).toBe('1')
+	})
+
 	it('escapes a glob class bracket, which the core reads literally', () => {
 		expect(compileConditionSQL(cond('name', 'glob', ['a[b]*']), SCHEMA)).toEqual({
 			sql: '"name" GLOB ?',

@@ -11,15 +11,14 @@ import {
 import {
 	applyQuery,
 	captureFailure,
-	collectRows,
 	collectScalars,
-	compactReadInput,
-	comparePlans,
+	normalizeReadInput,
+	scanPlans,
 	CONFORMANCE_ROWS,
 	CONFORMANCE_SCHEMA,
 	findPlanFaults,
 	foldASCII,
-	containsValue,
+	matchesListed,
 	prepareScalars,
 	readPlannedAggregate,
 	readPlannedRows,
@@ -83,6 +82,8 @@ import {
 	createDoublyBrokenDriver,
 	createCrashingDriver,
 	createPlannedDriver,
+	StorageRecorder,
+	tallyCalls,
 } from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
@@ -1323,23 +1324,23 @@ describe('sortRows — the tie rule', () => {
 	})
 })
 
-describe('collectScalars, containsValue, and prepareScalars', () => {
+describe('collectScalars, matchesListed, and prepareScalars', () => {
 	it('collects the scalar operands and leaves objects out', () => {
 		const scalars = collectScalars(['a', 1, null, undefined, Number.NaN, { b: 2 }])
 		expect([...scalars]).toEqual(['a', 1, null, undefined, Number.NaN])
 	})
 
 	it('matches a scalar by lookup and an object structurally', () => {
-		expect(containsValue('a', ['a', 'b'])).toBe(true)
-		expect(containsValue(-0, [0])).toBe(true)
-		expect(containsValue(Number.NaN, [Number.NaN])).toBe(true)
-		expect(containsValue('1', [1])).toBe(false)
-		expect(containsValue({ b: 1 }, [{ b: 1 }])).toBe(true)
-		expect(containsValue({ b: 1 }, ['b'])).toBe(false)
+		expect(matchesListed('a', ['a', 'b'])).toBe(true)
+		expect(matchesListed(-0, [0])).toBe(true)
+		expect(matchesListed(Number.NaN, [Number.NaN])).toBe(true)
+		expect(matchesListed('1', [1])).toBe(false)
+		expect(matchesListed({ b: 1 }, [{ b: 1 }])).toBe(true)
+		expect(matchesListed({ b: 1 }, ['b'])).toBe(false)
 	})
 
 	it('answers from the prepared set it is handed', () => {
-		expect(containsValue('a', ['a'], new Set(['z']))).toBe(false)
+		expect(matchesListed('a', ['a'], new Set(['z']))).toBe(false)
 		expect(matchesCondition({ id: 'z' }, buildCondition('id', 'any', ['a']), new Set(['z']))).toBe(
 			true,
 		)
@@ -1366,12 +1367,12 @@ describe('collectScalars, containsValue, and prepareScalars', () => {
 	})
 })
 
-describe('compactReadInput', () => {
+describe('normalizeReadInput', () => {
 	it('drops an empty list and keeps every present clause', () => {
-		expect(compactReadInput({ conditions: [], order: [], limit: 10 })).toEqual({ limit: 10 })
-		expect(compactReadInput({})).toEqual({})
+		expect(normalizeReadInput({ conditions: [], order: [], limit: 10 })).toEqual({ limit: 10 })
+		expect(normalizeReadInput({})).toEqual({})
 		const aggregate = { operation: 'count' as const, column: 'id' }
-		expect(compactReadInput({ offset: 0, aggregate })).toEqual({ offset: 0, aggregate })
+		expect(normalizeReadInput({ offset: 0, aggregate })).toEqual({ offset: 0, aggregate })
 	})
 })
 
@@ -1437,7 +1438,7 @@ describe('findPlanFaults', () => {
 	})
 })
 
-describe('readPlannedRows, readPlannedAggregate, collectRows, and comparePlans', () => {
+describe('readPlannedRows, readPlannedAggregate, and scanPlans', () => {
 	it('answers a planned read and a scan-only read alike', async () => {
 		const planned = createPlannedDriver()
 		const memory = createMemoryDriver()
@@ -1456,10 +1457,7 @@ describe('readPlannedRows, readPlannedAggregate, collectRows, and comparePlans',
 		expect(await readPlannedAggregate(planned, 'users', input, aggregate)).toBe(
 			await readPlannedAggregate(memory, 'users', input, aggregate),
 		)
-		expect((await collectRows(memory.scan('users'))).map((row) => row.id)).toEqual(
-			CONFORMANCE_ROWS.map((row) => row.id),
-		)
-		expect(await collect(comparePlans(planned, 'plan'))).toEqual([])
+		expect(await collect(scanPlans(planned, 'plan'))).toEqual([])
 	})
 
 	it('reports an answer that differs from the core engine', async () => {
@@ -1469,7 +1467,7 @@ describe('readPlannedRows, readPlannedAggregate, collectRows, and comparePlans',
 			const key = extractKey(row, 'id')
 			if (key !== undefined) await driver.write('users', key, row)
 		}
-		const findings = await collect(comparePlans(driver, 'plan'))
+		const findings = await collect(scanPlans(driver, 'plan'))
 		expect(findings.length).toBeGreaterThan(0)
 		expect(new Set(findings.map((finding) => finding.check))).toEqual(
 			new Set(['plan-differential']),
@@ -1505,5 +1503,22 @@ describe('scanDriver — the plan phase', () => {
 			expected: { plan: true, records: true, stream: true, aggregate: true },
 			actual: { plan: false, records: false, stream: false, aggregate: false },
 		})
+	})
+})
+
+describe('readPlannedRows — the read procedure Table runs', () => {
+	it('stops the residual stream at offset + limit matches, as Table.records does', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		await recorder.driver.open(CONFORMANCE_SCHEMA)
+		for (const row of CONFORMANCE_ROWS) {
+			const key = extractKey(row, 'id')
+			if (key !== undefined) await recorder.driver.write('users', key, row)
+		}
+		const input = { conditions: [buildCondition('age', 'above', [30])], limit: 1 }
+		const { value, calls } = await recorder.measure(() =>
+			readPlannedRows(recorder.driver, 'users', input),
+		)
+		expect(value.map((row) => row.id)).toEqual(['a'])
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, rows: 1 })
 	})
 })

@@ -40,6 +40,9 @@ export type Key = string | number
  */
 export type KeyFunction = () => Key
 
+/** Represents a value that is not an object and not a function: `null` or a primitive. */
+export type Scalar = null | undefined | boolean | number | bigint | string | symbol
+
 /** Represents a table row — a plain record of column values keyed by column name. */
 export type Row = Record<string, unknown>
 

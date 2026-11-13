@@ -39,6 +39,7 @@ import {
 	preview,
 	resolveField,
 } from '@orkestrel/contract'
+import { StreamPage } from './StreamPage.js'
 import {
 	CONFORMANCE_POSTS_SCHEMA,
 	CONFORMANCE_READS,
@@ -100,10 +101,10 @@ export function validatePage(input?: QueryInput): void {
  *
  * @example
  * ```ts
- * compactReadInput({ conditions: [], order: [], limit: 10 }) // { limit: 10 }
+ * normalizeReadInput({ conditions: [], order: [], limit: 10 }) // { limit: 10 }
  * ```
  */
-export function compactReadInput(input: ReadInput): ReadInput {
+export function normalizeReadInput(input: ReadInput): ReadInput {
 	return {
 		...(input.conditions !== undefined && input.conditions.length > 0
 			? { conditions: input.conditions }
@@ -458,7 +459,7 @@ export function collectScalars(values: readonly unknown[]): ReadonlySet<unknown>
  * {@link compareValues}, the total order; the equality family (`equals` / `not`
  * / `any` / `none`) uses {@link equalsValue}, structural equality with SameValueZero
  * leaves, so `NaN` equals `NaN` under `equals` / `any`. `any` and `none` test the field
- * through {@link containsValue}. `like` / `glob` / `starts` / `ends` match only strings;
+ * through {@link matchesListed}. `like` / `glob` / `starts` / `ends` match only strings;
  * `absent` / `present` test nullishness. Total — a type mismatch is a non-match.
  *
  * @param row - The row to test
@@ -499,9 +500,9 @@ export function matchesCondition(
 		case 'ends':
 			return isString(value) && isString(first) && value.endsWith(first)
 		case 'any':
-			return containsValue(value, condition.values, scalars)
+			return matchesListed(value, condition.values, scalars)
 		case 'none':
-			return !containsValue(value, condition.values, scalars)
+			return !matchesListed(value, condition.values, scalars)
 		case 'absent':
 			return value === undefined || value === null
 		case 'present':
@@ -524,11 +525,11 @@ export function matchesCondition(
  *
  * @example
  * ```ts
- * containsValue('a', ['a', 'b']) // true
- * containsValue({ b: 1 }, [{ b: 1 }]) // true
+ * matchesListed('a', ['a', 'b']) // true
+ * matchesListed({ b: 1 }, [{ b: 1 }]) // true
  * ```
  */
-export function containsValue(
+export function matchesListed(
 	value: unknown,
 	values: readonly unknown[],
 	scalars?: ReadonlySet<unknown>,
@@ -1345,16 +1346,98 @@ export function findPlanFaults(input: ReadInput, plan: ReadPlan): readonly strin
 }
 
 /**
- * Reads the rows of a read through a storage's plan: the native side from `records` or
- * `stream`, then the residual through {@link applyQuery} — the planned side of the
- * conformance differential.
+ * Asks a storage for its plan of a read, with the read normalized first.
  *
  * @remarks
- * A storage without `plan` answers the whole read as residual over `scan`.
+ * A storage that does not declare `plan`, `records`, and `stream` answers nothing natively:
+ * its plan is an empty native side and the whole read as residual, answered over `scan`.
+ *
+ * @param storage - The storage to read
+ * @param table - The table to read
+ * @param input - The read to split
+ * @returns The plan
+ *
+ * @example
+ * ```ts
+ * planRead(createMemoryDriver(), 'users', { limit: 1, order: [] }) // { native: {}, residual: { limit: 1 } }
+ * ```
+ */
+export function planRead(storage: StorageInterface, table: string, input: ReadInput): ReadPlan {
+	const read = normalizeReadInput(input)
+	if (storage.plan === undefined || storage.records === undefined || storage.stream === undefined) {
+		return { native: {}, residual: read }
+	}
+	return storage.plan(table, read)
+}
+
+/**
+ * Streams the native side of a plan and applies residual conditions and a residual page,
+ * stopping at `offset + limit` matches — step 3 of the read procedure.
+ *
+ * @remarks
+ * The rows come from `stream` for a storage that plans, and from `scan` otherwise. Each
+ * condition's scalar set is built once. `step` runs before each pull and after it, where
+ * `Table` checks readiness and the abort signal. The residual order is the caller's.
+ *
+ * @param storage - The storage to read
+ * @param table - The table to read
+ * @param native - The plan's native side
+ * @param residual - The residual conditions and page to apply
+ * @param step - The check to run around each pull. Default: none
+ * @yields The rows the residual keeps, in the order the native side streams them
+ *
+ * @example
+ * ```ts
+ * await Array.fromAsync(streamPlannedRows(createMemoryDriver(), 'users', {}, { limit: 1 })) // the first row
+ * ```
+ */
+export async function* streamPlannedRows(
+	storage: StorageInterface,
+	table: string,
+	native: ReadInput,
+	residual: ReadInput,
+	step?: () => Promise<void>,
+): AsyncIterable<Row> {
+	const conditions = residual.conditions ?? []
+	const scalars = prepareScalars(conditions)
+	const limit = residual.limit
+	const page = new StreamPage(residual.offset ?? 0)
+	const source =
+		storage.plan === undefined || storage.stream === undefined
+			? storage.scan(table)
+			: storage.stream(table, native)
+	const iterator = source[Symbol.asyncIterator]()
+	try {
+		while (true) {
+			await step?.()
+			if (limit !== undefined && page.count >= limit) return
+			const pulled = await iterator.next()
+			await step?.()
+			if (pulled.done === true) return
+			const row = pulled.value
+			if (conditions.length > 0 && !matchesQuery(row, conditions, scalars)) continue
+			if (!page.next()) continue
+			yield row
+		}
+	} finally {
+		await iterator.return?.()
+	}
+}
+
+/**
+ * Reads the rows of a read through a storage's plan — the read procedure `Table.records`
+ * runs and the conformance differential checks.
+ *
+ * @remarks
+ * An empty residual returns what `records` answers for the native side. A residual without
+ * an order streams the native side through {@link streamPlannedRows}, stopping at
+ * `offset + limit` matches. A residual order collects the filtered rows, then sorts and
+ * pages them through {@link applyQuery}.
  *
  * @param storage - The storage to read
  * @param table - The table to read
  * @param input - The read, without an aggregate
+ * @param step - The check to run around each pulled row. Default: none
  * @returns The rows the plan answers
  *
  * @example
@@ -1371,25 +1454,40 @@ export async function readPlannedRows(
 	storage: StorageInterface,
 	table: string,
 	input: QueryInput,
+	step?: () => Promise<void>,
 ): Promise<readonly Row[]> {
-	const read = compactReadInput(input)
-	if (storage.plan === undefined || storage.records === undefined || storage.stream === undefined) {
-		return applyQuery(await collectRows(storage.scan(table)), read)
+	const plan = planRead(storage, table, input)
+	const residual = plan.residual
+	if (Object.keys(residual).length === 0 && storage.records !== undefined) {
+		return storage.records(table, plan.native)
 	}
-	const plan = storage.plan(table, read)
-	if (Object.keys(plan.residual).length === 0) return storage.records(table, plan.native)
-	return applyQuery(await collectRows(storage.stream(table, plan.native)), plan.residual)
+	if (residual.order === undefined) {
+		return Array.fromAsync(streamPlannedRows(storage, table, plan.native, residual, step))
+	}
+	const filter = residual.conditions === undefined ? {} : { conditions: residual.conditions }
+	const matched = await Array.fromAsync(
+		streamPlannedRows(storage, table, plan.native, filter, step),
+	)
+	return applyQuery(matched, {
+		order: residual.order,
+		...(residual.limit === undefined ? {} : { limit: residual.limit }),
+		...(residual.offset === undefined ? {} : { offset: residual.offset }),
+	})
 }
 
 /**
- * Computes an aggregate read through a storage's plan: `aggregate` when the plan keeps it
- * native, otherwise the core's reduction over the native rows the residual filter keeps —
- * the planned side of the conformance differential.
+ * Computes an aggregate read through a storage's plan — the read procedure `Table.count`
+ * and `Table.aggregate` run and the conformance differential checks.
+ *
+ * @remarks
+ * `aggregate` answers when the plan keeps the aggregate native; otherwise the residual
+ * conditions filter the native rows and {@link computeAggregate} reduces them.
  *
  * @param storage - The storage to read
  * @param table - The table to read
- * @param input - The read's conditions
+ * @param input - The read's conditions; paging is ignored
  * @param aggregate - The aggregate to compute
+ * @param step - The check to run around each pulled row. Default: none
  * @returns The aggregate value, or `undefined` when undefined for the rows
  *
  * @example
@@ -1407,42 +1505,20 @@ export async function readPlannedAggregate(
 	table: string,
 	input: QueryInput,
 	aggregate: Aggregate,
+	step?: () => Promise<void>,
 ): Promise<number | undefined> {
-	const read = compactReadInput({
+	const plan = planRead(storage, table, {
 		...(input.conditions === undefined ? {} : { conditions: input.conditions }),
 		aggregate,
 	})
-	if (storage.plan === undefined || storage.records === undefined || storage.stream === undefined) {
-		const rows = filterRows(await collectRows(storage.scan(table)), read.conditions ?? [])
-		return computeAggregate(rows, aggregate.operation, aggregate.column)
-	}
-	const plan = storage.plan(table, read)
 	const { aggregate: kept, ...native } = plan.native
 	if (kept !== undefined && storage.aggregate !== undefined) {
 		return storage.aggregate(table, kept.operation, kept.column, native)
 	}
-	const rows = filterRows(
-		await collectRows(storage.stream(table, native)),
-		plan.residual.conditions ?? [],
-	)
+	const filter =
+		plan.residual.conditions === undefined ? {} : { conditions: plan.residual.conditions }
+	const rows = await Array.fromAsync(streamPlannedRows(storage, table, native, filter, step))
 	return computeAggregate(rows, aggregate.operation, aggregate.column)
-}
-
-/**
- * Collects every row an async iterable yields, in order.
- *
- * @param source - The rows to collect
- * @returns The rows as an array
- *
- * @example
- * ```ts
- * await collectRows(createMemoryDriver().scan('users')) // rows in key order
- * ```
- */
-export async function collectRows(source: AsyncIterable<Row>): Promise<readonly Row[]> {
-	const rows: Row[] = []
-	for await (const row of source) rows.push(row)
-	return rows
 }
 
 /**
@@ -1460,21 +1536,21 @@ export async function collectRows(source: AsyncIterable<Row>): Promise<readonly 
  *
  * @example
  * ```ts
- * import { comparePlans, CONFORMANCE_ROWS, CONFORMANCE_SCHEMA, createMemoryDriver } from '@orkestrel/database'
+ * import { scanPlans, CONFORMANCE_ROWS, CONFORMANCE_SCHEMA, createMemoryDriver } from '@orkestrel/database'
  *
  * const driver = createMemoryDriver()
  * await driver.open(CONFORMANCE_SCHEMA)
  * for (const row of CONFORMANCE_ROWS) await driver.write('users', String(row.id), row)
- * for await (const finding of comparePlans(driver, 'plan')) console.log(finding.check) // logs nothing
+ * for await (const finding of scanPlans(driver, 'plan')) console.log(finding.check) // logs nothing
  * ```
  */
-export async function* comparePlans(
+export async function* scanPlans(
 	storage: StorageInterface,
 	check: string,
 ): AsyncIterable<ConformanceFinding> {
-	const scanned = await collectRows(storage.scan('users'))
+	const scanned = await Array.fromAsync(storage.scan('users'))
 	for (const input of CONFORMANCE_READS) {
-		const read = compactReadInput(input)
+		const read = normalizeReadInput(input)
 		const faults =
 			storage.plan === undefined ? [] : findPlanFaults(read, storage.plan('users', read))
 		if (faults.length > 0) {
@@ -2207,7 +2283,7 @@ export async function* scanDriver(
 			const aggregated = CONFORMANCE_READS.some(
 				(input) =>
 					input.aggregate !== undefined &&
-					driver.plan?.('users', compactReadInput(input)).native.aggregate !== undefined,
+					driver.plan?.('users', normalizeReadInput(input)).native.aggregate !== undefined,
 			)
 			if (aggregated && driver.aggregate === undefined) {
 				yield {
@@ -2216,14 +2292,14 @@ export async function* scanDriver(
 					context: { aggregate: false },
 				}
 			}
-			for await (const finding of comparePlans(driver, 'plan')) yield finding
+			for await (const finding of scanPlans(driver, 'plan')) yield finding
 			if (driver.transaction === undefined) {
 				await driver.close()
 				break planPhase
 			}
 			const scoped = await driver.transaction(async (storage) => {
 				const findings: ConformanceFinding[] = []
-				for await (const finding of comparePlans(storage, 'plan-scoped')) findings.push(finding)
+				for await (const finding of scanPlans(storage, 'plan-scoped')) findings.push(finding)
 				return {
 					findings,
 					members: {

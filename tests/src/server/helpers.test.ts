@@ -8,13 +8,10 @@ import {
 	encodeValue,
 	extractValues,
 	deriveSQLiteIndexName,
-	classifyAbsence,
 	computeSuccessor,
-	findNativeColumn,
+	findSQLiteColumn,
 	matchesAbsentPath,
-	matchesNativeAggregate,
-	matchesNativeCondition,
-	matchesNativeOrder,
+	matchesSQLiteCondition,
 	matchesPrimaryPin,
 	matchesSQLiteAffinity,
 	planSQLiteQuery,
@@ -209,73 +206,96 @@ describe('deriveSQLiteIndexName — collision-free, deterministic', () => {
 	})
 })
 
-describe('matchesNativeCondition', () => {
+describe('matchesSQLiteCondition', () => {
 	const SCHEMA = CONDITION_SCHEMA
 
 	it('is false for a nested path, an undeclared column, and a json column', () => {
-		expect(matchesNativeCondition(cond(['meta', 'score'], 'above', [1]), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('missing', 'equals', [1]), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('meta', 'absent', []), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond(['meta', 'score'], 'above', [1]), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('missing', 'equals', [1]), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('meta', 'absent', []), SCHEMA)).toBe(false)
 	})
 
 	it('answers every operator on a nullable column with operands of its class', () => {
 		for (const operator of ['equals', 'not', 'above', 'below', 'from', 'to'] as const) {
-			expect(matchesNativeCondition(cond('age', operator, [18]), SCHEMA)).toBe(true)
+			expect(matchesSQLiteCondition(cond('age', operator, [18]), SCHEMA)).toBe(true)
 		}
-		expect(matchesNativeCondition(cond('age', 'between', [1, 2]), SCHEMA)).toBe(true)
-		expect(matchesNativeCondition(cond('age', 'any', [1, 2]), SCHEMA)).toBe(true)
-		expect(matchesNativeCondition(cond('age', 'none', []), SCHEMA)).toBe(true)
-		expect(matchesNativeCondition(cond('age', 'absent', []), SCHEMA)).toBe(true)
-		expect(matchesNativeCondition(cond('age', 'equals', [null]), SCHEMA)).toBe(true)
-		expect(matchesNativeCondition(cond('active', 'equals', [true]), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'between', [1, 2]), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'any', [1, 2]), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'none', []), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'absent', []), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'equals', [null]), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('active', 'equals', [true]), SCHEMA)).toBe(true)
 	})
 
 	it('answers a text range, like, glob, starts, and ends', () => {
 		for (const operator of ['above', 'like', 'glob', 'starts', 'ends'] as const) {
-			expect(matchesNativeCondition(cond('name', operator, ['Ad']), SCHEMA)).toBe(true)
+			expect(matchesSQLiteCondition(cond('name', operator, ['Ad']), SCHEMA)).toBe(true)
 		}
 	})
 
-	it('leaves an operand of another class, an undefined operand, and an over-long pattern residual', () => {
-		expect(matchesNativeCondition(cond('age', 'above', ['18']), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('age', 'equals', [1.5]), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('age', 'equals', [undefined]), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('age', 'any', [1, null]), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('age', 'like', ['1%']), SCHEMA)).toBe(false)
-		expect(matchesNativeCondition(cond('name', 'like', ['a'.repeat(1025)]), SCHEMA)).toBe(false)
+	it('answers an undefined operand and a list holding null', () => {
+		expect(matchesSQLiteCondition(cond('age', 'equals', [undefined]), SCHEMA)).toBe(true)
+		expect(matchesSQLiteCondition(cond('age', 'any', [1, null]), SCHEMA)).toBe(true)
+	})
+
+	it('leaves an operand of another class and an over-long pattern residual', () => {
+		expect(matchesSQLiteCondition(cond('age', 'above', ['18']), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('age', 'equals', [1.5]), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('age', 'any', [1, '1']), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('age', 'like', ['1%']), SCHEMA)).toBe(false)
+		expect(matchesSQLiteCondition(cond('name', 'like', ['a'.repeat(1025)]), SCHEMA)).toBe(false)
 	})
 })
 
-describe('matchesNativeOrder', () => {
+describe('planSQLiteQuery — order and aggregate coverage', () => {
 	it('orders natively by a flat declared column with at most one flag', () => {
-		expect(matchesNativeOrder({ column: 'age', direction: 'ascending' }, ORDER_SCHEMA)).toBe(true)
-		expect(matchesNativeOrder({ column: 'id', direction: 'descending' }, ORDER_SCHEMA)).toBe(true)
+		for (const column of ['age', 'id']) {
+			const order = [{ column, direction: 'descending' as const }]
+			expect(planSQLiteQuery({ order }, ORDER_SCHEMA)).toEqual({ native: { order }, residual: {} })
+		}
 	})
 
 	it('leaves a nested path, a json column, and a column with both flags residual', () => {
-		expect(
-			matchesNativeOrder({ column: ['meta', 'a'], direction: 'ascending' }, ORDER_SCHEMA),
-		).toBe(false)
-		expect(matchesNativeOrder({ column: 'meta', direction: 'ascending' }, ORDER_SCHEMA)).toBe(false)
-		expect(matchesNativeOrder({ column: 'rank', direction: 'ascending' }, AGGREGATE_SCHEMA)).toBe(
-			false,
-		)
-	})
-})
-
-describe('matchesNativeAggregate', () => {
-	const SCHEMA = AGGREGATE_SCHEMA
-
-	it('computes count natively whatever the column', () => {
-		expect(matchesNativeAggregate({ operation: 'count', column: ['nested'] }, SCHEMA)).toBe(true)
+		for (const [column, schema] of [
+			[['meta', 'a'], ORDER_SCHEMA],
+			['meta', ORDER_SCHEMA],
+			['rank', AGGREGATE_SCHEMA],
+		] as const) {
+			const order = [{ column, direction: 'ascending' as const }]
+			expect(planSQLiteQuery({ order }, schema)).toEqual({ native: {}, residual: { order } })
+		}
 	})
 
-	it('computes every numeric aggregate on a numeric column with at most one flag', () => {
+	it('computes count natively whatever the column, and the numeric aggregates on a numeric column with at most one flag', () => {
+		const count = { operation: 'count' as const, column: ['nested'] }
+		expect(planSQLiteQuery({ aggregate: count }, AGGREGATE_SCHEMA).native).toEqual({
+			aggregate: count,
+		})
 		for (const operation of ['sum', 'average', 'minimum', 'maximum'] as const) {
-			expect(matchesNativeAggregate({ operation, column: 'age' }, SCHEMA)).toBe(true)
-			expect(matchesNativeAggregate({ operation, column: 'score' }, SCHEMA)).toBe(true)
-			expect(matchesNativeAggregate({ operation, column: 'rank' }, SCHEMA)).toBe(false)
-			expect(matchesNativeAggregate({ operation, column: 'id' }, SCHEMA)).toBe(false)
+			for (const [column, native] of [
+				['age', true],
+				['score', true],
+				['rank', false],
+				['id', false],
+			] as const) {
+				const aggregate = { operation, column }
+				expect(planSQLiteQuery({ aggregate }, AGGREGATE_SCHEMA)).toEqual(
+					native
+						? { native: { aggregate }, residual: {} }
+						: { native: {}, residual: { aggregate } },
+				)
+			}
+		}
+	})
+
+	it('answers a null or undefined operand and a list holding either natively', () => {
+		for (const input of [
+			{ conditions: [cond('age', 'equals', [undefined])] },
+			{ conditions: [cond('age', 'not', [undefined])] },
+			{ conditions: [cond('age', 'any', [1, null, undefined])] },
+			{ conditions: [cond('age', 'none', [null])] },
+		]) {
+			expect(planSQLiteQuery(input, CONDITION_SCHEMA)).toEqual({ native: input, residual: {} })
 		}
 	})
 })
@@ -343,23 +363,7 @@ describe('planSQLiteQuery', () => {
 	})
 })
 
-describe('classifyAbsence, matchesPrimaryPin, findNativeColumn, and computeSuccessor', () => {
-	it('classifies a column by its flags', () => {
-		expect(classifyAbsence({ name: 'a', storage: 'text', optional: false, nullable: false })).toBe(
-			'required',
-		)
-		expect(classifyAbsence({ name: 'a', storage: 'text', optional: true, nullable: false })).toBe(
-			'optional',
-		)
-		expect(classifyAbsence({ name: 'a', storage: 'text', optional: false, nullable: true })).toBe(
-			'nullable',
-		)
-		expect(classifyAbsence({ name: 'a', storage: 'text', optional: true, nullable: true })).toBe(
-			'both',
-		)
-		expect(classifyAbsence(undefined)).toBe('optional')
-	})
-
+describe('matchesPrimaryPin, findSQLiteColumn, and computeSuccessor', () => {
 	it('pins an and fold with an any on the primary key, and never an or fold', () => {
 		expect(
 			matchesPrimaryPin(
@@ -377,9 +381,9 @@ describe('classifyAbsence, matchesPrimaryPin, findNativeColumn, and computeSucce
 	})
 
 	it('resolves a flat declared scalar column only', () => {
-		expect(findNativeColumn('age', CONDITION_SCHEMA)?.storage).toBe('integer')
-		expect(findNativeColumn('meta', CONDITION_SCHEMA)).toBeUndefined()
-		expect(findNativeColumn(['age'], CONDITION_SCHEMA)).toBeUndefined()
+		expect(findSQLiteColumn('age', CONDITION_SCHEMA)?.storage).toBe('integer')
+		expect(findSQLiteColumn('meta', CONDITION_SCHEMA)).toBeUndefined()
+		expect(findSQLiteColumn(['age'], CONDITION_SCHEMA)).toBeUndefined()
 	})
 
 	it('increments the final code point, carrying past U+10FFFF and skipping surrogates', () => {

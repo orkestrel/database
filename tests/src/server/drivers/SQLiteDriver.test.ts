@@ -67,7 +67,10 @@ import {
 	collectSQLiteRecords,
 	createForeignKeyFixture,
 	createExplainDatabase,
+	corruptPagingRow,
+	createFallbackPagingDatabase,
 	createMatrixTables,
+	matrixSchema,
 	createPagingDatabase,
 	EXPLAIN_SCHEMA,
 	explainRead,
@@ -2804,7 +2807,8 @@ describe('SQLiteDriver — options (path, readonly, pragmas)', () => {
 })
 
 describe('SQLiteDriver — native-first paging readings', () => {
-	const fixture = createPagingDatabase()
+	const temp = tempDatabasePath()
+	const fixture = createPagingDatabase(temp.path)
 	const lines = fixture.database.table('lines')
 	const book = buildCondition('book', 'equals', ['b1'])
 	const like = buildCondition('text', 'like', ['line 01%'])
@@ -2812,10 +2816,25 @@ describe('SQLiteDriver — native-first paging readings', () => {
 
 	beforeAll(async () => {
 		await lines.set(pagingRows())
+		corruptPagingRow(temp.path)
 	})
 
 	afterAll(async () => {
 		await fixture.database.close()
+		temp.cleanup()
+	})
+
+	it('decodes no row outside the match, so an internal fallback over scan raises', async () => {
+		const fallback = createFallbackPagingDatabase(temp.path)
+		try {
+			await expect(fallback.table('lines').records({ conditions: [like] })).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { table: 'lines', key: 'line-1999', column: 'book' },
+			})
+		} finally {
+			await fallback.close()
+		}
+		expect(await lines.records({ conditions: [like] })).toHaveLength(100)
 	})
 
 	it('reads one page of an integer order from the driver with no scan', async () => {
@@ -2975,7 +2994,13 @@ describe('SQLiteDriver — operator, storage, and flag matrix against the core e
 			it(`answers every read like the core on ${storage} (optional ${optional}, nullable ${nullable})`, async () => {
 				const { sqlite, memory } = await createMatrixTables(storage, optional, nullable)
 				try {
+					const schema = matrixSchema(storage, optional, nullable)
 					for (const input of matrixReads(storage)) {
+						const native = input.conditions === undefined || planSQLiteQuery(input, schema).residual
+						expect({ input, residual: native === true ? {} : native }).toEqual({
+							input,
+							residual: {},
+						})
 						const actual = await sqlite.table('cells').records(input)
 						const expected = await memory.table('cells').records(input)
 						expect({ input, rows: actual }).toEqual({ input, rows: expected })
@@ -2994,4 +3019,17 @@ describe('SQLiteDriver — operator, storage, and flag matrix against the core e
 			})
 		}
 	}
+})
+
+describe('SQLiteDriver — refused pragmas', () => {
+	it('refuses case_sensitive_like, which changes what a native like answers', () => {
+		for (const key of ['case_sensitive_like', 'CASE_SENSITIVE_LIKE']) {
+			expect(() => createSQLiteDriver({ path: ':memory:', pragmas: { [key]: 'ON' } })).toThrow(
+				expect.objectContaining({ code: 'VALIDATION', context: { pragma: key } }),
+			)
+		}
+		expect(() =>
+			createSQLiteDriver({ path: ':memory:', pragmas: { journal_mode: 'WAL' } }),
+		).not.toThrow()
+	})
 })

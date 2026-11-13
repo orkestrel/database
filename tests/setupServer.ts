@@ -43,6 +43,7 @@ import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import {
 	compileQuerySQL,
 	createSQLiteDriver,
+	SQLiteDriver as SQLiteDriverClass,
 	planSQLiteQuery,
 	schemaToIndexes,
 	schemaToTable,
@@ -2281,6 +2282,14 @@ export function matrixReads(storage: MatrixStorage): readonly QueryInput[] {
 	return [
 		matrixCondition('equals', [low]),
 		matrixCondition('equals', [null]),
+		matrixCondition('equals', [undefined]),
+		matrixCondition('not', [undefined]),
+		matrixCondition('any', [low, null]),
+		matrixCondition('any', [null]),
+		matrixCondition('any', [undefined, high]),
+		matrixCondition('none', [low, null]),
+		matrixCondition('none', [null]),
+		matrixCondition('none', [undefined, high]),
 		matrixCondition('not', [low]),
 		matrixCondition('not', [null]),
 		matrixCondition('above', [low]),
@@ -2298,4 +2307,72 @@ export function matrixReads(storage: MatrixStorage): readonly QueryInput[] {
 		{ order: [{ column: 'value', direction: 'ascending' }], limit: 5, offset: 1 },
 		{ order: [{ column: 'value', direction: 'descending' }], limit: 5, offset: 1 },
 	]
+}
+
+/**
+ * Builds the schema of the matrix table for one storage and flag combination.
+ *
+ * @param storage - The column storage
+ * @param optional - If `true`, the column accepts absence; if `false`, it does not
+ * @param nullable - If `true`, the column accepts `null`; if `false`, it does not
+ * @returns The `cells` schema
+ */
+export function matrixSchema(
+	storage: MatrixStorage,
+	optional: boolean,
+	nullable: boolean,
+): TableSchema {
+	return {
+		name: 'cells',
+		primary: 'id',
+		columns: [
+			{ name: 'id', storage: 'text', optional: false, nullable: false },
+			{ name: 'value', storage, optional, nullable },
+		],
+		indexes: [],
+	}
+}
+
+/**
+ * Stores a blob in the `book` column of the paging row `line-1999`, which no paging
+ * reading matches: a native read never decodes the row, and a read that decodes every row
+ * raises `DRIVER` on it.
+ *
+ * @param path - The SQLite file the paging database holds
+ */
+export function corruptPagingRow(path: string): void {
+	const database = createSQLiteDatabase({ path })
+	database.connect()
+	try {
+		database
+			.prepare('UPDATE "lines" SET "book" = ? WHERE "id" = ?')
+			.execute([new Uint8Array([0]), 'line-1999'])
+	} finally {
+		database.close()
+	}
+}
+
+/**
+ * Creates the paging database over an injected internal fallback: a SQLite driver whose
+ * `records` decodes every row through `scan` and filters in the core engine — the
+ * negative control of the corrupt-row detector.
+ *
+ * @param path - The SQLite file the paging database holds
+ * @returns The database over the fallback driver
+ */
+export function createFallbackPagingDatabase(
+	path: string,
+): DatabaseInterface<typeof PAGING_TABLES> {
+	return createDatabase({
+		driver: new FallbackSQLiteDriver({ path }),
+		tables: PAGING_TABLES,
+		indexes: PAGING_INDEXES,
+	})
+}
+
+/** Falls back inside `records`: decodes every row through `scan`, then filters in the core. */
+export class FallbackSQLiteDriver extends SQLiteDriverClass {
+	override async records(table: string, input: QueryInput): Promise<readonly Row[]> {
+		return applyQuery(await Array.fromAsync(this.scan(table)), input)
+	}
 }

@@ -3,7 +3,7 @@ import type { IndexedDBError } from '@orkestrel/indexeddb'
 import type { StoreDefinition } from '@orkestrel/indexeddb'
 import type { AccessPlan } from './types.js'
 import { isString } from '@orkestrel/contract'
-import { compactReadInput, compareValues, DatabaseError, findColumn, isKey } from '@src/core'
+import { normalizeReadInput, compareValues, DatabaseError, findColumn, isKey } from '@src/core'
 import { rangeAboveKey, rangeBelowKey, rangeFromKey, rangeToKey } from '@orkestrel/indexeddb'
 import { INDEXABLE_STORAGE } from './constants.js'
 
@@ -181,11 +181,11 @@ export function planIndexedDBQuery(
 	schema: TableSchema,
 	available: readonly string[],
 ): ReadPlan {
-	const read = compactReadInput(input)
+	const read = normalizeReadInput(input)
 	const access = findAccessCondition(read, schema, available)
 	return {
 		native: access === undefined ? {} : { conditions: [access] },
-		residual: compactReadInput({
+		residual: normalizeReadInput({
 			...read,
 			conditions: (read.conditions ?? []).filter((condition) => condition !== access),
 		}),

@@ -22,14 +22,6 @@ export interface CompiledSQL {
 }
 
 /**
- * Names how a flat SQLite column stores absence and explicit `null`: `required` stores
- * neither, `optional` and `nullable` store SQL `NULL`, and `both` stores absence as
- * `NULL` and explicit `null` as a sentinel. The `@orkestrel/database/server` entry point
- * exports this type.
- */
-export type ColumnAbsence = 'required' | 'optional' | 'nullable' | 'both'
-
-/**
  * Configures {@link import('./factories.js').createSQLiteDriver}. The
  * `@orkestrel/database/server` entry point exports this type.
  *
@@ -42,7 +34,8 @@ export type ColumnAbsence = 'required' | 'optional' | 'nullable' | 'both'
  * constraint enforcement, while omission retains the upstream default.
  * `pragmas` is an ordered record of PRAGMA name to value, applied through the
  * wrapper's `pragma()` right after `connect()`, in insertion order (for
- * example `{ journal_mode: 'WAL' }`). Core rows are number-typed — this driver
+ * example `{ journal_mode: 'WAL' }`); a `case_sensitive_like` entry throws `VALIDATION`,
+ * because it changes what a native `like` answers. Core rows are number-typed — this driver
  * never surfaces a `bigint`, so a stored integer beyond
  * `Number.MAX_SAFE_INTEGER` reads back imprecisely (the wrapper's own
  * `bigints` option is not exposed here).

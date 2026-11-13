@@ -13,7 +13,6 @@ import type { CompiledSQL } from './types.js'
 import { DatabaseError, findColumn, validatePage } from '@src/core'
 import { isFiniteNumber, isString } from '@orkestrel/contract'
 import {
-	classifyAbsence,
 	computeSuccessor,
 	deriveSQLiteIndexName,
 	encodeValue,
@@ -160,13 +159,32 @@ export function compileConditionSQL(
 	const column = (pinned ? '+' : '') + compileFieldSQL(condition.column)
 	const nested = !isString(condition.column)
 	const declared = isString(condition.column) ? findColumn(condition.column, schema) : undefined
-	const flags = nested ? 'nested' : classifyAbsence(declared)
+	// How the column stores absence and explicit null; an undeclared flat column reads as optional.
+	const flags = nested
+		? 'nested'
+		: declared === undefined
+			? 'optional'
+			: declared.optional && declared.nullable
+				? 'both'
+				: declared.nullable
+					? 'nullable'
+					: declared.optional
+						? 'optional'
+						: 'required'
 	const sentinel = declared?.storage === 'text' || declared?.storage === 'json' ? 'blob' : 'text'
 	const absent =
 		flags === 'both'
 			? '(' + column + ' IS NULL OR typeof(' + column + ") = '" + sentinel + "')"
 			: column + ' IS NULL'
 	const valued = flags === 'both' ? ' AND typeof(' + column + ") != '" + sentinel + "'" : ''
+	// The tests for a decoded null and a decoded absence, or '' where the flags store neither.
+	const nulled =
+		flags === 'nullable'
+			? column + ' IS NULL'
+			: flags === 'both'
+				? 'typeof(' + column + ") = '" + sentinel + "'"
+				: ''
+	const absented = flags === 'optional' || flags === 'both' ? column + ' IS NULL' : ''
 	// A flat text column without a sentinel holds only text or NULL, so a text test needs no
 	// `typeof`; a sentinel, a nested path, or another storage can hold a non-text value.
 	const texted = declared?.storage === 'text' && flags !== 'both' && flags !== 'nested'
@@ -177,14 +195,11 @@ export function compileConditionSQL(
 	const jsonType = isString(condition.column) ? '' : compileJSONTypeSQL(condition.column)
 	switch (condition.operator) {
 		case 'equals': {
-			if (first === null || first === undefined) {
-				if (flags === 'nested') return { sql: jsonType + " = 'null'", parameters: [] }
-				if (flags === 'nullable') return { sql: column + ' IS NULL', parameters: [] }
-				if (flags === 'both') {
-					return { sql: 'typeof(' + column + ") = '" + sentinel + "'", parameters: [] }
-				}
-				return { sql: '0', parameters: [] }
+			if (flags === 'nested' && (first === null || first === undefined)) {
+				return { sql: jsonType + " = 'null'", parameters: [] }
 			}
+			if (first === null) return { sql: nulled === '' ? '0' : nulled, parameters: [] }
+			if (first === undefined) return { sql: absented === '' ? '0' : absented, parameters: [] }
 			return compileBoundSQL(column + ' = ?', [first], nested, declared)
 		}
 		case 'not': {
@@ -195,11 +210,11 @@ export function compileConditionSQL(
 						parameters: [],
 					}
 				}
-				if (flags === 'nullable') return { sql: column + ' IS NOT NULL', parameters: [] }
-				if (flags === 'both') {
-					return { sql: 'typeof(' + column + ") != '" + sentinel + "'", parameters: [] }
+				if (first === null) {
+					if (flags === 'nullable') return { sql: column + ' IS NOT NULL', parameters: [] }
+					return { sql: nulled === '' ? '1' : 'NOT ' + nulled, parameters: [] }
 				}
-				return { sql: '1', parameters: [] }
+				return { sql: absented === '' ? '1' : column + ' IS NOT NULL', parameters: [] }
 			}
 			return compileBoundSQL(
 				'(' + column + ' != ? OR ' + column + ' IS NULL)',
@@ -209,25 +224,30 @@ export function compileConditionSQL(
 			)
 		}
 		case 'above':
-			return compileBoundSQL(wrapValued(column + ' > ?', valued), [first], nested, declared)
+			return compileBoundSQL(compileGuardedSQL(column + ' > ?', valued), [first], nested, declared)
 		case 'below':
 			return compileBoundSQL('(' + column + ' < ? OR ' + absent + ')', [first], nested, declared)
 		case 'from':
-			return compileBoundSQL(wrapValued(column + ' >= ?', valued), [first], nested, declared)
+			return compileBoundSQL(compileGuardedSQL(column + ' >= ?', valued), [first], nested, declared)
 		case 'to':
 			return compileBoundSQL('(' + column + ' <= ? OR ' + absent + ')', [first], nested, declared)
 		case 'between':
 			return compileBoundSQL(
-				wrapValued(column + ' BETWEEN ? AND ?', valued),
+				compileGuardedSQL(column + ' BETWEEN ? AND ?', valued),
 				[first, second],
 				nested,
 				declared,
 			)
 		case 'like':
-			return compileBoundSQL(wrapValued(column + ' LIKE ?', textual), [first], nested, declared)
+			return compileBoundSQL(
+				compileGuardedSQL(column + ' LIKE ?', textual),
+				[first],
+				nested,
+				declared,
+			)
 		case 'glob':
 			return compileBoundSQL(
-				wrapValued(column + ' GLOB ?', textual),
+				compileGuardedSQL(column + ' GLOB ?', textual),
 				[isString(first) ? first.replaceAll('[', '[[]') : first],
 				nested,
 				declared,
@@ -271,22 +291,58 @@ export function compileConditionSQL(
 		}
 		case 'any': {
 			if (condition.values.length === 0) return { sql: '0', parameters: [] }
-			return compileListSQL(column + ' IN ', '', condition.values, nested, declared)
+			if (nested) return compileListSQL(column + ' IN ', '', condition.values, nested, declared)
+			const listed = condition.values.filter((value) => value !== null && value !== undefined)
+			const parts = [
+				...(listed.length > 0
+					? [compileListSQL(column + ' IN ', '', listed, nested, declared)]
+					: []),
+				...(condition.values.includes(null) && nulled !== ''
+					? [{ sql: nulled, parameters: [] }]
+					: []),
+				...(condition.values.includes(undefined) && absented !== ''
+					? [{ sql: absented, parameters: [] }]
+					: []),
+			]
+			return compileJoinedSQL(parts, ' OR ', '0')
 		}
 		case 'none': {
 			if (condition.values.length === 0) return { sql: '1', parameters: [] }
-			return compileListSQL(
-				'(' + column + ' NOT IN ',
-				' OR ' + column + ' IS NULL)',
-				condition.values,
-				nested,
-				declared,
-			)
+			if (nested) {
+				return compileListSQL(
+					'(' + column + ' NOT IN ',
+					' OR ' + column + ' IS NULL)',
+					condition.values,
+					nested,
+					declared,
+				)
+			}
+			const listed = condition.values.filter((value) => value !== null && value !== undefined)
+			const parts = [
+				...(listed.length > 0
+					? [
+							compileListSQL(
+								'(' + column + ' NOT IN ',
+								' OR ' + column + ' IS NULL)',
+								listed,
+								nested,
+								declared,
+							),
+						]
+					: []),
+				...(condition.values.includes(null) && nulled !== ''
+					? [{ sql: 'NOT ' + nulled, parameters: [] }]
+					: []),
+				...(condition.values.includes(undefined) && absented !== ''
+					? [{ sql: column + ' IS NOT NULL', parameters: [] }]
+					: []),
+			]
+			return compileJoinedSQL(parts, ' AND ', '1')
 		}
 		case 'absent':
 			return { sql: absent, parameters: [] }
 		case 'present':
-			return { sql: wrapValued(column + ' IS NOT NULL', valued), parameters: [] }
+			return { sql: compileGuardedSQL(column + ' IS NOT NULL', valued), parameters: [] }
 	}
 }
 
@@ -299,12 +355,41 @@ export function compileConditionSQL(
  *
  * @example
  * ```ts
- * wrapValued('"age" > ?', '') // '"age" > ?'
- * wrapValued('"age" > ?', ' AND "age" IS NOT NULL') // '("age" > ? AND "age" IS NOT NULL)'
+ * compileGuardedSQL('"age" > ?', '') // '"age" > ?'
+ * compileGuardedSQL('"age" > ?', ' AND "age" IS NOT NULL') // '("age" > ? AND "age" IS NOT NULL)'
  * ```
  */
-export function wrapValued(fragment: string, guard: string): string {
+export function compileGuardedSQL(fragment: string, guard: string): string {
 	return guard === '' ? fragment : '(' + fragment + guard + ')'
+}
+
+/**
+ * Joins SQL fragments with one connective, parenthesizing two or more, and returns a constant
+ * for none.
+ *
+ * @param parts - The fragments and their parameters, in order
+ * @param connective - The joining operator, such as ` OR `
+ * @param empty - The SQL for an empty list, such as `'0'`
+ * @returns The joined fragment and its parameters
+ *
+ * @example
+ * ```ts
+ * compileJoinedSQL([{ sql: 'a', parameters: [] }, { sql: 'b', parameters: [1] }], ' OR ', '0')
+ * // { sql: '(a OR b)', parameters: [1] }
+ * ```
+ */
+export function compileJoinedSQL(
+	parts: readonly CompiledSQL[],
+	connective: string,
+	empty: string,
+): CompiledSQL {
+	const [only] = parts
+	if (only === undefined) return { sql: empty, parameters: [] }
+	if (parts.length === 1) return only
+	return {
+		sql: '(' + parts.map((part) => part.sql).join(connective) + ')',
+		parameters: parts.flatMap((part) => part.parameters),
+	}
 }
 
 /**

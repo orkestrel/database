@@ -1,4 +1,5 @@
 import type {
+	Scalar,
 	ColumnSchema,
 	DriverMetadata,
 	Key,
@@ -30,7 +31,7 @@ import {
  * isScalar({}) // false
  * ```
  */
-export function isScalar(value: unknown): boolean {
+export function isScalar(value: unknown): value is Scalar {
 	return value === null || (typeof value !== 'object' && typeof value !== 'function')
 }
 

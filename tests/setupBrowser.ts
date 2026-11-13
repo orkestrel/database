@@ -935,9 +935,11 @@ export function selectAccess(
  * `equals`, `above`, `from`, or `between` over the index or a comparison over the primary
  * key, and read the whole store of 9 rows otherwise. In read order: `age equals 36` and the
  * `id any` with `age equals 36` read 3 rows; `age above 17` read 5; `age from 17`,
- * `age between 0 and 36`, and the two reads on `age above 0` read 6.
+ * `age between 0 and 36`, and the two reads on `age above 0` read 6. The read holding only
+ * `limit: 4, offset: 2` returns 6 rows: the read procedure stops the stream at `offset + limit`
+ * matches, while the store still loads the 9 rows the 0.0.23 driver read.
  */
 export const CONFORMANCE_ROWS_READ: readonly number[] = Object.freeze([
 	9, 3, 9, 9, 9, 9, 5, 9, 6, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-	3, 9, 9, 9, 9, 9, 9, 9, 9, 6, 9, 6, 9, 9, 9, 9, 9,
+	3, 9, 9, 9, 9, 9, 9, 9, 9, 6, 6, 6, 9, 9, 9, 9, 9,
 ])

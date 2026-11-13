@@ -36,8 +36,7 @@ import type { FieldPath } from '@orkestrel/contract'
 import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
 import {
 	applyQuery,
-	collectRows,
-	compactReadInput,
+	normalizeReadInput,
 	computeAggregate,
 	createDatabase,
 	createMemoryDriver,
@@ -755,7 +754,7 @@ export function splitPlannedRead(split: PlannedSplit, input: ReadInput): ReadPla
 	if (split === 'listed') return { native: input, residual: { conditions: [] } }
 	if (split !== 'dropped') return { native: input, residual: {} }
 	return {
-		native: compactReadInput({ ...input, conditions: input.conditions?.slice(1) ?? [] }),
+		native: normalizeReadInput({ ...input, conditions: input.conditions?.slice(1) ?? [] }),
 		residual: {},
 	}
 }
@@ -776,8 +775,8 @@ export async function readPlannedSplit(
 	input: QueryInput,
 	split: PlannedSplit,
 ): Promise<readonly Row[]> {
-	const read = split === 'ignored' ? compactReadInput({ ...input, conditions: [] }) : input
-	return applyQuery(await collectRows(memory.scan(table)), read)
+	const read = split === 'ignored' ? normalizeReadInput({ ...input, conditions: [] }) : input
+	return applyQuery(await Array.fromAsync(memory.scan(table)), read)
 }
 
 /**

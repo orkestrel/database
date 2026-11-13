@@ -2,6 +2,7 @@ import type { ContractInterface, FieldPath, Guard } from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
 import type { DatabaseContext } from './DatabaseContext.js'
 import type {
+	Aggregate,
 	AggregateOperation,
 	QueryInput,
 	CursorInterface,
@@ -9,8 +10,6 @@ import type {
 	KeyFunction,
 	QueryInterface,
 	OperationOptions,
-	ReadInput,
-	ReadPlan,
 	Row,
 	TableEventMap,
 	TableInterface,
@@ -21,20 +20,18 @@ import { admitValue, describeFaultLine, isArray, isRecord } from '@orkestrel/con
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import {
-	applyQuery,
 	checkAbort,
-	compactReadInput,
-	computeAggregate,
 	equalsValue,
 	extractKey,
-	matchesQuery,
-	prepareScalars,
+	planRead,
+	readPlannedAggregate,
+	readPlannedRows,
+	streamPlannedRows,
 	validatePage,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 import { ScopedIterator } from './ScopedIterator.js'
-import { StreamPage } from './StreamPage.js'
 
 /**
  * Exposes typed keyed CRUD plus fluent query and cursor access over a driver.
@@ -159,32 +156,18 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			const plan = this.#plan({
-				...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
-				...(input?.order === undefined ? {} : { order: input.order }),
-				...(input?.limit === undefined ? {} : { limit: input.limit }),
-				...(input?.offset === undefined ? {} : { offset: input.offset }),
-			})
-			const residual = plan.residual
-			if (Object.keys(residual).length === 0 && this.#driver.records !== undefined) {
-				const rows = await this.#driver.records(this.#name, plan.native)
-				return rows.map((row) => this.#assert(row))
-			}
-			if (residual.order === undefined) {
-				const rows: T[] = []
-				for await (const row of this.#select(plan.native, residual, options)) {
-					rows.push(this.#assert(row))
-				}
-				return rows
-			}
-			const matched: Row[] = []
-			const filter = residual.conditions === undefined ? {} : { conditions: residual.conditions }
-			for await (const row of this.#select(plan.native, filter, options)) matched.push(row)
-			return applyQuery(matched, {
-				order: residual.order,
-				...(residual.limit === undefined ? {} : { limit: residual.limit }),
-				...(residual.offset === undefined ? {} : { offset: residual.offset }),
-			}).map((row) => this.#assert(row))
+			const rows = await readPlannedRows(
+				this.#driver,
+				this.#name,
+				{
+					...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
+					...(input?.order === undefined ? {} : { order: input.order }),
+					...(input?.limit === undefined ? {} : { limit: input.limit }),
+					...(input?.offset === undefined ? {} : { offset: input.offset }),
+				},
+				() => this.#step(options),
+			)
+			return rows.map((row) => this.#assert(row))
 		})
 	}
 
@@ -204,7 +187,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			return (await this.#compute('count', this.#key, input, options)) ?? 0
+			return (await this.#compute({ operation: 'count', column: this.#key }, input, options)) ?? 0
 		})
 	}
 
@@ -228,7 +211,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			return this.#compute(operation, column, input, options)
+			return this.#compute({ operation, column }, input, options)
 		})
 	}
 
@@ -343,83 +326,36 @@ export class Table<T = Row> implements TableInterface<T> {
 	async *#scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
 		checkAbort(options?.signal)
 		await this.#ready()
-		const plan = this.#plan({
+		const plan = planRead(this.#driver, this.#name, {
 			...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
 			...(input?.limit === undefined ? {} : { limit: input.limit }),
 			...(input?.offset === undefined ? {} : { offset: input.offset }),
 		})
-		for await (const row of this.#select(plan.native, plan.residual, options)) {
-			yield this.#assert(row)
-		}
+		const rows = streamPlannedRows(this.#driver, this.#name, plan.native, plan.residual, () =>
+			this.#step(options),
+		)
+		for await (const row of rows) yield this.#assert(row)
 	}
 
-	// Ask the driver for its plan; a driver without the native members leaves the whole read
-	// residual over `scan`.
-	#plan(input: ReadInput): ReadPlan {
-		const read = compactReadInput(input)
-		const driver = this.#driver
-		if (driver.plan === undefined || driver.records === undefined || driver.stream === undefined) {
-			return { native: {}, residual: read }
-		}
-		return driver.plan(this.#name, read)
-	}
-
-	// Stream the native side, apply the residual conditions, and window by the residual page,
-	// stopping at `offset + limit` matches. The residual order is the caller's.
-	async *#select(
-		native: ReadInput,
-		residual: ReadInput,
-		options?: OperationOptions,
-	): AsyncIterable<Row> {
-		const conditions = residual.conditions ?? []
-		const scalars = prepareScalars(conditions)
-		const limit = residual.limit
-		const page = new StreamPage(residual.offset ?? 0)
-		const source =
-			this.#driver.plan === undefined || this.#driver.stream === undefined
-				? this.#driver.scan(this.#name)
-				: this.#driver.stream(this.#name, native)
-		const iterator = source[Symbol.asyncIterator]()
-		try {
-			while (true) {
-				await this.#ready()
-				checkAbort(options?.signal)
-				if (limit !== undefined && page.count >= limit) return
-				const step = await iterator.next()
-				await this.#ready()
-				checkAbort(options?.signal)
-				if (step.done === true) return
-				const row = step.value
-				if (conditions.length > 0 && !matchesQuery(row, conditions, scalars)) continue
-				if (!page.next()) continue
-				yield row
-			}
-		} finally {
-			await iterator.return?.()
-		}
-	}
-
-	// Run an aggregate read: the engine computes it when the plan keeps it native; otherwise
-	// the residual conditions filter the native rows and the core reduces them, asserting none.
-	async #compute(
-		operation: AggregateOperation,
-		column: FieldPath,
+	// Run an aggregate read through the shared read procedure, with the table's checks.
+	#compute(
+		aggregate: Aggregate,
 		input: QueryInput | undefined,
 		options: OperationOptions | undefined,
 	): Promise<number | undefined> {
-		const plan = this.#plan({
-			...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
-			aggregate: { operation, column },
-		})
-		const { aggregate, ...native } = plan.native
-		if (aggregate !== undefined && this.#driver.aggregate !== undefined) {
-			return this.#driver.aggregate(this.#name, aggregate.operation, aggregate.column, native)
-		}
-		const filter =
-			plan.residual.conditions === undefined ? {} : { conditions: plan.residual.conditions }
-		const rows: Row[] = []
-		for await (const row of this.#select(native, filter, options)) rows.push(row)
-		return computeAggregate(rows, operation, column)
+		return readPlannedAggregate(
+			this.#driver,
+			this.#name,
+			input?.conditions === undefined ? {} : { conditions: input.conditions },
+			aggregate,
+			() => this.#step(options),
+		)
+	}
+
+	// Check readiness and the abort signal around each row a read pulls.
+	async #step(options: OperationOptions | undefined): Promise<void> {
+		await this.#ready()
+		checkAbort(options?.signal)
 	}
 
 	// Run a single-item operation across each item in order — the batch overloads
