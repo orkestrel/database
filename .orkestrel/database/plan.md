@@ -28,6 +28,7 @@
   - a batch applies all rows or none.
 - Taverna's six points are ruled in `designs/native.md` § Addendum. The paging wave gains the primary-key pin (unary `+` on the other conditions when an `any` is on the primary key), native `equals`/`any` on optional and nullable columns, and the empty-residual invariant. The coverage wave gains the `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize` at close and open, `SQLiteDriverInterface.pragma(name)`, and the drop of undeclared indexes at open.
 - Taverna's tests import `matchesQueryExactly` and `compileQuerySQL`. The paging release renames `matchesQueryExactly` to `planSQLiteQuery(input, schema)` and keeps `compileQuerySQL` with changed SQL text (§ Addendum); the handover names both.
+- The paging wave's Core unit also makes the core engine's `any` and `none` linear in rows: `matchesCondition` builds one `Set` of a condition's scalar values per condition and keeps `equalsValue` for a non-scalar value (taverna's `native-b` reading, 2026-11-13: an `id any` over 1000 keys on a fixture driver ran rows × keys, and two book cases went from about 1 s to 14-17 s). This is the residual engine's own cost; the native path is unchanged.
 - Next: the paging wave's Contract and Core unit.
 
 ## Sequence
