@@ -81,12 +81,14 @@ import { METADATA_TABLE } from '../constants.js'
  * `INSERT OR REPLACE` upsert, while `insert` uses a plain `INSERT` and maps its
  * atomic primary-key constraint failure to `CONFLICT`; every other backend
  * `SQLiteError` is contained by the same `DatabaseError` boundary described
- * below. Querying, ordering, paging, and aggregation is native: `records` /
- * `stream` compile a `QueryInput` to SQL with `compileQuerySQL`, and
- * `aggregate` runs a SQL `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (through
- * `compileAggregateSQL`) over the same compiled WHERE. `transaction` runs a
- * callback inside native `BEGIN` / `COMMIT` / `ROLLBACK`, passing a scoped
- * storage capability that becomes invalid after settlement. `migrate` runs the
+ * below. Reads follow the native-first rule {@link DriverInterface} states: `plan` splits
+ * each read through {@link planSQLiteQuery}, `records` / `stream` compile the native side
+ * to SQL with `compileQuerySQL`, and `aggregate` runs a SQL
+ * `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (through `compileAggregateSQL`) over the same
+ * compiled WHERE. A stored value that does not match its declaration raises `DRIVER`.
+ * `transaction` runs a callback inside native `BEGIN` / `COMMIT` / `ROLLBACK`, passing a
+ * scoped storage capability that declares the same native members and becomes invalid
+ * after settlement. `migrate` runs the
  * plan's projected DDL ({@link import('../compilers.js').stepToSQL}) inside
  * whichever native transaction is active: joined into the active transaction
  * callback when one exists (the core's versioned reconcile path wraps migrate +

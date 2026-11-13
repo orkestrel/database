@@ -29,8 +29,8 @@ import { INDEXABLE_STORAGE } from './constants.js'
  * boolean) that is not a usable key. `between` additionally guards against a
  * reversed pair (`first > second`): native `IDBKeyRange.bound` throws a raw
  * `DataError` `DOMException` for a lower bound above the upper bound, so a
- * reversed pair returns `undefined` here (falls back to a full scan, which the
- * engine then correctly resolves to an empty result) rather than letting a
+ * reversed pair returns `undefined` here (the read covers the whole store, and the
+ * core resolves it to an empty result) rather than letting a
  * native exception escape untyped — the same defensive posture as every other
  * backend, which returns empty for a reversed/empty range instead of throwing.
  * The switch is exhaustive over every {@link ConditionOperator}, so a new
@@ -56,7 +56,7 @@ export function conditionToRange(condition: Condition): IDBKeyRange | undefined 
 			return isKey(first) ? rangeToKey(first) : undefined
 		case 'between':
 			// A reversed pair (`first > second`) has no valid IDBKeyRange — native
-			// `bound` throws rather than returning empty. Fall back to a full scan
+			// `bound` throws rather than returning empty. Read the whole store
 			// instead of letting that DOMException escape (the engine then yields
 			// the correct, empty result over `compareValues(value, first) >= 0 &&
 			// compareValues(value, second) <= 0`, which no row can satisfy).

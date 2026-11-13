@@ -50,10 +50,10 @@ import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
 import { isKey, isScalar } from './validators.js'
 
-// The query engine. Every backend's `scan` yields rows; these pure helpers do
-// the filtering, ordering, paging, and aggregation once, so a driver never
-// re-implements WHERE compilation. They are total — like the contracts guards
-// they lean on, hostile input yields a `false` / a skipped value, never a throw.
+// The core's query engine. It runs the residual a driver's plan returns, under the
+// native-first rule `DriverInterface` states, and the whole read for a driver without
+// `plan`. Its helpers are total — like the contracts guards they lean on, malformed input
+// yields a `false` / a skipped value, never a throw.
 
 // === Query input validation
 
@@ -1353,6 +1353,16 @@ export function findPlanFaults(input: ReadInput, plan: ReadPlan): readonly strin
  * @param table - The table to read
  * @param input - The read, without an aggregate
  * @returns The rows the plan answers
+ *
+ * @example
+ * ```ts
+ * import { createMemoryDriver, readPlannedRows } from '@orkestrel/database'
+ *
+ * const driver = createMemoryDriver()
+ * await driver.open([{ name: 'users', primary: 'id', columns: [], indexes: [] }])
+ * await driver.write('users', 'u1', { id: 'u1', age: 36 })
+ * await readPlannedRows(driver, 'users', { limit: 1 }) // [{ id: 'u1', age: 36 }]
+ * ```
  */
 export async function readPlannedRows(
 	storage: StorageInterface,
@@ -1378,6 +1388,16 @@ export async function readPlannedRows(
  * @param input - The read's conditions
  * @param aggregate - The aggregate to compute
  * @returns The aggregate value, or `undefined` when undefined for the rows
+ *
+ * @example
+ * ```ts
+ * import { createMemoryDriver, readPlannedAggregate } from '@orkestrel/database'
+ *
+ * const driver = createMemoryDriver()
+ * await driver.open([{ name: 'users', primary: 'id', columns: [], indexes: [] }])
+ * await driver.write('users', 'u1', { id: 'u1', age: 36 })
+ * await readPlannedAggregate(driver, 'users', {}, { operation: 'sum', column: 'age' }) // 36
+ * ```
  */
 export async function readPlannedAggregate(
 	storage: StorageInterface,
@@ -1434,6 +1454,16 @@ export async function collectRows(source: AsyncIterable<Row>): Promise<readonly 
  * @param storage - The seeded storage to read
  * @param check - The finding's `check` prefix
  * @yields One {@link ConformanceFinding} per broken invariant or differing answer
+ *
+ * @example
+ * ```ts
+ * import { comparePlans, CONFORMANCE_ROWS, CONFORMANCE_SCHEMA, createMemoryDriver } from '@orkestrel/database'
+ *
+ * const driver = createMemoryDriver()
+ * await driver.open(CONFORMANCE_SCHEMA)
+ * for (const row of CONFORMANCE_ROWS) await driver.write('users', String(row.id), row)
+ * for await (const finding of comparePlans(driver, 'plan')) console.log(finding.check) // logs nothing
+ * ```
  */
 export async function* comparePlans(
 	storage: StorageInterface,

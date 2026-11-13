@@ -391,7 +391,8 @@ await new GuideCommand({
 		it('the comparison and pattern helpers return what the fence claims (guides/database.md:2020-2023)', () => {
 			expect(compareValues(1, 2)).toBe(-1)
 			expect(matchesWildcardPattern('hello', 'h%o', '%', '_', true)).toBe(true)
-			expect(matchesLikePattern('hello', 'h%o')).toBe(true)
+			expect(matchesLikePattern('Hello', 'h%o')).toBe(true)
+			expect(matchesLikePattern('Émile', 'émile')).toBe(false)
 			expect(matchesGlobPattern('hello', 'h*o')).toBe(true)
 		})
 
@@ -516,6 +517,14 @@ await new GuideCommand({
 					limit: 10,
 				},
 				residual: {},
+			})
+			const plan = planSQLiteQuery(
+				{ conditions: [native], order: [{ column: 'age', direction: 'ascending' }], limit: 10 },
+				schema,
+			)
+			expect(compileQuerySQL(plan.native, schema)).toEqual({
+				sql: 'WHERE "age" > ? ORDER BY "age" ASC, "id" ASC LIMIT ?',
+				parameters: [18, 10],
 			})
 		})
 	})
