@@ -69,7 +69,11 @@ and its reader, and the pure leaves they are built from. `@orkestrel/test/browse
 journey layer, which drives a real browser through the installed Vitest provider. Core touches
 neither `node:*` nor the DOM, so a browser test project imports it unchanged.
 `@orkestrel/test/reporter` is the runner entry Vitest's `--reporter` flag loads: its default
-export is `ProgressReporter`, and it ships ES only.
+export is `ProgressReporter`, and it ships ES only. The entry lives at `src/bin/reporter.ts` and
+builds to `dist/bin/reporter.js`; the specifier does not name that path. Use it for a run started
+from the command line with a configuration you cannot edit, as `@orkestrel/capture` starts a
+package's Vitest. In a package's own configuration, list `new ProgressReporter()` instead, as
+§ Read a long run while it runs shows.
 
 The browser face ships ES only. It is built on `vitest/browser`, which is an ES-only module, so no
 CommonJS consumer can reach it and no `.d.cts` is emitted for it.
@@ -3047,8 +3051,8 @@ Object.keys(
 Object.keys(
 	readInventory(root, ['src'], { extensions: ['.ts'], exclude: ['src/server', 'src/browser'] }),
 )
-// ['src/core/Production.ts', 'src/core/Teardown.ts', 'src/core/constants.ts', 'src/core/factories.ts', 'src/core/helpers.ts', 'src/core/index.ts',
-//  'src/core/types.ts', 'src/core/validators.ts', 'src/reporter/main.ts']
+// ['src/bin/reporter.ts', 'src/core/Production.ts', 'src/core/Teardown.ts', 'src/core/constants.ts', 'src/core/factories.ts',
+//  'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts', 'src/core/validators.ts']
 
 // An exclusion also applies to a target you name, so naming one file below an excluded directory
 // does not reinstate it.

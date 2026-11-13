@@ -1402,13 +1402,7 @@ export function collectDistributionFiles(directory: string): readonly string[] {
  */
 export function readDistributionFace(installed: string, path: string): string | undefined {
 	const [output, axis, face] = relativePath(installed, path).split(sep)
-	return output === 'dist'
-		? axis === 'src'
-			? face
-			: axis === 'bin' || axis === 'reporter'
-				? axis
-				: undefined
-		: undefined
+	return output === 'dist' ? (axis === 'src' ? face : axis === 'bin' ? axis : undefined) : undefined
 }
 
 /**
