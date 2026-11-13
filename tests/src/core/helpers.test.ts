@@ -19,7 +19,7 @@ import {
 	CONFORMANCE_SCHEMA,
 	findPlanFaults,
 	foldASCII,
-	matchesMember,
+	containsValue,
 	prepareScalars,
 	readPlannedAggregate,
 	readPlannedRows,
@@ -1323,23 +1323,23 @@ describe('sortRows — the tie rule', () => {
 	})
 })
 
-describe('collectScalars, matchesMember, and prepareScalars', () => {
+describe('collectScalars, containsValue, and prepareScalars', () => {
 	it('collects the scalar operands and leaves objects out', () => {
 		const scalars = collectScalars(['a', 1, null, undefined, Number.NaN, { b: 2 }])
 		expect([...scalars]).toEqual(['a', 1, null, undefined, Number.NaN])
 	})
 
 	it('matches a scalar by lookup and an object structurally', () => {
-		expect(matchesMember('a', ['a', 'b'])).toBe(true)
-		expect(matchesMember(-0, [0])).toBe(true)
-		expect(matchesMember(Number.NaN, [Number.NaN])).toBe(true)
-		expect(matchesMember('1', [1])).toBe(false)
-		expect(matchesMember({ b: 1 }, [{ b: 1 }])).toBe(true)
-		expect(matchesMember({ b: 1 }, ['b'])).toBe(false)
+		expect(containsValue('a', ['a', 'b'])).toBe(true)
+		expect(containsValue(-0, [0])).toBe(true)
+		expect(containsValue(Number.NaN, [Number.NaN])).toBe(true)
+		expect(containsValue('1', [1])).toBe(false)
+		expect(containsValue({ b: 1 }, [{ b: 1 }])).toBe(true)
+		expect(containsValue({ b: 1 }, ['b'])).toBe(false)
 	})
 
 	it('answers from the prepared set it is handed', () => {
-		expect(matchesMember('a', ['a'], new Set(['z']))).toBe(false)
+		expect(containsValue('a', ['a'], new Set(['z']))).toBe(false)
 		expect(matchesCondition({ id: 'z' }, buildCondition('id', 'any', ['a']), new Set(['z']))).toBe(
 			true,
 		)

@@ -23,6 +23,7 @@ import type {
 } from './types.js'
 import {
 	attempt,
+	collectMembers,
 	compileGuard,
 	isArray,
 	isBoolean,
@@ -32,6 +33,7 @@ import {
 	isNumber,
 	isRecord,
 	isString,
+	matchesMember,
 	objectShape,
 	parseNumber,
 	preview,
@@ -429,9 +431,10 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  *
  * @remarks
  * A scalar is `undefined`, `null`, a boolean, a number, a string, a bigint, or a symbol. The
- * set compares by SameValueZero, the comparison {@link equalsValue} applies to a scalar, so
- * `any` and `none` test a scalar field with one lookup instead of one comparison per
- * operand. Object operands stay out of the set; {@link equalsValue} compares them.
+ * set is Contract's `collectMembers` vocabulary, which `matchesMember` asks by SameValueZero,
+ * the comparison {@link equalsValue} applies to a scalar, so `any` and `none` test a scalar
+ * field with one lookup instead of one comparison per operand. Object operands stay out of
+ * the set; {@link equalsValue} compares them.
  *
  * @param values - The operands of an `any` or `none` condition
  * @returns The set of scalar operands
@@ -442,7 +445,7 @@ export function matchesGlobPattern(value: string, pattern: string): boolean {
  * ```
  */
 export function collectScalars(values: readonly unknown[]): ReadonlySet<unknown> {
-	return new Set(values.filter(isScalar))
+	return collectMembers(values.filter(isScalar))
 }
 
 /**
@@ -455,7 +458,7 @@ export function collectScalars(values: readonly unknown[]): ReadonlySet<unknown>
  * {@link compareValues}, the total order; the equality family (`equals` / `not`
  * / `any` / `none`) uses {@link equalsValue}, structural equality with SameValueZero
  * leaves, so `NaN` equals `NaN` under `equals` / `any`. `any` and `none` test the field
- * through {@link matchesMember}. `like` / `glob` / `starts` / `ends` match only strings;
+ * through {@link containsValue}. `like` / `glob` / `starts` / `ends` match only strings;
  * `absent` / `present` test nullishness. Total — a type mismatch is a non-match.
  *
  * @param row - The row to test
@@ -496,9 +499,9 @@ export function matchesCondition(
 		case 'ends':
 			return isString(value) && isString(first) && value.endsWith(first)
 		case 'any':
-			return matchesMember(value, condition.values, scalars)
+			return containsValue(value, condition.values, scalars)
 		case 'none':
-			return !matchesMember(value, condition.values, scalars)
+			return !containsValue(value, condition.values, scalars)
 		case 'absent':
 			return value === undefined || value === null
 		case 'present':
@@ -510,8 +513,8 @@ export function matchesCondition(
  * Checks whether a value equals one operand of a membership list.
  *
  * @remarks
- * A scalar value is one lookup in `scalars`; a non-scalar value compares with each operand
- * through {@link equalsValue}.
+ * A scalar value is one Contract `matchesMember` lookup in `scalars`; a non-scalar value
+ * compares with each operand through {@link equalsValue}.
  *
  * @param value - The field value to test
  * @param values - The membership list
@@ -521,16 +524,16 @@ export function matchesCondition(
  *
  * @example
  * ```ts
- * matchesMember('a', ['a', 'b']) // true
- * matchesMember({ b: 1 }, [{ b: 1 }]) // true
+ * containsValue('a', ['a', 'b']) // true
+ * containsValue({ b: 1 }, [{ b: 1 }]) // true
  * ```
  */
-export function matchesMember(
+export function containsValue(
 	value: unknown,
 	values: readonly unknown[],
 	scalars?: ReadonlySet<unknown>,
 ): boolean {
-	if (isScalar(value)) return (scalars ?? collectScalars(values)).has(value)
+	if (isScalar(value)) return matchesMember(scalars ?? collectScalars(values), value)
 	return values.some((candidate) => equalsValue(value, candidate))
 }
 
