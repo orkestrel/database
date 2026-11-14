@@ -958,10 +958,11 @@ export interface DatabaseTableOptions {
  * Exposes typed keyed CRUD plus fluent query and cursor access.
  *
  * @remarks
- * Writes are admitted whole through the table's contract by `admitValue`: a numeric
- * string for a numeric column is a lossless repair and stores the number, and a row
- * with an undeclared column, a missing column, or a lossy repair throws `VALIDATION`
- * whose `context` carries `table` and the contract's `faults`. A
+ * Writes are admitted whole through the table's contract by `admitValue`: a row with a
+ * mistyped column (a numeric string for an integer column included), an undeclared
+ * column, or a missing column throws `VALIDATION` whose `context` carries `table` and
+ * the contract's `faults` and whose message names each fault. Pass loose data through
+ * `repairValue(table.contract, row)` before the write to repair a lossless leaf. A
  * row whose primary is `undefined` receives a generated key. `get` returns `undefined`
  * when a key is absent; `resolve` throws `NOT_FOUND`. `set` upserts; `add`
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the

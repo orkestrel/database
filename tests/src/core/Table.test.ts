@@ -1,6 +1,6 @@
 import type { TableEvent } from '../../setup.js'
 import type { DoorRow } from '../../setup.js'
-import type { Condition, QueryInput, Key, TableEventMap } from '@src/core'
+import type { Condition, DatabaseInterface, QueryInput, Key, TableEventMap } from '@src/core'
 import {
 	applyQuery,
 	captureFailure,
@@ -12,6 +12,7 @@ import {
 } from '@src/core'
 import {
 	describeFaultLine,
+	describeFaults,
 	FAULT_LIMIT,
 	FAULT_TEXT_LIMIT,
 	isContractError,
@@ -647,13 +648,15 @@ describe('Table — coercion and validation', () => {
 		const users = createConstrainedUsersDatabase().db.table('users')
 		const error = await users.add(row).catch((caught: unknown) => caught)
 		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
-		const faults = error.context?.faults
-		if (!isArray(faults) || !isAuditFault(faults[0])) throw new Error('Expected a fault')
+		const listed = error.context?.faults
+		const faults = isArray(listed) ? listed.filter(isAuditFault) : []
+		if (faults.length === 0) throw new Error('Expected a fault')
+		const head = "Row failed the 'users' contract"
 		expect(error.message).toBe(
-			`Row failed the 'users' contract: ${describeFaultLine(faults[0], users.contract.schema)}`,
+			`${head}: ${describeFaults(faults, users.contract.schema, { limit: FAULT_TEXT_LIMIT - head.length - 2 })}`,
 		)
 		expect(error.message).toContain('…')
-		expect(error.message.length).toBeLessThan(400)
+		expect(error.message.length).toBeLessThanOrEqual(FAULT_TEXT_LIMIT)
 	})
 
 	it('refuses an undeclared column on update and keeps the stored row', async () => {
@@ -682,10 +685,113 @@ describe('Table — coercion and validation', () => {
 		expect(await users.keys()).toEqual([])
 	})
 
-	it('admits a lossless repair and stores the repaired number', async () => {
+	it('refuses a numeric string for an integer column and stores nothing', async () => {
 		const users = createConstrainedUsersDatabase().db.table('users')
-		await users.set({ id: 'u1', name: 'Ada', age: '36' })
-		expect(await users.get('u1')).toEqual(createUserRow())
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		const stored = await users.get('u1')
+		const row = { id: 'u1', name: 'Ada', age: '41' }
+		const failures = [
+			await users.add({ ...row, id: 'u2' }).catch((caught: unknown) => caught),
+			await users.set(row).catch((caught: unknown) => caught),
+			await users.update('u1', { age: '41' }).catch((caught: unknown) => caught),
+		]
+		for (const error of failures) {
+			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+			expect(error.code).toBe('VALIDATION')
+			expect(error.message).toContain('age: type; expected integer; received "41"')
+			expect(error.context?.faults).toEqual([
+				{ reason: 'type', path: ['age'], expected: 'integer', received: '"41"' },
+			])
+		}
+		expect(await users.get('u1')).toEqual(stored)
+		expect(await users.has('u2')).toBe(false)
+	})
+
+	it('names every fault of a row with two faults in the message', async () => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		const error = await users
+			.add({ id: 'u1', name: 7, age: '41' })
+			.catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.message).toContain('name: type')
+		expect(error.message).toContain('age: type; expected integer; received "41"')
+		expect(error.context?.faults).toHaveLength(2)
+	})
+
+	it.each(['add', 'update'] as const)(
+		'refuses a declared optional column written as undefined on %s',
+		async (method) => {
+			const db: DatabaseInterface = createDatabase({
+				driver: createMemoryDriver(),
+				tables: { notes: { id: stringShape(), note: stringShape() } },
+			})
+			const notes = db.table('notes')
+			await notes.set({ id: 'n1', note: 'kept' })
+			const error = await (
+				method === 'add'
+					? notes.add({ id: 'n2', note: undefined })
+					: notes.update('n1', { note: undefined })
+			).catch((caught: unknown) => caught)
+			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+			expect(error.code).toBe('VALIDATION')
+			expect(error.message).toContain('note: type; expected string; received undefined')
+			expect(await notes.get('n1')).toEqual({ id: 'n1', note: 'kept' })
+		},
+	)
+
+	it('generates a key for a row whose primary is undefined', async () => {
+		const db: DatabaseInterface = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { notes: { id: optionalShape(stringShape()), note: stringShape() } },
+		})
+		const notes = db.table('notes')
+		const key = await notes.add({ id: undefined, note: 'kept' })
+		expect(typeof key).toBe('string')
+		expect(await notes.get(key)).toEqual({ id: key, note: 'kept' })
+	})
+
+	it('refuses a row with a symbol key', async () => {
+		const users = createConstrainedUsersDatabase().db.table('users')
+		const row = { id: 'u1', name: 'Ada', age: 36, [Symbol('tag')]: 1 }
+		const error = await users.add(row).catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.message).toContain(
+			'value: extra; symbol key Symbol(tag) is not declared, remove it',
+		)
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('refuses a mistyped row of a table named with FAULT_TEXT_LIMIT characters', async () => {
+		const name = 'n'.repeat(FAULT_TEXT_LIMIT)
+		const db: DatabaseInterface = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { [name]: { id: stringShape(), age: integerShape() } },
+		})
+		const error = await db
+			.table(name)
+			.add({ id: 'u1', age: '41' })
+			.catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(isContractError(error)).toBe(false)
+	})
+
+	it('raises DRIVER naming one fault for a stored row with a repairable leaf', async () => {
+		const driver = createMemoryDriver()
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), age: integerShape() } },
+		})
+		const users = db.table('users')
+		await db.open()
+		await driver.write('users', 'a', { id: 'a', age: '41' })
+		const error = await users.get('a').catch((caught: unknown) => caught)
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('DRIVER')
+		expect(error.message).toContain('age: type; expected integer; received "41"')
+		expect(error.context?.faults).toHaveLength(1)
 	})
 
 	it('admits any nested JSON inside a raw column through insert and update', async () => {

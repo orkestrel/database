@@ -2,7 +2,7 @@
 // this repo's own `guides/README.md` manifest. The constants that follow are this
 // package's own, as is the executed section that closes the file.
 
-import type { AdmissionInterface, Condition, TableSchema } from '@src/core'
+import type { AdmissionInterface, Condition, DatabaseInterface, TableSchema } from '@src/core'
 import { GuideCommand } from '@orkestrel/guide/server'
 import { readInventory } from '@orkestrel/test/server'
 import { createVitest } from 'vitest/node'
@@ -52,12 +52,12 @@ await new GuideCommand({
 	runner: createVitest,
 }).execute(async ({ files, report, root, rows }) => {
 	const {
-		admitValue,
 		integerShape,
 		isRecord,
 		literalShape,
 		optionalShape,
 		parseJSON,
+		repairValue,
 		stringShape,
 	} = await import('@orkestrel/contract')
 	const { computeSymbolKey, createGuide, findMissingSymbols, normalizeDirectories } =
@@ -565,8 +565,8 @@ await new GuideCommand({
 			expect(db.table('posts').primary).toBe('slug')
 		})
 
-		it('admits a numeric string as its number and refuses an undeclared column (guides/database.md § Admission through the contract)', async () => {
-			const users = createDatabase({
+		it('repairs a numeric string before the write, refuses the bare write, and refuses an undeclared column (guides/database.md § Admission through the contract)', async () => {
+			const db: DatabaseInterface = createDatabase({
 				driver: createMemoryDriver(),
 				tables: {
 					users: {
@@ -576,16 +576,18 @@ await new GuideCommand({
 						role: stringShape(),
 					},
 				},
-			}).table('users')
-			const admitted = admitValue(users.contract, {
-				id: 'u2',
-				name: 'Bo',
-				age: '41',
-				role: 'member',
 			})
-			if (!admitted.success) throw new Error('Expected the row to admit')
-			await users.set(admitted.value.value)
+			const users = db.table('users')
+			const loose = { id: 'u2', name: 'Bo', age: '41', role: 'member' }
+			const repaired = repairValue(users.contract, loose)
+			if (!repaired.success) throw new Error('Expected the row to repair')
+			await users.set(repaired.value.value)
 			expect((await users.get('u2'))?.age).toBe(41)
+			const bare = await users.set({ ...loose, id: 'u4' }).catch((error: unknown) => error)
+			if (!isDatabaseError(bare)) throw new Error('Expected a DatabaseError')
+			expect(bare.code).toBe('VALIDATION')
+			expect(bare.message).toContain('age: type; expected integer; received "41"')
+			expect(await users.get('u4')).toBeUndefined()
 			const imported = { id: 'u3', name: 'Cy', age: 29, role: 'member', nickname: 'Cy' }
 			const refused = await users.set(imported).catch((error: unknown) => error)
 			expect(isDatabaseError(refused) ? refused.context?.faults : undefined).toEqual([

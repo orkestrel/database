@@ -28,8 +28,8 @@ import type { TransactionScope } from './TransactionScope.js'
 import {
 	admitValue,
 	attempt,
-	describeFaultLine,
 	describeFaults,
+	FAULT_TEXT_LIMIT,
 	extractPath,
 	FAULT_LIMIT,
 	isArray,
@@ -66,8 +66,8 @@ import { ScopedIterator } from './ScopedIterator.js'
  *
  * @remarks
  * The table's contract is the load-bearing piece: writes go through `admitValue`
- * (admitting lossless repairs and refusing an undeclared, missing, or lossy column
- * with a `VALIDATION` throw carrying the contract's `faults`),
+ * (refusing a mistyped, undeclared, or missing column, a numeric string for an integer
+ * included, with a `VALIDATION` throw carrying the contract's `faults`),
  * reads come back through the contract guard (narrowing a stored {@link Row} to
  * the table's type, and raising `DRIVER` for a stored row that fails it), and `contract`
  * is exposed for introspection and seeding.
@@ -492,7 +492,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		})
 	}
 
-	// Coerce/validate and write one row; `insert` selects the atomic insert primitive.
+	// Admit and write one row; `insert` selects the atomic insert primitive.
 	async #put(row: T, insert: boolean, options?: OperationOptions): Promise<Key> {
 		const validated = this.#validate(this.#prepare(row))
 		const key = this.#resolveKey(validated)
@@ -626,9 +626,9 @@ export class Table<T = Row> implements TableInterface<T> {
 	// always an object shape, so it never refuses an admitted row.
 	#validate(row: Row): Row {
 		const admission = admitValue(this.#contract, row)
-		if (admission.success && isRecord(admission.value.value)) {
-			const column = findIllFormedColumn(admission.value.value, this.#columns)
-			if (column === undefined) return admission.value.value
+		if (admission.success && isRecord(admission.value)) {
+			const column = findIllFormedColumn(admission.value, this.#columns)
+			if (column === undefined) return admission.value
 			throw new DatabaseError(
 				'VALIDATION',
 				`Column '${column}' of table '${this.#name}' holds ill-formed text: a lone surrogate has no UTF-8 form; replace it before writing`,
@@ -636,14 +636,19 @@ export class Table<T = Row> implements TableInterface<T> {
 			)
 		}
 		const faults = admission.success ? [] : admission.error.faults
-		const [fault] = faults
 		throw new DatabaseError(
 			'VALIDATION',
-			fault === undefined
-				? `Row failed the '${this.#name}' contract`
-				: `Row failed the '${this.#name}' contract: ${describeFaultLine(fault, this.#contract.schema)}`,
+			this.#refuse(`Row failed the '${this.#name}' contract`, faults),
 			{ table: this.#name, faults },
 		)
+	}
+
+	// Render a write refusal's head and its faults within one FAULT_TEXT_LIMIT, the faults taking what
+	// the head and its separator leave.
+	#refuse(head: string, faults: readonly AuditFault[]): string {
+		if (faults.length === 0) return head
+		const limit = Math.max(0, FAULT_TEXT_LIMIT - head.length - 2)
+		return `${head}: ${describeFaults(faults, this.#contract.schema, { limit })}`
 	}
 
 	#resolveKey(row: Row): Key {
@@ -705,7 +710,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	#auditContract(copy: unknown): ContractRefusal {
 		const masked = attempt(() => maskUndefinedOperands(copy))
 		const admission = admitValue(queryInputContract, masked.success ? masked.value : copy)
-		return admission.success ? { faults: admission.value.repairs } : admission.error
+		return admission.success ? { faults: [] } : admission.error
 	}
 
 	// Raise one refusal for a read, its header naming the passes that refused, the first column
@@ -751,12 +756,9 @@ export class Table<T = Row> implements TableInterface<T> {
 		if (this.#guard(row)) return row
 		const admission = admitValue(this.#contract, row)
 		const faults = admission.success ? [] : admission.error.faults
-		const [fault] = faults
 		throw new DatabaseError(
 			'DRIVER',
-			fault === undefined
-				? `Stored row failed the '${this.#name}' contract`
-				: `Stored row failed the '${this.#name}' contract: ${describeFaultLine(fault, this.#contract.schema)}`,
+			this.#refuse(`Stored row failed the '${this.#name}' contract`, faults),
 			{ table: this.#name, key: extractKey(row, this.#key), faults },
 		)
 	}

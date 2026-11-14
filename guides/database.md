@@ -698,19 +698,20 @@ These invariants hold across the core database source tree ↔ this guide:
    an entry barrel remain internal.
 2. **A table is a contract.** Every write is admitted whole through the
    table's compiled contract — `set` / `add` / `update` run the row through
-   Contract's `admitValue`, which admits a lossless repair such as `'36'` to
-   `36` for a number column and enforces constraints such as `min` /
-   `pattern`. A row that carries an undeclared top-level column, omits a
-   required column, or needs a lossy repair such as `'036'` to `36` throws
-   `VALIDATION`; the table never removes a column to admit the rest. A
+   Contract's `admitValue`, which enforces types and constraints such as
+   `min` / `pattern` and repairs nothing. A row that carries an undeclared
+   top-level column, omits a required column, or holds a mistyped value such
+   as `'36'` for an integer column throws `VALIDATION`; the table never
+   removes a column to admit the rest. A caller that wants a lossless repair
+   runs `repairValue(table.contract, row)` before the write. A
    `rawShape` column admits any defined value, so the nested keys of a JSON
    column never refuse. Reads are narrowed back to the table's row type
    through the guard — never an `as` (see `AGENTS.md` § Non-negotiable
    rules). The row type is the shape's `Infer`, so a `tables` map types every
    table from one declaration. A refusal's context carries `table` and
    `faults`, the `AuditFault` list `admitValue` returned, and its message
-   names the table and the first fault through Contract's `describeFaultLine`
-   function. A fault's `received` member and the message carry Contract's
+   names the table and every fault through Contract's `describeFaults`
+   function, bounded by `FAULT_TEXT_LIMIT`. A fault's `received` member and the message carry Contract's
    JSON-encoded, length-capped rendering of the received value; the rejected
    row and the parser cause never enter the message, context, serialized
    error, or table events.
@@ -1441,24 +1442,32 @@ list are one list `read`, and `update` of a key list is one list `read` and one 
 
 ### Admission through the contract
 
-Admits a numeric string against the table's contract, stores the repaired number, and refuses an undeclared column:
+Repairs a numeric string through the table's contract before the write, stores the number, and refuses the bare write and an undeclared column:
 
 ```ts
 import { createDatabase, createMemoryDriver, isDatabaseError } from '@orkestrel/database'
-import { admitValue, integerShape, stringShape } from '@orkestrel/contract'
+import type { DatabaseInterface } from '@orkestrel/database'
+import { integerShape, repairValue, stringShape } from '@orkestrel/contract'
 
-const users = createDatabase({
+// A DatabaseInterface hands out untyped rows, as a boundary that holds loose data needs.
+const db: DatabaseInterface = createDatabase({
 	driver: createMemoryDriver(),
 	tables: {
 		users: { id: stringShape(), name: stringShape(), age: integerShape(), role: stringShape() },
 	},
-}).table('users')
+})
+const users = db.table('users')
 
-// A numeric string is a lossless repair, so admitValue admits it as the number.
-const admitted = admitValue(users.contract, { id: 'u2', name: 'Bo', age: '41', role: 'member' })
-if (!admitted.success) throw new Error('Expected the row to admit')
-await users.set(admitted.value.value)
+// A numeric string is a lossless repair, so repairValue admits it as the number before the write.
+const loose = { id: 'u2', name: 'Bo', age: '41', role: 'member' }
+const repaired = repairValue(users.contract, loose)
+if (!repaired.success) throw new Error('Expected the row to repair')
+await users.set(repaired.value.value)
 ;(await users.get('u2'))?.age // 41 (a number)
+
+// The bare write refuses the same row with DatabaseError('VALIDATION') and the type fault.
+const bare = await users.set({ ...loose, id: 'u4' }).catch((error: unknown) => error)
+if (isDatabaseError(bare)) bare.message // contains 'age: type; expected integer; received "41"'
 
 // An undeclared column refuses with DatabaseError('VALIDATION') and the contract's faults.
 const imported = { id: 'u3', name: 'Cy', age: 29, role: 'member', nickname: 'Cy' }
@@ -2912,8 +2921,8 @@ mapMigrationError(fault) // → the same, but an UPGRADE or a RECORD fault becom
 
 - **Declare tables in `createDatabase({ tables })` and hold the handles** —
   `const users = db.table('users')`; reuse them rather than re-resolving.
-- **Writes admit whole, reads narrow.** At an unknown-input boundary, admit
-  loose data (`'41'`) through `admitValue(table.contract, input)` and write
+- **Writes admit whole, reads narrow.** At an unknown-input boundary, repair
+  loose data (`'41'`) through `repairValue(table.contract, input)` and write
   its value; a refusal carries the faults to report. Trust `get` / `records`
   to return the row type.
 - **Use `resolve` when absence is an error**, `get` when it is expected —
@@ -3011,7 +3020,7 @@ to `Scalar`.
 - [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
 - [`tests/src/core/ScopedIterator.test.ts`](../tests/src/core/ScopedIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, the readiness thunk running before every advance and its failure preempting the source, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
 - [`tests/src/core/DriverIterator.test.ts`](../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
-- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, whole-row admission with its lossless repairs, its undeclared, missing, and lossy refusals, and the raw-column nested-key admission, `add` dispatch through atomic `insert` (including concurrent duplicate claims), one driver call per batch read through a `StorageRecorder`, batches that apply every row or none, a list `remove` that answers true only when every distinct listed key held a row and was removed, a repeated key counting as one (a transaction view included), empty lists that answer and touch no row, and the emitter's post-commit and no-aborted-event behavior. The query door: every refusal class through `records`, `count`, `aggregate`, `scan`, and each `query()` terminal with no driver call, the reads admitted at each class's edge, and a lone surrogate refused in a written `text` value and a key.
+- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, whole-row admission with its refusals of a mistyped value (a numeric string included), an undeclared column, a missing column, and two faults at once, each fault named in the message, and the raw-column nested-key admission, `add` dispatch through atomic `insert` (including concurrent duplicate claims), one driver call per batch read through a `StorageRecorder`, batches that apply every row or none, a list `remove` that answers true only when every distinct listed key held a row and was removed, a repeated key counting as one (a transaction view included), empty lists that answer and touch no row, and the emitter's post-commit and no-aborted-event behavior. The query door: every refusal class through `records`, `count`, `aggregate`, `scan`, and each `query()` terminal with no driver call, the reads admitted at each class's edge, and a lone surrogate refused in a written `text` value and a key.
 - [`tests/src/core/Query.test.ts`](../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.
 - [`tests/src/core/contracts.test.ts`](../tests/src/core/contracts.test.ts) — `queryInputContract`: each operator's arity on both sides, the operator candidates of an unknown operator, the column forms, and the closed object.
 - [`tests/src/core/StorageRecorder.test.ts`](../tests/src/core/StorageRecorder.test.ts) — the recorder over real drivers: rows returned and yielded per member, scoped calls inside a native transaction, the members it declares, a rejected call and an unpulled stream each counted as invoked, and a stream abandoned early or failing part way.
