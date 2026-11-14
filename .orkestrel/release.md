@@ -4,7 +4,9 @@ Layer order: `@orkestrel/contract`; `@orkestrel/sqlite` and `@orkestrel/indexedd
 
 | Package | Registry | Ruling | Evidence | Round |
 | --- | --- | --- | --- | --- |
-| `@orkestrel/contract` | 0.0.23 | bump to 0.0.24 | dist moved, ranges same, 0 self-pin hits; release commit `419be61`, waiting for the upload | round |
+| `@orkestrel/contract` | 0.0.23 | bump to 0.0.24, published and confirmed 2026-11-14 | dist moved, ranges same, 0 self-pin hits; release commit `419be61`, pushed with `main` fast-forwarded to it | landed |
+| `@orkestrel/sqlite` | 0.0.18 | bump to 0.0.19, published and confirmed 2026-11-14 | dist moved, ranges moved (contract ^0.0.24), 0 self-pin hits; release commit `b1443ac`, pushed with `main` fast-forwarded to it | landed |
+| `@orkestrel/indexeddb` | 0.0.18 | bump to 0.0.19, published and confirmed 2026-11-14 | dist moved, ranges moved (contract ^0.0.24), 2 visit self-pin hits in the vendored `guides/browser.md` mirror, ruled inert; release commit `57eeac4`, pushed with `main` fast-forwarded to it | landed |
 
 ## Standing host-bound readings
 
