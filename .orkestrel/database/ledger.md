@@ -33,3 +33,5 @@
 | 2026-11-14 | Database's conformance rows | opus (Opus 5.5); reviewer (Sonnet 5.5) one two-lane review and one closure check; verifier (Haiku 5.5) gates | `plan.md` § State |
 | 2026-11-14 | The query door stays derived from contract; the contract cost units move ahead of the coverage wave's release, and contract releases first | user | `plan.md` § State |
 | 2026-11-14 | After the four packages close, `@orkestrel/contract` joins the campaign, and its measured costs (the object guard, `parseEnum`, `resolveField`) become units under the same canon | user | `plan.md` § State |
+| 2026-11-14 | Contract keeps the hidden- and symbol-key refusal with the cost gain; database writes are strict; a door repairs only where its guide and tool description state it | user | `plan.md` § State |
+| 2026-11-14 | Contract semantic round: the follow-up rulings, the hidden-key strategy, and the write door | planner (Fable 5.2); reviewer (Opus 5.5) objective and subjective refutations | contract `tmp/units/semantics-consult-*.md` |
