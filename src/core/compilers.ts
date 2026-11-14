@@ -10,7 +10,6 @@ import type {
 	ReadInput,
 	Row,
 	StorageInterface,
-	StreamPageInterface,
 	TableSchema,
 } from './types.js'
 import { attempt, isFiniteNumber, isRecord } from '@orkestrel/contract'
@@ -356,37 +355,6 @@ export function computeAggregate(
 	const aggregate = new StreamAggregate(operation, column)
 	for (const row of rows) aggregate.add(row)
 	return aggregate.value
-}
-
-/**
- * Yields a source's rows, counting each row on a counter as its consumer pulls it.
- *
- * @remarks
- * The counter holds the rows yielded so far when the consumer stops early, the source ends, or
- * the source throws.
- *
- * @param source - The rows to pass through
- * @param rows - The counter each yielded row advances
- * @yields Each row of the source
- *
- * @example
- * ```ts
- * const driver = createMemoryDriver()
- * await driver.open([{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }])
- * await driver.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
- * const rows = new StreamPage(0)
- * await Array.fromAsync(streamRecordedRows(driver.scan('users'), rows))
- * rows.count // 2
- * ```
- */
-export async function* streamRecordedRows(
-	source: AsyncIterable<Row>,
-	rows: StreamPageInterface,
-): AsyncIterable<Row> {
-	for await (const row of source) {
-		rows.next()
-		yield row
-	}
 }
 
 /**

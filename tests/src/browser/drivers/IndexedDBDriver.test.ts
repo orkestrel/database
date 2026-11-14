@@ -2931,6 +2931,41 @@ describe('IndexedDBDriver — round trips per Table operation', () => {
 		])
 	})
 
+	it('finds a predicate match with no order by streaming to the first accepted row', async () => {
+		const { recorder, users } = recorded.value
+		const found = await recorder.measure(() =>
+			users
+				.query()
+				.filter((user) => user.age >= 4)
+				.find(),
+		)
+		expect([found.value?.id, found.calls]).toEqual([
+			'u4',
+			[
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'stream', keys: 0, rows: 5, scoped: false },
+			],
+		])
+	})
+
+	it('finds a predicate match under a native order through a page of one', async () => {
+		const { recorder, users } = recorded.value
+		const found = await recorder.measure(() =>
+			users
+				.query()
+				.filter((user) => user.age % 2 === 0)
+				.order({ column: 'id', direction: 'descending' })
+				.find(),
+		)
+		expect([found.value?.id, found.calls]).toEqual([
+			'u8',
+			[
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'stream', keys: 0, rows: 2, scoped: false },
+			],
+		])
+	})
+
 	it('counts in one aggregate call, and sums and streams through a query in one stream each', async () => {
 		const { recorder, users } = recorded.value
 		const query = users.query().condition(buildCondition('id', 'above', ['u6']))

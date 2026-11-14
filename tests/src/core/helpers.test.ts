@@ -48,6 +48,8 @@ import {
 	matchesIllFormedText,
 	restoreUndefinedOperands,
 	scanAggregateFaults,
+	streamRecordedRows,
+	StreamPage,
 	scanColumnFaults,
 	scanConditionFaults,
 	scanOperandFaults,
@@ -71,9 +73,9 @@ import {
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
-import { captureError, createRecorder } from '@orkestrel/test'
+import { captureError, collect, createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { buildCondition, createPlannedDriver } from '../../setup.js'
+import { buildCondition, createPlannedDriver, streamThenFail, tableSchemas } from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
 // — the connector is irrelevant for a single-condition match (it only matters
@@ -1389,6 +1391,33 @@ describe('tallyCalls', () => {
 			),
 		).toEqual({ calls: 2, keys: 3, rows: 2 })
 		expect(tallyCalls([], 'scan')).toEqual({ calls: 0, keys: 0, rows: 0 })
+	})
+})
+
+describe('streamRecordedRows', () => {
+	it('counts the rows a consumer pulls when it stops early, and every row at the end', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		await memory.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+		const early = new StreamPage(0)
+		for await (const row of streamRecordedRows(memory.scan('users'), early)) {
+			expect(row).toEqual({ id: 'a' })
+			break
+		}
+		expect(early.count).toBe(1)
+		const whole = new StreamPage(0)
+		expect(await collect(streamRecordedRows(memory.scan('users'), whole))).toHaveLength(2)
+		expect(whole.count).toBe(2)
+		const unpulled = new StreamPage(0)
+		streamRecordedRows(memory.scan('users'), unpulled)
+		expect(unpulled.count).toBe(0)
+	})
+
+	it('holds the rows yielded before a source throws', async () => {
+		const rows = new StreamPage(0)
+		const failing = streamThenFail([{ id: 'a' }], 'source failed')
+		await expect(collect(streamRecordedRows(failing, rows))).rejects.toThrow('source failed')
+		expect(rows.count).toBe(1)
 	})
 })
 

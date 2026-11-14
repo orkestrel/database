@@ -200,6 +200,20 @@ describe('Query — a predicate read holds only its answer', () => {
 		expect(found?.id).toBe('u3')
 	})
 
+	it('finds a predicate match under a native order through a page of one, not of N', async () => {
+		const recorder = new StorageRecorder(createPlannedDriver())
+		const users = await seeded(recorder.driver)
+		const { value, calls } = await recorder.measure(() =>
+			users
+				.query()
+				.filter((user) => user.role !== 'guest')
+				.order({ column: 'age', direction: 'descending' })
+				.find(),
+		)
+		expect(value?.id).toBe('u3')
+		expect(tallyCalls(calls, 'stream')).toMatchObject({ calls: 1, rows: 1 })
+	})
+
 	it('finds the first predicate match without an order, reading no row past it', async () => {
 		const recorder = new StorageRecorder(createMemoryDriver())
 		const users = await seeded(recorder.driver)

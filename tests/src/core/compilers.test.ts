@@ -18,8 +18,6 @@ import {
 	sortRows,
 	StorageRecorder,
 	streamPlannedRows,
-	streamRecordedRows,
-	StreamPage,
 	tallyCalls,
 } from '@src/core'
 import { captureError, collect, invokeUnchecked } from '@orkestrel/test'
@@ -42,8 +40,6 @@ import {
 	MIGRATION_USERS,
 	schema,
 	seedConformanceRows,
-	streamThenFail,
-	tableSchemas,
 } from '../../setup.js'
 
 describe('planMigration', () => {
@@ -376,33 +372,6 @@ describe('computeAggregate', () => {
 	it('returns undefined for non-count aggregates over no numeric values', () => {
 		expect(computeAggregate([{ a: 'x' }], 'sum', 'a')).toBeUndefined()
 		expect(computeAggregate([], 'average', 'a')).toBeUndefined()
-	})
-})
-
-describe('streamRecordedRows', () => {
-	it('counts the rows a consumer pulls when it stops early, and every row at the end', async () => {
-		const memory = createMemoryDriver()
-		await memory.open(tableSchemas('users'))
-		await memory.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
-		const early = new StreamPage(0)
-		for await (const row of streamRecordedRows(memory.scan('users'), early)) {
-			expect(row).toEqual({ id: 'a' })
-			break
-		}
-		expect(early.count).toBe(1)
-		const whole = new StreamPage(0)
-		expect(await collect(streamRecordedRows(memory.scan('users'), whole))).toHaveLength(2)
-		expect(whole.count).toBe(2)
-		const unpulled = new StreamPage(0)
-		streamRecordedRows(memory.scan('users'), unpulled)
-		expect(unpulled.count).toBe(0)
-	})
-
-	it('holds the rows yielded before a source throws', async () => {
-		const rows = new StreamPage(0)
-		const failing = streamThenFail([{ id: 'a' }], 'source failed')
-		await expect(collect(streamRecordedRows(failing, rows))).rejects.toThrow('source failed')
-		expect(rows.count).toBe(1)
 	})
 })
 

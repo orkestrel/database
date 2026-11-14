@@ -1995,16 +1995,22 @@ export const RESIDUAL_BUDGET = 180
 export const RESIDUAL_SHARE = 0.25
 
 /**
- * Holds the bar on a cell's growth when its input doubles, set outside the instrument's spread:
- * linear cells read 1.62 to 3.74 across three runs, and the quadratic control 15.8 to 17.8.
+ * Holds the factor between a growth cell's two sizes: linear work grows by about this factor and
+ * quadratic work by its square.
  */
-export const RESIDUAL_GROWTH = 6
+export const RESIDUAL_SCALE = 4
 
 /**
- * Holds the row count of the quadratic control: large enough that its copies outweigh its
- * allocations, small enough that its larger arm stays under a second.
+ * Holds the bar on a cell's growth across `RESIDUAL_SCALE`, set outside the instrument's spread:
+ * over three solo runs the linear cells read 2.47 to 9.94 and the quadratic control 13.94 to 19.40.
  */
-export const RESIDUAL_CONTROL_ROWS = 16000
+export const RESIDUAL_GROWTH = 12
+
+/**
+ * Holds the row count of the quadratic control's smaller arm: large enough that its moves outweigh
+ * its fixed cost, small enough that its larger arm stays near a second.
+ */
+export const RESIDUAL_CONTROL_ROWS = 2000
 
 /** Holds the widest text the consumer carries, about 570 characters, rounded up. */
 export const RESIDUAL_WIDTH = 600
@@ -2046,18 +2052,35 @@ export function buildShuffledBenchRows(count: number): ReadonlyArray<RowOf<typeo
 }
 
 /**
- * Sorts rows by one column, descending, by inserting each row into a copy of the rows before it:
- * quadratic work, the residual bench's superlinear control.
- *
- * @param rows - The rows to sort
- * @param column - The column to sort by
- * @returns The rows in descending column order, ties in input order
+ * Holds every row it is offered in descending order of one column, inserting each in place:
+ * quadratic moves with no allocation per row, the residual bench's superlinear control.
  */
-export function sortByInsertion(rows: readonly Row[], column: string): readonly Row[] {
-	return rows.reduce<readonly Row[]>((held, row) => {
-		const at = held.findIndex((other) => compareValues(other[column], row[column]) < 0)
-		return held.toSpliced(at === -1 ? held.length : at, 0, row)
-	}, [])
+export class InsertionPage {
+	readonly #column: string
+	readonly #rows: Row[] = []
+
+	constructor(column: string) {
+		this.#column = column
+	}
+
+	get rows(): readonly Row[] {
+		return this.#rows
+	}
+
+	/**
+	 * Inserts one row behind every held row its column does not exceed.
+	 *
+	 * @param row - The row to insert
+	 */
+	add(row: Row): void {
+		const at = this.#rows.findIndex(
+			(other) => compareValues(other[this.#column], row[this.#column]) < 0,
+		)
+		this.#rows.push(row)
+		if (at === -1) return
+		this.#rows.copyWithin(at + 1, at, this.#rows.length - 1)
+		this.#rows[at] = row
+	}
 }
 
 /**
