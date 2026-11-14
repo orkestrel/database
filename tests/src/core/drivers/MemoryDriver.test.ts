@@ -3,6 +3,7 @@ import {
 	conformDriver,
 	createMemoryDriver,
 	isDatabaseError,
+	MemoryDriver,
 	planMigration,
 	StorageJournal,
 } from '@src/core'
@@ -468,6 +469,120 @@ describe('MemoryDriver', () => {
 			expect(Reflect.set(first, 'version', 10)).toBe(false)
 			expect(await driver.metadata?.()).toEqual({ version: 3, schema: tableSchemas('users') })
 		})
+	})
+})
+
+describe('MemoryDriver — key order across key-set changes', () => {
+	it('orders a key a write adds after the order was read', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['d', 'b'], [{ id: 'd' }, { id: 'b' }])
+		expect(await driver.keys('t')).toEqual(['b', 'd'])
+		await driver.write('t', 'a', { id: 'a' })
+		expect(await driver.keys('t')).toEqual(['a', 'b', 'd'])
+		await driver.write('t', ['e', 'c'], [{ id: 'e' }, { id: 'c' }])
+		expect((await collect(driver.scan('t'))).map((row) => row.id)).toEqual([
+			'a',
+			'b',
+			'c',
+			'd',
+			'e',
+		])
+	})
+
+	it('orders a key an insert adds after the order was read', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.insert('t', ['d', 'b'], [{ id: 'd' }, { id: 'b' }])
+		expect(await driver.keys('t')).toEqual(['b', 'd'])
+		await driver.insert('t', 'c', { id: 'c' })
+		expect(await driver.keys('t')).toEqual(['b', 'c', 'd'])
+	})
+
+	it('drops a deleted key from the order it read', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['a', 'b', 'c'], [{ id: 'a' }, { id: 'b' }, { id: 'c' }])
+		expect(await driver.keys('t')).toEqual(['a', 'b', 'c'])
+		expect(await driver.delete('t', 'b')).toBe(true)
+		expect(await driver.keys('t')).toEqual(['a', 'c'])
+		expect(await driver.delete('t', ['a', 'missing'])).toEqual([true, false])
+		expect(await driver.keys('t')).toEqual(['c'])
+	})
+
+	it('reads no key a clear removed', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+		expect(await driver.keys('t')).toEqual(['a', 'b'])
+		await driver.clear('t')
+		expect(await driver.keys('t')).toEqual([])
+		await driver.write('t', 'c', { id: 'c' })
+		expect(await driver.keys('t')).toEqual(['c'])
+	})
+
+	it('keeps the order of an overwrite and scans its written row', async () => {
+		const driver = createMemoryDriver()
+		await driver.open([
+			{
+				name: 't',
+				primary: 'id',
+				columns: [
+					{ name: 'id', storage: 'text', optional: false, nullable: false },
+					{ name: 'n', storage: 'integer', optional: false, nullable: false },
+				],
+				indexes: [],
+			},
+		])
+		await driver.write(
+			't',
+			['b', 'a'],
+			[
+				{ id: 'b', n: 1 },
+				{ id: 'a', n: 1 },
+			],
+		)
+		expect(await collect(driver.scan('t'))).toEqual([
+			{ id: 'a', n: 1 },
+			{ id: 'b', n: 1 },
+		])
+		await driver.write('t', 'b', { id: 'b', n: 2 })
+		expect(await collect(driver.scan('t'))).toEqual([
+			{ id: 'a', n: 1 },
+			{ id: 'b', n: 2 },
+		])
+	})
+
+	it('orders the keys of a migrated table and a key written after it', async () => {
+		const driver = new MemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['b', 'a'], [{ id: 'b' }, { id: 'a' }])
+		expect(await driver.keys('t')).toEqual(['a', 'b'])
+		await driver.migrate({
+			plan: {
+				from: 0,
+				to: 1,
+				steps: [
+					{
+						operation: 'column.add',
+						table: 't',
+						column: { name: 'tag', storage: 'text', optional: true, nullable: false },
+					},
+				],
+			},
+		})
+		expect(await driver.keys('t')).toEqual(['a', 'b'])
+		await driver.write('t', 'c', { id: 'c' })
+		expect(await driver.keys('t')).toEqual(['a', 'b', 'c'])
+	})
+
+	it('returns a distinct key list from each call', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['b', 'a'], [{ id: 'b' }, { id: 'a' }])
+		const first = await driver.keys('t')
+		expect(await driver.keys('t')).not.toBe(first)
+		expect(Object.isFrozen(first)).toBe(false)
 	})
 })
 
