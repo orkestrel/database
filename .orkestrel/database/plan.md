@@ -74,7 +74,8 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
 - **The user's ruling of 2026-11-14 on two more repairing doors:** `@orkestrel/tool`'s `Tool.execute` and `@orkestrel/reason`'s `SubjectDoor` keep repair through `repairValue`, and the exception reads: a door repairs a lossless leaf where its guide states it, and its tool description too where the door serves a model.
 - **Contract semantic round, design closed:** contract `tmp/units/semantics-design-final.md` (Fable 5.2, with the Orchestrator's closure amendments in its § 8 after one closure check in two lanes) rules the units `faults`, `closed`, `union`, `array`, `function`, `clone`, and `admit`, then the contract release, then the consumer units in layer order. A census of every published `@orkestrel` package (`tmp/research/admit-census.txt`) names the dependents that move to `repairValue`: tool, reason, toolbox, agent, and workflow.
 - **Contract semantic round, wave A landed:** `faults`, `clone`, and `function` land as contract `508465d`: every preview holds 64 UTF-16 code units for every input, every clone refusal carries its path, every helper that composes fault text dispatches through captured members, and `functionShape` joins the shape kinds. The consumer pins they move are in contract `tmp/units/consumer-rows.md`.
-- **Next:** relation 0.0.23 (the last layer of the release wave: contract 0.0.24, sqlite and indexeddb 0.0.19, and database 0.0.25 are published), then the text wave, then the quality-and-performance units of § Sequence step 5, then the campaign's final wording pass.
+- **The user's rulings of 2026-11-14 after the release wave:** taverna's client pin, IndexedDB reads, and search requirement belong to taverna's session, so the text wave waits for its trigger; scaffold's `ENOTDIR` defect is fixed in scaffold for Linux and Windows alike; and implementation leads every unit, with guide parity kept to what the parity test asserts and prose written once, after the implementation is final (scaffold `AGENTS.md` § Work loop step 6).
+- **Next:** the scaffold release that carries the `ENOTDIR` fix and the implementation-first canon, then its adoption in the five packages; the quality-and-performance units of § Sequence step 5, whose open rows `research/strategies-database.md` § 3 lists.
 
 ## Sequence
 
@@ -99,14 +100,14 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
      - `link` and `unlink` as one insert and one delete;
      - primary-key loads through `get(keys)`;
      - its guide's two deferrals replaced by stated limits, per `research/strategies-database.md` § 4.
-3. **Text wave.** The design round of `designs/native.md` § 6, with taverna's search requirement read first, then one `@orkestrel/database` release.
+3. **Text wave.** Refused until its trigger (§ Refused, with triggers): the design round of `designs/native.md` § 6 opens when taverna's session delivers its search requirement, then one `@orkestrel/database` release.
 4. **At each wave's adoption, the dependents' sweep** of `designs/native.md` § 8 ("What each dependent changes") runs over agent, middleware, queue, relation, supervisor, taverna, terminal, toolbox, worker, workflow, and workspace. Each hit changes in the release that adopts the wave.
 5. **Quality and performance**, in the fresh session. The units of `research/strategies-database.md` § 3 that no wave holds, and the patterns of `research/strategies-agent.md` § 3. In this order:
    1. the remaining units of `research/strategies-database.md` § 3, each with its reading against `tenets.md`; the bench files and instruments moved into the coverage wave, and `validatePragmas` at construction meets the `pragmas` check at open.
 
 ## Open decisions
 
-`designs/native.md` § Addendum: the open decisions rules every decision but the three taverna's session holds:
+`designs/native.md` § Addendum: the open decisions rules every decision but the three taverna's session holds. The user ruled on 2026-11-14 that each belongs to that session, not this one:
 
 - the taverna commit, data slice, and Node version to pin as the real client;
 - taverna's IndexedDB reads, which decide whether the residual units of `research/strategies-database.md` § 3 take a consumer bar or a recorded stop, and whether the text wave builds an IndexedDB token store;
@@ -116,6 +117,7 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
 
 Each row is refused under scaffold's creation gate, which creates a capability with its first real consumer. Its trigger reopens it, and this campaign owns it (tenet A-D5).
 
+- **Text search** (the text wave, `designs/native.md` § 6). The trigger is taverna's search requirement, from taverna's session. The residual units of `research/strategies-database.md` § 3 that wait on taverna's IndexedDB reads take a recorded stop until those reads arrive.
 - **Unique indexes and references.** The trigger is a consumer that declares one (`designs/native.md` § 8). They then join the next wave.
 - **Typed loaded relations** in `@orkestrel/relation`. The trigger is a consumer that narrows a loaded relation property by hand (`research/strategies-database.md` § 4).
 
