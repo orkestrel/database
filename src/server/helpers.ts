@@ -557,7 +557,7 @@ export function decodeValue(
 		case 'json': {
 			if (!isString(value)) break
 			const parsed = attempt<unknown>(() => JSON.parse(value))
-			if (parsed.success) return structuredClone(cloneJSONValue(parsed.value))
+			if (parsed.success) return parsed.value
 			break
 		}
 		case 'integer':

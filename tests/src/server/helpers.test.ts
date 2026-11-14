@@ -72,6 +72,15 @@ describe('encodeValue / decodeValue — round-trips', () => {
 		expect(decodeValue(encoded, JSON_COLUMN)).toEqual(value)
 	})
 
+	it('decodes a json cell through its parse alone, so nesting past the structured-clone stack decodes', () => {
+		const depth = 100_000
+		const text = '['.repeat(depth) + ']'.repeat(depth)
+		const decoded = decodeValue(text, JSON_COLUMN)
+		expect(Array.isArray(decoded) && Array.isArray(decoded[0])).toBe(true)
+		expect(decodeValue(text, JSON_COLUMN) === decoded).toBe(false)
+		expect(Object.isFrozen(decoded)).toBe(false)
+	})
+
 	it('keeps a number / bigint for integer and real, refusing incompatible values', () => {
 		expect(encodeValue(36, INTEGER)).toBe(36)
 		expect(encodeValue(10n, INTEGER)).toBe(10n)
