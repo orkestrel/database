@@ -30,6 +30,7 @@ import {
 	isDatabaseError,
 	planMigration,
 	StorageJournal,
+	tallyCalls,
 } from '@src/core'
 import {
 	compileQuerySQL,
@@ -58,13 +59,15 @@ import {
 } from '@orkestrel/test'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+	createDoorTable,
+	ILL_FORMED_RESULT,
+	readIllFormedText,
 	buildCondition,
 	DatabaseFixture,
 	createRecordedUsers,
 	createUnclonableMetadata,
 	EMPTY_STORAGE_CASES,
 	EMPTY_TABLE_CASES,
-	tallyCalls,
 } from '../../../setup.js'
 import {
 	SQLITE_SCHEMA as SCHEMA,
@@ -95,6 +98,7 @@ import {
 	createPagingDatabase,
 	EXPLAIN_SCHEMA,
 	explainRead,
+	isMatrixAdmitted,
 	matrixReads,
 	pagingRows,
 	pinnedRead,
@@ -2875,7 +2879,17 @@ describe('SQLiteDriver — operator, storage, and flag matrix against the core e
 				const { sqlite, memory } = await createMatrixTables(storage, optional, nullable)
 				try {
 					const schema = matrixSchema(storage, optional, nullable)
-					for (const input of matrixReads(storage)) {
+					const reads = matrixReads(storage)
+					// The door refuses a nullish operand the column's flags do not admit, on both engines.
+					for (const input of reads.filter((read) => !isMatrixAdmitted(read, optional, nullable))) {
+						for (const database of [sqlite, memory]) {
+							await expect(database.table('cells').records(input)).rejects.toMatchObject({
+								code: 'VALIDATION',
+								context: { table: 'cells', column: 'value' },
+							})
+						}
+					}
+					for (const input of reads.filter((read) => isMatrixAdmitted(read, optional, nullable))) {
 						expect({ input, residual: planSQLiteQuery(input, schema).residual }).toEqual({
 							input,
 							residual: {},
@@ -3595,6 +3609,17 @@ describe('SQLiteDriver — the statement cache beside an open stream', () => {
 			expect((await held.next()).done).toBe(true)
 		} finally {
 			await held.return?.()
+		}
+	})
+})
+
+describe('SQLiteDriver — ill-formed text', () => {
+	it('refuses a lone surrogate before the driver, and round-trips one in a json cell', async () => {
+		const { recorder, table } = await createDoorTable(createSQLiteDriver({ path: ':memory:' }))
+		try {
+			expect(await readIllFormedText(table, recorder)).toMatchObject(ILL_FORMED_RESULT)
+		} finally {
+			await recorder.driver.close()
 		}
 	})
 })

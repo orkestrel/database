@@ -1,5 +1,5 @@
 import { captureFailure } from '@src/core'
-import { collect } from '@orkestrel/test'
+import { captureError, collect } from '@orkestrel/test'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Users } from '../../setup.js'
 import { DatabaseFixture, seeded, createNestedPeopleTable } from '../../setup.js'
@@ -65,11 +65,17 @@ describe('Query — ordering, paging, filter', () => {
 
 	it('rejects invalid page builders synchronously without mutating the query', async () => {
 		const limit = users.value.query().order({ column: 'age', direction: 'ascending' })
-		expect(() => limit.limit(-1)).toThrow('Query limit must be a nonnegative integer')
+		expect(captureError(() => limit.limit(-1))).toMatchObject({
+			code: 'VALIDATION',
+			context: { table: 'users', faults: [{ path: ['limit'] }] },
+		})
 		expect((await limit.collect()).map((user) => user.age)).toEqual([17, 23, 36, 41])
 
 		const offset = users.value.query().order({ column: 'age', direction: 'ascending' })
-		expect(() => offset.offset(Number.NaN)).toThrow('Query offset must be a nonnegative integer')
+		expect(captureError(() => offset.offset(Number.NaN))).toMatchObject({
+			code: 'VALIDATION',
+			context: { table: 'users', faults: [{ path: ['offset'] }] },
+		})
 		expect((await offset.collect()).map((user) => user.age)).toEqual([17, 23, 36, 41])
 	})
 
@@ -228,12 +234,26 @@ describe('Query — nested fields (FieldPath)', () => {
 
 	it('treats a single string as one column, never a dotted path', async () => {
 		const people = await createNestedPeopleTable()
-		// 'profile.age' is a literal column name (absent here) — not split on '.'.
-		expect(
-			await people
+		// 'profile.age' is one undeclared column name, never split into the declared json column
+		// 'profile', so the door refuses it.
+		await expect(
+			people
 				.query()
 				.condition({ column: 'profile.age', operator: 'present', values: [], connector: 'and' })
 				.count(),
-		).toBe(0)
+		).rejects.toMatchObject({
+			code: 'VALIDATION',
+			context: {
+				table: 'people',
+				faults: [
+					{
+						reason: 'type',
+						path: ['conditions', '0', 'column'],
+						expected: 'literal',
+						received: '"profile.age"',
+					},
+				],
+			},
+		})
 	})
 })

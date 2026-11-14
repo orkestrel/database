@@ -6,6 +6,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { captureError, requireValue } from '@orkestrel/test'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import {
+	isMatrixAdmitted,
+	matrixCondition,
 	WORKSPACE_ROOT,
 	GUIDE,
 	FIRST_FENCE,
@@ -986,5 +988,32 @@ describe('corruptIndexPage', () => {
 		} finally {
 			storage.cleanup()
 		}
+	})
+})
+
+describe('isMatrixAdmitted', () => {
+	it('admits a null operand on a nullable column and an undefined operand on an optional one', () => {
+		const reads = [
+			matrixCondition('equals', [1]),
+			matrixCondition('equals', [null]),
+			matrixCondition('any', [undefined, 1]),
+			{ order: [{ column: 'value', direction: 'ascending' as const }] },
+		]
+		const flags = [
+			[false, false],
+			[true, false],
+			[false, true],
+			[true, true],
+		] as const
+		expect(
+			flags.map(([optional, nullable]) =>
+				reads.map((read) => isMatrixAdmitted(read, optional, nullable)),
+			),
+		).toEqual([
+			[true, false, false, true],
+			[true, false, true, true],
+			[true, true, false, true],
+			[true, true, true, true],
+		])
 	})
 })

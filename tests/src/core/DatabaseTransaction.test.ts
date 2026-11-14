@@ -1,7 +1,7 @@
 import { captureError } from '@orkestrel/test'
 import { optionalShape, stringShape } from '@orkestrel/contract'
 import type { TableMap } from '@src/core'
-import { createMemoryDriver, isDatabaseError } from '@src/core'
+import { collectColumns, createMemoryDriver, isDatabaseError, requireColumns } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { DatabaseTransaction } from '../../../src/core/DatabaseTransaction.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
@@ -51,6 +51,7 @@ describe('table()', () => {
 		const open: DatabaseTransaction = new DatabaseTransaction(
 			driver,
 			createContractSource<TableMap>(COLUMNS),
+			(name) => collectColumns(requireColumns(COLUMNS, name)),
 			{},
 			undefined,
 			undefined,
@@ -67,6 +68,7 @@ describe('table()', () => {
 		const view = new DatabaseTransaction<typeof columns>(
 			driver,
 			createContractSource(columns),
+			(name) => collectColumns(requireColumns(columns, name)),
 			{ posts: 'slug' },
 			undefined,
 			undefined,
@@ -96,6 +98,7 @@ describe('the scoped table it builds', () => {
 		const view = new DatabaseTransaction<typeof columns>(
 			driver,
 			createContractSource(columns),
+			(name) => collectColumns(requireColumns(columns, name)),
 			{},
 			() => {
 				minted.next()

@@ -9,7 +9,7 @@ import {
 } from '../../setupBrowser.js'
 import type { DatabaseInterface } from '@src/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DatabaseFixture, collectRankStreamIds } from '../../setup.js'
+import { DatabaseFixture, REFUSED_PARITY_READS, collectRankStreamIds } from '../../setup.js'
 import { deleteDatabase, mintDatabase } from '../../setupBrowser.js'
 
 // Cross-backend PARITY suite — the enduring regression net proving the
@@ -50,6 +50,29 @@ describe('cross-backend parity — MemoryDriver vs IndexedDBDriver', () => {
 			expect(testCase.ordered === true ? actual : sortById(actual)).toEqual(
 				testCase.ordered === true ? expected : sortById(expected),
 			)
+		})
+	}
+
+	// The door refuses a wrong-class read before either engine answers it, with one refusal on both.
+	for (const testCase of REFUSED_PARITY_READS) {
+		it(`refuses on both engines — ${testCase.name}`, async () => {
+			const refusal = {
+				code: 'VALIDATION',
+				context: {
+					table: 'users',
+					column: testCase.column,
+					operator: testCase.operator,
+					faults: [testCase.fault],
+				},
+			}
+			for (const users of [memory.value.table('users'), indexedDB.value.table('users')]) {
+				await expect(users.records({ conditions: [testCase.condition] })).rejects.toMatchObject(
+					refusal,
+				)
+				await expect(users.query().condition(testCase.condition).count()).rejects.toMatchObject(
+					refusal,
+				)
+			}
 		})
 	}
 

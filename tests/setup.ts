@@ -8,6 +8,7 @@ import { DatabaseTransaction } from '../src/core/DatabaseTransaction.js'
 import { TransactionScope } from '../src/core/TransactionScope.js'
 import type {
 	StorageInterface,
+	StorageMember,
 	AdmissionInterface,
 	AggregateOperation,
 	ColumnSchema,
@@ -21,6 +22,7 @@ import type {
 	OperationOptions,
 	ReadInput,
 	ReadPlan,
+	QueryInterface,
 	DatabaseInterface,
 	DriverInterface,
 	DriverMetadata,
@@ -35,13 +37,20 @@ import type {
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { ContractInterface, FieldPath } from '@orkestrel/contract'
 import {
+	booleanShape,
 	createContract,
 	integerShape,
 	isArray,
+	isFunction,
+	isRecord,
+	jsonShape,
 	literalShape,
+	nullableShape,
 	objectShape,
+	optionalShape,
 	stringShape,
 } from '@orkestrel/contract'
+import { collect } from '@orkestrel/test'
 import {
 	applyQuery,
 	normalizeReadInput,
@@ -52,11 +61,13 @@ import {
 	extractKey,
 	applyKeys,
 	createMemoryDriver,
+	isDatabaseError,
 	buildBatch,
 	MemoryDriver,
 	requireColumns,
+	collectColumns,
 	StorageJournal,
-	StreamPage,
+	StorageRecorder,
 } from '@src/core'
 
 // ── Database test fixtures ────────────────────────────────────────────────────
@@ -674,322 +685,6 @@ export class RecordingDriverFixture {
 	}
 }
 
-/** Names a {@link StorageInterface} member a {@link StorageRecorder} observes. */
-export type StorageMember =
-	| 'read'
-	| 'write'
-	| 'insert'
-	| 'delete'
-	| 'keys'
-	| 'scan'
-	| 'clear'
-	| 'plan'
-	| 'records'
-	| 'stream'
-	| 'aggregate'
-
-/** Shapes one driver call a {@link StorageRecorder} observed: the member, the keys it addressed, and the rows it returned. */
-export interface StorageCall {
-	readonly member: StorageMember
-	readonly keys: number
-	readonly rows: number
-	readonly scoped: boolean
-}
-
-/** Shapes the calls, addressed keys, and returned rows of one member across a slice of a recorder's log. */
-export interface StorageTally {
-	readonly calls: number
-	readonly keys: number
-	readonly rows: number
-}
-
-/**
- * Totals the calls, addressed keys, and returned rows of one member across recorded calls.
- *
- * @param calls - The recorded calls to read
- * @param member - The member to total
- * @returns The member's call count, key total, and row total
- */
-export function tallyCalls(calls: readonly StorageCall[], member: StorageMember): StorageTally {
-	const matched = calls.filter((call) => call.member === member)
-	return {
-		calls: matched.length,
-		keys: matched.reduce((total, call) => total + call.keys, 0),
-		rows: matched.reduce((total, call) => total + call.rows, 0),
-	}
-}
-
-/**
- * Wraps a real storage's required members and appends one {@link StorageCall} per call to a
- * recorder's log, keeping the keyed members' single and list overloads.
- */
-export class RecordedStorage implements StorageInterface {
-	readonly #storage: StorageInterface
-	readonly #scoped: boolean
-	readonly #calls: StorageCall[]
-
-	constructor(storage: StorageInterface, scoped: boolean, calls: StorageCall[]) {
-		this.#storage = storage
-		this.#scoped = scoped
-		this.#calls = calls
-	}
-
-	read(table: string, key: Key): Promise<Row | undefined>
-	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
-	async read(
-		table: string,
-		keys: Key | readonly Key[],
-	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
-		if (!isArray(keys)) {
-			const row = await this.#storage.read(table, keys)
-			this.#record('read', 1, row === undefined ? 0 : 1)
-			return row
-		}
-		const rows = await this.#storage.read(table, keys)
-		this.#record('read', keys.length, rows.filter((row) => row !== undefined).length)
-		return rows
-	}
-
-	write(
-		table: string,
-		keys: readonly Key[],
-		rows: readonly Row[],
-		options?: OperationOptions,
-	): Promise<void>
-	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
-	async write(
-		table: string,
-		keys: Key | readonly Key[],
-		rows: Row | readonly Row[],
-		options?: OperationOptions,
-	): Promise<void> {
-		const entries = buildBatch(keys, rows)
-		await this.#storage.write(
-			table,
-			entries.map(([key]) => key),
-			entries.map(([, row]) => row),
-			options,
-		)
-		this.#record('write', entries.length, 0)
-	}
-
-	insert(
-		table: string,
-		keys: readonly Key[],
-		rows: readonly Row[],
-		options?: OperationOptions,
-	): Promise<void>
-	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
-	async insert(
-		table: string,
-		keys: Key | readonly Key[],
-		rows: Row | readonly Row[],
-		options?: OperationOptions,
-	): Promise<void> {
-		const entries = buildBatch(keys, rows)
-		await this.#storage.insert(
-			table,
-			entries.map(([key]) => key),
-			entries.map(([, row]) => row),
-			options,
-		)
-		this.#record('insert', entries.length, 0)
-	}
-
-	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
-	delete(
-		table: string,
-		keys: readonly Key[],
-		options?: OperationOptions,
-	): Promise<readonly boolean[]>
-	async delete(
-		table: string,
-		keys: Key | readonly Key[],
-		options?: OperationOptions,
-	): Promise<boolean | readonly boolean[]> {
-		return applyKeys(keys, async (listed) => {
-			const removed = await this.#storage.delete(table, listed, options)
-			this.#record('delete', listed.length, 0)
-			return removed
-		})
-	}
-
-	async keys(table: string): Promise<readonly Key[]> {
-		const keys = await this.#storage.keys(table)
-		this.#record('keys', 0, 0)
-		return keys
-	}
-
-	scan(table: string): AsyncIterable<Row> {
-		return iterateRecorded(this.#storage.scan(table), (rows) => this.#record('scan', 0, rows))
-	}
-
-	async clear(table: string): Promise<void> {
-		await this.#storage.clear(table)
-		this.#record('clear', 0, 0)
-	}
-
-	#record(member: StorageMember, keys: number, rows: number): void {
-		this.#calls.push({ member, keys, rows, scoped: this.#scoped })
-	}
-}
-
-/**
- * Yields a source's rows and reports how many it yielded when the consumer stops or the
- * source ends.
- *
- * @param source - The rows to pass through
- * @param report - Receives the count of rows yielded
- * @yields Each row of the source
- */
-export async function* iterateRecorded(
-	source: AsyncIterable<Row>,
-	report: (rows: number) => void,
-): AsyncIterable<Row> {
-	const counter = new StreamPage(0)
-	try {
-		for await (const row of source) {
-			counter.next()
-			yield row
-		}
-	} finally {
-		report(counter.count)
-	}
-}
-
-/**
- * Wraps a real driver and records the keys each storage member addresses and the rows it
- * returns, inside a transaction scope too — the rows-read instrument of the native-first
- * acceptance readings.
- */
-export class StorageRecorder {
-	readonly #source: DriverInterface
-	readonly #driver: DriverInterface
-	readonly #calls: StorageCall[] = []
-
-	constructor(source: DriverInterface) {
-		this.#source = source
-		this.#driver = this.#root(source)
-	}
-
-	get driver(): DriverInterface {
-		return this.#driver
-	}
-
-	get source(): DriverInterface {
-		return this.#source
-	}
-
-	get calls(): readonly StorageCall[] {
-		return this.#calls
-	}
-
-	/**
-	 * Runs one operation and returns its value with the driver calls it made.
-	 *
-	 * @param operation - The operation to observe
-	 * @returns The operation's value and the calls recorded while it ran
-	 */
-	async measure<R>(
-		operation: () => Promise<R>,
-	): Promise<{ readonly value: R; readonly calls: readonly StorageCall[] }> {
-		const mark = this.#calls.length
-		const value = await operation()
-		return { value, calls: this.#calls.slice(mark) }
-	}
-
-	#root(source: DriverInterface): DriverInterface {
-		const base: DriverInterface = {
-			...this.#wrap(source, false),
-			open: source.open.bind(source),
-			close: source.close.bind(source),
-		}
-		if (source.transaction === undefined) return base
-		return {
-			...base,
-			transaction: <R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R> =>
-				this.#transaction(source, scope),
-		}
-	}
-
-	#wrap(storage: StorageInterface, scoped: boolean): StorageInterface {
-		const recorded = new RecordedStorage(storage, scoped, this.#calls)
-		return {
-			read: recorded.read.bind(recorded),
-			write: recorded.write.bind(recorded),
-			insert: recorded.insert.bind(recorded),
-			delete: recorded.delete.bind(recorded),
-			keys: recorded.keys.bind(recorded),
-			scan: recorded.scan.bind(recorded),
-			clear: recorded.clear.bind(recorded),
-			...(storage.migrate === undefined ? {} : { migrate: storage.migrate.bind(storage) }),
-			...(storage.metadata === undefined ? {} : { metadata: storage.metadata.bind(storage) }),
-			...(storage.stamp === undefined ? {} : { stamp: storage.stamp.bind(storage) }),
-			...(storage.plan === undefined ? {} : { plan: this.#plan.bind(this, storage, scoped) }),
-			...(storage.records === undefined
-				? {}
-				: { records: this.#records.bind(this, storage, scoped) }),
-			...(storage.stream === undefined ? {} : { stream: this.#stream.bind(this, storage, scoped) }),
-			...(storage.aggregate === undefined
-				? {}
-				: { aggregate: this.#aggregate.bind(this, storage, scoped) }),
-		}
-	}
-
-	#transaction<R>(
-		source: DriverInterface,
-		scope: (storage: StorageInterface) => Promise<R>,
-	): Promise<R> {
-		if (source.transaction === undefined) throw new Error('The source declares no transaction')
-		return source.transaction((storage) => scope(this.#wrap(storage, true)))
-	}
-
-	#plan(storage: StorageInterface, scoped: boolean, table: string, input: ReadInput): ReadPlan {
-		if (storage.plan === undefined) throw new Error('The storage declares no plan')
-		const split = storage.plan(table, input)
-		this.#calls.push({ member: 'plan', keys: 0, rows: 0, scoped })
-		return split
-	}
-
-	async #records(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		input: QueryInput,
-	): Promise<readonly Row[]> {
-		if (storage.records === undefined) throw new Error('The storage declares no records')
-		const rows = await storage.records(table, input)
-		this.#calls.push({ member: 'records', keys: 0, rows: rows.length, scoped })
-		return rows
-	}
-
-	#stream(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		input: QueryInput,
-	): AsyncIterable<Row> {
-		if (storage.stream === undefined) throw new Error('The storage declares no stream')
-		return iterateRecorded(storage.stream(table, input), (rows) => {
-			this.#calls.push({ member: 'stream', keys: 0, rows, scoped })
-		})
-	}
-
-	async #aggregate(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		operation: AggregateOperation,
-		column: FieldPath,
-		input: QueryInput,
-	): Promise<number | undefined> {
-		if (storage.aggregate === undefined) throw new Error('The storage declares no aggregate')
-		const value = await storage.aggregate(table, operation, column, input)
-		this.#calls.push({ member: 'aggregate', keys: 0, rows: 0, scoped })
-		return value
-	}
-}
-
 /**
  * Names how {@link createPlannedDriver} splits and answers a read: `native` keeps every read
  * native and answers it exactly; `dropped` loses the first condition from both sides;
@@ -1221,6 +916,7 @@ export async function transactionView(): Promise<{
 		view: new DatabaseTransaction<typeof COLUMNS>(
 			driver,
 			createContractSource(COLUMNS),
+			(name) => collectColumns(requireColumns(COLUMNS, name)),
 			{},
 			undefined,
 			undefined,
@@ -1683,4 +1379,912 @@ export async function seedConformanceRows(driver: DriverInterface): Promise<void
 		const key = extractKey(row, 'id')
 		if (key !== undefined) await driver.write('users', key, row)
 	}
+}
+
+// ── Query door fixtures ───────────────────────────────────────────────────────
+
+/**
+ * Holds the door table's columns: one per storage class, an optional and a nullable `text`
+ * column, a `json` column, and a literal whose members span two classes, which is `json`.
+ */
+export const DOOR_COLUMNS = {
+	id: stringShape(),
+	n: integerShape(),
+	label: stringShape(),
+	flag: booleanShape(),
+	note: optionalShape(stringShape()),
+	tag: nullableShape(stringShape()),
+	meta: jsonShape(),
+	mode: literalShape(['a', 1]),
+}
+
+/** Represents one row of the door table. */
+export type DoorRow = RowOf<typeof DOOR_COLUMNS>
+
+/** Holds the door table's rows: `a` lacks `note` and holds a `null` tag. */
+export const DOOR_ROWS: readonly DoorRow[] = Object.freeze([
+	{ id: 'a', n: 5, label: '5', flag: true, tag: null, meta: { x: 1 }, mode: 'a' },
+	{ id: 'b', n: 7, label: '07', flag: false, note: 'n', tag: 't', meta: { x: 2 }, mode: 1 },
+])
+
+/**
+ * Creates the door table over a {@link StorageRecorder} on a real driver, seeded with
+ * {@link DOOR_ROWS}, so a test reads the driver calls a refused read makes.
+ *
+ * @param driver - The driver to record. Default: a fresh Memory driver
+ * @returns The recorder and the seeded table
+ */
+export async function createDoorTable(driver: DriverInterface = createMemoryDriver()): Promise<{
+	readonly recorder: StorageRecorder
+	readonly table: TableInterface<DoorRow>
+}> {
+	const recorder = new StorageRecorder(driver)
+	const table = createDatabase({ driver: recorder.driver, tables: { items: DOOR_COLUMNS } }).table(
+		'items',
+	)
+	await table.set(DOOR_ROWS)
+	return { recorder, table }
+}
+
+/**
+ * Shapes one read the door refuses: the read, the first fault its refusal carries, its second
+ * fault when it carries two, and the column and operator the refusal names when it names them.
+ */
+export interface RefusedRead {
+	readonly name: string
+	readonly input: unknown
+	readonly fault: Readonly<Record<string, unknown>>
+	readonly second?: Readonly<Record<string, unknown>>
+	readonly column?: string
+	readonly operator?: string
+}
+
+/**
+ * Lists the reads the door refuses: each case of the 0.0.24 door and affinity readings, and one
+ * case per refusal class of the table's columns.
+ */
+export const REFUSED_READS: readonly RefusedRead[] = Object.freeze([
+	{
+		name: 'a misspelled column under absent',
+		input: { conditions: [{ column: 'tga', operator: 'absent', values: [], connector: 'and' }] },
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'column'],
+			expected: 'literal',
+			received: '"tga"',
+		},
+		operator: 'absent',
+	},
+	{
+		name: 'a misspelled column under equals',
+		input: { conditions: [{ column: 'tga', operator: 'equals', values: ['x'], connector: 'and' }] },
+		fault: { reason: 'type', path: ['conditions', '0', 'column'], expected: 'literal' },
+		operator: 'equals',
+	},
+	{
+		name: 'an unknown operator',
+		input: {
+			conditions: [{ column: 'label', operator: 'similar', values: ['x'], connector: 'and' }],
+		},
+		fault: { reason: 'variant', path: ['conditions', '0'], key: 'operator' },
+	},
+	{
+		name: 'between with one operand',
+		input: {
+			conditions: [{ column: 'label', operator: 'between', values: ['a'], connector: 'and' }],
+		},
+		fault: {
+			reason: 'constraint',
+			path: ['conditions', '0', 'values'],
+			constraint: 'min',
+			limit: 2,
+		},
+	},
+	{
+		name: 'a string operand on an integer column',
+		input: { conditions: [{ column: 'n', operator: 'equals', values: ['5'], connector: 'and' }] },
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'number',
+			received: '"5"',
+		},
+		column: 'n',
+		operator: 'equals',
+	},
+	{
+		name: 'a string bound on an integer column',
+		input: { conditions: [{ column: 'n', operator: 'above', values: ['6'], connector: 'and' }] },
+		fault: { reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'number' },
+		column: 'n',
+		operator: 'above',
+	},
+	{
+		name: 'a number operand on a text column',
+		input: { conditions: [{ column: 'label', operator: 'equals', values: [5], connector: 'and' }] },
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'string',
+			received: '5',
+		},
+		column: 'label',
+		operator: 'equals',
+	},
+	{
+		name: 'a list operand in an any list on an integer column',
+		input: { conditions: [{ column: 'n', operator: 'any', values: [['5']], connector: 'and' }] },
+		fault: { reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'number' },
+		column: 'n',
+		operator: 'any',
+	},
+	{
+		name: 'a boolean operand on an integer column',
+		input: { conditions: [{ column: 'n', operator: 'equals', values: [true], connector: 'and' }] },
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'number',
+			received: 'true',
+		},
+		column: 'n',
+		operator: 'equals',
+	},
+	{
+		name: 'null on a column that is not nullable',
+		input: {
+			conditions: [{ column: 'label', operator: 'equals', values: [null], connector: 'and' }],
+		},
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'string',
+			received: 'null',
+		},
+		column: 'label',
+		operator: 'equals',
+	},
+	{
+		name: 'null under a range operator on a nullable column',
+		input: { conditions: [{ column: 'tag', operator: 'above', values: [null], connector: 'and' }] },
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'string',
+			received: 'null',
+		},
+		column: 'tag',
+		operator: 'above',
+	},
+	{
+		name: 'undefined on a column that is not optional',
+		input: {
+			conditions: [{ column: 'label', operator: 'not', values: [undefined], connector: 'and' }],
+		},
+		fault: { reason: 'type', path: ['conditions', '0', 'values', '0'], received: 'undefined' },
+		column: 'label',
+		operator: 'not',
+	},
+	{
+		name: 'undefined under a range operator on an optional column',
+		input: {
+			conditions: [{ column: 'note', operator: 'from', values: [undefined], connector: 'and' }],
+		},
+		fault: {
+			reason: 'type',
+			path: ['conditions', '0', 'values', '0'],
+			expected: 'json',
+			received: 'undefined',
+		},
+	},
+	{
+		name: 'a pattern operator on an integer column',
+		input: { conditions: [{ column: 'n', operator: 'like', values: ['5%'], connector: 'and' }] },
+		fault: {
+			reason: 'constraint',
+			path: ['conditions', '0', 'operator'],
+			constraint: 'pattern',
+			limit: 'a text or json column',
+			received: '"like"',
+		},
+		column: 'n',
+		operator: 'like',
+	},
+	{
+		name: 'a nested path under a text column',
+		input: {
+			conditions: [{ column: ['label', 'x'], operator: 'equals', values: [1], connector: 'and' }],
+		},
+		fault: { reason: 'type', path: ['conditions', '0', 'column'], expected: 'string' },
+		column: 'label',
+		operator: 'equals',
+	},
+	{
+		name: 'a one-key path holding the wrong class',
+		input: { conditions: [{ column: ['n'], operator: 'equals', values: ['5'], connector: 'and' }] },
+		fault: { reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'number' },
+		column: 'n',
+		operator: 'equals',
+	},
+	{
+		name: 'an ill-formed text operand',
+		input: {
+			conditions: [{ column: 'label', operator: 'starts', values: ['a\uD800'], connector: 'and' }],
+		},
+		fault: {
+			reason: 'constraint',
+			path: ['conditions', '0', 'values', '0'],
+			constraint: 'pattern',
+		},
+		column: 'label',
+		operator: 'starts',
+	},
+	{
+		name: 'an undeclared order column',
+		input: { order: [{ column: 'nn', direction: 'ascending' }] },
+		fault: {
+			reason: 'type',
+			path: ['order', '0', 'column'],
+			expected: 'literal',
+			received: '"nn"',
+		},
+	},
+	{
+		name: 'an ill-formed text operand under a json path',
+		input: {
+			conditions: [
+				{ column: ['meta', 'x'], operator: 'equals', values: ['\uD800'], connector: 'and' },
+			],
+		},
+		fault: {
+			reason: 'constraint',
+			path: ['conditions', '0', 'values', '0'],
+			constraint: 'pattern',
+		},
+		column: 'meta',
+		operator: 'equals',
+	},
+	{
+		name: 'a non-string pattern operand',
+		input: { conditions: [{ column: 'label', operator: 'like', values: [5], connector: 'and' }] },
+		fault: { path: ['conditions', '0', 'values', '0'] },
+	},
+	{
+		name: 'an empty column path',
+		input: { conditions: [{ column: [], operator: 'present', values: [], connector: 'and' }] },
+		fault: { path: ['conditions', '0', 'column'] },
+	},
+	{
+		name: 'an unknown connector',
+		input: { conditions: [{ column: 'n', operator: 'present', values: [], connector: 'xor' }] },
+		fault: { path: ['conditions', '0', 'connector'] },
+	},
+	{
+		name: 'an unknown direction',
+		input: { order: [{ column: 'n', direction: 'up' }] },
+		fault: { path: ['order', '0', 'direction'] },
+	},
+	{
+		name: 'a negative limit',
+		input: { limit: -1 },
+		fault: { reason: 'constraint', path: ['limit'], constraint: 'min' },
+	},
+	{
+		name: 'a fractional offset',
+		input: { offset: 1.5 },
+		fault: { path: ['offset'] },
+	},
+	{
+		name: 'a null read',
+		input: null,
+		fault: { reason: 'type', expected: 'object', received: 'null' },
+	},
+	{
+		name: 'an unknown operator beside a wrong-class operand, each fault once',
+		input: {
+			conditions: [
+				{ column: 'n', operator: 'similar', values: ['x'], connector: 'and' },
+				{ column: 'n', operator: 'equals', values: ['5'], connector: 'and' },
+			],
+		},
+		fault: { reason: 'variant', path: ['conditions', '0'], key: 'operator' },
+		second: {
+			reason: 'type',
+			path: ['conditions', '1', 'values', '0'],
+			expected: 'number',
+			received: '"5"',
+		},
+		column: 'n',
+	},
+	{
+		name: 'a misspelled read key',
+		input: { condtions: [] },
+		fault: { reason: 'extra', path: ['condtions'] },
+	},
+])
+
+/**
+ * Shapes one read the door admits, with the ids of the door rows it reads.
+ */
+export interface AdmittedRead {
+	readonly name: string
+	readonly input: QueryInput
+	readonly ids: readonly string[]
+}
+
+/** Lists the reads the door admits at the edges of each refusal class. */
+export const ADMITTED_READS: readonly AdmittedRead[] = Object.freeze([
+	{
+		name: 'undefined on an optional column',
+		input: {
+			conditions: [{ column: 'note', operator: 'equals', values: [undefined], connector: 'and' }],
+		},
+		ids: ['a'],
+	},
+	{
+		name: 'null on a nullable column',
+		input: {
+			conditions: [{ column: 'tag', operator: 'equals', values: [null], connector: 'and' }],
+		},
+		ids: ['a'],
+	},
+	{
+		name: 'null and a string in an any list on a nullable column',
+		input: {
+			conditions: [{ column: 'tag', operator: 'any', values: [null, 't'], connector: 'and' }],
+		},
+		ids: ['a', 'b'],
+	},
+	{
+		name: 'a nested path under a json column',
+		input: {
+			conditions: [{ column: ['meta', 'x'], operator: 'equals', values: [2], connector: 'and' }],
+		},
+		ids: ['b'],
+	},
+	{
+		name: 'any operand on a json column',
+		input: {
+			conditions: [{ column: 'meta', operator: 'equals', values: [{ x: 1 }], connector: 'and' }],
+		},
+		ids: ['a'],
+	},
+	{
+		name: 'a number on a literal spanning two classes',
+		input: { conditions: [{ column: 'mode', operator: 'equals', values: [1], connector: 'and' }] },
+		ids: ['b'],
+	},
+	{
+		name: 'a pattern on a text column',
+		input: {
+			conditions: [{ column: 'label', operator: 'like', values: ['0%'], connector: 'and' }],
+		},
+		ids: ['b'],
+	},
+	{
+		name: 'a one-key path holding its class',
+		input: {
+			conditions: [{ column: ['n'], operator: 'between', values: [1, 6], connector: 'and' }],
+		},
+		ids: ['a'],
+	},
+	{
+		name: 'a boolean on a boolean column, ordered and paged',
+		input: {
+			conditions: [{ column: 'flag', operator: 'equals', values: [false], connector: 'or' }],
+			order: [{ column: 'n', direction: 'descending' }],
+			limit: 1,
+		},
+		ids: ['b'],
+	},
+])
+
+/** Shapes one public read a door case runs through: records, count, aggregate, scan, or a query. */
+export interface DoorPath {
+	readonly name: string
+	readonly run: (table: TableInterface<DoorRow>, input: unknown) => Promise<unknown>
+}
+
+/**
+ * Lists every public read of a table and a query, each passing its input untyped, as a client
+ * that authors a read does.
+ */
+export const DOOR_PATHS: readonly DoorPath[] = Object.freeze([
+	{ name: 'records', run: (table, input) => Reflect.apply(table.records, table, [input]) },
+	{ name: 'count', run: (table, input) => Reflect.apply(table.count, table, [input]) },
+	{
+		name: 'aggregate',
+		run: (table, input) => Reflect.apply(table.aggregate, table, ['sum', 'n', input]),
+	},
+	{ name: 'scan', run: (table, input) => collect(Reflect.apply(table.scan, table, [input])) },
+	{ name: 'query collect', run: (table, input) => buildDoorQuery(table, input).collect() },
+	{ name: 'query count', run: (table, input) => buildDoorQuery(table, input).count() },
+	{ name: 'query stream', run: (table, input) => collect(buildDoorQuery(table, input).stream()) },
+	{
+		name: 'query aggregate',
+		run: (table, input) => buildDoorQuery(table, input).aggregate('maximum', 'n'),
+	},
+	{
+		name: 'query aggregate after a filter',
+		run: (table, input) =>
+			buildDoorQuery(table, input)
+				.filter(() => true)
+				.aggregate('maximum', 'n'),
+	},
+])
+
+/**
+ * Builds a query over the door table from an untyped read: each listed condition and ordering
+ * term passes through the builder as authored. A read with no list builds an empty query, so a
+ * case whose fault sits outside the lists reaches the door through the table's reads alone.
+ *
+ * @param table - The door table
+ * @param input - The authored read
+ * @returns The query
+ */
+export function buildDoorQuery(
+	table: TableInterface<DoorRow>,
+	input: unknown,
+): QueryInterface<DoorRow> {
+	const query = table.query()
+	const conditions: unknown = isRecord(input) ? input.conditions : undefined
+	const order: unknown = isRecord(input) ? input.order : undefined
+	for (const condition of isArray(conditions) ? conditions : []) {
+		Reflect.apply(query.condition, query, [condition])
+	}
+	for (const term of isArray(order) ? order : []) Reflect.apply(query.order, query, [term])
+	return query
+}
+
+/** Shapes one operator's arity: the operand lists the query shape admits and refuses for it. */
+export interface OperatorArity {
+	readonly operator: string
+	readonly admitted: ReadonlyArray<readonly unknown[]>
+	readonly refused: ReadonlyArray<readonly unknown[]>
+}
+
+/** Lists every condition operator with operand lists on each side of its arity. */
+export const OPERATOR_ARITIES: readonly OperatorArity[] = Object.freeze([
+	{ operator: 'absent', admitted: [[]], refused: [[null]] },
+	{ operator: 'present', admitted: [[]], refused: [[1]] },
+	{ operator: 'equals', admitted: [[1], [null], [{ a: 1 }]], refused: [[], [1, 2]] },
+	{ operator: 'not', admitted: [['x']], refused: [[], ['x', 'y']] },
+	{ operator: 'above', admitted: [[1]], refused: [[], [1, 2]] },
+	{ operator: 'below', admitted: [[1]], refused: [[]] },
+	{ operator: 'from', admitted: [[1]], refused: [[1, 2]] },
+	{ operator: 'to', admitted: [[1]], refused: [[]] },
+	{ operator: 'between', admitted: [[1, 2]], refused: [[1], [1, 2, 3], []] },
+	{ operator: 'like', admitted: [['a%']], refused: [[], [1], ['a', 'b']] },
+	{ operator: 'glob', admitted: [['a*']], refused: [[null]] },
+	{ operator: 'starts', admitted: [['a']], refused: [[true]] },
+	{ operator: 'ends', admitted: [['z']], refused: [[]] },
+	{ operator: 'any', admitted: [[], [1], [1, 'a', null]], refused: [] },
+	{ operator: 'none', admitted: [[], ['a', 'b']], refused: [] },
+])
+
+/** Shapes one keyed call that carries an ill-formed key. */
+export interface IllFormedKey {
+	readonly name: string
+	readonly run: (table: TableInterface<DoorRow>) => Promise<unknown>
+}
+
+/** Lists each keyed call of a table, every one carrying a key with a lone surrogate. */
+export const ILL_FORMED_KEYS: readonly IllFormedKey[] = Object.freeze([
+	{ name: 'get', run: (table) => table.get('a\uD800') },
+	{ name: 'get of a list', run: (table) => table.get(['a', '\uDBFFz']) },
+	{ name: 'resolve', run: (table) => table.resolve('\uD800') },
+	{ name: 'has', run: (table) => table.has(['\uD800']) },
+	{ name: 'update', run: (table) => table.update(['\uD800'], { n: 1 }) },
+	{ name: 'remove', run: (table) => table.remove('\uD800') },
+	{
+		name: 'a written key',
+		run: (table) =>
+			table.add({ id: '\uD800', n: 1, label: 'x', flag: true, tag: null, meta: {}, mode: 'a' }),
+	},
+])
+
+// ── Bench fixtures ────────────────────────────────────────────────────────────
+
+/** Holds the columns of the bench table: a client-shaped row of keys, text, numbers, and flags. */
+export const BENCH_COLUMNS = {
+	id: stringShape(),
+	organization: stringShape(),
+	rank: integerShape(),
+	body: stringShape(),
+	active: booleanShape(),
+	note: optionalShape(stringShape()),
+}
+
+/**
+ * Builds bench rows: unique keys, a low-cardinality organization, a skewed rank, text of varied
+ * width, alternating flags, and a note on every third row.
+ *
+ * @param count - The number of rows
+ * @returns The rows, keyed `k0` onward
+ */
+export function buildBenchRows(count: number): ReadonlyArray<RowOf<typeof BENCH_COLUMNS>> {
+	return Array.from({ length: count }, (_, index) => ({
+		id: `k${index}`,
+		organization: `o${index % 40}`,
+		rank: Math.floor(Math.sqrt(index * 97)),
+		body: 'x'.repeat(24 + (index % 176)),
+		active: index % 2 === 0,
+		...(index % 3 === 0 ? { note: 'n' } : {}),
+	}))
+}
+
+/** Holds a read of ten conditions over the bench table, one per kind of check the door makes. */
+export const TEN_CONDITIONS: QueryInput = Object.freeze<QueryInput>({
+	conditions: [
+		{ column: 'organization', operator: 'equals', values: ['o3'], connector: 'and' },
+		{ column: 'rank', operator: 'above', values: [10], connector: 'and' },
+		{ column: 'rank', operator: 'between', values: [1, 900], connector: 'and' },
+		{ column: 'body', operator: 'like', values: ['x%'], connector: 'and' },
+		{ column: 'active', operator: 'equals', values: [true], connector: 'and' },
+		{
+			column: 'id',
+			operator: 'any',
+			values: ['k3', 'k43', 'k83', 'k123', 'k163'],
+			connector: 'and',
+		},
+		{ column: 'organization', operator: 'starts', values: ['o'], connector: 'and' },
+		{ column: 'rank', operator: 'to', values: [100000], connector: 'and' },
+		{ column: 'note', operator: 'not', values: ['m'], connector: 'and' },
+		{ column: 'body', operator: 'present', values: [], connector: 'and' },
+	],
+})
+
+/** Represents the members of a published database build a bench drives. */
+export interface DatabaseModule {
+	readonly createDatabase: typeof createDatabase
+	readonly createMemoryDriver: typeof createMemoryDriver
+}
+
+/**
+ * Checks whether a loaded module carries the members a bench drives, as functions.
+ *
+ * @remarks
+ * A loaded module is foreign: the check reads that each member is a function and cannot read
+ * its signature, which the published build's declarations state.
+ *
+ * @param value - The loaded module
+ * @returns True if both members are functions; false otherwise
+ */
+export function isDatabaseModule(value: unknown): value is DatabaseModule {
+	return isRecord(value) && isFunction(value.createDatabase) && isFunction(value.createMemoryDriver)
+}
+
+/**
+ * Shapes one read of the parity suites' `users` table that the door refuses on every engine:
+ * its one condition, and the column, operator, and first fault its refusal names.
+ */
+export interface RefusedParityRead {
+	readonly name: string
+	readonly condition: Condition
+	readonly column: string
+	readonly operator: string
+	readonly fault: Readonly<Record<string, unknown>>
+}
+
+/**
+ * Lists the wrong-class reads of the parity suites, each of which the door refuses before any
+ * engine answers it: a pattern on an integer column, a mixed-class list, and an operand of
+ * another class.
+ */
+export const REFUSED_PARITY_READS: readonly RefusedParityRead[] = Object.freeze([
+	{
+		name: 'like against a non-string (age) column',
+		condition: { column: 'age', operator: 'like', values: ['%3%'], connector: 'and' },
+		column: 'age',
+		operator: 'like',
+		fault: {
+			path: ['conditions', '0', 'operator'],
+			constraint: 'pattern',
+			limit: 'a text or json column',
+			received: '"like"',
+		},
+	},
+	{
+		name: 'glob against a non-string (age) column',
+		condition: { column: 'age', operator: 'glob', values: ['*3*'], connector: 'and' },
+		column: 'age',
+		operator: 'glob',
+		fault: {
+			path: ['conditions', '0', 'operator'],
+			constraint: 'pattern',
+			limit: 'a text or json column',
+			received: '"glob"',
+		},
+	},
+	{
+		name: 'any with a mixed-type list',
+		condition: { column: 'age', operator: 'any', values: [36, 'nope', 0], connector: 'and' },
+		column: 'age',
+		operator: 'any',
+		fault: { path: ['conditions', '0', 'values', '1'], expected: 'number', received: '"nope"' },
+	},
+	{
+		name: 'none with a mixed-type list',
+		condition: { column: 'age', operator: 'none', values: [36, 'nope', 0], connector: 'and' },
+		column: 'age',
+		operator: 'none',
+		fault: { path: ['conditions', '0', 'values', '1'], expected: 'number', received: '"nope"' },
+	},
+	{
+		name: 'equals with a string operand on an integer column',
+		condition: { column: 'age', operator: 'equals', values: ['36'], connector: 'and' },
+		column: 'age',
+		operator: 'equals',
+		fault: { path: ['conditions', '0', 'values', '0'], expected: 'number', received: '"36"' },
+	},
+	{
+		name: 'above with a string operand on an integer column',
+		condition: { column: 'age', operator: 'above', values: ['18'], connector: 'and' },
+		column: 'age',
+		operator: 'above',
+		fault: { path: ['conditions', '0', 'values', '0'], expected: 'number', received: '"18"' },
+	},
+	{
+		name: 'equals with a number operand on a text column',
+		condition: { column: 'name', operator: 'equals', values: [36], connector: 'and' },
+		column: 'name',
+		operator: 'equals',
+		fault: { path: ['conditions', '0', 'values', '0'], expected: 'string', received: '36' },
+	},
+])
+
+/** Represents a `DatabaseError` rejection as its code and context. */
+export interface CapturedRefusal {
+	readonly code: string
+	readonly context: Readonly<Record<string, unknown>> | undefined
+}
+
+/** Represents what a table does with a lone surrogate on one driver: each refusal, and the json cell. */
+export interface IllFormedResult {
+	readonly text: CapturedRefusal | undefined
+	readonly key: CapturedRefusal | undefined
+	readonly operand: CapturedRefusal | undefined
+	readonly calls: number
+	readonly json: unknown
+}
+
+/**
+ * Holds the result every driver gives, for a partial match: three `VALIDATION` refusals naming
+ * the table and the column, no driver call, and the json cell intact.
+ */
+export const ILL_FORMED_RESULT: IllFormedResult = Object.freeze({
+	text: { code: 'VALIDATION', context: { table: 'items', column: 'label' } },
+	key: { code: 'VALIDATION', context: { table: 'items', column: 'id' } },
+	operand: {
+		code: 'VALIDATION',
+		context: {
+			table: 'items',
+			column: 'label',
+			operator: 'equals',
+			faults: [{ path: ['conditions', '0', 'values', '0'], constraint: 'pattern' }],
+		},
+	},
+	calls: 0,
+	json: { text: 'a\uD800b' },
+})
+
+/**
+ * Settles an operation and captures its `DatabaseError` rejection as the error's code and context.
+ *
+ * @param operation - The operation to settle
+ * @returns The code and context of the rejection, or `undefined` when the operation fulfills
+ * @throws The rejection itself when it is no `DatabaseError`
+ */
+export async function captureRefusal(
+	operation: Promise<unknown>,
+): Promise<CapturedRefusal | undefined> {
+	const error = await operation.then(
+		() => undefined,
+		(caught: unknown) => caught,
+	)
+	if (error === undefined) return undefined
+	if (!isDatabaseError(error)) throw error
+	return { code: error.code, context: error.context }
+}
+
+/**
+ * Reads what a seeded door table does with a lone surrogate in a written text value, a key, and
+ * a text operand, and whether a json cell holding one reads back unchanged.
+ *
+ * @param table - The door table, seeded with {@link DOOR_ROWS}
+ * @param recorder - The recorder over the table's driver
+ * @returns The result
+ */
+export async function readIllFormedText(
+	table: TableInterface<DoorRow>,
+	recorder: StorageRecorder,
+): Promise<IllFormedResult> {
+	const [row] = DOOR_ROWS
+	if (row === undefined) throw new Error('The door table has no rows')
+	const { value, calls } = await recorder.measure(async () => ({
+		text: await captureRefusal(table.set({ ...row, id: 'c', label: 'a\uD800b' })),
+		key: await captureRefusal(table.get('\uD800')),
+		operand: await captureRefusal(
+			table.records({
+				conditions: [{ column: 'label', operator: 'equals', values: ['\uDC00'], connector: 'and' }],
+			}),
+		),
+	}))
+	await table.set({ ...row, id: 'j', meta: { text: 'a\uD800b' } })
+	return { ...value, calls: calls.length, json: (await table.get('j'))?.meta }
+}
+
+/**
+ * Holds a driver's scan until a test releases it, and reports when the scan starts, so a test acts
+ * between a read's admission and its rows.
+ */
+export class ScanGate {
+	readonly #started = Promise.withResolvers<void>()
+	readonly #released = Promise.withResolvers<void>()
+
+	get started(): Promise<void> {
+		return this.#started.promise
+	}
+
+	/** Lets every held scan yield its rows. */
+	release(): void {
+		this.#released.resolve()
+	}
+
+	/**
+	 * Yields a scan's rows after the gate is released, reporting the start first.
+	 *
+	 * @param source - The rows to hold
+	 * @yields Each row of the source
+	 */
+	async *scan(source: AsyncIterable<Row>): AsyncIterable<Row> {
+		this.#started.resolve()
+		await this.#released.promise
+		yield* source
+	}
+}
+
+/**
+ * Forwards every required member to a Memory driver and logs the form each keyed call arrived in,
+ * `single` or `list`, so a test reads what a wrapping storage forwarded.
+ */
+export class FormStorage implements StorageInterface {
+	readonly #memory: DriverInterface
+	readonly #forms: string[] = []
+
+	constructor(memory: DriverInterface) {
+		this.#memory = memory
+	}
+
+	get forms(): readonly string[] {
+		return [...this.#forms]
+	}
+
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
+		this.#forms.push(`read ${isArray(keys) ? 'list' : 'single'}`)
+		return isArray(keys) ? this.#memory.read(table, keys) : this.#memory.read(table, keys)
+	}
+
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		this.#forms.push(`write ${isArray(keys) ? 'list' : 'single'}`)
+		const entries = buildBatch(keys, rows)
+		return this.#memory.write(
+			table,
+			entries.map(([key]) => key),
+			entries.map(([, row]) => row),
+			options,
+		)
+	}
+
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		this.#forms.push(`insert ${isArray(keys) ? 'list' : 'single'}`)
+		const entries = buildBatch(keys, rows)
+		return this.#memory.insert(
+			table,
+			entries.map(([key]) => key),
+			entries.map(([, row]) => row),
+			options,
+		)
+	}
+
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
+		this.#forms.push(`delete ${isArray(keys) ? 'list' : 'single'}`)
+		return isArray(keys)
+			? this.#memory.delete(table, keys, options)
+			: this.#memory.delete(table, keys, options)
+	}
+
+	keys(table: string): Promise<readonly Key[]> {
+		return this.#memory.keys(table)
+	}
+
+	scan(table: string): AsyncIterable<Row> {
+		return this.#memory.scan(table)
+	}
+
+	clear(table: string): Promise<void> {
+		return this.#memory.clear(table)
+	}
+}
+
+/** Shapes one aggregate the door refuses: its operation, its column, and the faults it carries. */
+export interface RefusedAggregate {
+	readonly operation: unknown
+	readonly column: unknown
+	readonly faults: ReadonlyArray<Readonly<Record<string, unknown>>>
+}
+
+/** Lists the aggregates the door refuses: an unknown operation, and a missing or malformed column. */
+export const REFUSED_AGGREGATES: readonly RefusedAggregate[] = Object.freeze([
+	{
+		operation: 'median',
+		column: 'n',
+		faults: [{ path: ['aggregate', 'operation'], expected: 'literal', received: '"median"' }],
+	},
+	{
+		operation: 'sum',
+		column: undefined,
+		faults: [{ path: ['aggregate', 'column'], expected: 'string', received: 'undefined' }],
+	},
+	{
+		operation: 'sum',
+		column: [],
+		faults: [{ path: ['aggregate', 'column'], expected: 'string', received: 'array' }],
+	},
+	{
+		operation: 'maximum',
+		column: 7,
+		faults: [{ path: ['aggregate', 'column'], expected: 'string', received: '7' }],
+	},
+])
+
+/**
+ * Yields rows and then throws, as a source that fails part way through a read does.
+ *
+ * @param rows - The rows to yield first
+ * @param message - The message of the error thrown after the last row
+ * @yields Each row
+ */
+export async function* streamThenFail(rows: readonly Row[], message: string): AsyncIterable<Row> {
+	yield* rows
+	throw new Error(message)
 }

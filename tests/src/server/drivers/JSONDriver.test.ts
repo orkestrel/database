@@ -13,6 +13,9 @@ import { dirname } from 'node:path'
 import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+	createDoorTable,
+	ILL_FORMED_RESULT,
+	readIllFormedText,
 	DatabaseFixture,
 	DatabaseSwitch,
 	DatabaseCounter,
@@ -1732,4 +1735,17 @@ describe('JSONDriver — empty lists', () => {
 			}
 		})
 	}
+})
+
+describe('JSONDriver — ill-formed text', () => {
+	it('refuses a lone surrogate before the driver, and round-trips one in a json cell', async () => {
+		const file = tempDatabasePath()
+		const { recorder, table } = await createDoorTable(createJSONDriver(file.path))
+		try {
+			expect(await readIllFormedText(table, recorder)).toMatchObject(ILL_FORMED_RESULT)
+		} finally {
+			await recorder.driver.close()
+			file.cleanup()
+		}
+	})
 })

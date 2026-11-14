@@ -1,4 +1,7 @@
+import type { Guard } from '@orkestrel/contract'
 import type {
+	Aggregate,
+	AggregateOperation,
 	Scalar,
 	ColumnSchema,
 	DriverMetadata,
@@ -16,8 +19,11 @@ import {
 	isArray,
 	isBoolean,
 	isFiniteNumber,
+	isRecord,
 	isString,
+	literalOf,
 } from '@orkestrel/contract'
+import { AGGREGATE_OPERATIONS } from './constants.js'
 
 /**
  * Checks whether a value is a scalar: not an object and not a function.
@@ -291,4 +297,37 @@ export function isMigrationInput(value: unknown): value is MigrationInput {
 			(input.metadata === undefined || isDriverMetadata(input.metadata))
 		)
 	})
+}
+
+/**
+ * Checks whether a value is one of `AGGREGATE_OPERATIONS`.
+ *
+ * @example
+ * ```ts
+ * isAggregateOperation('sum') // true
+ * isAggregateOperation('median') // false
+ * ```
+ */
+export const isAggregateOperation: Guard<AggregateOperation> = literalOf(AGGREGATE_OPERATIONS)
+
+/**
+ * Checks whether a value is an {@link Aggregate}: one of `AGGREGATE_OPERATIONS` over a column name
+ * or a non-empty list of keys.
+ *
+ * @param value - The value to test
+ * @returns True if `value` is an aggregate; false otherwise
+ *
+ * @example
+ * ```ts
+ * isAggregate({ operation: 'sum', column: ['meta', 'total'] }) // true
+ * isAggregate({ operation: 'sum', column: [] }) // false
+ * ```
+ */
+export function isAggregate(value: unknown): value is Aggregate {
+	return (
+		isRecord(value) &&
+		isAggregateOperation(value.operation) &&
+		(isString(value.column) ||
+			(isArray(value.column) && value.column.length > 0 && value.column.every(isString)))
+	)
 }

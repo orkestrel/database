@@ -59,10 +59,26 @@ import {
 	validatePage,
 	matchesWildcardPattern,
 	matchesWildcardSegment,
+	StorageRecorder,
+	collectColumns,
+	findIllFormedColumn,
+	extractColumnHead,
+	maskUndefinedOperands,
+	matchesIllFormedText,
+	restoreUndefinedOperands,
+	scanAggregateFaults,
+	streamRecordedRows,
+	StreamPage,
+	scanColumnFaults,
+	scanConditionFaults,
+	scanOperandFaults,
+	scanQueryFaults,
+	tallyCalls,
 } from '@src/core'
 import {
 	arrayShape,
 	booleanShape,
+	FAULT_LIMIT,
 	integerShape,
 	jsonShape,
 	literalShape,
@@ -89,8 +105,8 @@ import {
 	createCrashingDriver,
 	createPlannedDriver,
 	seedConformanceRows,
-	StorageRecorder,
-	tallyCalls,
+	streamThenFail,
+	tableSchemas,
 } from '../../setup.js'
 
 // `buildCondition` (tests/setup.ts) builds one condition with the seed connector
@@ -581,6 +597,12 @@ describe('shapeToColumnStorage', () => {
 	it('unwraps optional / nullable to the inner type', () => {
 		expect(shapeToColumnStorage(optionalShape(integerShape()))).toBe('integer')
 		expect(shapeToColumnStorage(nullableShape(stringShape()))).toBe('text')
+	})
+
+	it('stores a literal whose members span more than one class as json, as a union is', () => {
+		expect(shapeToColumnStorage(literalShape(['a', 1]))).toBe('json')
+		expect(shapeToColumnStorage(literalShape([true, 'yes']))).toBe('json')
+		expect(shapeToColumnStorage(literalShape([0, false]))).toBe('json')
 	})
 
 	it('takes a literal shape from its values', () => {
@@ -1685,5 +1707,392 @@ describe('applyKeys', () => {
 
 	it('answers false for a single key the operation reports no result for', async () => {
 		expect(await applyKeys('u1', async () => [])).toBe(false)
+	})
+})
+
+describe('collectColumns', () => {
+	it('collects each column schema by name in declaration order', () => {
+		const columns = collectColumns({
+			id: stringShape(),
+			age: optionalShape(integerShape()),
+			tag: nullableShape(stringShape()),
+		})
+		expect([...columns.keys()]).toEqual(['id', 'age', 'tag'])
+		expect(columns.get('age')).toEqual({
+			name: 'age',
+			storage: 'integer',
+			optional: true,
+			nullable: false,
+		})
+		expect(columns.get('tag')).toEqual({
+			name: 'tag',
+			storage: 'text',
+			optional: false,
+			nullable: true,
+		})
+	})
+
+	it('collects nothing from an empty column map', () => {
+		expect(collectColumns({}).size).toBe(0)
+	})
+})
+
+describe('maskUndefinedOperands', () => {
+	it('reads an undefined operand of the nullish operators as null on a copy', () => {
+		const condition = {
+			column: 'note',
+			operator: 'equals',
+			values: [undefined, 'n'],
+			connector: 'and',
+		}
+		const kept = { column: 'note', operator: 'from', values: [undefined], connector: 'and' }
+		const input = { conditions: [condition, kept], limit: 1 }
+		expect(maskUndefinedOperands(input)).toEqual({
+			conditions: [{ ...condition, values: [null, 'n'] }, kept],
+			limit: 1,
+		})
+		expect(condition.values).toEqual([undefined, 'n'])
+	})
+
+	it('returns the input itself when no nullish operand is undefined, and any non-read as it came', () => {
+		const input = {
+			conditions: [{ column: 'n', operator: 'any', values: [null, 1], connector: 'and' }],
+		}
+		expect(maskUndefinedOperands(input)).toBe(input)
+		const unlisted = { conditions: 'none' }
+		expect(maskUndefinedOperands(unlisted)).toBe(unlisted)
+		expect(maskUndefinedOperands(null)).toBeNull()
+		expect(maskUndefinedOperands({ conditions: [null, 3] })).toEqual({ conditions: [null, 3] })
+	})
+})
+
+describe('scanQueryFaults and its leaves', () => {
+	const columns = collectColumns({
+		id: stringShape(),
+		n: integerShape(),
+		flag: booleanShape(),
+		note: optionalShape(stringShape()),
+		tag: nullableShape(stringShape()),
+		meta: jsonShape(),
+	})
+
+	it('admits a read every column holds', () => {
+		expect(
+			scanQueryFaults(
+				{
+					conditions: [
+						{ column: 'n', operator: 'between', values: [1, 2], connector: 'and' },
+						{ column: 'note', operator: 'none', values: [undefined, 'x'], connector: 'or' },
+						{
+							column: ['meta', 'deep', 'leaf'],
+							operator: 'like',
+							values: ['a%'],
+							connector: 'and',
+						},
+						{ column: 'flag', operator: 'present', values: [], connector: 'and' },
+					],
+					order: [{ column: ['meta', 'x'], direction: 'ascending' }],
+					aggregate: { operation: 'sum', column: 'n' },
+				},
+				columns,
+			),
+		).toEqual([])
+		expect(scanQueryFaults({}, columns)).toEqual([])
+	})
+
+	it('reports each fault of conditions, order, and aggregate in that order', () => {
+		expect(
+			scanQueryFaults(
+				{
+					conditions: [{ column: 'flag', operator: 'equals', values: [1], connector: 'and' }],
+					order: [{ column: ['id', 'x'], direction: 'ascending' }],
+					aggregate: { operation: 'sum', column: ['missing'] },
+				},
+				columns,
+			),
+		).toEqual([
+			{
+				reason: 'type',
+				path: ['conditions', '0', 'values', '0'],
+				expected: 'boolean',
+				received: '1',
+			},
+			{ reason: 'type', path: ['order', '0', 'column'], expected: 'string', received: 'array' },
+			{
+				reason: 'type',
+				path: ['aggregate', 'column', '0'],
+				expected: 'literal',
+				received: '"missing"',
+			},
+		])
+	})
+
+	it('stops at the contract fault limit', () => {
+		const values = Array.from({ length: FAULT_LIMIT * 2 }, () => 'x')
+		const conditions = [
+			{ column: 'n', operator: 'any', values, connector: 'and' },
+			{ column: 'n', operator: 'any', values, connector: 'and' },
+		] as const
+		expect(scanQueryFaults({ conditions }, columns)).toHaveLength(FAULT_LIMIT)
+		expect(scanConditionFaults(conditions[0], ['conditions', '0'], columns)).toHaveLength(
+			FAULT_LIMIT,
+		)
+	})
+
+	it('refuses a pattern operator on an integer, real, boolean, or blob column, naming the storage that admits it', () => {
+		const stores = new Map([
+			['n', { name: 'n', storage: 'integer', optional: false, nullable: false }],
+			['r', { name: 'r', storage: 'real', optional: false, nullable: false }],
+			['b', { name: 'b', storage: 'boolean', optional: false, nullable: false }],
+			['x', { name: 'x', storage: 'blob', optional: false, nullable: false }],
+		] as const)
+		for (const column of ['n', 'r', 'b', 'x']) {
+			expect(
+				scanConditionFaults(
+					{ column, operator: 'glob', values: ['1*'], connector: 'and' },
+					['c'],
+					stores,
+				),
+			).toEqual([
+				{
+					reason: 'constraint',
+					path: ['c', 'operator'],
+					expected: 'literal',
+					constraint: 'pattern',
+					limit: 'a text or json column',
+					received: '"glob"',
+				},
+			])
+		}
+		expect(
+			scanConditionFaults(
+				{ column: 'meta', operator: 'ends', values: ['z'], connector: 'and' },
+				['c'],
+				columns,
+			),
+		).toEqual([])
+	})
+
+	it('names the undeclared head of a column reference and a nested path under a scalar column', () => {
+		expect(scanColumnFaults('nope', ['p'], columns)).toEqual([
+			{ reason: 'type', path: ['p'], expected: 'literal', received: '"nope"' },
+		])
+		expect(scanColumnFaults(['nope', 'x'], ['p'], columns)).toEqual([
+			{ reason: 'type', path: ['p', '0'], expected: 'literal', received: '"nope"' },
+		])
+		expect(scanColumnFaults(['n', 'x'], ['p'], columns)).toEqual([
+			{ reason: 'type', path: ['p'], expected: 'string', received: 'array' },
+		])
+		expect(scanColumnFaults(['n'], ['p'], columns)).toEqual([])
+		expect(scanColumnFaults(['meta', 'x', 'y'], ['p'], columns)).toEqual([])
+	})
+
+	it('admits nullish operands by operator family and column flags', () => {
+		const tag = columns.get('tag')
+		const note = columns.get('note')
+		expect(scanOperandFaults(null, ['v'], tag, true)).toEqual([])
+		expect(scanOperandFaults(null, ['v'], tag, false)).toEqual([
+			{ reason: 'type', path: ['v'], expected: 'string', received: 'null' },
+		])
+		expect(scanOperandFaults(undefined, ['v'], note, true)).toEqual([])
+		expect(scanOperandFaults(undefined, ['v'], tag, true)).toEqual([
+			{ reason: 'type', path: ['v'], expected: 'string', received: 'undefined' },
+		])
+		expect(scanOperandFaults(null, ['v'], note, true)).toEqual([
+			{ reason: 'type', path: ['v'], expected: 'string', received: 'null' },
+		])
+	})
+
+	it('reads the storage class and no refinement of a number column', () => {
+		const n = columns.get('n')
+		expect(scanOperandFaults(1.5, ['v'], n, false)).toEqual([])
+		expect(scanOperandFaults(Number.NaN, ['v'], n, false)).toEqual([])
+		expect(scanOperandFaults(-0, ['v'], n, false)).toEqual([])
+		expect(scanOperandFaults(1n, ['v'], n, false)).toEqual([
+			{ reason: 'type', path: ['v'], expected: 'number', received: '1n' },
+		])
+	})
+
+	it('admits any operand without a column or on a json column, and refuses ill-formed text everywhere', () => {
+		expect(scanOperandFaults({ a: [1] }, ['v'], undefined, false)).toEqual([])
+		expect(scanOperandFaults(Symbol('s'), ['v'], columns.get('meta'), false)).toEqual([])
+		expect(scanOperandFaults('a\uD800', ['v'], undefined, false)).toEqual([
+			{
+				reason: 'constraint',
+				path: ['v'],
+				expected: 'string',
+				constraint: 'pattern',
+				received: '"a\\ud800"',
+			},
+		])
+		expect(scanOperandFaults('\uDC00z', ['v'], columns.get('meta'), true)).toHaveLength(1)
+		expect(scanOperandFaults('😀', ['v'], columns.get('id'), true)).toEqual([])
+	})
+})
+
+describe('findIllFormedColumn', () => {
+	const columns = collectColumns({
+		id: stringShape(),
+		body: stringShape(),
+		meta: jsonShape(),
+		n: integerShape(),
+	})
+
+	it('names the first text column holding a lone surrogate, and reads no json column', () => {
+		expect(findIllFormedColumn({ id: 'a', body: 'x\uD800', meta: 'y\uDC00', n: 1 }, columns)).toBe(
+			'body',
+		)
+		expect(
+			findIllFormedColumn({ id: 'a', body: 'ok', meta: 'y\uDC00', n: 1 }, columns),
+		).toBeUndefined()
+		expect(findIllFormedColumn({ id: '😀', body: '\uDBFF' }, columns)).toBe('body')
+		expect(findIllFormedColumn({}, columns)).toBeUndefined()
+	})
+})
+
+describe('tallyCalls', () => {
+	it('totals one member and ignores every other', () => {
+		expect(
+			tallyCalls(
+				[
+					{ member: 'read', keys: 2, rows: 1, scoped: false },
+					{ member: 'write', keys: 3, rows: 0, scoped: true },
+					{ member: 'read', keys: 1, rows: 1, scoped: true },
+				],
+				'read',
+			),
+		).toEqual({ calls: 2, keys: 3, rows: 2 })
+		expect(tallyCalls([], 'scan')).toEqual({ calls: 0, keys: 0, rows: 0 })
+	})
+})
+
+describe('streamRecordedRows', () => {
+	it('counts the rows a consumer pulls when it stops early, and every row at the end', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		await memory.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+		const early = new StreamPage(0)
+		for await (const row of streamRecordedRows(memory.scan('users'), early)) {
+			expect(row).toEqual({ id: 'a' })
+			break
+		}
+		expect(early.count).toBe(1)
+		const whole = new StreamPage(0)
+		expect(await collect(streamRecordedRows(memory.scan('users'), whole))).toHaveLength(2)
+		expect(whole.count).toBe(2)
+		const unpulled = new StreamPage(0)
+		streamRecordedRows(memory.scan('users'), unpulled)
+		expect(unpulled.count).toBe(0)
+	})
+
+	it('holds the rows yielded before a source throws', async () => {
+		const rows = new StreamPage(0)
+		const failing = streamThenFail([{ id: 'a' }], 'source failed')
+		await expect(collect(streamRecordedRows(failing, rows))).rejects.toThrow('source failed')
+		expect(rows.count).toBe(1)
+	})
+})
+
+describe('matchesIllFormedText', () => {
+	it('matches a string holding a lone surrogate, and nothing else', () => {
+		expect(['a\uD800b', '\uDC00', 'z\uDBFF'].map(matchesIllFormedText)).toEqual([true, true, true])
+		expect(
+			['', 'Ada', '\uD83D\uDE00', 1, null, undefined, ['\uD800']].map(matchesIllFormedText),
+		).toEqual([false, false, false, false, false, false, false])
+	})
+})
+
+describe('extractColumnHead', () => {
+	it('reads the leading column of a name or a non-empty list of strings, and nothing else', () => {
+		expect(extractColumnHead('age')).toBe('age')
+		expect(extractColumnHead(['profile', 'age'])).toBe('profile')
+		expect([[], ['profile', 1], 7, null, undefined, { 0: 'x' }].map(extractColumnHead)).toEqual([
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		])
+	})
+})
+
+describe('restoreUndefinedOperands', () => {
+	it('puts back the source operands of each condition, keeping every other member', () => {
+		const source = {
+			conditions: [
+				{ column: 'note', operator: 'equals', values: [undefined], connector: 'and' },
+				{ column: 'n', operator: 'from', values: [1], connector: 'or' },
+			],
+			limit: 2,
+		}
+		const masked = maskUndefinedOperands(source)
+		expect(masked).not.toBe(source)
+		const restored = restoreUndefinedOperands(
+			{
+				conditions: [
+					{ column: 'note', operator: 'equals', values: [null], connector: 'and' },
+					{ column: 'n', operator: 'from', values: [1], connector: 'or' },
+				],
+				limit: 2,
+			},
+			source,
+		)
+		expect(restored).toEqual(source)
+		expect(restoreUndefinedOperands({ limit: 1 }, source)).toEqual({ limit: 1 })
+		expect(restoreUndefinedOperands({ conditions: [] }, null)).toEqual({ conditions: [] })
+	})
+})
+
+describe('scanAggregateFaults', () => {
+	const columns = collectColumns({ id: stringShape(), age: integerShape(), meta: jsonShape() })
+
+	it('admits a known operation over a declared column or a json path', () => {
+		expect(scanAggregateFaults({ operation: 'average', column: 'age' }, columns)).toEqual([])
+		expect(scanAggregateFaults({ operation: 'sum', column: ['meta', 'x'] }, columns)).toEqual([])
+	})
+
+	it('refuses an unknown operation, a column that is no path, an undeclared column, and no record', () => {
+		expect(scanAggregateFaults({ operation: 'median', column: [] }, columns)).toEqual([
+			{
+				reason: 'type',
+				path: ['aggregate', 'operation'],
+				expected: 'literal',
+				received: '"median"',
+			},
+			{ reason: 'type', path: ['aggregate', 'column'], expected: 'string', received: 'array' },
+		])
+		expect(scanAggregateFaults({ operation: 'sum', column: 'agee' }, columns)).toEqual([
+			{ reason: 'type', path: ['aggregate', 'column'], expected: 'literal', received: '"agee"' },
+		])
+		expect(scanAggregateFaults(null, columns)).toEqual([
+			{ reason: 'type', path: ['aggregate'], expected: 'object', received: 'null' },
+		])
+	})
+})
+
+describe('scanQueryFaults on a read the contract refuses', () => {
+	it('checks each well-formed part and skips each part that is no record or no list', () => {
+		const columns = collectColumns({ id: stringShape(), n: integerShape() })
+		expect(
+			scanQueryFaults(
+				{
+					conditions: [null, { column: 'n', operator: 'similar', values: ['x'], connector: 'and' }],
+					order: 'n',
+				},
+				columns,
+			),
+		).toEqual([
+			{
+				reason: 'type',
+				path: ['conditions', '1', 'values', '0'],
+				expected: 'number',
+				received: '"x"',
+			},
+		])
+		expect(scanQueryFaults(null, columns)).toEqual([])
+		expect(
+			scanQueryFaults({ conditions: [{ column: [], operator: 'present', values: [] }] }, columns),
+		).toEqual([])
 	})
 })

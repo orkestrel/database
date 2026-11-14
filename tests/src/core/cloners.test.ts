@@ -2,10 +2,12 @@ import {
 	cloneDriverMetadata,
 	cloneDriverSchema,
 	cloneMigrationInput,
+	cloneQueryInput,
+	cloneQueryPart,
 	isDatabaseError,
 } from '@src/core'
 import { isContractError } from '@orkestrel/contract'
-import { captureError } from '@orkestrel/test'
+import { captureError, createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import { emptyValue } from '../../setup.js'
 
@@ -200,5 +202,61 @@ describe('cloneMigrationInput', () => {
 		expect(isContractError(error.context?.cause)).toBe(true)
 		expect(error).not.toBe(fault)
 		expect(error.context?.cause).not.toBe(fault)
+	})
+})
+
+describe('cloneQueryInput', () => {
+	it('copies the read, its lists, each condition and term, and each key and operand list', () => {
+		const condition = {
+			column: ['meta', 'x'],
+			operator: 'any',
+			values: [1, { a: 1 }],
+			connector: 'and',
+		}
+		const term = { column: ['meta', 'y'], direction: 'ascending' }
+		const input = { conditions: [condition], order: [term], limit: 1, extra: true }
+		const copy = cloneQueryInput(input)
+		expect(copy).toEqual(input)
+		expect(copy).not.toBe(input)
+		const copied =
+			copy !== null && typeof copy === 'object' && 'conditions' in copy
+				? copy.conditions
+				: undefined
+		expect(Array.isArray(copied) ? copied[0] : undefined).not.toBe(condition)
+		condition.values.push(2)
+		condition.column.push('z')
+		term.column.push('z')
+		input.conditions.push(condition)
+		expect(copy).toEqual({
+			conditions: [
+				{ column: ['meta', 'x'], operator: 'any', values: [1, { a: 1 }], connector: 'and' },
+			],
+			order: [{ column: ['meta', 'y'], direction: 'ascending' }],
+			limit: 1,
+			extra: true,
+		})
+	})
+
+	it('keeps a value that is no record, and a part that is no record or no list, as it came', () => {
+		expect(cloneQueryInput(null)).toBeNull()
+		expect(cloneQueryInput({ conditions: 'x', order: [3] })).toEqual({
+			conditions: 'x',
+			order: [3],
+		})
+		expect(cloneQueryPart(5)).toBe(5)
+		expect(cloneQueryPart({ column: 'n', values: 'x' })).toEqual({ column: 'n', values: 'x' })
+	})
+
+	it('reads each member once', () => {
+		const reads = createRecorder<[]>()
+		const input = Object.defineProperty({}, 'conditions', {
+			enumerable: true,
+			get: () => {
+				reads.handler()
+				return []
+			},
+		})
+		expect(cloneQueryInput(input)).toEqual({ conditions: [] })
+		expect(reads.calls).toHaveLength(1)
 	})
 })

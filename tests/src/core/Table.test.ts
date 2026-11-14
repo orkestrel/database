@@ -1,4 +1,5 @@
 import type { TableEvent } from '../../setup.js'
+import type { DoorRow } from '../../setup.js'
 import type { Condition, QueryInput, Key, TableEventMap } from '@src/core'
 import {
 	applyQuery,
@@ -6,9 +7,15 @@ import {
 	createDatabase,
 	createMemoryDriver,
 	isDatabaseError,
+	queryInputContract,
+	tallyCalls,
 } from '@src/core'
 import {
 	describeFaultLine,
+	FAULT_LIMIT,
+	FAULT_TEXT_LIMIT,
+	isContractError,
+	jsonShape,
 	integerShape,
 	isArray,
 	isAuditFault,
@@ -34,7 +41,15 @@ import {
 	createSeededUsersTable,
 	RECORDING_AGGREGATE,
 	RECORDING_ROW,
-	tallyCalls,
+	ADMITTED_READS,
+	createDoorTable,
+	REFUSED_AGGREGATES,
+	ScanGate,
+	ILL_FORMED_RESULT,
+	readIllFormedText,
+	DOOR_PATHS,
+	ILL_FORMED_KEYS,
+	REFUSED_READS,
 } from '../../setup.js'
 
 // The authoritative behavior tests for `Table` — keyed CRUD and its batch
@@ -721,20 +736,18 @@ describe('Table — records / count / aggregate (engine path)', () => {
 		expect(paged.map((row) => row.id)).toEqual(['u1']) // ages 22,36,41 → offset 1 → 36
 	})
 
-	it('rejects invalid paging at every table read boundary', async () => {
+	it('refuses invalid paging at every table read boundary through the door, naming the table', async () => {
 		const users = await createSeededUsersTable()
-		const records = users.records({ limit: -1 })
-		expect(records).toBeInstanceOf(Promise)
-		await expect(records).rejects.toThrow('Query limit must be a nonnegative integer')
-		const count = users.count({ offset: 1.5 })
-		expect(count).toBeInstanceOf(Promise)
-		await expect(count).rejects.toThrow('Query offset must be a nonnegative integer')
-		const aggregate = users.aggregate('sum', 'age', { limit: Number.NaN })
-		expect(aggregate).toBeInstanceOf(Promise)
-		await expect(aggregate).rejects.toThrow('Query limit must be a nonnegative integer')
-		expect(() => users.scan({ offset: Number.POSITIVE_INFINITY })).toThrow(
-			'Query offset must be a nonnegative integer',
-		)
+		const limit = { code: 'VALIDATION', context: { table: 'users', faults: [{ path: ['limit'] }] } }
+		const offset = {
+			code: 'VALIDATION',
+			context: { table: 'users', faults: [{ path: ['offset'] }] },
+		}
+		await expect(users.records({ limit: -1 })).rejects.toMatchObject(limit)
+		await expect(users.count({ offset: 1.5 })).rejects.toMatchObject(offset)
+		await expect(users.aggregate('sum', 'age', { limit: Number.NaN })).rejects.toMatchObject(limit)
+		const scan = users.scan({ offset: Number.POSITIVE_INFINITY })
+		await expect(collect(scan)).rejects.toMatchObject(offset)
 	})
 
 	it('accepts zero paging while count and aggregate retain unpaged semantics', async () => {
@@ -1235,5 +1248,380 @@ describe('Table — emitter (push observation surface)', () => {
 		users.emitter.on('write', write.handler)
 		await users.set(createUserRow())
 		expect(write.calls).toEqual([['u1']])
+	})
+})
+
+describe('Table — the query door', () => {
+	// A query carries only its conditions and, to `collect`, its order, so a case reaches the
+	// door through a query when its fault sits in a list the query passes on.
+	for (const testCase of REFUSED_READS) {
+		const [list] = isArray(testCase.fault.path) ? testCase.fault.path : []
+		for (const path of DOOR_PATHS.filter(
+			(candidate) =>
+				!candidate.name.startsWith('query') ||
+				list === 'conditions' ||
+				(list === 'order' && candidate.name === 'query collect'),
+		)) {
+			it(`refuses ${testCase.name} through ${path.name} with no driver call`, async () => {
+				const { recorder, table } = await createDoorTable()
+				const { value: error, calls } = await recorder.measure(() =>
+					path.run(table, testCase.input).then(
+						() => undefined,
+						(caught: unknown) => caught,
+					),
+				)
+				expect(calls).toEqual([])
+				expect(isDatabaseError(error) ? error.code : error).toBe('VALIDATION')
+				expect(error).toMatchObject({
+					context: {
+						table: 'items',
+						faults:
+							testCase.second === undefined ? [testCase.fault] : [testCase.fault, testCase.second],
+						...(testCase.column === undefined ? {} : { column: testCase.column }),
+						...(testCase.operator === undefined ? {} : { operator: testCase.operator }),
+					},
+				})
+			})
+		}
+	}
+
+	it('names the table, the column, its storage, the operator, and the expected class', async () => {
+		const { table } = await createDoorTable()
+		const error = await table
+			.count({ conditions: [{ column: 'n', operator: 'equals', values: ['5'], connector: 'and' }] })
+			.catch((caught: unknown) => caught)
+		expect(error).toBeInstanceOf(Error)
+		const message = error instanceof Error ? error.message : ''
+		expect(message).toContain(`Query failed the 'items' columns at 'n' (integer) under 'equals'`)
+		expect(message).toContain('conditions.0.values.0: type; expected number; received "5"')
+		expect(message).toContain('(declared columns: id text, n integer, label text, flag boolean')
+		expect(message).toContain(
+			'note text optional, tag text nullable, meta json nullable, mode json',
+		)
+	})
+
+	it('names the operator candidates of an unknown operator', async () => {
+		const { table } = await createDoorTable()
+		const error = await Reflect.apply(table.records, table, [
+			{ conditions: [{ column: 'label', operator: 'similar', values: ['x'], connector: 'and' }] },
+		]).catch((caught: unknown) => caught)
+		expect(error instanceof Error ? error.message : '').toContain(
+			`Query failed the 'items' query contract: conditions.0: variant`,
+		)
+		expect(error instanceof Error ? error.message : '').toContain('"absent", "present", "equals"')
+	})
+
+	it('bounds the refusal message to the contract fault text limit beside its header', async () => {
+		const { table } = await createDoorTable()
+		const error = await Reflect.apply(table.records, table, [
+			{
+				conditions: Array.from({ length: FAULT_LIMIT }, () => ({
+					column: 'label',
+					operator: 'similar',
+					values: ['x'],
+					connector: 'and',
+				})),
+			},
+		]).catch((caught: unknown) => caught)
+		const message = error instanceof Error ? error.message : ''
+		const header = message.slice(0, message.indexOf(': ') + 2)
+		expect(header).toBe(`Query failed the 'items' query contract: `)
+		const faults =
+			isDatabaseError(error) && isArray(error.context?.faults) ? error.context.faults : []
+		const unbounded = faults
+			.filter(isAuditFault)
+			.map((fault) => describeFaultLine(fault, queryInputContract.schema))
+			.join('\n')
+		expect(unbounded.length).toBeGreaterThan(FAULT_TEXT_LIMIT)
+		expect(message.length).toBeLessThanOrEqual(header.length + FAULT_TEXT_LIMIT)
+	})
+
+	it('admits one copy of an aggregate and computes from it, whatever the caller changes afterward', async () => {
+		const gate = new ScanGate()
+		const memory = createMemoryDriver()
+		const ledger = createDatabase({
+			driver: createMemoryAdapter(memory, { scan: (name) => gate.scan(memory.scan(name)) }),
+			tables: { ledger: { id: stringShape(), meta: jsonShape() } },
+		}).table('ledger')
+		await ledger.set([
+			{ id: 'a', meta: { cost: 2, price: 10 } },
+			{ id: 'b', meta: { cost: 3, price: 20 } },
+		])
+		const column = ['meta', 'cost']
+		const direct = ledger.aggregate('sum', column)
+		const filtered = ledger
+			.query()
+			.filter(() => true)
+			.aggregate('sum', column)
+		await gate.started
+		column[1] = 'price'
+		gate.release()
+		expect([await direct, await filtered]).toEqual([5, 5])
+	})
+
+	it('admits the conditions and the aggregate of a filtered query in one refusal', async () => {
+		const { recorder, table } = await createDoorTable()
+		const { value, calls } = await recorder.measure(() =>
+			table
+				.query()
+				.condition({ column: 'n', operator: 'equals', values: ['5'], connector: 'and' })
+				.filter(() => true)
+				.aggregate('sum', 'nn')
+				.catch((caught: unknown) => caught),
+		)
+		expect(calls).toEqual([])
+		expect(value).toMatchObject({
+			code: 'VALIDATION',
+			context: {
+				table: 'items',
+				faults: [
+					{ path: ['conditions', '0', 'values', '0'], expected: 'number' },
+					{ path: ['aggregate', 'column'], received: '"nn"' },
+				],
+			},
+		})
+	})
+
+	it('lists every fault of a read in one refusal, bounded by the contract fault limit', async () => {
+		const { table } = await createDoorTable()
+		const twice = await table
+			.records({
+				conditions: [
+					{ column: 'n', operator: 'equals', values: ['5'], connector: 'and' },
+					{ column: 'label', operator: 'equals', values: [5], connector: 'or' },
+				],
+				order: [{ column: 'nn', direction: 'ascending' }],
+			})
+			.catch((caught: unknown) => caught)
+		expect(twice).toMatchObject({
+			context: {
+				faults: [
+					{ path: ['conditions', '0', 'values', '0'] },
+					{ path: ['conditions', '1', 'values', '0'] },
+					{ path: ['order', '0', 'column'] },
+				],
+			},
+		})
+		const wide = await table
+			.records({
+				conditions: [
+					{
+						column: 'n',
+						operator: 'any',
+						values: Array.from({ length: FAULT_LIMIT + 10 }, (_, index) => `${index}`),
+						connector: 'and',
+					},
+				],
+			})
+			.catch((caught: unknown) => caught)
+		expect(
+			isDatabaseError(wide) && isArray(wide.context?.faults) ? wide.context.faults : [],
+		).toHaveLength(FAULT_LIMIT)
+	})
+
+	it('refuses an undeclared aggregate column with no driver call', async () => {
+		const { recorder, table } = await createDoorTable()
+		const { value, calls } = await recorder.measure(() =>
+			table.aggregate('sum', 'nn').catch((caught: unknown) => caught),
+		)
+		expect(calls).toEqual([])
+		expect(value).toMatchObject({
+			code: 'VALIDATION',
+			context: {
+				faults: [{ path: ['aggregate', 'column'], expected: 'literal', received: '"nn"' }],
+			},
+		})
+	})
+
+	it('refuses a read whose list throws on access with the contract cause', async () => {
+		const { table } = await createDoorTable()
+		const hostile = Object.defineProperty({}, 'conditions', {
+			enumerable: true,
+			get: () => {
+				throw new Error('unreadable')
+			},
+		})
+		const error = await Reflect.apply(table.records, table, [hostile]).catch(
+			(caught: unknown) => caught,
+		)
+		expect(error).toMatchObject({ code: 'VALIDATION', context: { table: 'items' } })
+		const cause: unknown = isDatabaseError(error) ? error.context?.cause : undefined
+		expect(isContractError(cause)).toBe(true)
+		const thrown: unknown = cause instanceof Error ? cause.cause : undefined
+		expect(thrown instanceof Error ? thrown.message : thrown).toBe('unreadable')
+	})
+
+	it('refuses an unknown aggregate operation and a missing or malformed column, never computing', async () => {
+		const { recorder, table } = await createDoorTable()
+		for (const { operation, column, faults } of REFUSED_AGGREGATES) {
+			const { value, calls } = await recorder.measure(() =>
+				Reflect.apply(table.aggregate, table, [operation, column]).catch(
+					(caught: unknown) => caught,
+				),
+			)
+			expect(calls).toEqual([])
+			expect(value).toMatchObject({ code: 'VALIDATION', context: { table: 'items', faults } })
+		}
+	})
+
+	it('admits the aggregate column of a filtered query before it reads a row', async () => {
+		const { recorder, table } = await createDoorTable()
+		const { value, calls } = await recorder.measure(() =>
+			table
+				.query()
+				.filter(() => true)
+				.aggregate('sum', 'nn')
+				.catch((caught: unknown) => caught),
+		)
+		expect(calls).toEqual([])
+		expect(value).toMatchObject({
+			code: 'VALIDATION',
+			context: { table: 'items', faults: [{ path: ['aggregate', 'column'], received: '"nn"' }] },
+		})
+		expect(
+			await table
+				.query()
+				.filter(() => true)
+				.aggregate('sum', 'n'),
+		).toBe(12)
+	})
+
+	it('carries the faults of both passes in one refusal', async () => {
+		const { table } = await createDoorTable()
+		const error = await Reflect.apply(table.records, table, [
+			{
+				conditions: [
+					{ column: 'label', operator: 'similar', values: ['x'], connector: 'and' },
+					{ column: 'n', operator: 'equals', values: ['5'], connector: 'and' },
+				],
+				limit: -2,
+			},
+		]).catch((caught: unknown) => caught)
+		expect(error).toMatchObject({
+			code: 'VALIDATION',
+			context: {
+				table: 'items',
+				column: 'n',
+				faults: [
+					{ reason: 'variant', path: ['conditions', '0'] },
+					{ reason: 'constraint', path: ['limit'] },
+					{ reason: 'type', path: ['conditions', '1', 'values', '0'], expected: 'number' },
+				],
+			},
+		})
+		expect(isDatabaseError(error) ? error.context?.operator : 'none').toBeUndefined()
+		expect(error instanceof Error ? error.message : '').toContain(
+			`Query failed the 'items' query contract and columns at 'n' (integer) (declared columns: id text,`,
+		)
+	})
+
+	it('reads only the admitted copy, so a condition added to a live query after the door is ignored', async () => {
+		const gate = new ScanGate()
+		const memory = createMemoryDriver()
+		const people = createDatabase({
+			driver: createMemoryAdapter(memory, { scan: (name) => gate.scan(memory.scan(name)) }),
+			tables: { people: { id: stringShape(), age: integerShape() } },
+		}).table('people')
+		await people.set([
+			{ id: 'p1', age: 36 },
+			{ id: 'p2', age: 7 },
+		])
+		const query = people
+			.query()
+			.condition({ column: 'age', operator: 'from', values: [18], connector: 'and' })
+		const pending = query.collect()
+		await gate.started
+		query.condition({ column: 'age', operator: 'above', values: [100], connector: 'and' })
+		gate.release()
+		expect((await pending).map((row) => row.id)).toEqual(['p1'])
+	})
+
+	it('refuses a null read on every read path', async () => {
+		const { recorder, table } = await createDoorTable()
+		const { value, calls } = await recorder.measure(() =>
+			Reflect.apply(table.count, table, [null]).catch((caught: unknown) => caught),
+		)
+		expect(calls).toEqual([])
+		expect(value).toMatchObject({ code: 'VALIDATION', context: { table: 'items' } })
+	})
+
+	for (const testCase of ADMITTED_READS) {
+		it(`admits ${testCase.name}`, async () => {
+			const { table } = await createDoorTable()
+			expect((await table.records(testCase.input)).map((row) => row.id)).toEqual(testCase.ids)
+			expect(await table.count({ conditions: testCase.input.conditions ?? [] })).toBe(
+				testCase.input.limit === undefined ? testCase.ids.length : 1,
+			)
+		})
+	}
+})
+
+describe('Table — ill-formed text', () => {
+	it('refuses a lone surrogate in a written text value, writing no row of the batch', async () => {
+		const { recorder, table } = await createDoorTable()
+		const { value, calls } = await recorder.measure(() =>
+			table
+				.set([
+					{ id: 'c', n: 1, label: 'fine', flag: true, tag: null, meta: {}, mode: 'a' },
+					{ id: 'd', n: 2, label: 'a\uD800b', flag: true, tag: null, meta: {}, mode: 'a' },
+				])
+				.catch((caught: unknown) => caught),
+		)
+		expect(calls).toEqual([])
+		expect(value).toMatchObject({
+			code: 'VALIDATION',
+			context: { table: 'items', column: 'label' },
+		})
+		expect(value instanceof Error ? value.message : '').not.toContain('a\uD800b')
+		expect(await table.has(['c', 'd'])).toEqual([false, false])
+	})
+
+	it('refuses a lone surrogate in an update and in a nullable text column', async () => {
+		const { table } = await createDoorTable()
+		await expect(table.update('a', { tag: '\uDC00' })).rejects.toMatchObject({
+			code: 'VALIDATION',
+			context: { table: 'items', column: 'tag' },
+		})
+		expect((await table.get('a'))?.tag).toBeNull()
+	})
+
+	for (const { name, run } of ILL_FORMED_KEYS) {
+		it(`refuses a lone surrogate in a key through ${name} with no driver call`, async () => {
+			const { recorder, table } = await createDoorTable()
+			const { value, calls } = await recorder.measure(() =>
+				run(table).catch((caught: unknown) => caught),
+			)
+			expect(calls).toEqual([])
+			expect(value).toMatchObject({ code: 'VALIDATION', context: { table: 'items', column: 'id' } })
+		})
+	}
+
+	it('admits a well-formed surrogate pair and round-trips a lone surrogate in a json cell', async () => {
+		const { table } = await createDoorTable()
+		const row: DoorRow = {
+			id: '\uD83D\uDE00',
+			n: 1,
+			label: '\uD83D\uDE00',
+			flag: true,
+			tag: null,
+			meta: { text: 'a\uD800b' },
+			mode: 'a',
+		}
+		await table.set(row)
+		expect(await table.get('\uD83D\uDE00')).toEqual(row)
+		expect(
+			await table.count({
+				conditions: [
+					{ column: 'label', operator: 'equals', values: ['\uD83D\uDE00'], connector: 'and' },
+				],
+			}),
+		).toBe(1)
+	})
+})
+
+describe('Table — ill-formed text on the Memory driver', () => {
+	it('refuses a lone surrogate before the driver, and round-trips one in a json cell', async () => {
+		const { recorder, table } = await createDoorTable()
+		expect(await readIllFormedText(table, recorder)).toMatchObject(ILL_FORMED_RESULT)
 	})
 })

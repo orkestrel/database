@@ -12,7 +12,7 @@ import type { DatabaseInterface } from '@src/core'
 import { createDatabase, createMemoryDriver, equalsValue } from '@src/core'
 import { createSQLiteDriver } from '@src/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DatabaseFixture, collectRankStreamIds } from '../../setup.js'
+import { DatabaseFixture, REFUSED_PARITY_READS, collectRankStreamIds } from '../../setup.js'
 
 // Cross-backend PARITY suite — the enduring regression net proving the
 // SQLite driver (exact-or-refine over `src/server`) returns byte-identical
@@ -51,6 +51,29 @@ describe('cross-backend parity — MemoryDriver vs SQLiteDriver', () => {
 				testCase.binary ?? engine,
 			)
 			expect(testCase.binary !== undefined && equalsValue(ids, testCase.binary)).toBe(false)
+		})
+	}
+
+	// The door refuses a wrong-class read before either engine answers it, with one refusal on both.
+	for (const testCase of REFUSED_PARITY_READS) {
+		it(`refuses on both engines — ${testCase.name}`, async () => {
+			const refusal = {
+				code: 'VALIDATION',
+				context: {
+					table: 'users',
+					column: testCase.column,
+					operator: testCase.operator,
+					faults: [testCase.fault],
+				},
+			}
+			for (const users of [memory.value.table('users'), sqlite.value.table('users')]) {
+				await expect(users.records({ conditions: [testCase.condition] })).rejects.toMatchObject(
+					refusal,
+				)
+				await expect(users.query().condition(testCase.condition).count()).rejects.toMatchObject(
+					refusal,
+				)
+			}
 		})
 	}
 

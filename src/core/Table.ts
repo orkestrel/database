@@ -1,34 +1,60 @@
-import type { ContractInterface, FieldPath, Guard } from '@orkestrel/contract'
+import type {
+	AuditFault,
+	ContractInterface,
+	ContractRefusal,
+	FieldPath,
+	Guard,
+} from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
 import type { DatabaseContext } from './DatabaseContext.js'
 import type {
 	Aggregate,
 	AggregateOperation,
+	ColumnSchema,
 	QueryInput,
 	CursorInterface,
 	Key,
 	KeyFunction,
 	QueryInterface,
 	OperationOptions,
+	ReadInput,
 	Row,
 	TableEventMap,
 	TableInterface,
 	StorageInterface,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
-import { admitValue, describeFaultLine, isArray, isRecord } from '@orkestrel/contract'
+import {
+	admitValue,
+	attempt,
+	describeFaultLine,
+	describeFaults,
+	extractPath,
+	FAULT_LIMIT,
+	isArray,
+	isRecord,
+	isString,
+} from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
+import { cloneQueryInput, cloneQueryPart } from './cloners.js'
+import { queryInputContract } from './contracts.js'
 import { DatabaseError } from './errors.js'
+import { isAggregate } from './validators.js'
 import {
 	checkAbort,
 	computeFirstIndexes,
 	equalsValue,
+	extractColumnHead,
 	extractKey,
+	findIllFormedColumn,
+	maskUndefinedOperands,
+	matchesIllFormedText,
 	planRead,
 	readPlannedAggregate,
 	readPlannedRows,
+	restoreUndefinedOperands,
+	scanQueryFaults,
 	streamPlannedRows,
-	validatePage,
 } from './helpers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
@@ -43,9 +69,13 @@ import { ScopedIterator } from './ScopedIterator.js'
  * with a `VALIDATION` throw carrying the contract's `faults`),
  * reads come back through the contract guard (narrowing a stored {@link Row} to
  * the table's type, and raising `DRIVER` for a stored row that fails it), and `contract`
- * is exposed for introspection and seeding. Each read runs the driver's plan under the
- * native-first rule {@link DriverInterface} states: the driver answers the native side, and
- * the core's engine runs the residual and nothing else.
+ * is exposed for introspection and seeding.
+ *
+ * Each read admits a copy of its input through `queryInputContract` and the table's columns after
+ * the driver is ready, and reads only that copy; the faults of both passes wait for a refusal and
+ * travel in one. A lone surrogate in a written `text` value or a key is refused. Each read runs
+ * the driver's plan under the native-first rule {@link DriverInterface} states: the driver
+ * answers the native side, and the core's engine runs the residual and nothing else.
  *
  * @remarks
  * - **Observable.** The owned {@link emitter} ({@link TableEventMap}) carries the
@@ -63,6 +93,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	readonly #name: string
 	readonly #key: string
 	readonly #contract: ContractInterface<T>
+	readonly #columns: ReadonlyMap<string, ColumnSchema>
 	readonly #guard: Guard<T>
 	readonly #generate: KeyFunction | undefined
 	readonly #context: DatabaseContext | undefined
@@ -78,6 +109,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		name: string,
 		key: string,
 		contract: ContractInterface<T>,
+		columns: ReadonlyMap<string, ColumnSchema>,
 		generate?: KeyFunction,
 		error?: EmitterErrorHandler,
 		context?: DatabaseContext,
@@ -88,6 +120,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		this.#name = name
 		this.#key = key
 		this.#contract = contract
+		this.#columns = columns
 		this.#guard = contract.is
 		this.#generate = generate
 		this.#context = context
@@ -118,6 +151,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	get(keys: Key | readonly Key[]): Promise<(T | undefined) | ReadonlyArray<T | undefined>> {
 		return this.#track(async () => {
 			await this.#ready()
+			this.#check(keys)
 			if (isArray(keys)) return this.#readMany(keys)
 			return this.#read(keys)
 		})
@@ -128,6 +162,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	resolve(keys: Key | readonly Key[]): Promise<T | readonly T[]> {
 		return this.#track(async () => {
 			await this.#ready()
+			this.#check(keys)
 			if (!isArray(keys)) return this.#resolveOne(keys)
 			const rows = await this.#readMany(keys)
 			const missing = keys.find((_, index) => rows[index] === undefined)
@@ -141,6 +176,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	has(keys: Key | readonly Key[]): Promise<boolean | readonly boolean[]> {
 		return this.#track(async () => {
 			await this.#ready()
+			this.#check(keys)
 			if (isArray(keys)) return (await this.#readMany(keys)).map((row) => row !== undefined)
 			return (await this.#read(keys)) !== undefined
 		})
@@ -154,18 +190,18 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	async records(input?: QueryInput, options?: OperationOptions): Promise<readonly T[]> {
-		validatePage(input)
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
+			const read = this.#admit(input)
 			const rows = await readPlannedRows(
 				this.#driver,
 				this.#name,
 				{
-					...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
-					...(input?.order === undefined ? {} : { order: input.order }),
-					...(input?.limit === undefined ? {} : { limit: input.limit }),
-					...(input?.offset === undefined ? {} : { offset: input.offset }),
+					...(read.conditions === undefined ? {} : { conditions: read.conditions }),
+					...(read.order === undefined ? {} : { order: read.order }),
+					...(read.limit === undefined ? {} : { limit: read.limit }),
+					...(read.offset === undefined ? {} : { offset: read.offset }),
 				},
 				() => this.#step(options),
 			)
@@ -185,11 +221,11 @@ export class Table<T = Row> implements TableInterface<T> {
 	 * @returns The count of matching stored rows
 	 */
 	async count(input?: QueryInput, options?: OperationOptions): Promise<number> {
-		validatePage(input)
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			return (await this.#compute({ operation: 'count', column: this.#key }, input, options)) ?? 0
+			const read = this.#admit(input)
+			return (await this.#compute({ operation: 'count', column: this.#key }, read, options)) ?? 0
 		})
 	}
 
@@ -209,11 +245,11 @@ export class Table<T = Row> implements TableInterface<T> {
 		input?: QueryInput,
 		options?: OperationOptions,
 	): Promise<number | undefined> {
-		validatePage(input)
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			return this.#compute({ operation, column }, input, options)
+			const read = this.#admit(input, { operation, column })
+			return this.#compute(read.aggregate, read, options)
 		})
 	}
 
@@ -230,7 +266,6 @@ export class Table<T = Row> implements TableInterface<T> {
 	 * @returns An async iterable of matching rows
 	 */
 	scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
-		validatePage(input)
 		const source = this.#scan(input, options)
 		if (this.#context !== undefined) return new ScopedIterator(source, this.#context, this.#ready)
 		return this.#scope === undefined ? source : this.#scope.stream(source)
@@ -273,6 +308,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	): Promise<boolean | readonly boolean[]> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
+			this.#check(keys)
 			if (isArray(keys)) {
 				return this.#updateMany(keys, changes, options)
 			}
@@ -288,6 +324,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	): Promise<boolean | readonly boolean[]> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
+			this.#check(keys)
 			if (isArray(keys)) {
 				return this.#deleteMany(keys, options)
 			}
@@ -306,7 +343,11 @@ export class Table<T = Row> implements TableInterface<T> {
 	}
 
 	query(): QueryInterface<T> {
-		return new Query<T>(this)
+		return new Query<T>(
+			this,
+			(input) => this.#admit(input),
+			(input, aggregate) => this.#admit(input, aggregate),
+		)
 	}
 
 	cursor(): Promise<CursorInterface<T>> {
@@ -328,10 +369,11 @@ export class Table<T = Row> implements TableInterface<T> {
 	async *#scan(input?: QueryInput, options?: OperationOptions): AsyncIterable<T> {
 		checkAbort(options?.signal)
 		await this.#ready()
+		const read = this.#admit(input)
 		const plan = planRead(this.#driver, this.#name, {
-			...(input?.conditions === undefined ? {} : { conditions: input.conditions }),
-			...(input?.limit === undefined ? {} : { limit: input.limit }),
-			...(input?.offset === undefined ? {} : { offset: input.offset }),
+			...(read.conditions === undefined ? {} : { conditions: read.conditions }),
+			...(read.limit === undefined ? {} : { limit: read.limit }),
+			...(read.offset === undefined ? {} : { offset: read.offset }),
 		})
 		const rows = streamPlannedRows(this.#driver, this.#name, plan.native, plan.residual, () =>
 			this.#step(options),
@@ -342,13 +384,13 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Run an aggregate read through the shared read procedure, with the table's checks.
 	#compute(
 		aggregate: Aggregate,
-		input: QueryInput | undefined,
+		read: QueryInput,
 		options: OperationOptions | undefined,
 	): Promise<number | undefined> {
 		return readPlannedAggregate(
 			this.#driver,
 			this.#name,
-			input?.conditions === undefined ? {} : { conditions: input.conditions },
+			read.conditions === undefined ? {} : { conditions: read.conditions },
 			aggregate,
 			() => this.#step(options),
 		)
@@ -588,7 +630,15 @@ export class Table<T = Row> implements TableInterface<T> {
 	// always an object shape, so it never refuses an admitted row.
 	#validate(row: Row): Row {
 		const admission = admitValue(this.#contract, row)
-		if (admission.success && isRecord(admission.value.value)) return admission.value.value
+		if (admission.success && isRecord(admission.value.value)) {
+			const column = findIllFormedColumn(admission.value.value, this.#columns)
+			if (column === undefined) return admission.value.value
+			throw new DatabaseError(
+				'VALIDATION',
+				`Column '${column}' of table '${this.#name}' holds ill-formed text: a lone surrogate has no UTF-8 form; replace it before writing`,
+				{ table: this.#name, column },
+			)
+		}
 		const faults = admission.success ? [] : admission.error.faults
 		const [fault] = faults
 		throw new DatabaseError(
@@ -608,7 +658,96 @@ export class Table<T = Row> implements TableInterface<T> {
 				column: this.#key,
 			})
 		}
+		this.#check(key)
 		return key
+	}
+
+	// Refuse a key that is ill-formed text, which SQLite would store changed.
+	#check(keys: Key | readonly Key[]): void {
+		const listed: readonly Key[] = isArray(keys) ? keys : [keys]
+		if (!listed.some(matchesIllFormedText)) return
+		throw new DatabaseError(
+			'VALIDATION',
+			`Key for column '${this.#key}' of table '${this.#name}' is ill-formed text: a lone surrogate has no UTF-8 form`,
+			{ table: this.#name, column: this.#key },
+		)
+	}
+
+	// Admit a copy of a read, and of its aggregate when it computes one, through the query contract
+	// and the table's columns, and return the copies the read uses; faults wait for a refusal, and
+	// one refusal carries both passes' faults.
+	#admit(input: unknown): ReadInput
+	#admit(input: unknown, aggregate: unknown): ReadInput & { readonly aggregate: Aggregate }
+	#admit(input: unknown, aggregate?: unknown): ReadInput {
+		if (input === undefined && aggregate === undefined) return {}
+		const cloned = attempt(() => cloneQueryInput(input === undefined ? {} : input))
+		const copy: unknown = cloned.success ? cloned.value : input
+		const measure = aggregate === undefined ? undefined : cloneQueryPart(aggregate)
+		const read = measure === undefined || !isRecord(copy) ? copy : { ...copy, aggregate: measure }
+		const admitted = cloned.success ? this.#matchContract(copy) : undefined
+		const contract: ContractRefusal =
+			admitted === undefined ? this.#auditContract(copy) : { faults: [] }
+		const columns = cloned.success ? scanQueryFaults(read, this.#columns, contract.faults) : []
+		if (admitted !== undefined && columns.length === 0) {
+			if (measure === undefined) return admitted
+			if (isAggregate(measure)) return { ...admitted, aggregate: measure }
+		}
+		return this.#refuseRead(contract, columns, read)
+	}
+
+	// Narrow a copied read through the query contract, an `undefined` operand masked and restored.
+	#matchContract(copy: unknown): QueryInput | undefined {
+		if (queryInputContract.is(copy)) return copy
+		const masked = attempt(() => maskUndefinedOperands(copy))
+		if (!masked.success || masked.value === copy || !queryInputContract.is(masked.value)) {
+			return undefined
+		}
+		return restoreUndefinedOperands(masked.value, copy)
+	}
+
+	// Compute the query contract's faults of a refused read, after the refusal.
+	#auditContract(copy: unknown): ContractRefusal {
+		const masked = attempt(() => maskUndefinedOperands(copy))
+		const admission = admitValue(queryInputContract, masked.success ? masked.value : copy)
+		return admission.success ? { faults: admission.value.repairs } : admission.error
+	}
+
+	// Raise one refusal for a read, its header naming the passes that refused, the first column
+	// fault's column, its operator when the contract admitted the read, and the declared columns, and
+	// its body the contract's bounded rendering of the contract's faults, then the columns' faults.
+	#refuseRead(contract: ContractRefusal, columns: readonly AuditFault[], read: unknown): never {
+		const faults = [...contract.faults, ...columns].slice(0, FAULT_LIMIT)
+		const [fault] = columns
+		const path = fault === undefined ? [] : extractPath(fault)
+		const list = isRecord(read) && path[0] !== undefined ? read[path[0]] : undefined
+		const entry: unknown = isArray(list) ? list[Number(path[1])] : list
+		const head = isRecord(entry) ? extractColumnHead(entry.column) : undefined
+		const column = head === undefined ? undefined : this.#columns.get(head)
+		const operator =
+			contract.faults.length === 0 && path[0] === 'conditions' && isRecord(entry)
+				? entry.operator
+				: undefined
+		const passes = [
+			...(contract.faults.length > 0 ? ['query contract'] : []),
+			...(columns.length > 0 ? ['columns'] : []),
+		].join(' and ')
+		const declared = [...this.#columns.values()]
+			.map(
+				(schema) =>
+					`${schema.name} ${schema.storage}${schema.optional ? ' optional' : ''}${schema.nullable ? ' nullable' : ''}`,
+			)
+			.join(', ')
+		throw new DatabaseError(
+			'VALIDATION',
+			`Query failed the '${this.#name}' ${passes}${column === undefined ? '' : ` at '${column.name}' (${column.storage})`}${isString(operator) ? ` under '${operator}'` : ''}${columns.length > 0 ? ` (declared columns: ${declared})` : ''}: ${describeFaults(faults)}`,
+			{
+				table: this.#name,
+				faults,
+				...(column === undefined ? {} : { column: column.name }),
+				...(isString(operator) ? { operator } : {}),
+				...(contract.cause === undefined ? {} : { cause: contract.cause }),
+			},
+		)
 	}
 
 	// Narrow a stored row to the table's type, raising DRIVER for a row that fails the contract.

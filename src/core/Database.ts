@@ -1,6 +1,7 @@
 import type { ContractInterface, Result } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
+	ColumnSchema,
 	DatabaseEventMap,
 	DatabaseInterface,
 	DatabaseOptions,
@@ -20,7 +21,7 @@ import type {
 import type { TransactionScope } from './TransactionScope.js'
 import { compileSchema, createContract, objectShape } from '@orkestrel/contract'
 import { DatabaseError } from './errors.js'
-import { requireColumns, resolvePrimary, shapeToColumnSchema } from './helpers.js'
+import { collectColumns, requireColumns, resolvePrimary } from './helpers.js'
 import { DatabaseContext } from './DatabaseContext.js'
 import { DatabaseTransaction } from './DatabaseTransaction.js'
 import { Table } from './Table.js'
@@ -46,12 +47,20 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 	readonly #generate: KeyFunction | undefined
 	// Each table's compiled contract, built on its first use and shared with every transaction.
 	readonly #contracts: { [K in keyof T]?: ContractInterface<RowOf<T[K]>> } = {}
+	// Each table's declared columns by name, which its read door checks a query against.
+	readonly #columns: ReadonlyMap<string, ReadonlyMap<string, ColumnSchema>>
 
 	constructor(options: DatabaseOptions<T>) {
 		this.#tables = options.tables
 		this.#primary = options.primary ?? {}
 		this.#indexes = options.indexes ?? {}
 		this.#generate = options.generator
+		this.#columns = new Map(
+			Object.keys(options.tables).map((name) => [
+				name,
+				collectColumns(requireColumns(options.tables, name)),
+			]),
+		)
 		this.#context = new DatabaseContext(options)
 		this.#context.register(this.#schema())
 	}
@@ -110,6 +119,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 			const transaction = new DatabaseTransaction<T>(
 				storage,
 				(name) => this.#contract(name),
+				(name) => this.#layout(name),
 				this.#primary,
 				this.#generate,
 				this.#context.error,
@@ -131,6 +141,11 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 		return contract
 	}
 
+	// Every declared table has an entry, because the constructor derives one per table.
+	#layout(name: string): ReadonlyMap<string, ColumnSchema> {
+		return this.#columns.get(name) ?? new Map()
+	}
+
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
 		return new Table(
 			() => this.#context.connect(),
@@ -138,6 +153,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 			name,
 			key,
 			contract,
+			this.#layout(name),
 			this.#generate,
 			this.#context.error,
 			this.#context,
@@ -160,17 +176,12 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 	}
 
 	#schema(): readonly TableSchema[] {
-		return Object.keys(this.#tables).map((name) => {
-			const columns = requireColumns(this.#tables, name)
-			return {
-				name,
-				primary: resolvePrimary(this.#primary, name),
-				columns: Object.entries(columns).map(([column, shape]) =>
-					shapeToColumnSchema(column, shape),
-				),
-				indexes: this.#indexes[name] ?? [],
-			}
-		})
+		return Object.keys(this.#tables).map((name) => ({
+			name,
+			primary: resolvePrimary(this.#primary, name),
+			columns: [...this.#layout(name).values()],
+			indexes: this.#indexes[name] ?? [],
+		}))
 	}
 
 	async #settle<R>(

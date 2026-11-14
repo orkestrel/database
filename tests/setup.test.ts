@@ -1,19 +1,33 @@
 import type { DriverMetadata, Key, TableMap } from '@src/core'
-import type { StorageCall } from './setup.js'
 import { compileGuard, integerShape, stringShape } from '@orkestrel/contract'
-import { createMemoryDriver } from '@src/core'
+import {
+	createDatabase,
+	createMemoryDriver,
+	StreamPage,
+	streamRecordedRows,
+	tallyCalls,
+} from '@src/core'
 import { collect, createRecorder, requireValue } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
+	buildBenchRows,
 	buildCondition,
+	buildDoorQuery,
 	buildUserRows,
+	captureRefusal,
+	createDoorTable,
+	DOOR_ROWS,
+	FormStorage,
+	ILL_FORMED_RESULT,
+	isDatabaseModule,
+	readIllFormedText,
+	ScanGate,
+	streamThenFail,
 	collectRankStreamIds,
 	createContractSource,
 	createPartialBatchDriver,
 	createRecordedUsers,
 	interceptStorage,
-	iterateRecorded,
-	RecordedStorage,
 	createConstrainedUsersDatabase,
 	createCursorDatabase,
 	createMemoryAdapter,
@@ -32,9 +46,7 @@ import {
 	seedCursorDatabase,
 	seedUsersTable,
 	splitPlannedRead,
-	StorageRecorder,
 	tableSchemas,
-	tallyCalls,
 	userRows,
 } from './setup.js'
 
@@ -381,60 +393,6 @@ describe('createRecordingDriver', () => {
 	})
 })
 
-describe('StorageRecorder and tallyCalls', () => {
-	it('records the rows each member returns, and marks the scoped calls', async () => {
-		const recorder = new StorageRecorder(createMemoryDriver())
-		await recorder.driver.open(tableSchemas('users'))
-		await recorder.driver.write('users', 'a', { id: 'a' })
-		await recorder.driver.write('users', 'b', { id: 'b' })
-		const { value, calls } = await recorder.measure(async () => {
-			const rows = await collect(recorder.driver.scan('users'))
-			const row = await recorder.driver.read('users', 'missing')
-			return { rows: rows.length, row }
-		})
-		expect(value).toEqual({ rows: 2, row: undefined })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, keys: 0, rows: 2 })
-		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 1, rows: 0 })
-		expect(calls.every((call) => !call.scoped)).toBe(true)
-		expect(recorder.driver.transaction).toBeUndefined()
-		expect(recorder.source.stream).toBeUndefined()
-	})
-})
-
-describe('RecordedStorage', () => {
-	it('records the keys each keyed call addresses and the rows a list read returns', async () => {
-		const memory = createMemoryDriver()
-		await memory.open(tableSchemas('users'))
-		const calls: StorageCall[] = []
-		const recorded = new RecordedStorage(memory, true, calls)
-		await recorded.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
-		await recorded.insert('users', 'c', { id: 'c' })
-		expect(await recorded.read('users', ['a', 'missing'])).toEqual([{ id: 'a' }, undefined])
-		expect(await recorded.delete('users', ['a', 'b'])).toEqual([true, true])
-		expect(calls).toEqual([
-			{ member: 'write', keys: 2, rows: 0, scoped: true },
-			{ member: 'insert', keys: 1, rows: 0, scoped: true },
-			{ member: 'read', keys: 2, rows: 1, scoped: true },
-			{ member: 'delete', keys: 2, rows: 0, scoped: true },
-		])
-	})
-})
-
-describe('iterateRecorded', () => {
-	it('reports the rows a consumer pulled when it stops early', async () => {
-		const memory = createMemoryDriver()
-		await memory.open(tableSchemas('users'))
-		await memory.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
-		const reports = createRecorder<[rows: number]>()
-		const source = iterateRecorded(memory.scan('users'), reports.handler)
-		for await (const row of source) {
-			expect(row).toEqual({ id: 'a' })
-			break
-		}
-		expect(reports.calls).toEqual([[1]])
-	})
-})
-
 describe('interceptStorage', () => {
 	it('hands every keyed call to its handler as a list, and forwards an unhandled member', async () => {
 		const memory = createMemoryDriver()
@@ -497,5 +455,109 @@ describe('splitPlannedRead', () => {
 			residual: {},
 		})
 		expect(splitPlannedRead('listed', {})).toEqual({ native: {}, residual: { conditions: [] } })
+	})
+})
+
+describe('createDoorTable', () => {
+	it('seeds the door rows over a recorded driver it was handed, Memory by default', async () => {
+		const { recorder, table } = await createDoorTable()
+		expect(await table.keys()).toEqual(DOOR_ROWS.map((row) => row.id))
+		expect(tallyCalls(recorder.calls, 'write')).toEqual({ calls: 1, keys: 2, rows: 0 })
+		const memory = createMemoryDriver()
+		const handed = await createDoorTable(memory)
+		expect(handed.recorder.source).toBe(memory)
+	})
+})
+
+describe('buildDoorQuery', () => {
+	it('carries each listed condition and ordering term as authored, and builds an empty query otherwise', async () => {
+		const { table } = await createDoorTable()
+		const query = buildDoorQuery(table, {
+			conditions: [{ column: 'n', operator: 'above', values: [5], connector: 'and' }],
+			order: [{ column: 'n', direction: 'descending' }],
+		})
+		expect((await query.collect()).map((row) => row.id)).toEqual(['b'])
+		expect(await buildDoorQuery(table, null).count()).toBe(2)
+		expect(await buildDoorQuery(table, { conditions: 'x' }).count()).toBe(2)
+	})
+})
+
+describe('captureRefusal and readIllFormedText', () => {
+	it('captures a database refusal as its code and context, and a fulfilled operation as undefined', async () => {
+		const { table } = await createDoorTable()
+		expect(await captureRefusal(table.get('a'))).toBeUndefined()
+		expect(await captureRefusal(table.resolve('missing'))).toMatchObject({
+			code: 'NOT_FOUND',
+			context: { table: 'items', key: 'missing' },
+		})
+		await expect(captureRefusal(Promise.reject(new Error('raw')))).rejects.toThrow('raw')
+	})
+
+	it('reads the ill-formed text result of a door table', async () => {
+		const { recorder, table } = await createDoorTable()
+		expect(await readIllFormedText(table, recorder)).toMatchObject(ILL_FORMED_RESULT)
+	})
+})
+
+describe('ScanGate', () => {
+	it('holds a scan until it is released and reports the start first', async () => {
+		const gate = new ScanGate()
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		await memory.write('users', 'a', { id: 'a' })
+		const rows = collect(gate.scan(memory.scan('users')))
+		await gate.started
+		const order = createRecorder<[step: string]>()
+		const settled = rows.then((found) => order.handler(`rows ${found.length}`))
+		order.handler('released')
+		gate.release()
+		await settled
+		expect(order.calls).toEqual([['released'], ['rows 1']])
+	})
+})
+
+describe('FormStorage and streamThenFail', () => {
+	it('logs the form of each keyed call and forwards it', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		const storage = new FormStorage(memory)
+		await storage.write('users', 'a', { id: 'a' })
+		await storage.insert('users', ['b'], [{ id: 'b' }])
+		expect(await storage.read('users', ['a', 'b'])).toEqual([{ id: 'a' }, { id: 'b' }])
+		expect(await storage.delete('users', 'a')).toBe(true)
+		expect(await storage.keys('users')).toEqual(['b'])
+		expect(await collect(storage.scan('users'))).toEqual([{ id: 'b' }])
+		await storage.clear('users')
+		expect(storage.forms).toEqual(['write single', 'insert list', 'read list', 'delete single'])
+	})
+
+	it('yields its rows and then throws', async () => {
+		const rows = new StreamPage(0)
+		await expect(
+			collect(streamRecordedRows(streamThenFail([{ id: 'a' }], 'failed'), rows)),
+		).rejects.toThrow('failed')
+		expect(rows.count).toBe(1)
+	})
+})
+
+describe('buildBenchRows and isDatabaseModule', () => {
+	it('builds client-shaped bench rows', () => {
+		const rows = buildBenchRows(4)
+		expect(
+			rows.map((row) => [row.id, row.organization, row.rank, row.body.length, row.active]),
+		).toEqual([
+			['k0', 'o0', 0, 24, true],
+			['k1', 'o1', 9, 25, false],
+			['k2', 'o2', 13, 26, true],
+			['k3', 'o3', 17, 27, false],
+		])
+		expect(rows.map((row) => row.note)).toEqual(['n', undefined, undefined, 'n'])
+	})
+
+	it('admits a module whose two members are functions, and nothing else', () => {
+		expect(isDatabaseModule({ createDatabase, createMemoryDriver })).toBe(true)
+		expect(isDatabaseModule({ createDatabase })).toBe(false)
+		expect(isDatabaseModule({ createDatabase, createMemoryDriver: 'x' })).toBe(false)
+		expect(isDatabaseModule(null)).toBe(false)
 	})
 })

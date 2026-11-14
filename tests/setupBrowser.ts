@@ -442,22 +442,6 @@ export const ROW_CASES: readonly RowCase[] = [
 				.condition({ column: 'name', operator: 'glob', values: ['[a-z]*'], connector: 'and' })
 				.collect(),
 	},
-	{
-		name: 'like against a non-string (age) column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'like', values: ['%3%'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'glob against a non-string (age) column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'glob', values: ['*3*'], connector: 'and' })
-				.collect(),
-	},
 
 	// ── any([]) / none([]) / mixed lists / deep json equals ─────────────
 	{
@@ -474,22 +458,6 @@ export const ROW_CASES: readonly RowCase[] = [
 			users
 				.query()
 				.condition({ column: 'name', operator: 'none', values: [], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'any with a mixed-type list',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'any', values: [36, 'nope', 0], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'none with a mixed-type list',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'none', values: [36, 'nope', 0], connector: 'and' })
 				.collect(),
 	},
 	{
@@ -582,32 +550,6 @@ export const ROW_CASES: readonly RowCase[] = [
 			users
 				.query()
 				.condition({ column: 'age', operator: 'between', values: [36, 0], connector: 'and' })
-				.collect(),
-	},
-
-	// ── mismatched operand types ──────────────────────────────────────────
-	{
-		name: 'equals with a string operand on an integer column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'equals', values: ['36'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'above with a string operand on an integer column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'above', values: ['18'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'equals with a number operand on a text column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'name', operator: 'equals', values: [36], connector: 'and' })
 				.collect(),
 	},
 

@@ -1,4 +1,11 @@
-import type { ColumnSchema, ReadInput, Row, TableSchema } from './types.js'
+import type {
+	AggregateOperation,
+	ColumnSchema,
+	ConditionOperator,
+	ReadInput,
+	Row,
+	TableSchema,
+} from './types.js'
 
 // Database constants — frozen plain data.
 
@@ -26,6 +33,60 @@ export const DEFAULT_PRIMARY = 'id'
  * `VALIDATION` {@link DatabaseError}; the cap is generous for any legitimate search.
  */
 export const MAX_PATTERN_LENGTH = 1024
+
+/**
+ * Lists the operators whose operand can be `null` on a nullable column and `undefined` on an
+ * optional one: `equals`, `not`, `any`, and `none`.
+ *
+ * @example
+ * ```ts
+ * import { NULLISH_OPERATORS } from '@orkestrel/database'
+ *
+ * NULLISH_OPERATORS.includes('above') // false — a range operator refuses `null`
+ * ```
+ */
+export const NULLISH_OPERATORS: readonly ConditionOperator[] = Object.freeze([
+	'equals',
+	'not',
+	'any',
+	'none',
+])
+
+/**
+ * Lists the operators that match a string pattern, which read a `text` or `json` column:
+ * `like`, `glob`, `starts`, and `ends`.
+ *
+ * @example
+ * ```ts
+ * import { PATTERN_OPERATORS } from '@orkestrel/database'
+ *
+ * PATTERN_OPERATORS.includes('like') // true
+ * ```
+ */
+export const PATTERN_OPERATORS: readonly ConditionOperator[] = Object.freeze([
+	'like',
+	'glob',
+	'starts',
+	'ends',
+])
+
+/**
+ * Lists the aggregates a read can compute: `count`, `sum`, `average`, `minimum`, and `maximum`.
+ *
+ * @example
+ * ```ts
+ * import { AGGREGATE_OPERATIONS } from '@orkestrel/database'
+ *
+ * AGGREGATE_OPERATIONS.includes('median') // false — a table refuses it with `VALIDATION`
+ * ```
+ */
+export const AGGREGATE_OPERATIONS: readonly AggregateOperation[] = Object.freeze([
+	'count',
+	'sum',
+	'average',
+	'minimum',
+	'maximum',
+])
 
 /**
  * Describes the `users` table the driver-conformance battery opens — keyed by the default

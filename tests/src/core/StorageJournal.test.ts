@@ -1,7 +1,7 @@
-import { createMemoryDriver, StorageJournal } from '@src/core'
+import { createMemoryDriver, StorageJournal, StorageRecorder, tallyCalls } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { interceptStorage, StorageRecorder, tableSchemas, tallyCalls } from '../../setup.js'
+import { interceptStorage, tableSchemas } from '../../setup.js'
 
 // `StorageJournal` over a real Memory driver: the prior row of each touched key is read once,
 // on its first touch, and restored on request; a clear captures its table alone. The adverse

@@ -1,14 +1,17 @@
 import type { FieldPath } from '@orkestrel/contract'
 import type {
+	Aggregate,
 	AggregateOperation,
 	Condition,
 	OperationOptions,
 	Order,
+	QueryInput,
 	QueryInterface,
+	ReadInput,
 	Row,
 	TableInterface,
 } from './types.js'
-import { computeAggregate, validatePage } from './helpers.js'
+import { computeAggregate } from './helpers.js'
 import { StreamPage } from './StreamPage.js'
 
 /**
@@ -17,18 +20,34 @@ import { StreamPage } from './StreamPage.js'
  * @remarks
  * Accumulates typed conditions, ordering, JS filters, and a page. Each builder
  * method mutates and returns the same instance. Portable inputs flow to the
- * table, while predicates remain an in-memory refinement.
+ * table, while predicates remain an in-memory refinement. `admit` and `admitAggregate` are the
+ * table's door: a page the builder sets and an aggregate the query computes itself after a filter
+ * pass it, with its conditions, in one door call.
  */
 export class Query<T = Row> implements QueryInterface<T> {
 	readonly #table: TableInterface<T>
+	readonly #admit: (input: unknown) => QueryInput
+	readonly #admitAggregate: (
+		input: unknown,
+		aggregate: unknown,
+	) => ReadInput & { readonly aggregate: Aggregate }
 	readonly #conditions: Condition[] = []
 	readonly #orders: Order[] = []
 	readonly #filters: Array<(row: T) => boolean> = []
 	#limit: number | undefined
 	#offset: number | undefined
 
-	constructor(table: TableInterface<T>) {
+	constructor(
+		table: TableInterface<T>,
+		admit: (input: unknown) => QueryInput,
+		admitAggregate: (
+			input: unknown,
+			aggregate: unknown,
+		) => ReadInput & { readonly aggregate: Aggregate },
+	) {
 		this.#table = table
+		this.#admit = admit
+		this.#admitAggregate = admitAggregate
 	}
 
 	condition(input: Condition): QueryInterface<T> {
@@ -47,13 +66,13 @@ export class Query<T = Row> implements QueryInterface<T> {
 	}
 
 	limit(count: number): QueryInterface<T> {
-		validatePage({ limit: count })
+		this.#admit({ limit: count })
 		this.#limit = count
 		return this
 	}
 
 	offset(count: number): QueryInterface<T> {
-		validatePage({ offset: count })
+		this.#admit({ offset: count })
 		this.#offset = count
 		return this
 	}
@@ -119,15 +138,19 @@ export class Query<T = Row> implements QueryInterface<T> {
 		}
 	}
 
-	aggregate(operation: AggregateOperation, column: FieldPath): Promise<number | undefined> {
+	async aggregate(operation: AggregateOperation, column: FieldPath): Promise<number | undefined> {
 		if (this.#filters.length === 0) {
 			return this.#table.aggregate(operation, column, {
 				conditions: this.#conditions,
 			})
 		}
-		return this.#table
-			.records({ conditions: this.#conditions })
-			.then((fetched) => computeAggregate(this.#filtered(fetched), operation, column))
+		const read = this.#admitAggregate({ conditions: this.#conditions }, { operation, column })
+		const fetched = await this.#table.records({ conditions: read.conditions ?? [] })
+		return computeAggregate(
+			this.#filtered(fetched),
+			read.aggregate.operation,
+			read.aggregate.column,
+		)
 	}
 
 	#filtered(rows: readonly T[]): readonly T[] {

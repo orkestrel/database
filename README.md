@@ -6,7 +6,8 @@
 
 Declare your tables with the `createDatabase` function, hold each
 `TableInterface` it hands back, and reach rows by key or through the fluent
-`query()` builder. `TableInterface.cursor()` opens the `CursorInterface`
+`query()` builder; every read passes the exported `queryInputContract` and the table's
+columns before a driver sees it. `TableInterface.cursor()` opens the `CursorInterface`
 contract for serial bulk mutation. Built on `@orkestrel/contract` for
 validation and `@orkestrel/emitter` for the observation surface, reusing both
 directly. Part of the `@orkestrel` line.
@@ -19,7 +20,7 @@ npm install @orkestrel/database
 
 ## Requirements
 
-- Node.js >= 22.12.0, matching the package engine declaration
+- Node.js `^22.18.0 || >=24.4.0`, the package engine range
 - The `./server` SQLite driver additionally requires a Node.js release that
   provides `node:sqlite`
 - Core is ESM; the `./server` subpath ships dual ESM+CJS builds; `./browser`

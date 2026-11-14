@@ -1,5 +1,5 @@
 import type { DriverMetadata, MigrationInput, TableSchema } from './types.js'
-import { cloneJSONRecord, cloneJSONValue } from '@orkestrel/contract'
+import { cloneJSONRecord, cloneJSONValue, isArray, isRecord } from '@orkestrel/contract'
 import { DatabaseError, isDatabaseError } from './errors.js'
 import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators.js'
 
@@ -81,5 +81,61 @@ export function cloneMigrationInput(value: unknown): MigrationInput {
 			path: 'migration',
 			cause: error,
 		})
+	}
+}
+
+/**
+ * Copies a read a table is about to admit, so a change its caller makes after admission never
+ * reaches the read.
+ *
+ * @remarks
+ * Copies the record, its `conditions` and `order` lists, each condition and ordering term, each
+ * operand list, and each list of keys, reading each member once. Operands are kept by reference.
+ * A value that is no record, and a part that is no record or no list, is kept as it came, for the
+ * query contract to report.
+ *
+ * @param value - The read, not yet admitted
+ * @returns The copy
+ *
+ * @example
+ * ```ts
+ * const conditions = [{ column: 'age', operator: 'from', values: [18], connector: 'and' }]
+ * const copy = cloneQueryInput({ conditions })
+ * conditions.push({ column: 'age', operator: 'to', values: [65], connector: 'and' })
+ * copy // { conditions: [{ column: 'age', operator: 'from', values: [18], connector: 'and' }] }
+ * ```
+ */
+export function cloneQueryInput(value: unknown): unknown {
+	if (!isRecord(value)) return value
+	const copy = { ...value }
+	const { conditions, order } = copy
+	return {
+		...copy,
+		...(isArray(conditions) ? { conditions: conditions.map(cloneQueryPart) } : {}),
+		...(isArray(order) ? { order: order.map(cloneQueryPart) } : {}),
+	}
+}
+
+/**
+ * Copies one condition or ordering term of a read, with its list of keys and its operand list,
+ * reading each member once.
+ *
+ * @param value - The condition or term, not yet admitted
+ * @returns The copy, or the value as it came when it is no record
+ *
+ * @example
+ * ```ts
+ * cloneQueryPart({ column: ['profile', 'age'], direction: 'ascending' })
+ * // { column: ['profile', 'age'], direction: 'ascending' }, a fresh key list included
+ * ```
+ */
+export function cloneQueryPart(value: unknown): unknown {
+	if (!isRecord(value)) return value
+	const copy = { ...value }
+	const { column, values } = copy
+	return {
+		...copy,
+		...(isArray(column) ? { column: [...column] } : {}),
+		...(isArray(values) ? { values: [...values] } : {}),
 	}
 }

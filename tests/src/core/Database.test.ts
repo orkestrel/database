@@ -4,6 +4,7 @@ import type {
 	DatabaseInterface,
 	CursorInterface,
 	MigrationInput,
+	QueryInput,
 	QueryInterface,
 	Row,
 	RowOf,
@@ -11,7 +12,14 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type { DatabaseEvent, MigrateEvent, UserRow } from '../../setup.js'
-import { createDatabase, createMemoryDriver, isDatabaseError, StorageJournal } from '@src/core'
+import {
+	createDatabase,
+	createMemoryDriver,
+	isDatabaseError,
+	StorageJournal,
+	StorageRecorder,
+	tallyCalls,
+} from '@src/core'
 import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
@@ -29,9 +37,7 @@ import {
 	createReconciliationDriver,
 	IteratorSource,
 	RecordingIterator,
-	StorageRecorder,
 	tableSchemas,
-	tallyCalls,
 } from '../../setup.js'
 
 // Database-level behavior only — lazy connect / close lifecycle, the per-table
@@ -1460,5 +1466,53 @@ describe('Database — contract cache', () => {
 		expect(db.table('users').contract).toBe(contract)
 		const scoped = await db.transaction(async (transaction) => transaction.table('users').contract)
 		expect(scoped).toBe(contract)
+	})
+})
+
+describe('Database — the query door in every view', () => {
+	it('admits a read through the columns of a transaction table and of an imported view', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		const db = createDatabase({
+			driver: recorder.driver,
+			tables: { users: { id: stringShape(), age: integerShape() } },
+		})
+		const posts = db.import(
+			{ posts: { slug: stringShape(), title: stringShape() } },
+			{ posts: 'slug' },
+		)
+		await db.table('users').set({ id: 'u1', age: 36 })
+		const refused: QueryInput = {
+			conditions: [{ column: 'age', operator: 'equals', values: ['36'], connector: 'and' }],
+		}
+		const { value, calls } = await recorder.measure(() =>
+			db
+				.transaction((scope) => scope.table('users').records(refused))
+				.catch((caught: unknown) => caught),
+		)
+		expect(value).toMatchObject({ code: 'VALIDATION', context: { table: 'users', column: 'age' } })
+		expect(calls).toEqual([])
+		const imported = await recorder.measure(() =>
+			posts
+				.table('posts')
+				.count({
+					conditions: [{ column: 'age', operator: 'present', values: [], connector: 'and' }],
+				})
+				.catch((caught: unknown) => caught),
+		)
+		expect(imported.calls).toEqual([])
+		expect(imported.value).toMatchObject({ code: 'VALIDATION', context: { table: 'posts' } })
+		await posts.table('posts').set({ slug: 'hello', title: 'Hello' })
+		expect(
+			await posts.table('posts').records({
+				conditions: [{ column: 'title', operator: 'starts', values: ['He'], connector: 'and' }],
+			}),
+		).toEqual([{ slug: 'hello', title: 'Hello' }])
+		expect(
+			await db.transaction((scope) =>
+				scope.table('users').count({
+					conditions: [{ column: 'age', operator: 'equals', values: [36], connector: 'and' }],
+				}),
+			),
+		).toBe(1)
 	})
 })

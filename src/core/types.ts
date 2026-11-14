@@ -86,6 +86,10 @@ export type ConditionConnector = 'and' | 'or'
  * the first condition's connector seeds the fold and is otherwise ignored.
  * `column` is a {@link FieldPath}: a single string is one column (never split on
  * `.`), an array descends into a nested (object/`json`) value.
+ *
+ * A table admits each read through `queryInputContract`, whose shape carries each operator's
+ * arity, and then through the table's columns: the leading column is declared, a nested path
+ * descends only a `json` column, and each operand matches its column's storage class.
  */
 export interface Condition {
 	readonly column: FieldPath
@@ -584,6 +588,78 @@ export interface StorageJournalInterface extends StorageInterface {
 	restore(): Promise<void>
 }
 
+/**
+ * Names a {@link StorageInterface} member a `StorageRecorder` observes.
+ *
+ * @example
+ * ```ts
+ * import type { StorageMember } from '@orkestrel/database'
+ *
+ * const member: StorageMember = 'records'
+ * ```
+ */
+export type StorageMember =
+	| 'read'
+	| 'write'
+	| 'insert'
+	| 'delete'
+	| 'keys'
+	| 'scan'
+	| 'clear'
+	| 'plan'
+	| 'records'
+	| 'stream'
+	| 'aggregate'
+
+/**
+ * Represents one storage call a `StorageRecorder` observed: the member, the keys it addressed,
+ * the rows it returned or yielded, and whether a transaction scope made it.
+ *
+ * @example
+ * ```ts
+ * import type { StorageCall } from '@orkestrel/database'
+ *
+ * const call: StorageCall = { member: 'read', keys: 2, rows: 1, scoped: false }
+ * ```
+ */
+export interface StorageCall {
+	readonly member: StorageMember
+	readonly keys: number
+	readonly rows: number
+	readonly scoped: boolean
+}
+
+/**
+ * Represents the calls, addressed keys, and returned rows of one member across recorded calls.
+ *
+ * @example
+ * ```ts
+ * import type { StorageTally } from '@orkestrel/database'
+ *
+ * const tally: StorageTally = { calls: 1, keys: 0, rows: 2 }
+ * ```
+ */
+export interface StorageTally {
+	readonly calls: number
+	readonly keys: number
+	readonly rows: number
+}
+
+/**
+ * Represents one measured operation's value and the storage calls it made.
+ *
+ * @example
+ * ```ts
+ * import type { StorageResult } from '@orkestrel/database'
+ *
+ * const result: StorageResult<number> = { value: 2, calls: [{ member: 'scan', keys: 0, rows: 2, scoped: false }] }
+ * ```
+ */
+export interface StorageResult<R> {
+	readonly value: R
+	readonly calls: readonly StorageCall[]
+}
+
 // === Database
 
 /**
@@ -853,6 +929,12 @@ export interface DatabaseInterface<
  * when a key is absent; `resolve` throws `NOT_FOUND`. `set` upserts; `add`
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the
  * compiled contract for introspection (`schema`) and fixtures (`generate`).
+ *
+ * Every read — `records`, `count`, `aggregate`, `scan`, and each `query()` terminal — is admitted
+ * through `queryInputContract` and then through the table's columns before any driver call; a
+ * refused read throws `VALIDATION` whose `context` carries `table` and `faults`, and `column`
+ * and `operator` where the first fault names them. A lone surrogate in a written `text` value or
+ * a key throws `VALIDATION` with `table` and `column`; a `json` cell holding one round-trips.
  *
  * The keyed methods batch by overload: pass one key/row for one result, or an array for an
  * array of results in the same order — a single verb, never `getMany` / `setAll`. `remove` of a

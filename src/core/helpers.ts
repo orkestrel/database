@@ -1,4 +1,4 @@
-import type { ContractShape, FieldPath } from '@orkestrel/contract'
+import type { AuditFault, ContractShape, FieldPath } from '@orkestrel/contract'
 import type {
 	Aggregate,
 	AggregateOperation,
@@ -17,13 +17,18 @@ import type {
 	ReadInput,
 	ReadPlan,
 	Row,
+	StorageCall,
 	StorageInterface,
+	StorageMember,
+	StorageTally,
 	TableMap,
 	TableSchema,
 } from './types.js'
 import {
 	attempt,
 	collectMembers,
+	extractPath,
+	FAULT_LIMIT,
 	compileGuard,
 	isArray,
 	isBoolean,
@@ -48,10 +53,12 @@ import {
 	CONFORMANCE_USERS_SCHEMA,
 	DEFAULT_PRIMARY,
 	MAX_PATTERN_LENGTH,
+	NULLISH_OPERATORS,
+	PATTERN_OPERATORS,
 } from './constants.js'
 import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
-import { isKey, isScalar } from './validators.js'
+import { isAggregateOperation, isKey, isScalar } from './validators.js'
 
 // The core's query engine. It runs the residual a driver's plan returns, under the
 // native-first rule `DriverInterface` states, and the whole read for a driver without
@@ -87,6 +94,397 @@ export function validatePage(input?: QueryInput): void {
 			value: isFiniteNumber(offset) ? offset : String(offset),
 		})
 	}
+}
+
+/**
+ * Checks whether a value is a string holding a lone surrogate, which has no UTF-8 form.
+ *
+ * @remarks
+ * SQLite stores a lone surrogate as U+FFFD and reads back a changed value, so a table refuses
+ * one in a written `text` value, a key, and a string operand on every driver.
+ *
+ * @param value - The value to check
+ * @returns True if the value is a string that is not well-formed UTF-16; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesIllFormedText('a\uD800b') // true
+ * matchesIllFormedText('\uD83D\uDE00') // false — a surrogate pair
+ * matchesIllFormedText(1) // false
+ * ```
+ */
+export function matchesIllFormedText(value: unknown): boolean {
+	return isString(value) && !value.isWellFormed()
+}
+
+/**
+ * Extracts the leading column a column reference names: a column name, or the first key of a
+ * non-empty list of keys.
+ *
+ * @param column - The column reference, not yet admitted
+ * @returns The leading column, or `undefined` when the reference is no column name and no
+ *   non-empty list of strings
+ *
+ * @example
+ * ```ts
+ * extractColumnHead(['profile', 'age']) // 'profile'
+ * extractColumnHead([]) // undefined
+ * ```
+ */
+export function extractColumnHead(column: unknown): string | undefined {
+	if (isString(column)) return column
+	return isArray(column) && column.length > 0 && column.every(isString) ? column[0] : undefined
+}
+
+/**
+ * Copies a read so that each `undefined` operand of `equals`, `not`, `any`, and `none` reads
+ * `null`, the form `queryInputShape` declares.
+ *
+ * @remarks
+ * A shape cannot declare an `undefined` array member, so a table checks this copy against the
+ * shape and checks each `undefined` operand against its column's optionality itself. Every other
+ * condition is kept by reference, and a value that is no record or whose `conditions` is no
+ * list returns as it came.
+ *
+ * @param input - The read to copy, not yet admitted
+ * @returns The input itself when no such operand is present, otherwise the copy
+ *
+ * @example
+ * ```ts
+ * maskUndefinedOperands({ conditions: [{ column: 'note', operator: 'equals', values: [undefined], connector: 'and' }] })
+ * // { conditions: [{ column: 'note', operator: 'equals', values: [null], connector: 'and' }] }
+ * ```
+ */
+export function maskUndefinedOperands(input: unknown): unknown {
+	if (!isRecord(input)) return input
+	const conditions = input.conditions
+	if (!isArray(conditions)) return input
+	const masked = conditions.map((condition) =>
+		isRecord(condition) &&
+		NULLISH_OPERATORS.some((operator) => operator === condition.operator) &&
+		isArray(condition.values) &&
+		condition.values.includes(undefined)
+			? { ...condition, values: condition.values.map((value) => value ?? null) }
+			: condition,
+	)
+	return masked.every((condition, index) => condition === conditions[index])
+		? input
+		: { ...input, conditions: masked }
+}
+
+/**
+ * Puts back the operands of a read whose masked form {@link maskUndefinedOperands} built and the
+ * query contract admitted.
+ *
+ * @remarks
+ * The masked read and its source differ only in operand lists, so each condition takes the
+ * operand list of the source's condition at the same position.
+ *
+ * @param masked - The admitted masked read
+ * @param source - The read the mask copied
+ * @returns The admitted read with the source's operands
+ *
+ * @example
+ * ```ts
+ * const source = { conditions: [{ column: 'note', operator: 'equals', values: [undefined], connector: 'and' }] }
+ * restoreUndefinedOperands(maskUndefinedOperands(source), source).conditions?.[0]?.values // [undefined]
+ * ```
+ */
+export function restoreUndefinedOperands(masked: QueryInput, source: unknown): QueryInput {
+	const conditions = isRecord(source) ? source.conditions : undefined
+	if (masked.conditions === undefined || !isArray(conditions)) return masked
+	return {
+		...masked,
+		conditions: masked.conditions.map((condition, index) => {
+			const original: unknown = conditions[index]
+			return isRecord(original) && isArray(original.values)
+				? { ...condition, values: original.values }
+				: condition
+		}),
+	}
+}
+
+/**
+ * Finds what a read asks of a table's columns that they do not hold — the schema facts a shape
+ * cannot state.
+ *
+ * @remarks
+ * Reads the read as it came, before the query contract admits it, and skips each part that is no
+ * record or no list and each condition and ordering term the contract refused, which the contract
+ * reports. A condition's and an ordering term's leading
+ * column is declared, and a path of more than one key descends only a `json` column. A
+ * condition's operand matches its column's storage class: a string for `text`, a number for
+ * `integer` and `real`, a boolean for `boolean`, and any value for `json` or under a nested
+ * path. `null` is admitted for `equals`, `not`, `any`, and `none` on a nullable column, and
+ * `undefined` for the same operators on an optional one. `like`, `glob`, `starts`, and `ends`
+ * read a `text` or `json` column. Every string operand is well-formed UTF-16, with no lone
+ * surrogate, whatever its column. An aggregate names one of `AGGREGATE_OPERATIONS` and a
+ * declared column. The check reads no refinement: integer-ness, bounds, patterns, and literal
+ * membership stay the contract's. At most `FAULT_LIMIT` faults return.
+ *
+ * @param input - The read, its aggregate included
+ * @param columns - The table's declared columns, by name
+ * @param refused - The query contract's faults of the read; each condition and ordering term a
+ *   fault names is skipped, so it carries no second fault here. Default: none
+ * @returns One fault per refused column, operator, operand, or aggregate member, empty when the
+ *   read is admitted
+ *
+ * @example
+ * ```ts
+ * const columns = new Map([['age', { name: 'age', storage: 'integer', optional: false, nullable: false }]])
+ * scanQueryFaults({ conditions: [{ column: 'age', operator: 'equals', values: ['36'], connector: 'and' }] }, columns)
+ * // [{ reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'number', received: '"36"' }]
+ * ```
+ */
+export function scanQueryFaults(
+	input: unknown,
+	columns: ReadonlyMap<string, ColumnSchema>,
+	refused: readonly AuditFault[] = [],
+): readonly AuditFault[] {
+	if (!isRecord(input)) return []
+	const conditions = isArray(input.conditions) ? input.conditions : []
+	const order = isArray(input.order) ? input.order : []
+	const skipped = new Set(refused.map((fault) => extractPath(fault).slice(0, 2).join('/')))
+	return Iterator.from([
+		Iterator.from(conditions).flatMap((condition, index) =>
+			skipped.has(`conditions/${index}`)
+				? []
+				: scanConditionFaults(condition, ['conditions', `${index}`], columns),
+		),
+		Iterator.from(order).flatMap((term, index) =>
+			isRecord(term) && !skipped.has(`order/${index}`)
+				? scanColumnFaults(term.column, ['order', `${index}`, 'column'], columns)
+				: [],
+		),
+		input.aggregate === undefined ? [] : scanAggregateFaults(input.aggregate, columns),
+	])
+		.flatMap((faults) => faults)
+		.take(FAULT_LIMIT)
+		.toArray()
+}
+
+/**
+ * Finds what one condition asks of a table's columns that they do not hold, under the rules
+ * {@link scanQueryFaults} states.
+ *
+ * @param condition - The condition, not yet admitted; a value that is no record has no fault here
+ * @param path - The condition's path in the read
+ * @param columns - The table's declared columns, by name
+ * @returns The condition's faults, at most `FAULT_LIMIT`
+ *
+ * @example
+ * ```ts
+ * const columns = new Map([['name', { name: 'name', storage: 'text', optional: false, nullable: false }]])
+ * scanConditionFaults({ column: 'name', operator: 'equals', values: [null], connector: 'and' }, ['conditions', '0'], columns)
+ * // [{ reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'string', received: 'null' }]
+ * ```
+ */
+export function scanConditionFaults(
+	condition: unknown,
+	path: readonly string[],
+	columns: ReadonlyMap<string, ColumnSchema>,
+): readonly AuditFault[] {
+	if (!isRecord(condition)) return []
+	const located = scanColumnFaults(condition.column, [...path, 'column'], columns)
+	const column = columns.get(extractColumnHead(condition.column) ?? '')
+	if (located.length > 0 || column === undefined) return located
+	const nested = isArray(condition.column) && condition.column.length > 1
+	const pattern = PATTERN_OPERATORS.some((operator) => operator === condition.operator)
+	if (pattern && !nested && column.storage !== 'text' && column.storage !== 'json') {
+		return [
+			{
+				reason: 'constraint',
+				path: [...path, 'operator'],
+				expected: 'literal',
+				constraint: 'pattern',
+				limit: 'a text or json column',
+				received: preview(condition.operator),
+			},
+		]
+	}
+	const nullish = NULLISH_OPERATORS.some((operator) => operator === condition.operator)
+	return Iterator.from(isArray(condition.values) ? condition.values : [])
+		.flatMap((value, index) =>
+			scanOperandFaults(
+				value,
+				[...path, 'values', `${index}`],
+				nested ? undefined : column,
+				nullish,
+			),
+		)
+		.take(FAULT_LIMIT)
+		.toArray()
+}
+
+/**
+ * Finds the fault of a column reference: an undeclared leading column, or a nested path under a
+ * column that is not `json`.
+ *
+ * @param column - The column reference; one that is no column name and no non-empty list of
+ *   strings has no fault here, because the query contract reports it
+ * @param path - The reference's path in the read
+ * @param columns - The table's declared columns, by name
+ * @returns The reference's fault, or an empty list when the table holds it
+ *
+ * @example
+ * ```ts
+ * scanColumnFaults('agee', ['order', '0', 'column'], new Map())
+ * // [{ reason: 'type', path: ['order', '0', 'column'], expected: 'literal', received: '"agee"' }]
+ * ```
+ */
+export function scanColumnFaults(
+	column: unknown,
+	path: readonly string[],
+	columns: ReadonlyMap<string, ColumnSchema>,
+): readonly AuditFault[] {
+	const head = extractColumnHead(column)
+	if (head === undefined) return []
+	const declared = columns.get(head)
+	if (declared === undefined) {
+		return [
+			{
+				reason: 'type',
+				path: isString(column) ? path : [...path, '0'],
+				expected: 'literal',
+				received: preview(head),
+			},
+		]
+	}
+	if (isArray(column) && column.length > 1 && declared.storage !== 'json') {
+		return [{ reason: 'type', path, expected: 'string', received: preview(column) }]
+	}
+	return []
+}
+
+/**
+ * Finds the faults of an aggregate: an operation outside `AGGREGATE_OPERATIONS`, and a column
+ * that is no column reference or that the table does not hold.
+ *
+ * @param aggregate - The aggregate, not yet admitted
+ * @param columns - The table's declared columns, by name
+ * @returns The aggregate's faults, at `['aggregate', 'operation']` and `['aggregate', 'column']`
+ *
+ * @example
+ * ```ts
+ * scanAggregateFaults({ operation: 'median', column: 'age' }, new Map())
+ * // [{ reason: 'type', path: ['aggregate', 'operation'], expected: 'literal', received: '"median"' },
+ * //  { reason: 'type', path: ['aggregate', 'column'], expected: 'literal', received: '"age"' }]
+ * ```
+ */
+export function scanAggregateFaults(
+	aggregate: unknown,
+	columns: ReadonlyMap<string, ColumnSchema>,
+): readonly AuditFault[] {
+	if (!isRecord(aggregate)) {
+		return [
+			{ reason: 'type', path: ['aggregate'], expected: 'object', received: preview(aggregate) },
+		]
+	}
+	const operation = isAggregateOperation(aggregate.operation)
+	return [
+		...(operation
+			? []
+			: [
+					{
+						reason: 'type' as const,
+						path: ['aggregate', 'operation'],
+						expected: 'literal' as const,
+						received: preview(aggregate.operation),
+					},
+				]),
+		...(extractColumnHead(aggregate.column) === undefined
+			? [
+					{
+						reason: 'type' as const,
+						path: ['aggregate', 'column'],
+						expected: 'string' as const,
+						received: preview(aggregate.column),
+					},
+				]
+			: scanColumnFaults(aggregate.column, ['aggregate', 'column'], columns)),
+	]
+}
+
+/**
+ * Finds the fault of one operand against its column's storage class.
+ *
+ * @remarks
+ * A string operand is well-formed UTF-16 whatever its column, under a nested path and on a
+ * `json` column included. Without a column, under a nested path, any other operand is
+ * admitted; a `json` or `blob` column admits any other operand too.
+ *
+ * @param value - The operand
+ * @param path - The operand's path in the read
+ * @param column - The column the operand compares with, or `undefined` under a nested path
+ * @param nullish - If `true`, the operator admits `null` on a nullable column and `undefined` on
+ *   an optional one; if `false`, it admits neither
+ * @returns The operand's fault, or an empty list when the column admits it
+ *
+ * @example
+ * ```ts
+ * const column = { name: 'age', storage: 'integer', optional: false, nullable: false }
+ * scanOperandFaults(true, ['conditions', '0', 'values', '0'], column, true)
+ * // [{ reason: 'type', path: ['conditions', '0', 'values', '0'], expected: 'number', received: 'true' }]
+ * ```
+ */
+export function scanOperandFaults(
+	value: unknown,
+	path: readonly string[],
+	column: ColumnSchema | undefined,
+	nullish: boolean,
+): readonly AuditFault[] {
+	if (matchesIllFormedText(value)) {
+		return [
+			{
+				reason: 'constraint',
+				path,
+				expected: 'string',
+				constraint: 'pattern',
+				received: preview(value),
+			},
+		]
+	}
+	if (column === undefined || column.storage === 'json' || column.storage === 'blob') return []
+	const expected =
+		column.storage === 'text' ? 'string' : column.storage === 'boolean' ? 'boolean' : 'number'
+	const admitted =
+		value === null
+			? nullish && column.nullable
+			: value === undefined
+				? nullish && column.optional
+				: expected === 'string'
+					? isString(value)
+					: expected === 'boolean'
+						? isBoolean(value)
+						: isNumber(value)
+	return admitted ? [] : [{ reason: 'type', path, expected, received: preview(value) }]
+}
+
+/**
+ * Finds the first `text` column of a row whose string is not well-formed UTF-16.
+ *
+ * @remarks
+ * A `json` column is not read, because `JSON.stringify` escapes a lone surrogate and the cell
+ * round-trips.
+ *
+ * @param row - The row to read
+ * @param columns - The table's declared columns, by name
+ * @returns The column's name, or `undefined` when every `text` value is well-formed
+ *
+ * @example
+ * ```ts
+ * const columns = new Map([['name', { name: 'name', storage: 'text', optional: false, nullable: false }]])
+ * findIllFormedColumn({ name: 'a\uD800b' }, columns) // 'name'
+ * findIllFormedColumn({ name: 'Ada' }, columns) // undefined
+ * ```
+ */
+export function findIllFormedColumn(
+	row: Row,
+	columns: ReadonlyMap<string, ColumnSchema>,
+): string | undefined {
+	return Iterator.from(columns.values()).find(
+		(column) => column.storage === 'text' && matchesIllFormedText(row[column.name]),
+	)?.name
 }
 
 /**
@@ -863,7 +1261,8 @@ export function bindRowKey(row: Row, primary: string, key: Key): Row {
  * `string` → `text`; `number` → `integer` when the shape is integer-only, else
  * `real`; `boolean` → `boolean`. A `literal` takes the type of its values
  * (all-boolean → `boolean`, all-integer → `integer`, mixed/fractional numbers →
- * `real`, anything else → `text`). `optional` / `nullable` unwrap to their inner
+ * `real`, all-string → `text`, members of more than one class → `json`, as a union is).
+ * `optional` / `nullable` unwrap to their inner
  * type (nullability is tracked separately). `null` / `object` / `array` / `union` /
  * `json` / `raw` → `json`: a backend stores them as JSON text and can `json_extract`
  * for nested `FieldPath` queries. A scan-only backend ignores the result.
@@ -892,7 +1291,7 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 			if (shape.values.every((value) => isNumber(value))) {
 				return shape.values.every((value) => isInteger(value)) ? 'integer' : 'real'
 			}
-			return 'text'
+			return shape.values.every((value) => isString(value)) ? 'text' : 'json'
 		}
 		case 'optional':
 		case 'nullable':
@@ -923,6 +1322,25 @@ export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnS
 		optional: isColumn({}),
 		nullable: isColumn({ value: null }),
 	}
+}
+
+/**
+ * Collects a table's column map into each column's portable schema, by name, in declaration
+ * order.
+ *
+ * @param columns - The table's column map
+ * @returns Each column's {@link ColumnSchema}, keyed by its name
+ *
+ * @example
+ * ```ts
+ * collectColumns({ id: stringShape(), age: optionalShape(integerShape()) }).get('age')
+ * // { name: 'age', storage: 'integer', optional: true, nullable: false }
+ * ```
+ */
+export function collectColumns(columns: ColumnMap): ReadonlyMap<string, ColumnSchema> {
+	return new Map(
+		Object.entries(columns).map(([name, shape]) => [name, shapeToColumnSchema(name, shape)]),
+	)
 }
 
 /**
@@ -1376,6 +1794,60 @@ export function migrateRows(rows: readonly Row[], steps: readonly MigrationStep[
 		}
 		return next
 	})
+}
+
+// === Recording
+
+/**
+ * Totals the calls, addressed keys, and returned rows of one member across recorded calls.
+ *
+ * @param calls - The recorded calls to read
+ * @param member - The member to total
+ * @returns The member's call count, key total, and row total
+ *
+ * @example
+ * ```ts
+ * tallyCalls([{ member: 'read', keys: 2, rows: 1, scoped: false }], 'read') // { calls: 1, keys: 2, rows: 1 }
+ * ```
+ */
+export function tallyCalls(calls: readonly StorageCall[], member: StorageMember): StorageTally {
+	const matched = calls.filter((call) => call.member === member)
+	return {
+		calls: matched.length,
+		keys: matched.reduce((total, call) => total + call.keys, 0),
+		rows: matched.reduce((total, call) => total + call.rows, 0),
+	}
+}
+
+/**
+ * Yields a source's rows, counting each row on a counter as its consumer pulls it.
+ *
+ * @remarks
+ * The counter holds the rows yielded so far when the consumer stops early, the source ends, or
+ * the source throws.
+ *
+ * @param source - The rows to pass through
+ * @param rows - The counter each yielded row advances
+ * @yields Each row of the source
+ *
+ * @example
+ * ```ts
+ * const driver = createMemoryDriver()
+ * await driver.open([{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }])
+ * await driver.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+ * const rows = new StreamPage(0)
+ * await Array.fromAsync(streamRecordedRows(driver.scan('users'), rows))
+ * rows.count // 2
+ * ```
+ */
+export async function* streamRecordedRows(
+	source: AsyncIterable<Row>,
+	rows: StreamPage,
+): AsyncIterable<Row> {
+	for await (const row of source) {
+		rows.next()
+		yield row
+	}
 }
 
 // === Conformance

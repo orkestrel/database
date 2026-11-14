@@ -17,6 +17,8 @@ import {
 	readPlannedAggregate,
 	readPlannedRows,
 	StorageJournal,
+	StorageRecorder,
+	tallyCalls,
 } from '@src/core'
 import { createIndexedDBDriver, deriveIndexedDBIndexName, schemaToStore } from '@src/browser'
 import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
@@ -24,6 +26,9 @@ import { integerShape, jsonShape, shapeShape, stringShape } from '@orkestrel/con
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+	createDoorTable,
+	ILL_FORMED_RESULT,
+	readIllFormedText,
 	buildCondition,
 	tableSchemas,
 	DatabaseCounter,
@@ -33,8 +38,6 @@ import {
 	createRecordedUsers,
 	EMPTY_STORAGE_CASES,
 	EMPTY_TABLE_CASES,
-	StorageRecorder,
-	tallyCalls,
 } from '../../../setup.js'
 import {
 	CONFORMANCE_ROWS_READ,
@@ -1992,4 +1995,18 @@ describe('IndexedDBDriver — empty lists', () => {
 			}
 		})
 	}
+})
+
+describe('IndexedDBDriver — ill-formed text', () => {
+	it('refuses a lone surrogate before the driver, and round-trips one in a json cell', async () => {
+		const database = mintDatabase('database-idb-surrogate')
+		await deleteDatabase(database)
+		const { recorder, table } = await createDoorTable(createIndexedDBDriver(database))
+		try {
+			expect(await readIllFormedText(table, recorder)).toMatchObject(ILL_FORMED_RESULT)
+		} finally {
+			await recorder.driver.close()
+			await deleteDatabase(database)
+		}
+	})
 })

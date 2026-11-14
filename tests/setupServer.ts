@@ -1,7 +1,6 @@
 import type { ColumnSchema } from '@src/core'
 import type { DatabaseInterface, IndexMap, RowOf, TableInterface } from '@src/core'
-import { createDatabase, createMemoryDriver } from '@src/core'
-import { StorageRecorder } from './setup.js'
+import { createDatabase, createMemoryDriver, StorageRecorder } from '@src/core'
 import {
 	attempt,
 	booleanShape,
@@ -1483,22 +1482,6 @@ export const ROW_CASES: readonly RowCase[] = [
 				.condition({ column: 'name', operator: 'glob', values: ['[a-z]*'], connector: 'and' })
 				.collect(),
 	},
-	{
-		name: 'like against a non-string (age) column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'like', values: ['%3%'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'glob against a non-string (age) column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'glob', values: ['*3*'], connector: 'and' })
-				.collect(),
-	},
 
 	// ── any([]) / none([]) / mixed lists / deep json equals ─────────────
 	{
@@ -1515,22 +1498,6 @@ export const ROW_CASES: readonly RowCase[] = [
 			users
 				.query()
 				.condition({ column: 'name', operator: 'none', values: [], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'any with a mixed-type list',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'any', values: [36, 'nope', 0], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'none with a mixed-type list',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'none', values: [36, 'nope', 0], connector: 'and' })
 				.collect(),
 	},
 	{
@@ -1622,32 +1589,6 @@ export const ROW_CASES: readonly RowCase[] = [
 			users
 				.query()
 				.condition({ column: 'age', operator: 'between', values: [36, 0], connector: 'and' })
-				.collect(),
-	},
-
-	// ── mismatched operand types ──────────────────────────────────────────
-	{
-		name: 'equals with a string operand on an integer column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'equals', values: ['36'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'above with a string operand on an integer column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'age', operator: 'above', values: ['18'], connector: 'and' })
-				.collect(),
-	},
-	{
-		name: 'equals with a number operand on a text column',
-		execute: (users) =>
-			users
-				.query()
-				.condition({ column: 'name', operator: 'equals', values: [36], connector: 'and' })
 				.collect(),
 	},
 
@@ -2334,6 +2275,27 @@ export function matrixReads(storage: MatrixStorage): readonly QueryInput[] {
 		{ order: [{ column: 'value', direction: 'ascending' }], limit: 5, offset: 1 },
 		{ order: [{ column: 'value', direction: 'descending' }], limit: 5, offset: 1 },
 	]
+}
+
+/**
+ * Checks whether the door admits a matrix read on a column of the given flags: a `null` operand
+ * needs a nullable column and an `undefined` operand an optional one.
+ *
+ * @remarks
+ * Every matrix read uses `null` and `undefined` only under `equals`, `not`, `any`, and `none`,
+ * and every other operand holds its storage's class, so the column's flags alone decide.
+ *
+ * @param input - The matrix read
+ * @param optional - If `true`, the column accepts absence; if `false`, it does not
+ * @param nullable - If `true`, the column accepts `null`; if `false`, it does not
+ * @returns True if every operand of the read stands on the column; false otherwise
+ */
+export function isMatrixAdmitted(input: QueryInput, optional: boolean, nullable: boolean): boolean {
+	return (input.conditions ?? []).every((condition) =>
+		condition.values.every(
+			(value) => (value !== null || nullable) && (value !== undefined || optional),
+		),
+	)
 }
 
 /**
