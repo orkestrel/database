@@ -21,6 +21,7 @@ import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import {
 	checkAbort,
+	computeFirstIndexes,
 	equalsValue,
 	extractKey,
 	planRead,
@@ -117,7 +118,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	get(keys: Key | readonly Key[]): Promise<(T | undefined) | ReadonlyArray<T | undefined>> {
 		return this.#track(async () => {
 			await this.#ready()
-			if (isArray(keys)) return this.#each(keys, (key) => this.#read(key))
+			if (isArray(keys)) return this.#readMany(keys)
 			return this.#read(keys)
 		})
 	}
@@ -127,8 +128,11 @@ export class Table<T = Row> implements TableInterface<T> {
 	resolve(keys: Key | readonly Key[]): Promise<T | readonly T[]> {
 		return this.#track(async () => {
 			await this.#ready()
-			if (isArray(keys)) return this.#each(keys, (key) => this.#resolveOne(key))
-			return this.#resolveOne(keys)
+			if (!isArray(keys)) return this.#resolveOne(keys)
+			const rows = await this.#readMany(keys)
+			const missing = keys.find((_, index) => rows[index] === undefined)
+			if (missing !== undefined) this.#missing(missing)
+			return rows.flatMap((row) => (row === undefined ? [] : [row]))
 		})
 	}
 
@@ -137,9 +141,7 @@ export class Table<T = Row> implements TableInterface<T> {
 	has(keys: Key | readonly Key[]): Promise<boolean | readonly boolean[]> {
 		return this.#track(async () => {
 			await this.#ready()
-			if (isArray(keys)) {
-				return this.#each(keys, async (key) => (await this.#read(key)) !== undefined)
-			}
+			if (isArray(keys)) return (await this.#readMany(keys)).map((row) => row !== undefined)
 			return (await this.#read(keys)) !== undefined
 		})
 	}
@@ -240,7 +242,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
 			if (isArray(rows)) {
-				return this.#each(rows, (row) => this.#put(row, false, options), options?.signal)
+				return this.#putMany(rows, false, options)
 			}
 			return this.#put(rows, false, options)
 		})
@@ -252,7 +254,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
 			if (isArray(rows)) {
-				return this.#each(rows, (row) => this.#put(row, true, options), options?.signal)
+				return this.#putMany(rows, true, options)
 			}
 			return this.#put(rows, true, options)
 		})
@@ -272,14 +274,14 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
 			if (isArray(keys)) {
-				return this.#each(keys, (key) => this.#updateOne(key, changes, options), options?.signal)
+				return this.#updateMany(keys, changes, options)
 			}
 			return this.#updateOne(keys, changes, options)
 		})
 	}
 
 	remove(key: Key, options?: OperationOptions): Promise<boolean>
-	remove(keys: readonly Key[], options?: OperationOptions): Promise<readonly boolean[]>
+	remove(keys: readonly Key[], options?: OperationOptions): Promise<boolean>
 	remove(
 		keys: Key | readonly Key[],
 		options?: OperationOptions,
@@ -287,7 +289,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			await this.#wait(options?.signal)
 			if (isArray(keys)) {
-				return this.#each(keys, (key) => this.#delete(key, options), options?.signal)
+				return this.#deleteMany(keys, options)
 			}
 			return this.#delete(keys, options)
 		})
@@ -358,22 +360,63 @@ export class Table<T = Row> implements TableInterface<T> {
 		checkAbort(options?.signal)
 	}
 
-	// Run a single-item operation across each item in order — the batch overloads
-	// loop one item at a time (sequential, so writes never race) rather than
-	// pushing batch logic into the thin driver. `signal` (write batches only) is
-	// checked before every item, so an abort mid-batch stops before the next
-	// item runs — already-applied items stay applied (no rollback).
-	async #each<I, R>(
-		elements: readonly I[],
-		operation: (element: I) => Promise<R>,
-		signal?: AbortSignal,
-	): Promise<readonly R[]> {
-		const results: R[] = []
-		for (const element of elements) {
-			checkAbort(signal)
-			results.push(await operation(element))
+	// Read and narrow one row per key in one driver call (assumes the driver is connected).
+	async #readMany(keys: readonly Key[]): Promise<ReadonlyArray<T | undefined>> {
+		const rows = await this.#driver.read(this.#name, keys)
+		return rows.map((row) => (row === undefined ? undefined : this.#assert(row)))
+	}
+
+	// Admit every row ahead of the one driver call, so a refused row applies none of the batch.
+	async #putMany(
+		rows: readonly T[],
+		insert: boolean,
+		options: OperationOptions | undefined,
+	): Promise<readonly Key[]> {
+		const validated = rows.map((row) => this.#validate(this.#prepare(row)))
+		const keys = validated.map((row) => this.#resolveKey(row))
+		if (insert) await this.#driver.insert(this.#name, keys, validated, options)
+		else await this.#driver.write(this.#name, keys, validated, options)
+		for (const key of keys) this.#emitter.emit('write', key)
+		return keys
+	}
+
+	// Merge the changes into every present row, admit each merged row, then write them in one
+	// driver call; an absent key reports false.
+	async #updateMany(
+		keys: readonly Key[],
+		changes: Partial<T>,
+		options: OperationOptions | undefined,
+	): Promise<readonly boolean[]> {
+		const existing = await this.#driver.read(this.#name, keys)
+		const present = keys.flatMap((key, index) => {
+			const row = existing[index]
+			return row === undefined ? [] : [[key, row] as const]
+		})
+		if (present.length === 0) {
+			checkAbort(options?.signal)
+			return keys.map(() => false)
 		}
-		return results
+		for (const [key] of present) this.#hold(key, changes)
+		const merged = present.map(([, row]) => this.#validate(Object.assign({}, row, changes)))
+		await this.#driver.write(
+			this.#name,
+			present.map(([key]) => key),
+			merged,
+			options,
+		)
+		for (const [key] of present) this.#emitter.emit('write', key)
+		return existing.map((row) => row !== undefined)
+	}
+
+	// Delete every key in one driver call, emitting `remove` for each row it removed; a key
+	// repeated in the call is one key, so the list answers true only when every distinct listed key held a row and was removed.
+	async #deleteMany(keys: readonly Key[], options: OperationOptions | undefined): Promise<boolean> {
+		const removed = await this.#driver.delete(this.#name, keys, options)
+		for (const [index, key] of keys.entries()) {
+			if (removed[index] === true) this.#emitter.emit('remove', key)
+		}
+		const first = computeFirstIndexes(keys)
+		return keys.every((key, index) => first.get(key) !== index || removed[index] === true)
 	}
 
 	// Read and narrow one row (assumes the driver is connected).
@@ -390,13 +433,15 @@ export class Table<T = Row> implements TableInterface<T> {
 	// Read one row or throw NOT_FOUND.
 	async #resolveOne(key: Key): Promise<T> {
 		const row = await this.#read(key)
-		if (row === undefined) {
-			throw new DatabaseError('NOT_FOUND', `No row '${key}' in table '${this.#name}'`, {
-				table: this.#name,
-				key,
-			})
-		}
+		if (row === undefined) this.#missing(key)
 		return row
+	}
+
+	#missing(key: Key): never {
+		throw new DatabaseError('NOT_FOUND', `No row '${key}' in table '${this.#name}'`, {
+			table: this.#name,
+			key,
+		})
 	}
 
 	// Coerce/validate and write one row; `insert` selects the atomic insert primitive.
@@ -419,14 +464,7 @@ export class Table<T = Row> implements TableInterface<T> {
 			checkAbort(options?.signal)
 			return false
 		}
-		const input: unknown = changes
-		if (isRecord(input) && Object.hasOwn(input, this.#key) && !equalsValue(input[this.#key], key)) {
-			throw new DatabaseError(
-				'VALIDATION',
-				`Update cannot change primary column '${this.#key}' on table '${this.#name}'`,
-				{ table: this.#name, column: this.#key, key },
-			)
-		}
+		this.#hold(key, changes)
 		await this.#driver.write(
 			this.#name,
 			key,
@@ -437,6 +475,18 @@ export class Table<T = Row> implements TableInterface<T> {
 		// (an absent key returned `false` above, emitting nothing).
 		this.#emitter.emit('write', key)
 		return true
+	}
+
+	// Refuse a change that moves a row to another primary key.
+	#hold(key: Key, changes: Partial<T>): void {
+		const input: unknown = changes
+		if (isRecord(input) && Object.hasOwn(input, this.#key) && !equalsValue(input[this.#key], key)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`Update cannot change primary column '${this.#key}' on table '${this.#name}'`,
+				{ table: this.#name, column: this.#key, key },
+			)
+		}
 	}
 
 	async #updateCursor(key: Key, changes: Partial<T>): Promise<boolean> {

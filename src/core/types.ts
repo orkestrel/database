@@ -209,7 +209,7 @@ export interface ConformanceFinding {
  * moments, so a non-generic map stays lean (per-row writes are {@link TableEventMap}).
  * Listener isolation is the emitter's: every event is emitted directly and a
  * listener throw is routed to the emitter's own `error` handler (the `error` option), never
- * onto this domain map and never into the snapshot / commit / rollback flow — so a buggy
+ * onto this domain map and never into the journal / commit / rollback flow — so a buggy
  * observer can never reorder, throw into, or corrupt a transaction. Every emit sits after the
  * relevant transition: `commit` only after the scope succeeds, `rollback` only after the
  * rollback operation completes (it observes the propagated scope error; that exact reason
@@ -226,7 +226,7 @@ export type DatabaseEventMap = {
 	readonly open: readonly []
 	/** Signals that the database was closed (the driver released). */
 	readonly close: readonly []
-	/** Signals that a transaction scope began after its native boundary or fallback snapshot was acquired. */
+	/** Signals that a transaction scope began after its native boundary was acquired, or its journal created. */
 	readonly transaction: readonly []
 	/** Signals that a transaction scope completed successfully (no rollback). */
 	readonly commit: readonly []
@@ -409,21 +409,46 @@ export interface ReadPlan {
  */
 export interface StorageInterface {
 	/**
-	 * Reads one row by key.
+	 * Reads one row by key, or one row per key for a list — `undefined` for each miss.
 	 */
 	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
 	/**
-	 * Writes one row at a key.
+	 * Writes one row at a key, or each listed row at the key of the same position, applying
+	 * every row or none.
 	 */
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
 	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
 	/**
-	 * Inserts one row atomically, rejecting `CONFLICT` when its key already exists.
+	 * Inserts one row at a key, or each listed row at the key of the same position, rejecting
+	 * `CONFLICT` with no row applied when a key already exists.
 	 */
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
 	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
 	/**
-	 * Deletes one row by key.
+	 * Deletes one row by key, or each listed row, reporting whether each row existed.
+	 *
+	 * @remarks
+	 * A list answers one result per key, true for the first occurrence of a key that held a
+	 * row, because this is the storage contract its caller builds on: `Table.remove` emits
+	 * `remove` for each removed key before it folds the list into one answer.
 	 */
 	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
 	/**
 	 * Lists a table's keys.
 	 */
@@ -536,21 +561,27 @@ export interface DriverInterface extends StorageInterface {
 	 */
 	close(): Promise<void>
 	/**
-	 * Captures table rows and returns a repeatable thunk that restores those rows —
-	 * the primitive transactions are built on.
-	 *
-	 * @remarks
-	 * Snapshots are row-only: they never restore schema or driver metadata.
-	 * `tables` omitted captures every current table. `tables` provided captures
-	 * only existing named tables. Rollback skips captured tables removed since
-	 * capture and leaves every uncaptured or later-added table untouched.
-	 */
-	snapshot(tables?: readonly string[]): Promise<() => Promise<void>>
-	/**
 	 * Opens a native transaction scope — an optional driver hook. The driver owns acquisition,
 	 * commit or rollback, release, and invalidation of the scoped capability.
 	 */
 	transaction?<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R>
+}
+
+/**
+ * Records the prior row of each key a scope writes or deletes, on its first touch, and restores
+ * those keys on request.
+ *
+ * @remarks
+ * Every member forwards to the storage it wraps, so a read sees the scope's writes. `clear`
+ * records the cleared table's rows before it empties the table. `restore` puts back each
+ * recorded row and deletes each recorded key that held no row. It gives rollback on rejection,
+ * and no crash atomicity.
+ */
+export interface StorageJournalInterface extends StorageInterface {
+	/**
+	 * Restores every key and table the journal recorded to its prior rows.
+	 */
+	restore(): Promise<void>
 }
 
 // === Database
@@ -740,7 +771,7 @@ export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
  * data); `export` produces a portable {@link TableDefinition} per table for moving a
  * schema between databases or environments. `transaction` runs a table-only
  * scoped callback through a native driver transaction when available, otherwise
- * through the universal whole-store snapshot floor.
+ * through the core's before-image journal, which restores only the keys a scope touched.
  */
 export interface DatabaseInterface<
 	T extends TableMap = TableMap,
@@ -770,7 +801,8 @@ export interface DatabaseInterface<
 	 *
 	 * @remarks
 	 * A native driver transaction carries the scope where the driver offers one;
-	 * otherwise the universal whole-store snapshot floor does. `options.signal` is
+	 * otherwise the core's before-image journal does, restoring the keys the scope touched on
+	 * rejection, with no crash atomicity. `options.signal` is
 	 * checked once, at entry.
 	 */
 	transaction<R>(
@@ -822,10 +854,11 @@ export interface DatabaseInterface<
  * inserts and throws `CONFLICT` on a duplicate key. `contract` exposes the
  * compiled contract for introspection (`schema`) and fixtures (`generate`).
  *
- * The keyed methods batch by overload: pass one key/row for one
- * result, or an array for an array of results in the same order — a single verb,
- * never `getMany` / `setAll`. Batches run as independent sequential operations;
- * wrap them in `transaction` for atomicity.
+ * The keyed methods batch by overload: pass one key/row for one result, or an array for an
+ * array of results in the same order — a single verb, never `getMany` / `setAll`. `remove` of a
+ * list answers one boolean, true only when every distinct listed key held a row and was removed, and `has` of a list
+ * answers per key, because a read returns state. A batch is one driver call that applies every
+ * row or none, and every row is admitted ahead of it.
  */
 export interface TableInterface<T = Row> {
 	readonly emitter: EmitterInterface<TableEventMap>
@@ -905,13 +938,13 @@ export interface TableInterface<T = Row> {
 	 * Upserts one or more rows.
 	 *
 	 * @param rows - The rows to upsert
-	 * @param options - Optional abort signal, checked at entry and between items
+	 * @param options - Optional abort signal, checked at entry and at the commit point
 	 * @returns Each row's key, in order
 	 *
 	 * @remarks
-	 * The signal (if any) is checked at entry and between items; an abort
-	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
-	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 * One driver call applies every row or none. The signal (if any) is checked at entry and
+	 * at the driver's commit point; an abort ahead of the commit surfaces as `DatabaseError`
+	 * `ABORTED` with no row applied.
 	 */
 	set(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
@@ -926,13 +959,13 @@ export interface TableInterface<T = Row> {
 	 * Inserts one or more rows, throwing `CONFLICT` on a duplicate key.
 	 *
 	 * @param rows - The rows to insert
-	 * @param options - Optional abort signal, checked at entry and between items
+	 * @param options - Optional abort signal, checked at entry and at the commit point
 	 * @returns Each row's key, in order
 	 *
 	 * @remarks
-	 * The signal (if any) is checked at entry and between items; an abort
-	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
-	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 * One driver call applies every row or none. The signal (if any) is checked at entry and
+	 * at the driver's commit point; an abort ahead of the commit surfaces as `DatabaseError`
+	 * `ABORTED` with no row applied.
 	 */
 	add(rows: readonly T[], options?: OperationOptions): Promise<readonly Key[]>
 	/**
@@ -949,13 +982,13 @@ export interface TableInterface<T = Row> {
 	 *
 	 * @param keys - The keys of the rows to update
 	 * @param changes - The partial changes to apply to each row
-	 * @param options - Optional abort signal, checked at entry and between items
+	 * @param options - Optional abort signal, checked at entry and at the commit point
 	 * @returns Each row's update result, in order
 	 *
 	 * @remarks
-	 * The signal (if any) is checked at entry and between items; an abort
-	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
-	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 * One driver call applies every row or none. The signal (if any) is checked at entry and
+	 * at the driver's commit point; an abort ahead of the commit surfaces as `DatabaseError`
+	 * `ABORTED` with no row applied.
 	 */
 	update(
 		keys: readonly Key[],
@@ -974,15 +1007,16 @@ export interface TableInterface<T = Row> {
 	 * Deletes one or more rows.
 	 *
 	 * @param keys - The keys of the rows to remove
-	 * @param options - Optional abort signal, checked at entry and between items
-	 * @returns Each row's removal result, in order
+	 * @param options - Optional abort signal, checked at entry and at the commit point
+	 * @returns True if every distinct listed key held a row and was removed; false otherwise. A key
+	 *   repeated in the list is one key
 	 *
 	 * @remarks
-	 * The signal (if any) is checked at entry and between items; an abort
-	 * surfaces as `DatabaseError` `ABORTED`. Already-applied items stay
-	 * applied — there is no rollback. Wrap in `transaction()` for atomicity.
+	 * One driver call applies every row or none, and emits `remove` for each row it removed.
+	 * The signal (if any) is checked at entry and at the driver's commit point; an abort ahead
+	 * of the commit surfaces as `DatabaseError` `ABORTED` with no row applied.
 	 */
-	remove(keys: readonly Key[], options?: OperationOptions): Promise<readonly boolean[]>
+	remove(keys: readonly Key[], options?: OperationOptions): Promise<boolean>
 	/**
 	 * Empties the table.
 	 */

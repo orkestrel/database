@@ -1,4 +1,5 @@
 import type { Row } from '@src/core'
+import { isString } from '@orkestrel/contract'
 import type { CursorUsers as Users, UserCursor } from '../../setup.js'
 import { createMemoryDriver } from '@src/core'
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +8,7 @@ import {
 	DatabaseCounter,
 	DatabaseFixture,
 	DatabaseSwitch,
-	createMemoryAdapter,
+	interceptStorage,
 	seedCursorDatabase,
 } from '../../setup.js'
 
@@ -321,15 +322,16 @@ describe('Cursor — transaction continuations', () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const blocking = new DatabaseSwitch()
-		const driver = createMemoryAdapter(memory, {
-			async write(table, key, row, options) {
+		const driver = interceptStorage(memory, {
+			async write(table, keys, rows, options) {
 				if (blocking.active) {
 					entered.resolve()
 					await release.promise
 				}
-				const normalized: Row = { ...row }
-				if (typeof normalized.name === 'string') normalized.name = normalized.name.trim()
-				await memory.write(table, key, normalized, options)
+				const normalized = rows.map((row) =>
+					isString(row.name) ? { ...row, name: row.name.trim() } : row,
+				)
+				await memory.write(table, keys, normalized, options)
 			},
 		})
 		const { db, users } = await seedCursorDatabase(driver)

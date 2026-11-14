@@ -44,6 +44,8 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 	readonly #primary: PrimaryMap
 	readonly #indexes: IndexMap
 	readonly #generate: KeyFunction | undefined
+	// Each table's compiled contract, built on its first use and shared with every transaction.
+	readonly #contracts: { [K in keyof T]?: ContractInterface<RowOf<T[K]>> } = {}
 
 	constructor(options: DatabaseOptions<T>) {
 		this.#tables = options.tables
@@ -72,12 +74,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 				name: this.#context.name,
 			})
 		}
-		const columns = requireColumns(this.#tables, name)
-		return this.#build(
-			name,
-			resolvePrimary(this.#primary, name),
-			createContract(objectShape(columns)),
-		)
+		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name))
 	}
 
 	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U> {
@@ -110,9 +107,9 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 		options?: OperationOptions,
 	): Promise<R> {
 		return this.#context.transaction(async (storage, lifetime) => {
-			const transaction = new DatabaseTransaction(
+			const transaction = new DatabaseTransaction<T>(
 				storage,
-				this.#tables,
+				(name) => this.#contract(name),
 				this.#primary,
 				this.#generate,
 				this.#context.error,
@@ -124,6 +121,14 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 
 	migrate(deployed: readonly TableSchema[], options?: OperationOptions): Promise<Migration> {
 		return this.#context.migrate(deployed, options)
+	}
+
+	#contract<K extends keyof T & string>(name: K): ContractInterface<RowOf<T[K]>> {
+		const cached = this.#contracts[name]
+		if (cached !== undefined) return cached
+		const contract = createContract(objectShape(requireColumns(this.#tables, name)))
+		this.#contracts[name] = contract
+		return contract
 	}
 
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {

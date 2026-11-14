@@ -12,6 +12,10 @@ import {
 	applyQuery,
 	captureFailure,
 	collectScalars,
+	applyKeys,
+	buildBatch,
+	computeFirstIndexes,
+	computeRemoved,
 	normalizeReadInput,
 	scanPlans,
 	CONFORMANCE_ROWS,
@@ -72,7 +76,7 @@ import {
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
-import { captureError, collect } from '@orkestrel/test'
+import { captureError, collect, createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
@@ -80,7 +84,7 @@ import {
 	createReferenceLeakingDriver,
 	createDescendingKeyDriver,
 	createMismatchedMetadataDriver,
-	createWholeSnapshotDriver,
+	createPartialBatchDriver,
 	createDoublyBrokenDriver,
 	createCrashingDriver,
 	createPlannedDriver,
@@ -1247,17 +1251,17 @@ describe('scanDriver', () => {
 		expect(clean.some((check) => check.startsWith('metadata'))).toBe(false)
 	})
 
-	it('runs the scoped-snapshot phase and finds a violation when snapshot rolls back the whole store instead of only the named table', async () => {
+	it('runs the batch phase and finds a violation when a list insert applies the rows ahead of a conflict', async () => {
 		const findings: string[] = []
-		for await (const finding of scanDriver(() => createWholeSnapshotDriver())) {
+		for await (const finding of scanDriver(() => createPartialBatchDriver())) {
 			findings.push(finding.check)
 		}
-		expect(findings).toContain('snapshot-scoped-posts')
+		expect(findings).toEqual(['batch-atomic'])
 
-		// And the reference MemoryDriver honors the scope and passes cleanly.
+		// And the reference MemoryDriver applies a batch whole and passes cleanly.
 		const clean: string[] = []
 		for await (const finding of scanDriver(() => createMemoryDriver())) clean.push(finding.check)
-		expect(clean.some((check) => check.startsWith('snapshot-scoped'))).toBe(false)
+		expect(clean).toEqual([])
 	})
 })
 
@@ -1522,7 +1526,7 @@ describe('readPlannedRows — the read procedure Table runs', () => {
 			readPlannedRows(recorder.driver, 'users', input),
 		)
 		expect(value.map((row) => row.id)).toEqual(['a'])
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, rows: 1 })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 1, rows: 1 })
 	})
 })
 
@@ -1596,6 +1600,90 @@ describe('streamPlannedRows', () => {
 			),
 		)
 		expect(failure).toEqual(new Error('stopped'))
-		expect(tallyCalls(recorder.calls, 'scan')).toEqual({ calls: 1, rows: 1 })
+		expect(tallyCalls(recorder.calls, 'scan')).toMatchObject({ calls: 1, rows: 1 })
+	})
+})
+
+describe('buildBatch', () => {
+	it('pairs a single key and row, and two lists by position', () => {
+		expect(buildBatch('u1', { id: 'u1' })).toEqual([['u1', { id: 'u1' }]])
+		expect(buildBatch(['u1', 2], [{ id: 'u1' }, { id: 2 }])).toEqual([
+			['u1', { id: 'u1' }],
+			[2, { id: 2 }],
+		])
+		expect(buildBatch([], [])).toEqual([])
+	})
+
+	it('refuses lists of different lengths and a call that mixes a list with a single value', () => {
+		expect(captureError(() => buildBatch(['u1', 'u2'], [{ id: 'u1' }]))).toMatchObject({
+			code: 'VALIDATION',
+			context: { keys: 2, rows: 1 },
+		})
+		expect(captureError(() => buildBatch(['u1'], { id: 'u1' }))).toMatchObject({
+			code: 'VALIDATION',
+			context: { keys: 1, rows: 1 },
+		})
+	})
+})
+
+describe('computeRemoved', () => {
+	it('reports true for the first occurrence of each key that held a row', () => {
+		expect(computeRemoved(['a', 'b', 'a', 1], [true, false, true, true])).toEqual([
+			true,
+			false,
+			false,
+			true,
+		])
+		expect(computeRemoved([], [])).toEqual([])
+	})
+
+	it('reports false for a key whose existence is unread', () => {
+		expect(computeRemoved(['a', 'b'], [true])).toEqual([true, false])
+	})
+})
+
+describe('computeFirstIndexes', () => {
+	it('maps each key to the position of its first occurrence', () => {
+		expect(computeFirstIndexes(['a', 'b', 'a', 1, 'b'])).toEqual(
+			new Map<unknown, number>([
+				['a', 0],
+				['b', 1],
+				[1, 3],
+			]),
+		)
+		expect(computeFirstIndexes([]).size).toBe(0)
+	})
+
+	it('compares keys by SameValueZero, so a number and its string differ', () => {
+		expect(computeFirstIndexes([1, '1', 1])).toEqual(
+			new Map<unknown, number>([
+				[1, 0],
+				['1', 1],
+			]),
+		)
+	})
+})
+
+describe('applyKeys', () => {
+	it('hands a single key to the operation as a list of one and answers with its one result', async () => {
+		const seen = createRecorder<[keys: readonly unknown[]]>()
+		const answer = await applyKeys('u1', async (keys) => {
+			seen.handler(keys)
+			return [true]
+		})
+		expect(answer).toBe(true)
+		expect(seen.calls).toEqual([[['u1']]])
+	})
+
+	it('hands a key list through and answers with the whole list', async () => {
+		expect(await applyKeys(['u1', 'u2'], async (keys) => keys.map((key) => key === 'u1'))).toEqual([
+			true,
+			false,
+		])
+		expect(await applyKeys([], async () => [])).toEqual([])
+	})
+
+	it('answers false for a single key the operation reports no result for', async () => {
+		expect(await applyKeys('u1', async () => [])).toBe(false)
 	})
 })

@@ -1,8 +1,8 @@
 # Database
 
-> One typed database API for keyed rows, fluent queries, cursors, and
-> whole-store transactions, running unchanged over an in-memory map, a JSON
-> file, SQLite, or IndexedDB.
+> One typed database API for keyed rows, batches, fluent queries, cursors, and
+> transactions, running unchanged over an in-memory map, a JSON file, SQLite, or
+> IndexedDB.
 
 A table is a contract. Declare a `tables` map of
 [`ContractShape`](contract.md)s once, and the row type, write-time admission,
@@ -10,8 +10,8 @@ JSON-Schema introspection, and seed data all flow from that one
 declaration — no separate schema, no annotations, no `as`.
 
 The design stance is native first, under the rule Contract invariant 3 places. A backend
-implements keyed read/write/insert/delete, an ordered `scan`, key listing, and a
-`snapshot`, and declares through `plan` which part of each read its engine answers; the
+implements keyed read/write/insert/delete, each with a list overload that applies every row
+or none, an ordered `scan`, and key listing, and declares through `plan` which part of each read its engine answers; the
 core's engine runs only the residual. A backend without `plan` inherits the whole WHERE /
 order / page / aggregate surface from that engine over `scan`.
 So this is deliberately not an ORM and not a query abstraction layer: there is
@@ -81,17 +81,19 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Classes
 
-| Name                | Kind  | Signature                                                                                                                | Summary                                                                                                                                                |
-| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Database`          | class | `new <T extends TableMap = TableMap>(options: DatabaseOptions<T>) => DatabaseInterface<T>`                               | Exposes a typed view over one shared internal lifecycle and storage context.                                                                           |
-| `DriverIterator`    | class | `new <T>(source: AsyncIterator<T>, guard: () => void) => AsyncIterableIterator<T>`                                       | Forms the internal continuation boundary for a root driver async iterator.                                                                             |
-| `MemoryDriver`      | class | `new () => DriverInterface`                                                                                              | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                      |
-| `JSONDriver`        | class | `new (path: string) => DriverInterface`                                                                                  | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                          |
-| `SQLiteDriver`      | class | `new (options: SQLiteDriverOptions) => DriverInterface`                                                                  | Implements the `DriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper. |
-| `IndexedDBDriver`   | class | `new (name: string) => DriverInterface`                                                                                  | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.               |
-| `StreamPage`        | class | `new (offset: number) => StreamPage`                                                                                     | Tracks the matching-row position of one streaming page.                                                                                                |
-| `JSONTransaction`   | class | `new (memory: MemoryDriver, schema: readonly TableSchema[], identities: ReadonlyMap<string, object>) => JSONTransaction` | Owns the isolated memory store and schema of one JSON transaction.                                                                                     |
-| `SQLiteTransaction` | class | `new (schema: ReadonlyMap<string, TableSchema>, identities: ReadonlyMap<string, object>) => SQLiteTransaction`           | Owns the candidate schema and table identities of one SQLite transaction.                                                                              |
+| Name                | Kind  | Signature                                                                                                                | Summary                                                                                                                                                                         |
+| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Database`          | class | `new <T extends TableMap = TableMap>(options: DatabaseOptions<T>) => DatabaseInterface<T>`                               | Exposes a typed view over one shared internal lifecycle and storage context.                                                                                                    |
+| `DriverIterator`    | class | `new <T>(source: AsyncIterator<T>, guard: () => void) => AsyncIterableIterator<T>`                                       | Forms the internal continuation boundary for a root driver async iterator.                                                                                                      |
+| `ScopedStorage`     | class | `new (source: StorageInterface, guard: () => void) => StorageInterface`                                                  | Forms the lifetime boundary of a driver's scoped storage: each member runs the guard, then forwards to the storage it wraps.                                                    |
+| `StorageJournal`    | class | `new (source: StorageInterface) => StorageJournalInterface`                                                              | Records the prior row of each key a scope writes or deletes, on its first touch, and restores those keys on request — the transaction floor for a driver without `transaction`. |
+| `MemoryDriver`      | class | `new () => DriverInterface`                                                                                              | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                                               |
+| `JSONDriver`        | class | `new (path: string) => DriverInterface`                                                                                  | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                                                   |
+| `SQLiteDriver`      | class | `new (options: SQLiteDriverOptions) => DriverInterface`                                                                  | Implements the `DriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper.                          |
+| `IndexedDBDriver`   | class | `new (name: string) => DriverInterface`                                                                                  | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.                                        |
+| `StreamPage`        | class | `new (offset: number) => StreamPage`                                                                                     | Tracks the matching-row position of one streaming page.                                                                                                                         |
+| `JSONTransaction`   | class | `new (memory: MemoryDriver, schema: readonly TableSchema[], identities: ReadonlyMap<string, object>) => JSONTransaction` | Owns the isolated memory store and schema of one JSON transaction.                                                                                                              |
+| `SQLiteTransaction` | class | `new (schema: ReadonlyMap<string, TableSchema>, identities: ReadonlyMap<string, object>) => SQLiteTransaction`           | Owns the candidate schema and table identities of one SQLite transaction.                                                                                                       |
 
 ### Server
 
@@ -124,6 +126,7 @@ None of these import a SQLite package; they speak strings and values only.
 | `compileOrderSQL`       | function | `(order: readonly Order[] \| undefined, schema: TableSchema, pinned?: boolean) => string`                                       | Compiles the ORDER BY clause from the order terms, ending with the primary key in the direction of the final term.                                                                                                                                                                                                               |
 | `compilePageSQL`        | function | `(limit: number \| undefined, offset: number \| undefined) => CompiledSQL`                                                      | Compiles the LIMIT / OFFSET clause.                                                                                                                                                                                                                                                                                              |
 | `compileQuerySQL`       | function | `(input: QueryInput \| undefined, schema: TableSchema) => CompiledSQL`                                                          | Compiles a `QueryInput` into the SQL clause that follows a table name, with its bound parameters in clause order.                                                                                                                                                                                                                |
+| `compileInsertSQL`      | function | `(schema: TableSchema, replace: boolean) => string`                                                                             | Compiles the statement that inserts one row of a table, binding one parameter per declared column in schema order.                                                                                                                                                                                                               |
 | `quoteIdentifier`       | function | `(identifier: string) => string`                                                                                                | Quotes a SQL identifier (a table or column name) so any characters are literal.                                                                                                                                                                                                                                                  |
 | `compileFieldSQL`       | function | `(path: FieldPath) => string`                                                                                                   | Compiles a `FieldPath` to the SQL expression that reads it.                                                                                                                                                                                                                                                                      |
 | `compileColumnSQL`      | function | `(storage: ColumnStorage) => string`                                                                                            | Maps a portable `ColumnStorage` to its SQLite column type.                                                                                                                                                                                                                                                                       |
@@ -181,30 +184,34 @@ whose every entry passes Contract's `isAuditFault` function.
 The portable semantics every backend shares — pure, total functions the
 driver never re-implements.
 
-| Name                   | Kind     | Signature                                                                                                                              | Summary                                                                                                                                                                |
-| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `compareValues`        | function | `(left: unknown, right: unknown) => number`                                                                                            | Compares two arbitrary values under one total order — the comparator behind sorting and the range operators.                                                           |
-| `matchesCondition`     | function | `(row: Row, condition: Condition, scalars?: ReadonlySet<unknown>) => boolean`                                                          | Evaluates one `Condition` against a row — the per-operator predicate.                                                                                                  |
-| `matchesQuery`         | function | `(row: Row, conditions: readonly Condition[], scalars?: ReadonlyArray<ReadonlySet<unknown>>) => boolean`                               | Folds a row through a list of conditions, joining each by its connector.                                                                                               |
-| `sortRows`             | function | `(rows: readonly Row[], order: readonly Order[]) => readonly Row[]`                                                                    | Sorts rows by an ordering specification, leaving the input untouched.                                                                                                  |
-| `applyQuery`           | function | `(rows: readonly Row[], input?: QueryInput) => readonly Row[]`                                                                         | Applies a `QueryInput` to rows — filter, then sort, then page.                                                                                                         |
-| `validatePage`         | function | `(input?: QueryInput) => void`                                                                                                         | Validates the paging fields of a portable query.                                                                                                                       |
-| `computeAggregate`     | function | `(rows: readonly unknown[], operation: AggregateOperation, column: FieldPath) => number \| undefined`                                  | Computes an aggregate over a column across rows.                                                                                                                       |
-| `extractKey`           | function | `(row: Row, column: string) => Key \| undefined`                                                                                       | Reads a row's primary key from a column, when it is a usable `Key`.                                                                                                    |
-| `bindRowKey`           | function | `(row: Row, primary: string, key: Key) => Row`                                                                                         | Returns a fresh row whose primary column is authoritatively bound to its storage key.                                                                                  |
-| `shapeToColumnSchema`  | function | `(name: string, shape: ContractShape) => ColumnSchema`                                                                                 | Projects one contract shape into a portable column schema.                                                                                                             |
-| `findColumn`           | function | `(name: string, schema: TableSchema) => ColumnSchema \| undefined`                                                                     | Reads one flat column's declaration out of a table schema.                                                                                                             |
-| `resolvePrimary`       | function | `(primary: PrimaryMap, name: string) => string`                                                                                        | Resolves the primary-key column one table keys its rows by.                                                                                                            |
-| `requireColumns`       | function | `(<T extends TableMap, K extends keyof T & string>(tables: T, name: K) => T[K]) & ((tables: TableMap, name: string) => ColumnMap)`     | Requires one declared table's columns out of a table map.                                                                                                              |
-| `shapeToColumnStorage` | function | `(shape: ContractShape) => ColumnStorage`                                                                                              | Maps a column's `ContractShape` to its portable `ColumnStorage` — the value a `TableSchema` carries so a native backend can declare a real column.                     |
-| `filterRows`           | function | `(rows: readonly Row[], conditions: readonly Condition[]) => readonly Row[]`                                                           | Filters rows by a list of conditions — the shared basis for a table's count and aggregate paths (no sort/page, unlike `applyQuery`).                                   |
-| `equalsValue`          | function | `(left: unknown, right: unknown) => boolean`                                                                                           | Compares two values structurally by SameValueZero leaves — the comparator behind conformance checks and any test/fixture that needs "same data", not "same reference". |
-| `collectScalars`       | function | `(values: readonly unknown[]) => ReadonlySet<unknown>`                                                                                 | Collects the scalar operands of a membership list into one set.                                                                                                        |
-| `matchesListed`        | function | `(value: unknown, values: readonly unknown[], scalars?: ReadonlySet<unknown>) => boolean`                                              | Checks whether a value equals one operand of a membership list.                                                                                                        |
-| `prepareScalars`       | function | `(conditions: readonly Condition[]) => ReadonlyArray<ReadonlySet<unknown>>`                                                            | Collects one scalar set per condition, by position — the `scalars` argument of `matchesQuery`.                                                                         |
-| `normalizeReadInput`   | function | `(input: ReadInput) => ReadInput`                                                                                                      | Drops each clause a read does not hold, so an absent clause is an absent key.                                                                                          |
-| `planRead`             | function | `(storage: StorageInterface, table: string, input: ReadInput) => ReadPlan`                                                             | Asks a storage for its plan of a read, with the read normalized first.                                                                                                 |
-| `streamPlannedRows`    | function | `(storage: StorageInterface, table: string, native: ReadInput, residual: ReadInput, step?: () => Promise<void>) => AsyncIterable<Row>` | Streams the native side of a plan and applies residual conditions and a residual page, stopping at `offset + limit` matches — step 3 of the read procedure.            |
+| Name                   | Kind     | Signature                                                                                                                                   | Summary                                                                                                                                                                |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `compareValues`        | function | `(left: unknown, right: unknown) => number`                                                                                                 | Compares two arbitrary values under one total order — the comparator behind sorting and the range operators.                                                           |
+| `matchesCondition`     | function | `(row: Row, condition: Condition, scalars?: ReadonlySet<unknown>) => boolean`                                                               | Evaluates one `Condition` against a row — the per-operator predicate.                                                                                                  |
+| `matchesQuery`         | function | `(row: Row, conditions: readonly Condition[], scalars?: ReadonlyArray<ReadonlySet<unknown>>) => boolean`                                    | Folds a row through a list of conditions, joining each by its connector.                                                                                               |
+| `sortRows`             | function | `(rows: readonly Row[], order: readonly Order[]) => readonly Row[]`                                                                         | Sorts rows by an ordering specification, leaving the input untouched.                                                                                                  |
+| `applyQuery`           | function | `(rows: readonly Row[], input?: QueryInput) => readonly Row[]`                                                                              | Applies a `QueryInput` to rows — filter, then sort, then page.                                                                                                         |
+| `validatePage`         | function | `(input?: QueryInput) => void`                                                                                                              | Validates the paging fields of a portable query.                                                                                                                       |
+| `buildBatch`           | function | `(keys: Key \| readonly Key[], rows: Row \| readonly Row[]) => ReadonlyArray<readonly [Key, Row]>`                                          | Assembles the entries of a storage write from its keys and rows, one row per key.                                                                                      |
+| `computeRemoved`       | function | `(keys: readonly unknown[], existed: readonly boolean[]) => readonly boolean[]`                                                             | Computes what a batch delete reports per key: true for the first occurrence of a key that held a row, and false for a miss and for every repeat of a key.              |
+| `computeFirstIndexes`  | function | `(keys: readonly unknown[]) => ReadonlyMap<unknown, number>`                                                                                | Computes the position of each key's first occurrence in a batch.                                                                                                       |
+| `applyKeys`            | function | `(keys: Key \| readonly Key[], operation: (keys: readonly Key[]) => Promise<readonly boolean[]>) => Promise<boolean \| readonly boolean[]>` | Applies a keyed operation that takes a key list to a single key or a key list, and answers in the form the call took.                                                  |
+| `computeAggregate`     | function | `(rows: readonly unknown[], operation: AggregateOperation, column: FieldPath) => number \| undefined`                                       | Computes an aggregate over a column across rows.                                                                                                                       |
+| `extractKey`           | function | `(row: Row, column: string) => Key \| undefined`                                                                                            | Reads a row's primary key from a column, when it is a usable `Key`.                                                                                                    |
+| `bindRowKey`           | function | `(row: Row, primary: string, key: Key) => Row`                                                                                              | Returns a fresh row whose primary column is authoritatively bound to its storage key.                                                                                  |
+| `shapeToColumnSchema`  | function | `(name: string, shape: ContractShape) => ColumnSchema`                                                                                      | Projects one contract shape into a portable column schema.                                                                                                             |
+| `findColumn`           | function | `(name: string, schema: TableSchema) => ColumnSchema \| undefined`                                                                          | Reads one flat column's declaration out of a table schema.                                                                                                             |
+| `resolvePrimary`       | function | `(primary: PrimaryMap, name: string) => string`                                                                                             | Resolves the primary-key column one table keys its rows by.                                                                                                            |
+| `requireColumns`       | function | `(<T extends TableMap, K extends keyof T & string>(tables: T, name: K) => T[K]) & ((tables: TableMap, name: string) => ColumnMap)`          | Requires one declared table's columns out of a table map.                                                                                                              |
+| `shapeToColumnStorage` | function | `(shape: ContractShape) => ColumnStorage`                                                                                                   | Maps a column's `ContractShape` to its portable `ColumnStorage` — the value a `TableSchema` carries so a native backend can declare a real column.                     |
+| `filterRows`           | function | `(rows: readonly Row[], conditions: readonly Condition[]) => readonly Row[]`                                                                | Filters rows by a list of conditions — the shared basis for a table's count and aggregate paths (no sort/page, unlike `applyQuery`).                                   |
+| `equalsValue`          | function | `(left: unknown, right: unknown) => boolean`                                                                                                | Compares two values structurally by SameValueZero leaves — the comparator behind conformance checks and any test/fixture that needs "same data", not "same reference". |
+| `collectScalars`       | function | `(values: readonly unknown[]) => ReadonlySet<unknown>`                                                                                      | Collects the scalar operands of a membership list into one set.                                                                                                        |
+| `matchesListed`        | function | `(value: unknown, values: readonly unknown[], scalars?: ReadonlySet<unknown>) => boolean`                                                   | Checks whether a value equals one operand of a membership list.                                                                                                        |
+| `prepareScalars`       | function | `(conditions: readonly Condition[]) => ReadonlyArray<ReadonlySet<unknown>>`                                                                 | Collects one scalar set per condition, by position — the `scalars` argument of `matchesQuery`.                                                                         |
+| `normalizeReadInput`   | function | `(input: ReadInput) => ReadInput`                                                                                                           | Drops each clause a read does not hold, so an absent clause is an absent key.                                                                                          |
+| `planRead`             | function | `(storage: StorageInterface, table: string, input: ReadInput) => ReadPlan`                                                                  | Asks a storage for its plan of a read, with the read normalized first.                                                                                                 |
+| `streamPlannedRows`    | function | `(storage: StorageInterface, table: string, native: ReadInput, residual: ReadInput, step?: () => Promise<void>) => AsyncIterable<Row>`      | Streams the native side of a plan and applies residual conditions and a residual page, stopping at `offset + limit` matches — step 3 of the read procedure.            |
 
 For `minimum` and `maximum`, `computeAggregate` compares each numeric value
 with a scalar `Math.min` or `Math.max` call. The helper never passes a
@@ -316,7 +323,8 @@ Pure helpers behind the query engine's pattern matching.
 | `MigrationInput`           | interface | `{ plan, metadata? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents one atomic migration request.                                                                                                                                                                                                                                                                                 |
 | `StorageInterface`         | interface | `{ read(), write(), insert(), delete(), keys(), scan(), clear(), plan?(), records?(), aggregate?(), stream?(), migrate?(), metadata?(), stamp?() }`                                                                                                                                                                                                                                                                                                                                                                                          | Declares the storage operations available only inside a driver's transaction scope.                                                                                                                                                                                                                                      |
 | `DriverMetadata`           | interface | `{ version, schema }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents persisted schema metadata a versioning driver owns as an immutable snapshot.                                                                                                                                                                                                                                  |
-| `DriverInterface`          | interface | `{ open(), close(), snapshot(), transaction?() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Declares the storage contract a backend implements: its engine's native operations first, and the core's engine only for the residual its plan returns.                                                                                                                                                                  |
+| `DriverInterface`          | interface | `{ open(), close(), transaction?() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Declares the storage contract a backend implements: its engine's native operations first, and the core's engine only for the residual its plan returns.                                                                                                                                                                  |
+| `StorageJournalInterface`  | interface | `{ restore() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Records the prior row of each key a scope writes or deletes, on its first touch, and restores those keys on request.                                                                                                                                                                                                     |
 | `DatabaseOptions`          | interface | `{ on?, error?, driver, tables, primary?, indexes?, name?, generator?, version? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Options for `createDatabase`.                                                                                                                                                                                                                                                                                            |
 | `CompiledSQL`              | interface | `{ sql, parameters }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents a parameterized SQL fragment or statement plus its bind values. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                               |
 | `SQLiteDriverOptions`      | interface | `{ path, readonly?, timeout?, references?, pragmas? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Configures `createSQLiteDriver`. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                                                                         |
@@ -387,46 +395,48 @@ method below runs inside that scope, and each carries the same contract its
 `StorageInterface` and `DriverInterface` tables share one description per
 method.
 
-| Method      | Returns                                | Summary                                                                                                    |
-| ----------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `read`      | `Promise<Row \| undefined>`            | Reads one row by key.                                                                                      |
-| `write`     | `Promise<void>`                        | Writes one row at a key.                                                                                   |
-| `insert`    | `Promise<void>`                        | Inserts one row atomically, rejecting `CONFLICT` when its key already exists.                              |
-| `delete`    | `Promise<boolean>`                     | Deletes one row by key.                                                                                    |
-| `keys`      | `Promise<readonly Key[]>`              | Lists a table's keys.                                                                                      |
-| `scan`      | `AsyncIterable<Row>`                   | Iterates a table's rows in ascending key order.                                                            |
-| `clear`     | `Promise<void>`                        | Empties a table.                                                                                           |
-| `plan`      | `ReadPlan`                             | Splits a read into the part the engine answers natively and the residual the core runs — an optional hook. |
-| `records`   | `Promise<readonly Row[]>`              | Reads the rows matching the native side of a plan — an optional hook.                                      |
-| `aggregate` | `Promise<number \| undefined>`         | Computes an aggregate over the rows matching the native side of a plan — an optional hook.                 |
-| `stream`    | `AsyncIterable<Row>`                   | Iterates the rows matching the native side of a plan lazily — an optional hook.                            |
-| `migrate`   | `Promise<void>`                        | Applies one atomic `MigrationInput` — an optional hook.                                                    |
-| `metadata`  | `Promise<DriverMetadata \| undefined>` | Reads the persisted `DriverMetadata` as a deeply frozen copy — an optional hook.                           |
-| `stamp`     | `Promise<void>`                        | Writes the persisted `DriverMetadata`, snapshot at entry — an optional hook.                               |
+| Method      | Returns                                | Summary                                                                                                                                           |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`      | `Promise<Row \| undefined>` (or array) | Reads one row by key, or one row per key for a list — `undefined` for each miss.                                                                  |
+| `write`     | `Promise<void>`                        | Writes one row at a key, or each listed row at the key of the same position, applying every row or none.                                          |
+| `insert`    | `Promise<void>`                        | Inserts one row at a key, or each listed row at the key of the same position, rejecting `CONFLICT` with no row applied when a key already exists. |
+| `delete`    | `Promise<boolean>` (or array)          | Deletes one row by key, or each listed row, reporting whether each row existed.                                                                   |
+| `keys`      | `Promise<readonly Key[]>`              | Lists a table's keys.                                                                                                                             |
+| `scan`      | `AsyncIterable<Row>`                   | Iterates a table's rows in ascending key order.                                                                                                   |
+| `clear`     | `Promise<void>`                        | Empties a table.                                                                                                                                  |
+| `plan`      | `ReadPlan`                             | Splits a read into the part the engine answers natively and the residual the core runs — an optional hook.                                        |
+| `records`   | `Promise<readonly Row[]>`              | Reads the rows matching the native side of a plan — an optional hook.                                                                             |
+| `aggregate` | `Promise<number \| undefined>`         | Computes an aggregate over the rows matching the native side of a plan — an optional hook.                                                        |
+| `stream`    | `AsyncIterable<Row>`                   | Iterates the rows matching the native side of a plan lazily — an optional hook.                                                                   |
+| `migrate`   | `Promise<void>`                        | Applies one atomic `MigrationInput` — an optional hook.                                                                                           |
+| `metadata`  | `Promise<DriverMetadata \| undefined>` | Reads the persisted `DriverMetadata` as a deeply frozen copy — an optional hook.                                                                  |
+| `stamp`     | `Promise<void>`                        | Writes the persisted `DriverMetadata`, snapshot at entry — an optional hook.                                                                      |
 
 #### `DriverInterface`
 
-The complete backend extends `StorageInterface` with lifecycle, the
-snapshot floor, and an optional native transaction callback. The inherited
+The complete backend extends `StorageInterface` with lifecycle and an optional native
+transaction callback. The inherited
 storage/query/migration/metadata methods carry the same contract they carry on
 `StorageInterface`, addressed against the whole backend rather than one
 transaction scope. `open` receives the derived `TableSchema` list: a native
 backend builds real tables and indexes from it, a scan-only backend reads
-`name` alone. `snapshot` with no `tables` captures the whole store, while a
-list scopes capture and restore to those tables. A driver without `plan` answers
-nothing natively — the core runs the whole read over `scan` — and a driver without
-`transaction` runs a scope on the snapshot floor (see
-[Native transactions](#native-transactions)).
+`name` alone. Each keyed member takes one key, or a list that one call applies whole: a
+list `write` or `insert` pairs `keys[i]` with `rows[i]` and applies every row or none, and
+a list `delete` reports, per key, whether the call removed its row: it is the storage contract,
+not a manager verb, and `Table.remove` emits `remove` for each removed key before it folds the
+list into one answer. A driver without
+`plan` answers nothing natively — the core runs the whole read over `scan` — and a driver
+without `transaction` runs a scope on the core's journal (see
+[Transactions](#transactions)).
 
 | Method        | Returns                                | Summary                                                                                                                                                          |
 | ------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `open`        | `Promise<void>`                        | Readies the tables from a derived `TableSchema` list.                                                                                                            |
 | `close`       | `Promise<void>`                        | Releases the backend.                                                                                                                                            |
-| `snapshot`    | `Promise<() => Promise<void>>`         | Captures table rows and returns a repeatable thunk that restores those rows — the primitive transactions are built on.                                           |
-| `read`        | `Promise<Row \| undefined>`            | Reads one row by key.                                                                                                                                            |
-| `write`       | `Promise<void>`                        | Writes one row at a key.                                                                                                                                         |
-| `insert`      | `Promise<void>`                        | Inserts one row atomically, rejecting `CONFLICT` when its key already exists.                                                                                    |
-| `delete`      | `Promise<boolean>`                     | Deletes one row by key.                                                                                                                                          |
+| `read`        | `Promise<Row \| undefined>` (or array) | Reads one row by key, or one row per key for a list — `undefined` for each miss.                                                                                 |
+| `write`       | `Promise<void>`                        | Writes one row at a key, or each listed row at the key of the same position, applying every row or none.                                                         |
+| `insert`      | `Promise<void>`                        | Inserts one row at a key, or each listed row at the key of the same position, rejecting `CONFLICT` with no row applied when a key already exists.                |
+| `delete`      | `Promise<boolean>` (or array)          | Deletes one row by key, or each listed row, reporting whether each row existed.                                                                                  |
 | `keys`        | `Promise<readonly Key[]>`              | Lists a table's keys.                                                                                                                                            |
 | `scan`        | `AsyncIterable<Row>`                   | Iterates a table's rows in ascending key order.                                                                                                                  |
 | `clear`       | `Promise<void>`                        | Empties a table.                                                                                                                                                 |
@@ -438,6 +448,30 @@ nothing natively — the core runs the whole read over `scan` — and a driver w
 | `metadata`    | `Promise<DriverMetadata \| undefined>` | Reads the persisted `DriverMetadata` as a deeply frozen copy — an optional hook.                                                                                 |
 | `stamp`       | `Promise<void>`                        | Writes the persisted `DriverMetadata`, snapshot at entry — an optional hook.                                                                                     |
 | `transaction` | `Promise<R>`                           | Opens a native transaction scope — an optional driver hook. The driver owns acquisition, commit or rollback, release, and invalidation of the scoped capability. |
+
+#### `StorageJournalInterface`
+
+`StorageJournalInterface` extends `StorageInterface`. Each inherited member forwards to the
+storage the journal wraps, and a write, insert, delete, or clear first records the prior rows
+it would change.
+
+| Method      | Returns                                | Summary                                                                                                                                           |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`      | `Promise<Row \| undefined>` (or array) | Reads one row by key, or one row per key for a list — `undefined` for each miss.                                                                  |
+| `write`     | `Promise<void>`                        | Writes one row at a key, or each listed row at the key of the same position, applying every row or none.                                          |
+| `insert`    | `Promise<void>`                        | Inserts one row at a key, or each listed row at the key of the same position, rejecting `CONFLICT` with no row applied when a key already exists. |
+| `delete`    | `Promise<boolean>` (or array)          | Deletes one row by key, or each listed row, reporting whether each row existed.                                                                   |
+| `keys`      | `Promise<readonly Key[]>`              | Lists a table's keys.                                                                                                                             |
+| `scan`      | `AsyncIterable<Row>`                   | Iterates a table's rows in ascending key order.                                                                                                   |
+| `clear`     | `Promise<void>`                        | Empties a table.                                                                                                                                  |
+| `plan`      | `ReadPlan`                             | Splits a read into the part the engine answers natively and the residual the core runs — an optional hook.                                        |
+| `records`   | `Promise<readonly Row[]>`              | Reads the rows matching the native side of a plan — an optional hook.                                                                             |
+| `aggregate` | `Promise<number \| undefined>`         | Computes an aggregate over the rows matching the native side of a plan — an optional hook.                                                        |
+| `stream`    | `AsyncIterable<Row>`                   | Iterates the rows matching the native side of a plan lazily — an optional hook.                                                                   |
+| `migrate`   | `Promise<void>`                        | Applies one atomic `MigrationInput` — an optional hook.                                                                                           |
+| `metadata`  | `Promise<DriverMetadata \| undefined>` | Reads the persisted `DriverMetadata` as a deeply frozen copy — an optional hook.                                                                  |
+| `stamp`     | `Promise<void>`                        | Writes the persisted `DriverMetadata`, snapshot at entry — an optional hook.                                                                      |
+| `restore`   | `Promise<void>`                        | Restores every key and table the journal recorded to its prior rows.                                                                              |
 
 #### `DatabaseInterface`
 
@@ -486,8 +520,9 @@ it raises `DRIVER` with `table`, `key`, and the contract's `faults`. `count()` i
 `aggregate('count')`, which reads the stored set `records()` reads while ignoring paging,
 so the two agree. `records`,
 `count`, `aggregate`, `scan`, `set`, `add`, `update`, and `remove` each take an
-optional `OperationOptions`: its `signal` reaches every backend commit point,
-and an aborted batch keeps the items already committed.
+optional `OperationOptions`: its `signal` reaches every backend commit point. A list form
+is one driver call that admits every row first and applies every row or none; `update`
+of a list is one list `read` and one list `write`.
 
 | Method      | Returns                              | Summary                                                                                   |
 | ----------- | ------------------------------------ | ----------------------------------------------------------------------------------------- |
@@ -502,7 +537,7 @@ and an aborted batch keeps the items already committed.
 | `set`       | `Promise<Key>` (or array)            | Upserts one or more rows.                                                                 |
 | `add`       | `Promise<Key>` (or array)            | Inserts one or more rows, throwing `CONFLICT` on a duplicate key.                         |
 | `update`    | `Promise<boolean>` (or array)        | Applies a partial change to one or more rows.                                             |
-| `remove`    | `Promise<boolean>` (or array)        | Deletes one or more rows.                                                                 |
+| `remove`    | `Promise<boolean>`                   | Deletes one or more rows.                                                                 |
 | `clear`     | `Promise<void>`                      | Empties the table.                                                                        |
 | `query`     | `QueryInterface<T>`                  | Opens a fluent query builder over the table.                                              |
 | `cursor`    | `Promise<CursorInterface<T>>`        | Opens a forward row cursor for bulk mutation.                                             |
@@ -581,16 +616,16 @@ These invariants hold across the core database source tree ↔ this guide:
    planned driver against the core engine over `scan`. The following table rules where
    each clause runs in this release:
 
-   | Clause                                                                  | `SQLiteDriver`                                                                                                                                                        | `IndexedDBDriver`                                                                                                  | `MemoryDriver`, `JSONDriver`                             |
-   | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-   | Every operator on a flat `text`, `integer`, `real`, or `boolean` column | Native under every flag combination, with the null forms chosen from the column's flags; `starts` is an index range and `any` / `none` bind one `json_each` parameter | The first `and`-joined `equals`, `above`, `from`, or `between` over an index, or a comparison over the primary key | Residual over `scan`                                     |
-   | A nested path; a `json` or `blob` column                                | Residual                                                                                                                                                              | Residual                                                                                                           | Residual over `scan`                                     |
-   | An `or` fold                                                            | Native when every condition is; otherwise wholly residual                                                                                                             | Residual                                                                                                           | Residual over `scan`                                     |
-   | Order                                                                   | Native on a flat column that is not both optional and nullable                                                                                                        | Residual                                                                                                           | Residual over `scan`                                     |
-   | Page                                                                    | `LIMIT` and `OFFSET` when the residual holds no condition and no order                                                                                                | Residual, stopping the stream at `offset + limit` matches                                                          | Residual over `scan`                                     |
-   | `count`                                                                 | `COUNT(*)` when the residual holds no condition                                                                                                                       | Residual                                                                                                           | Residual over `scan`                                     |
-   | `sum`, `average`, `minimum`, `maximum`                                  | Native on an `integer` or `real` column that is not both optional and nullable                                                                                        | Residual                                                                                                           | Residual over `scan`                                     |
-   | Transaction                                                             | `BEGIN` / `COMMIT` / `ROLLBACK`; the scoped capability declares `plan`, `records`, `stream`, and `aggregate`                                                          | The snapshot floor                                                                                                 | `JSONDriver`: native; `MemoryDriver`: the snapshot floor |
+   | Clause                                                                  | `SQLiteDriver`                                                                                                                                                        | `IndexedDBDriver`                                                                                                  | `MemoryDriver`, `JSONDriver`                                          |
+   | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+   | Every operator on a flat `text`, `integer`, `real`, or `boolean` column | Native under every flag combination, with the null forms chosen from the column's flags; `starts` is an index range and `any` / `none` bind one `json_each` parameter | The first `and`-joined `equals`, `above`, `from`, or `between` over an index, or a comparison over the primary key | Residual over `scan`                                                  |
+   | A nested path; a `json` or `blob` column                                | Residual                                                                                                                                                              | Residual                                                                                                           | Residual over `scan`                                                  |
+   | An `or` fold                                                            | Native when every condition is; otherwise wholly residual                                                                                                             | Residual                                                                                                           | Residual over `scan`                                                  |
+   | Order                                                                   | Native on a flat column that is not both optional and nullable                                                                                                        | Residual                                                                                                           | Residual over `scan`                                                  |
+   | Page                                                                    | `LIMIT` and `OFFSET` when the residual holds no condition and no order                                                                                                | Residual, stopping the stream at `offset + limit` matches                                                          | Residual over `scan`                                                  |
+   | `count`                                                                 | `COUNT(*)` when the residual holds no condition                                                                                                                       | Residual                                                                                                           | Residual over `scan`                                                  |
+   | `sum`, `average`, `minimum`, `maximum`                                  | Native on an `integer` or `real` column that is not both optional and nullable                                                                                        | Residual                                                                                                           | Residual over `scan`                                                  |
+   | Transaction                                                             | `BEGIN` / `COMMIT` / `ROLLBACK`; the scoped capability declares `plan`, `records`, `stream`, and `aggregate`                                                          | The core's before-image journal                                                                                    | `JSONDriver`: native; `MemoryDriver`: the core's before-image journal |
 
    The rule fixes these semantics on every driver: text order and text ranges are the
    engine's binary order, so SQLite orders by code point where the core orders by UTF-16
@@ -600,8 +635,8 @@ These invariants hold across the core database source tree ↔ this guide:
    `average` on a numeric column are the engine's arithmetic. Every write is admitted
    through the contract, so every stored row conforms; a returned stored row that fails the
    contract raises `DRIVER`, and SQLite raises `DRIVER` for a stored value that does not
-   match its column's declaration. `MemoryDriver` still lacks a native `transaction?`, so its
-   transactions always use the snapshot floor; `JSONDriver` does implement
+   match its column's declaration. `MemoryDriver` lacks a native `transaction?`, so the
+   core's journal carries its transactions; `JSONDriver` does implement
    `transaction?` — it clones the committed memory/schema/metadata into an
    isolated candidate, passes only that candidate's capability to the callback,
    and publishes it with one atomic file replacement only when the callback
@@ -614,7 +649,7 @@ These invariants hold across the core database source tree ↔ this guide:
    exactly once, and terminalizes the iterator; the transaction and driver
    remain usable. Memory and IndexedDB need no equivalent root wrapper because
    neither exposes a callback transaction. `Database.transaction` over a `JSONDriver`
-   therefore prefers this native path over the snapshot floor. Both reference drivers also
+   therefore prefers this native path over the journal. Both reference drivers also
    implement the paired `metadata?` / `stamp?` — `MemoryDriver` in-process only
    (the owned `DriverMetadata` snapshot lives in instance memory), `JSONDriver` persisted:
    the file is `{ metadata?: DriverMetadata, tables }`, with `metadata` present only
@@ -644,9 +679,7 @@ These invariants hold across the core database source tree ↔ this guide:
    or physically incomplete state throws `DRIVER` without publishing a handle or
    attempting table/store repair; after external repair, the same driver instance
    may retry `open`.
-   `IndexedDBDriver.snapshot()` captures every store in one read transaction,
-   so the capture is point-in-time consistent across stores even under
-   concurrent writers; `restore` was already atomic. `SQLiteDriver` and
+   `SQLiteDriver` and
    `IndexedDBDriver` each implement `migrate?` natively and treat `MigrationInput` as one commit unit:
    `SQLiteDriver` applies schema, rows, and optional metadata inside one native
    SQLite transaction (`stepToSQL` projects each step's DDL), while a migration
@@ -662,8 +695,8 @@ These invariants hold across the core database source tree ↔ this guide:
    nothing is rewritten. Both implement the paired `metadata?` /
    `stamp?` into a reserved store name a user table must avoid:
    `SQLiteDriver` uses a single-row `_metadata` table (`METADATA_TABLE`), and
-   `IndexedDBDriver` uses an out-of-line `__metadata__` store (`METADATA_STORE`), both
-   excluded from a whole-store `snapshot`. `SQLiteDriver` implements
+   `IndexedDBDriver` uses an out-of-line `__metadata__` store (`METADATA_STORE`), which no
+   table reaches. `SQLiteDriver` implements
    `transaction?` as a callback-scoped real `BEGIN` / `COMMIT` / `ROLLBACK`;
    the capability performs reads, writes, migration, and metadata work inside
    that one native transaction, then becomes invalid. `IndexedDBDriver`
@@ -704,9 +737,10 @@ These invariants hold across the core database source tree ↔ this guide:
    tables, queries, cursors, and streams also throw `CONFLICT` after settlement.
    When the driver implements `transaction?(scope)`, the driver owns
    acquisition, commit on fulfillment, rollback on rejection, release, and
-   invalidation. Otherwise the universal single-writer floor snapshots the
-   whole store, runs the same scoped callback, and restores the snapshot on
-   rejection. Either path emits the identical `transaction` / `commit`
+   invalidation. Otherwise the core's before-image journal records the prior row of each
+   key the scope writes or deletes, on its first touch, and restores those keys on
+   rejection; a `clear` journals its table alone, and reads go to the driver, so a native
+   read sees the scope's writes. It gives rollback on rejection and no crash atomicity. Either path emits the identical `transaction` / `commit`
    lifecycle; `rollback(error)` is emitted only when rollback completed and the
    original scope/drain error remains the propagated rejection, never when
    cleanup itself replaced that error.
@@ -745,7 +779,7 @@ These invariants hold across the core database source tree ↔ this guide:
    `migrate?` / `metadata?` / `stamp?` may be omitted). `MemoryDriver` and
    `JSONDriver` both omit `records?` / `aggregate?`, and both
    implement `stream?` / `migrate?` / `metadata?` / `stamp?`; `MemoryDriver` still
-   omits `transaction?` (snapshot floor only) while `JSONDriver`
+   omits `transaction?` (the core's journal carries its scopes) while `JSONDriver`
    implements `transaction?` too (isolated candidate state plus one atomic
    publish on callback fulfillment). `SQLiteDriver` implements every optional hook — `records?` /
    `aggregate?` / `transaction?` / `stream?` / `migrate?` / `metadata?`
@@ -777,9 +811,8 @@ These invariants hold across the core database source tree ↔ this guide:
    the temp file before rejection, and reads wait behind that unit. Once an
    commit point that cannot be aborted (`SQLite` call entry, IndexedDB transaction
    completion, JSON `rename` dispatch) has won, the operation awaits and reports its real
-   result; a late signal cannot convert success to `ABORTED`. Batch items remain
-   sequential and independent: earlier committed items survive an abort of a
-   later item.
+   result; a late signal cannot convert success to `ABORTED`. A batch is one driver call,
+   so an abort ahead of its commit point applies no row of it.
 10. **Key generation is host-neutral and overridable.** When an optional
     primary column is omitted, a table uses global `crypto.randomUUID()`.
     `DatabaseOptions.generator` (a `KeyFunction`) authoritatively replaces
@@ -850,16 +883,17 @@ These invariants hold across the core database source tree ↔ this guide:
     README all call it the same way. It opens the fixed `users` and `posts`
     schema per phase (calling `factory()` fresh each time so failures stay
     isolated) and verifies the required surface's invariants (copy-in/copy-out
-    isolation, upsert-overwrite, key-ordered `keys`/`scan`, `snapshot` rollback, a
-    non-`id` primary key, structural round-tripping through `equalsValue`), then
+    isolation, upsert-overwrite, key-ordered `keys`/`scan`, the batch invariants (a list
+    read in key order, a list write that applies every row, a list insert with a conflicting
+    final member and a mismatched batch that apply none, a list delete that reports each key
+    once), the journal's round trip of prior rows, a non-`id` primary key, structural round-tripping through `equalsValue`), then
     presence-gates the optional `migrate?` / `stream?` / `transaction?`
     hooks when the driver implements them. The battery's `write-read` phase
     is deepened with nested-field checks (a written row's nested object/array
     fields must copy-in/copy-out isolated, not only its top-level fields),
-    and a dedicated `snapshot-nested` phase asserts the same nested isolation
-    across a `snapshot()` capture/restore round-trip — a driver that
-    shallow-copies anywhere in its write/read/scan/snapshot boundary
-    fails conformance (`MemoryDriver` passes by deep-copying through
+    and the journal phase asserts the same nested isolation for a list read whose rows the
+    journal restores — a driver that shallow-copies anywhere in its write/read/scan
+    boundary fails conformance (`MemoryDriver` passes by deep-copying through
     `structuredClone` at every one of those boundaries). The first violated
     invariant throws a `CONFORMANCE` `DatabaseError` naming the failed check.
 13. **Backend faults surface as `DatabaseError`, never raw.** No native
@@ -871,14 +905,9 @@ These invariants hold across the core database source tree ↔ this guide:
     error as `context.cause`. `SQLiteDriver`: a constraint violation maps to
     `CONFLICT`, a closed-connection fault to `CLOSED`, a busy/locked database
     to `DRIVER` with a `retryable` context flag, anything else to `DRIVER`.
-    Snapshot capture puts the open gate, every prepare/read, and captured-map
-    population inside one `#guard`; replay likewise contains the open gate,
-    native transaction, deletes, prepares, and reinserts in one `#guard`.
-    Public `close()` crosses that same boundary. A physically dropped declared
-    table therefore rejects capture as top-level `DRIVER`, and a zero-timeout
-    exclusive lock rejects replay as retryable `DRIVER` with
-    `context.code === 'BUSY'`; both retain the actual `SQLiteError` only at
-    `context.cause`.
+    Public `close()` crosses that same boundary, and a zero-timeout exclusive lock rejects a
+    write as retryable `DRIVER` with `context.code === 'BUSY'`, retaining the actual
+    `SQLiteError` only at `context.cause`.
     `IndexedDBDriver`: a constraint violation maps to `CONFLICT`; a
     closed/not-open/invalid-state fault to `CLOSED`; a quota fault to
     `DRIVER` with `code: 'QUOTA'`; `migrate`'s versionchange path remaps an
@@ -905,7 +934,7 @@ reference `MemoryDriver`, and the persistent `JSONDriver`, `SQLiteDriver`, and
 `IndexedDBDriver` backends. `JSONDriver` in `src/server` is a decorator over
 `MemoryDriver` that loads/flushes a single JSON file — every primitive
 delegates to the inner memory driver, so querying, key-order `scan` / `keys`,
-and capture-replay `snapshot` are inherited unchanged; `JSONDriver.migrate`
+and the all-or-nothing batches are inherited unchanged; `JSONDriver.migrate`
 additionally persists the migrated state, and every flush is atomic — written
 to a sibling temp file and `rename`d onto the target path, so a crash mid-flush
 can never truncate or corrupt the previous good file. Outside a `transaction`,
@@ -1165,8 +1194,8 @@ write. Memory and SQLite check immediately before their synchronous mutation;
 IndexedDB aborts its explicit readwrite transaction while active; JSON aborts
 staging, cleans its temp file, and restores the preimage before rejecting. If
 the native commit has already been dispatched, the method ignores a late abort
-and awaits the real success or failure. A batch passes the same signal to each
-sequential item, so already-committed earlier items remain committed.
+and awaits the real success or failure. A batch is one driver call with one commit point,
+so an abort applies every row of it or none.
 
 ### Batch operations
 
@@ -1200,11 +1229,16 @@ await users.get(['u1', 'u2']) // → readonly (Row | undefined)[]
 await users.resolve(['u1', 'u2']) // → readonly Row[] (NOT_FOUND on any miss)
 await users.has(['u1', 'u2']) // → readonly boolean[]
 await users.update(['u1', 'u2'], { role: 'member' }) // same changes to each → readonly boolean[]
-await users.remove(['u1', 'u2']) // → readonly boolean[]
+await users.remove(['u1', 'u2']) // → boolean, true only when every distinct listed key held a row and was removed
 ```
 
-A batch runs as independent sequential operations; wrap it in `transaction`
-when it must be atomic.
+A batch is one driver call that applies every row or none. The table admits every row through
+the contract ahead of that call, so a refused row applies none of the batch, and a conflicting
+`add` member does the same. SQLite runs the batch as one transaction, or as one savepoint
+inside a scope; IndexedDB runs it in one `database.write` scope; `MemoryDriver` and
+`JSONDriver` check every row ahead of the first change. `get`, `resolve`, and `has` of a key
+list are one list `read`, and `update` of a key list is one list `read` and one list
+`write`.
 
 ### Admission through the contract
 
@@ -1544,6 +1578,35 @@ error. `rollback(error)` reports only a completed rollback whose original
 scope/drain error is still being propagated — a cleanup failure is never
 reported as a successful rollback.
 
+On a driver without `transaction?` (`MemoryDriver`, `IndexedDBDriver`, a custom backend), the
+core runs the scope through its before-image journal, `StorageJournal`: each write, insert,
+or delete reads the prior rows of its untouched keys in one list `read` ahead of the write,
+and a `clear` reads its table's keys and rows ahead of emptying it. On rejection the journal
+writes back each cleared table and each recorded row and deletes each recorded key that held
+no row, so the cost of a scope follows the keys it touched rather than the store's size.
+Reads go to the driver, so a native read inside the scope sees the scope's writes. The
+journal gives rollback on rejection and no crash atomicity:
+
+```ts
+import { createMemoryDriver, StorageJournal } from '@orkestrel/database'
+
+const driver = createMemoryDriver()
+await driver.open([
+	{
+		name: 'users',
+		primary: 'id',
+		columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+		indexes: [],
+	},
+])
+await driver.write('users', 'u1', { id: 'u1', name: 'Ada' })
+const journal = new StorageJournal(driver)
+await journal.write('users', 'u1', { id: 'u1', name: 'Grace' })
+await journal.insert('users', 'u2', { id: 'u2', name: 'Alan' })
+await journal.restore()
+await driver.read('users', ['u1', 'u2']) // [{ id: 'u1', name: 'Ada' }, undefined]
+```
+
 Root promise operations enter the shared admission ledger synchronously, before
 their first `await`. `transaction()` closes root admission before it drains that
 ledger, so work accepted immediately before the transaction is included and work
@@ -1572,7 +1635,7 @@ await boundary.track(async () => 42) // 42
 ### Native transactions
 
 `transaction` uses a driver's optional native `transaction?(scope)` hook
-instead of the snapshot floor. The driver passes a `StorageInterface`
+instead of the core's journal. The driver passes a `StorageInterface`
 capability to the callback, commits when it fulfills, rolls back when it
 rejects, and invalidates the capability after settlement. The database-level
 `transaction` / `commit` / `rollback` events fire the same either way:
@@ -1941,7 +2004,7 @@ The event vocabulary:
 `open` fires once when the handle's driver connects (an explicit `open()`, or
 the lazy first-use connect); `close`
 when the driver is released; `transaction` when a scope begins after its
-native boundary or fallback snapshot is acquired; `commit` only after a scope
+native boundary is acquired or its journal is created; `commit` only after a scope
 succeeds; `rollback` only after a throwing scope's tables are all restored;
 `migrate` after a migration commits. A `Table` fires `write` after any
 row put (set / add / update — re-read by key if you need the new value),
@@ -2083,9 +2146,10 @@ await driver.write('users', 'u1', { id: 'u1', name: 'Ada Lovelace' }) // upsert
 await driver.read('users', 'u1') // { id: 'u1', name: 'Ada' } | undefined
 for await (const row of driver.scan('users')) row // every row, key order
 await driver.keys('users') // readonly Key[]
-const rollback = await driver.snapshot() // capture, then...
-await driver.delete('users', 'u1') // boolean
-await rollback() // ...restore the captured state
+await driver.write('users', ['u2', 'u3'], [{ id: 'u2' }, { id: 'u3' }]) // every row or none
+await driver.read('users', ['u1', 'missing']) // [{ id: 'u1', name: 'Ada Lovelace' }, undefined]
+await driver.delete('users', ['u2', 'u2']) // [true, false]
+await driver.delete('users', 'u1') // true
 await driver.clear('users')
 await driver.close()
 ```
@@ -2192,12 +2256,12 @@ restored before that error leaves the exclusive queue, so the next operation
 can proceed after the temporary obstruction is removed. A successful staging
 write requests native `flush: true` before the same-directory atomic rename.
 
-`JSONDriver.snapshot()` captures owned row data together with the table schema
-needed to decode that capture. Its rollback thunk is repeatable and restores
-data only into the driver's current schema: current metadata is never rewound,
-a captured table removed after capture is skipped, and a table added later is
-preserved. Replaying the same thunk again produces the same row result without
-replacing the current schema or metadata.
+Each root write, insert, or delete, a list included, records its prior rows in a
+`StorageJournal` over the driver's memory, applies the change, and flushes the whole store
+once; a failed flush restores the journaled rows before the error leaves the queue, so memory
+and the file hold the same rows. An empty list changes no row and leaves the file in place.
+`clear` flushes the table as empty ahead of emptying memory, so a failed flush leaves memory
+holding every row it held.
 
 ### Compiling input to SQL
 
@@ -2337,7 +2401,7 @@ await db
 // Real transactions and atomic migration ship with it:
 await db.transaction(async (transaction) => {
 	await transaction.table('users').update('u1', { age: 37 })
-}) // real BEGIN/COMMIT/ROLLBACK, not the snapshot floor
+}) // real BEGIN/COMMIT/ROLLBACK, not the core's journal
 
 // createSQLiteDriver accepts a SQLiteDriverOptions bag:
 createSQLiteDriver({
@@ -2364,9 +2428,11 @@ metadata. The same call inside a callback transaction uses a SQLite savepoint:
 the wrapper deliberately provides raw `execute`, not a savepoint manager, so the
 driver owns one guarded fixed internal SQL literal. If caller code catches its
 failure, the failed inner migration is rolled back to that savepoint while the
-surrounding transaction remains active and may continue safely. Snapshot
-capture and replay, plus public `close()`, contain their complete native bodies
-inside `#guard`; no raw SQLite fault crosses the driver boundary. Candidate
+surrounding transaction remains active and may continue safely. A list write or insert
+uses one prepared statement per row, as one transaction outside a scope and inside the same
+savepoint form within one, so a conflicting row applies none of the batch; a list read and a
+list delete are each one statement with the keys bound as one JSON parameter. Public
+`close()` contains its complete native body inside `#guard`; no raw SQLite fault crosses the driver boundary. Candidate
 schema state becomes live only after the native commit. Point `write` / `insert` /
 `delete` check `OperationOptions.signal`
 immediately before the synchronous SQLite call; that call entry is the commit
@@ -2527,7 +2593,19 @@ mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATIO
 - **Use `MemoryDriver` for tests and ephemeral data** — no I/O, and
   `JSONDriver` swaps in unchanged when writes need to survive a restart.
 
-## Migrating from 0.0.23
+## Migrating from 0.0.24
+
+The coverage wave changes these exports and behaviors; each consumer changes in the release
+that adopts it. A name in this section that the package no longer exports is written plain.
+
+| 0.0.24                                                                                             | This release                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DriverInterface.snapshot, on `MemoryDriver`, `JSONDriver`, `SQLiteDriver`, and `IndexedDBDriver`   | Removed; a scope on a driver without `transaction?` runs through `StorageJournal`, and a custom driver drops the member                                                                                                 |
+| A custom `StorageInterface` with single-key `read`, `write`, `insert`, and `delete`                | Each member adds its list overload: `read(table, keys)`, `write(table, keys, rows, options?)`, `insert(table, keys, rows, options?)`, and `delete(table, keys, options?)`, each one call that applies every row or none |
+| A `Table` batch (`set`, `add`, `update`, `remove` of a list) that kept the rows ahead of a failure | The batch applies no row; a caller that relied on the earlier rows writes them as their own batch                                                                                                                       |
+| An abort between the items of a batch                                                              | The signal is checked at entry and at the driver's commit point; an abort ahead of the commit applies no row                                                                                                            |
+| `Table.remove(keys)` answering one boolean per key                                                 | One boolean, true only when every distinct listed key held a row and was removed, a repeated key counting as one; `has(keys)` keeps one answer per key                                                                  |
+| A transaction on `MemoryDriver` or `IndexedDBDriver` that copied the whole store                   | The journal reads and restores only the keys the scope touched, and a `clear` journals its table alone                                                                                                                  |
 
 The paging wave changes these exports and behaviors; under the no-shim law, each consumer
 changes in the release that adopts it. A name in this section that the package no longer
@@ -2565,26 +2643,28 @@ to `Scalar`.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ compiler-resolved public-entry bijection across `src/core`, `src/server`, and `src/browser`, including fail-closed temporary-project coverage for barrel resolution and unsupported exports, each interface ↔ implementing-class method bijection, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Create a database` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline. It also compiles every TypeScript fence against the published entry specifiers and runs the flagship fences, asserting the values their comments claim.
 - [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — `cloneDriverMetadata` ownership: normalized deeply frozen distinct output, caller-mutation isolation, and `VALIDATION` translation for malformed, cyclic, functional, accessor, and hostile/revoked-proxy inputs without leaking raw Contract or caller errors.
 - [`tests/src/core/validators.test.ts`](../tests/src/core/validators.test.ts) — total boundary guards for keys, columns, tables, driver schemas, migrations, inputs, and metadata.
-- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `validatePage`'s strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero; `findColumn`'s flat-column lookup and its `undefined` miss; `resolvePrimary`'s declared-or-default key and `requireColumns`'s typed map lookup with its `NOT_FOUND` throw; `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — through `equalsValue`, including `NaN`-equals-`NaN`; the range family through `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and the `scanDriver` / `conformDriver` / `auditDriver` battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks and the `snapshot-nested` phase (a shallow-copying driver fails it).
-- [`tests/src/core/drivers/MemoryDriver.test.ts`](../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear + `snapshot` rollback, duplicate-insert `CONFLICT`, non-JSON row isolation through native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
+- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) — the query engine: `validatePage`'s strict page matrix, deterministic field order, exact non-finite diagnostics, and legal zero; `findColumn`'s flat-column lookup and its `undefined` miss; `resolvePrimary`'s declared-or-default key and `requireColumns`'s typed map lookup with its `NOT_FOUND` throw; `compareValues` total order, every `matchesCondition` operator (the equality family — `equals` / `not` / `any` / `none` — through `equalsValue`, including `NaN`-equals-`NaN`; the range family through `compareValues`), `matchesQuery` folding, `filterRows`, `sortRows`, `applyQuery`, `computeAggregate`, `extractKey`, `shapeToColumnStorage`'s shape → portable-type mapping (scalars, `json` for object/array/union/raw, optional/nullable unwrap, literal-by-values), total `isDriverMetadata` rejection of malformed and hostile getter/proxy input, `equalsValue`'s structural equality, `planMigration`'s `MIGRATION` throw on a shared column's storage/nullability drift, and the `scanDriver` / `conformDriver` / `auditDriver` battery against `MemoryDriver` and a deliberately-broken driver (each check fails with a `CONFORMANCE` `DatabaseError`), including the deepened `write-read` nested-field checks, the journal phase (a shallow-copying driver fails it), and the batch phase (a per-row list insert fails it); `buildBatch`'s pairing and refusals and `computeRemoved`'s first-occurrence rule.
+- [`tests/src/core/drivers/MemoryDriver.test.ts`](../tests/src/core/drivers/MemoryDriver.test.ts) — the driver primitive: `open(schema)` readies tables, read/write/atomic-insert/delete/keys/scan/clear, list reads in key order, list writes and inserts that apply every row or none, list deletes that report each key once, duplicate-insert `CONFLICT`, non-JSON row isolation through native `structuredClone`, metadata stamp/migrate/copy-out ownership through `cloneDriverMetadata`, strict stream paging, and pre-aborted point mutations rejecting `ABORTED` without changing rows.
 - [`tests/src/core/Database.test.ts`](../tests/src/core/Database.test.ts) — declared tables, lazy connect, typed CRUD, custom keys, indexes, import/export, and callback transactions: whole accepted-operation drain, synchronous-throw and asynchronous-rejection reason identity, caught-operation rejection still rolling back, callback-over-drain error precedence, root/import/lifecycle/nesting barriers, stale scoped table/query/cursor/stream invalidation, and truthful successful-rollback-only events. It also covers explicit migration and versioned open: deployed-schema-first reconciliation, fresh stamp, same-version no-op, atomic upgrade input, higher-version rejection, paired-hook enforcement (metadata-only and stamp-only are inert), and migrate-event behavior.
 - [`tests/src/core/ScopedIterator.test.ts`](../tests/src/core/ScopedIterator.test.ts) — direct internal continuation-lifetime coverage: tracked `next` / `return` / `throw`, the readiness thunk running before every advance and its failure preempting the source, synchronous source throws, missing methods, concurrent accepted continuations, idle iterators, late conflicts, and exactly-once rejected cleanup.
 - [`tests/src/core/DriverIterator.test.ts`](../tests/src/core/DriverIterator.test.ts) — direct root-driver continuation coverage: pre/post-read guards, produced-row discard, terminalization, return races, missing methods, throw delegation, and exactly-once cleanup.
-- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, whole-row admission with its lossless repairs, its undeclared, missing, and lossy refusals, and the raw-column nested-key admission, `add` dispatch through atomic `insert` (including concurrent duplicate claims), sequential partial-batch abort semantics, and the emitter's post-commit and no-aborted-event behavior.
+- [`tests/src/core/Table.test.ts`](../tests/src/core/Table.test.ts) — `Table`'s keyed CRUD + batch overloads, payload-safe bounded contract diagnostics, strict paging at every read boundary, whole-row admission with its lossless repairs, its undeclared, missing, and lossy refusals, and the raw-column nested-key admission, `add` dispatch through atomic `insert` (including concurrent duplicate claims), one driver call per batch read through a `StorageRecorder`, batches that apply every row or none, a list `remove` that answers true only when every distinct listed key held a row and was removed, a repeated key counting as one (a transaction view included), empty lists that answer and touch no row, and the emitter's post-commit and no-aborted-event behavior.
 - [`tests/src/core/Query.test.ts`](../tests/src/core/Query.test.ts) — `Query`'s where / and / or dispatch, ordering, synchronous strict page builders with no failed mutation, legal zero, `filter`, and aggregates.
+- [`tests/src/core/StorageJournal.test.ts`](../tests/src/core/StorageJournal.test.ts) — the before-image journal over a real `MemoryDriver`: restore of updated, inserted, and deleted keys, one list read per call and one restore call per kind, no call when nothing was recorded, and the adverse orderings (unawaited writes to one key, a write on each side of a `clear`, a table cleared alone, a failed prior read that records nothing so a later write records its prior row, a delayed prior read that a later write to the same key waits on, a mismatched batch).
+- [`tests/src/core/ScopedStorage.test.ts`](../tests/src/core/ScopedStorage.test.ts) — the scoped-storage lifetime boundary: forwarding of each member's single and list forms, refusal of every member once the guard throws, and a scan advance refused after the scope settles.
 - [`tests/src/core/Cursor.test.ts`](../tests/src/core/Cursor.test.ts) — cursor behavior over a key snapshot: `value` / `index` / `done`, serialized overlapping `next` / `update` / `remove`, rejection recovery, synchronous runner admission, terminal close before queued work and during dispatched reads/mutations, plus transaction-ledger regressions for deleted-key skipping, unawaited normalized updates, validation rollback, and retained closed/active conflicts.
 - [`tests/src/core/factories.test.ts`](../tests/src/core/factories.test.ts) — `createDatabase` / `createMemoryDriver` each return a working instance of their interface (a round-trip end to end).
 - [`tests/src/core/TransactionScope.test.ts`](../tests/src/core/TransactionScope.test.ts) — direct transaction-lifetime coverage: `accepting` and the `check` refusal, synchronous admission through `track`, a synchronous operation throw captured as a rejection, unawaited work contained by `drain`, the drain loop re-reading work another tracked operation admitted, first-failure identity preserved across repeated drains, and `stream`'s per-continuation boundary leaving an idle iterator unpinned.
 - [`tests/src/core/DatabaseContext.test.ts`](../tests/src/core/DatabaseContext.test.ts) — direct shared-context coverage: `register`'s identical-schema merge, its `VALIDATION` conflict, and its `CONFLICT` / `CLOSED` refusals; idle → open → closed transitions emitted once with one shared readiness promise; root admission, its transaction-time `CONFLICT`, and close-time drain; transaction commit / rollback events and value or error propagation, nested-transaction refusal, entry-only signal checking, and a fresh `TransactionScope` per attempt; explicit migration's missing-hook and post-open refusals; and versioned reconciliation's fresh stamp, newer-store rejection, differing-schema rejection, and same-version no-op.
 - [`tests/src/core/DatabaseTransaction.test.ts`](../tests/src/core/DatabaseTransaction.test.ts) — direct transaction-view coverage: the typed table `table()` builds over the scoped driver, its writes landing straight on that driver, the scope `CONFLICT` after settlement, the `NOT_FOUND` refusal for an undeclared table, a per-table primary override, a scoped table refusing work started after settlement, and the configured generator minting a key for a keyless write.
 - [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts) — `createJSONDriver` / `createSQLiteDriver` each return a working `DriverInterface` instance (a round-trip end to end), drive the core `createDatabase` stack, and persist across a reopen; `createSQLiteDriver` requires a path and opens an in-memory database only with `path: ':memory:'`.
-- [`tests/src/server/drivers/JSONDriver.test.ts`](../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver` persistence plus atomic insert and the exclusive point-mutation queue: queued abort/no late start, active staging restoration, cleanup-success error precedence, deterministic real-filesystem persistence-plus-cleanup dual failure with exact evidence and queue recovery, read isolation, concurrent-writer ordering, fail-closed real-filesystem coverage for non-absence reads, invalid syntax/documents/table sets/containers/rows/metadata, byte preservation, no partial publication, application-invalid row retention, payload-safe rejection, strict stream paging, and same-instance external-repair retry; synchronous root/scoped stamp and migration ownership, deeply frozen distinct copy-out, deployed-schema-first open, isolated callback/root-migration candidates whose rows/schema/metadata publish only after file replacement succeeds, transaction-time root scan/stream continuation conflicts with terminal cleanup, and post-native-rollback rejection replacement.
-- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s native surface: deployed-metadata-first open and reconciliation; fail-closed malformed metadata, physical schema disagreement, and persisted-table loss before DDL, including deterministic first-loss evidence, physical non-recreation, external repair, and same-driver retry; root/scoped stamp/migration ownership and distinct deeply frozen copy-out; atomic insert/duplicate `CONFLICT`; point-mutation abort boundaries; strict direct records/aggregate/stream paging; native planned query and aggregate paths, the paging readings, the operator matrix, and `EXPLAIN QUERY PLAN` of the native plan; repeatable schema-aware snapshot capture/replay plus real dropped-table and exclusive-lock failure containment/recovery; atomic `MigrationInput` schema/rows/metadata at the root; fixed-literal savepoint containment for a caught migration failure while its callback transaction remains active; candidate-schema publication only after commit; callback transaction barriers/invalidation including root continuation cleanup; payload-safe rejection; post-native-rollback rejection replacement; backend-fault mapping; and engine parity.
+- [`tests/src/server/drivers/JSONDriver.test.ts`](../tests/src/server/drivers/JSONDriver.test.ts) — `JSONDriver` persistence plus atomic insert and the exclusive point-mutation queue: an empty list that leaves the file in place, a failed clear flush that leaves every row in memory, queued abort/no late start, active staging restoration, cleanup-success error precedence, deterministic real-filesystem persistence-plus-cleanup dual failure with exact evidence and queue recovery, read isolation, concurrent-writer ordering, fail-closed real-filesystem coverage for non-absence reads, invalid syntax/documents/table sets/containers/rows/metadata, byte preservation, no partial publication, application-invalid row retention, payload-safe rejection, strict stream paging, and same-instance external-repair retry; synchronous root/scoped stamp and migration ownership, deeply frozen distinct copy-out, deployed-schema-first open, isolated callback/root-migration candidates whose rows/schema/metadata publish only after file replacement succeeds, transaction-time root scan/stream continuation conflicts with terminal cleanup, and post-native-rollback rejection replacement.
+- [`tests/src/server/drivers/SQLiteDriver.test.ts`](../tests/src/server/drivers/SQLiteDriver.test.ts) — `SQLiteDriver`'s native surface: deployed-metadata-first open and reconciliation; fail-closed malformed metadata, physical schema disagreement, and persisted-table loss before DDL, including deterministic first-loss evidence, physical non-recreation, external repair, and same-driver retry; root/scoped stamp/migration ownership and distinct deeply frozen copy-out; atomic insert/duplicate `CONFLICT`; point-mutation abort boundaries; strict direct records/aggregate/stream paging; native planned query and aggregate paths, the paging readings, the operator matrix, and `EXPLAIN QUERY PLAN` of the native plan; list reads and deletes as one statement, a conflicting batch that applies no row outside a scope and rolls back to its savepoint inside one, and one commit per batch read through the file change counter under a rollback journal; atomic `MigrationInput` schema/rows/metadata at the root; fixed-literal savepoint containment for a caught migration failure while its callback transaction remains active; candidate-schema publication only after commit; callback transaction barriers/invalidation including root continuation cleanup; payload-safe rejection; post-native-rollback rejection replacement; backend-fault mapping; and engine parity.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the SQLite bridge: `quoteIdentifier`, codecs, row extraction, `deriveSQLiteIndexName` exact bytes, the planner `planSQLiteQuery` and its `matchesSQLiteCondition` / `computeSuccessor` predicates, `validatePragmas`, strict decode, and `matchesSQLiteAffinity`.
 - [`tests/src/server/compilers.test.ts`](../tests/src/server/compilers.test.ts) — the coherent SQL-emitter cluster: column/field/aggregate compilation, table/index/migration DDL, and the strict-page `QueryInput` → SQL pipeline with exact statements and parameters.
 - [`tests/src/server/inferers.test.ts`](../tests/src/server/inferers.test.ts) — `inferValueStorage`'s nested-operand storage inference: the `ColumnStorage` a `json_extract` operand must encode as, over booleans, integral and fractional numbers, bigints, objects and arrays, strings, `null`, and `undefined`.
 - [`tests/src/server/integration.test.ts`](../tests/src/server/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `SQLiteDriver` (native and residual reads) produce identical rows/counts/aggregates, and the text-order exemption names the ids SQLite returns under its binary order.
-- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, the plan, the rows read per conformance read against 0.0.23, snapshot capture-replay, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
+- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, the plan, the rows read per conformance read against 0.0.23, list reads, inserts, and deletes in one transaction each, a journal scope whose native reads see its writes, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
 - [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the planner: `conditionToRange` over every comparison operator, `findAccessCondition` / `deriveAccessPlan` index and primary selection, `planIndexedDBQuery`, backend-error mapping, and exact `deriveIndexedDBIndexName` bytes.
 - [`tests/src/browser/factories.test.ts`](../tests/src/browser/factories.test.ts) — `createIndexedDBDriver` returns a working `DriverInterface` instance (a round-trip end to end).
 - [`tests/src/browser/integration.test.ts`](../tests/src/browser/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `IndexedDBDriver` produce identical rows/counts, including pushdown edge cases (`below`/`to` on a secondary-indexed column, a reversed `between`).

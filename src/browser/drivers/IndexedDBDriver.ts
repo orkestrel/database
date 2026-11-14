@@ -20,24 +20,27 @@ import type {
 } from '@orkestrel/indexeddb'
 import type { AccessPlan } from '../types.js'
 import {
+	applyKeys,
 	applyQuery,
 	bindRowKey,
 	checkAbort,
 	cloneDriverMetadata,
 	cloneMigrationInput,
 	compareValues,
+	computeRemoved,
 	DatabaseError,
 	equalsValue,
+	buildBatch,
 	extractKey,
 	isKey,
 	isDatabaseError,
 	migrateRows,
 	normalizeReadInput,
 	normalizeDriverSchema,
-	planMigration,
 	projectMigrationSchema,
 	validatePage,
 } from '@src/core'
+import { isArray } from '@orkestrel/contract'
 import { createIndexedDBDatabase, isIndexedDBError } from '@orkestrel/indexeddb'
 import {
 	deriveAccessPlan,
@@ -57,8 +60,8 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  *
  * @remarks
  * A thin adapter: it implements the storage primitives the core database layer
- * needs (`open` / `close` / `read` / `write` / `delete` / `keys` / `scan` / `clear`
- * / `snapshot`) by delegating to the wrapper's typed store operations — it never
+ * needs (`open` / `close` / `read` / `write` / `insert` / `delete` / `keys` / `scan` /
+ * `clear`) by delegating to the wrapper's typed store operations — it never
  * touches raw IndexedDB. Rows are stored with **out-of-line keys** (the database
  * passes the key explicitly, `store.set(row, key)`), so each table is declared as a
  * key-path-less store. A fresh database opens in **auto-managed** mode (no fixed
@@ -66,8 +69,9 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * bootstrap captures the live stores and version, rejects a missing persisted store,
  * and pins the final open to that version so a competing versionchange cannot
  * silently recreate lost storage. The driver's bulk reads (`scan` / `keys`) use the
- * wrapper's native `getAll` / `getAllKeys`, and `snapshot` rolls back through one
- * atomic wrapper transaction.
+ * wrapper's native `getAll` / `getAllKeys`. A list read is one `get(keys)` transaction, and
+ * a list write, insert, or delete runs in one `database.write` scope, so a conflicting row
+ * applies none of the batch.
  *
  * It declares `plan`, `records`, and `stream`: {@link planIndexedDBQuery} keeps native the
  * one condition a key range over the primary key or a single-column secondary index
@@ -76,8 +80,7 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * @remarks
  * This driver also implements `migrate` / `metadata` / `stamp`. `metadata` / `stamp`
  * persist the {@link DriverMetadata} in a reserved out-of-line store,
- * {@link METADATA_STORE} (`__metadata__`) — excluded from a whole-store `snapshot`
- * capture, since it is driver bookkeeping, not caller data. `migrate` applies a
+ * {@link METADATA_STORE} (`__metadata__`), driver bookkeeping no table reaches. `migrate` applies a
  * {@link Migration} plan natively: IndexedDB schema DDL (creating/dropping a
  * store, creating/dropping an index) is legal only inside a versionchange
  * transaction (`onupgradeneeded`), so `migrate` closes the current connection
@@ -95,9 +98,9 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * `records` covers it. `transaction` is impossible here: the wrapper
  * auto-commits an `IDBTransaction` when control yields outside its request
  * chain, so arbitrary callback awaits cannot remain inside one native
- * transaction. Every atomic multi-operation sequence in this driver
- * (`snapshot`'s rollback) instead runs entirely inside one `db.write(...)`
- * scope.
+ * transaction, so the core's journal carries a scope over this driver. Every atomic
+ * multi-operation sequence in this driver, a batch included, runs inside one
+ * `db.write(...)` scope.
  */
 export class IndexedDBDriver implements DriverInterface {
 	readonly #name: string
@@ -177,35 +180,80 @@ export class IndexedDBDriver implements DriverInterface {
 		this.#database = undefined
 	}
 
-	async read(table: string, key: Key): Promise<Row | undefined> {
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
 		try {
-			return await this.#store(table).get(key)
+			// A list is one `get(keys)` call, in one transaction.
+			const store = this.#store(table)
+			// The ternary only selects the overload; both arms make the same call.
+			return isArray(keys) ? await store.get(keys) : await store.get(keys)
 		} catch (error) {
 			throw this.#wrap(error)
 		}
 	}
 
-	async write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
-		const bound = bindRowKey(row, this.#table(table).primary, key)
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = this.#bind(table, buildBatch(keys, rows))
 		await this.#mutate(table, options, async (store) => {
-			await store.set(bound, key)
+			await Promise.all(entries.map(([key, row]) => store.set(row, key)))
 		})
 	}
 
-	async insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
-		const bound = bindRowKey(row, this.#table(table).primary, key)
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = this.#bind(table, buildBatch(keys, rows))
 		await this.#mutate(table, options, async (store) => {
-			await store.add(bound, key)
+			await Promise.all(entries.map(([key, row]) => store.add(row, key)))
 		})
 	}
 
-	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
-		const result = Promise.withResolvers<boolean>()
-		await this.#mutate(table, options, async (store) => {
-			result.resolve(await store.has(key))
-			await store.remove(key)
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
+		return applyKeys(keys, async (listed) => {
+			const result = Promise.withResolvers<readonly boolean[]>()
+			await this.#mutate(table, options, async (store) => {
+				const existed = await store.has(listed)
+				await store.remove(listed)
+				result.resolve(computeRemoved(listed, existed))
+			})
+			return result.promise
 		})
-		return result.promise
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
@@ -260,109 +308,6 @@ export class IndexedDBDriver implements DriverInterface {
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		validatePage(input)
 		return this.#stream(table, input)
-	}
-
-	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		try {
-			const database = this.#require()
-			const requested = tables ?? [...this.#schema.keys()]
-			const names = [...new Set(requested)].filter(
-				(name) =>
-					name !== METADATA_STORE && this.#schema.has(name) && database.stores.includes(name),
-			)
-			const captured = new Map<
-				string,
-				{
-					readonly identity: object
-					readonly keys: readonly IDBValidKey[]
-					readonly rows: readonly Row[]
-					readonly schema: TableSchema
-				}
-			>()
-			if (names.length > 0) {
-				await database.read(names, async (transaction) => {
-					for (const name of names) {
-						const schema = this.#schema.get(name)
-						const identity = this.#identities.get(name)
-						if (schema === undefined || identity === undefined) continue
-						const store = transaction.store(name)
-						captured.set(name, {
-							identity,
-							keys: await store.keys(),
-							rows: await store.records(),
-							schema,
-						})
-					}
-				})
-			}
-			return async () => {
-				try {
-					const current = this.#require()
-					const replacements = new Map<
-						string,
-						{ readonly keys: readonly Key[]; readonly rows: readonly Row[] }
-					>()
-					for (const [name, snapshot] of captured) {
-						const schema = this.#schema.get(name)
-						if (
-							schema === undefined ||
-							this.#identities.get(name) !== snapshot.identity ||
-							!current.stores.includes(name)
-						) {
-							continue
-						}
-						const plan = planMigration([snapshot.schema], [schema])
-						const migrated = migrateRows(snapshot.rows, plan.steps)
-						if (
-							snapshot.keys.length !== snapshot.rows.length ||
-							migrated.length !== snapshot.rows.length
-						) {
-							throw new DatabaseError(
-								'MIGRATION',
-								'IndexedDB snapshot keys and rows have different cardinality',
-								{ table: name },
-							)
-						}
-						const keys: Key[] = []
-						const rows: Row[] = []
-						for (const [index, key] of snapshot.keys.entries()) {
-							const row = migrated[index]
-							if (!isKey(key) || row === undefined) {
-								throw new DatabaseError(
-									'MIGRATION',
-									'IndexedDB snapshot row has no usable primary key',
-									{ table: name, column: schema.primary, index },
-								)
-							}
-							keys.push(key)
-							rows.push(bindRowKey(row, schema.primary, key))
-						}
-						replacements.set(name, { keys, rows })
-					}
-					if (replacements.size === 0) return
-					await current.write([...replacements.keys()], async (transaction) => {
-						for (const [name, replacement] of replacements) {
-							const store = transaction.store(name)
-							await store.clear()
-							for (const [index, key] of replacement.keys.entries()) {
-								const row = replacement.rows[index]
-								if (row === undefined || key === undefined) {
-									throw new DatabaseError('DRIVER', 'IndexedDB snapshot entry is incomplete', {
-										table: name,
-										index,
-									})
-								}
-								await store.set(row, key)
-							}
-						}
-					})
-				} catch (error) {
-					throw this.#wrap(error)
-				}
-			}
-		} catch (error) {
-			throw this.#wrap(error)
-		}
 	}
 
 	/**
@@ -561,6 +506,15 @@ export class IndexedDBDriver implements DriverInterface {
 		} finally {
 			cleanup.abort()
 		}
+	}
+
+	// Write each row's key into its primary column, ahead of the transaction.
+	#bind(
+		table: string,
+		entries: ReadonlyArray<readonly [Key, Row]>,
+	): ReadonlyArray<readonly [Key, Row]> {
+		const primary = this.#table(table).primary
+		return entries.map(([key, row]) => [key, bindRowKey(row, primary, key)] as const)
 	}
 
 	#require(): IndexedDBDatabaseInterface {

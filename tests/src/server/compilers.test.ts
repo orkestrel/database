@@ -12,6 +12,7 @@ import {
 	compileWhereSQL,
 	compileConditionSQL,
 	compileGuardedSQL,
+	compileInsertSQL,
 	compileJoinedSQL,
 	schemaToIndexes,
 	schemaToTable,
@@ -727,6 +728,20 @@ describe('compileGuardedSQL', () => {
 		expect(compileGuardedSQL('"age" > ?', '')).toBe('"age" > ?')
 		expect(compileGuardedSQL('"age" > ?', ' AND typeof("age") != \'text\'')).toBe(
 			'("age" > ? AND typeof("age") != \'text\')',
+		)
+	})
+})
+
+describe('compileInsertSQL', () => {
+	it('binds one parameter per declared column in schema order', () => {
+		expect(compileInsertSQL(SCHEMA, true)).toBe(
+			'INSERT OR REPLACE INTO "users" ("id", "name", "age", "active", "meta") VALUES (?, ?, ?, ?, ?)',
+		)
+	})
+
+	it('omits the replace clause for an insert that must refuse an existing key', () => {
+		expect(compileInsertSQL(SCHEMA, false)).toBe(
+			'INSERT INTO "users" ("id", "name", "age", "active", "meta") VALUES (?, ?, ?, ?, ?)',
 		)
 	})
 })

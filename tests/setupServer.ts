@@ -808,14 +808,13 @@ export function replaceTransactionFailure(
 	return {
 		open: (schema) => driver.open(schema),
 		close: () => driver.close(),
-		read: (table, key) => driver.read(table, key),
-		write: (table, key, row, options) => driver.write(table, key, row, options),
-		insert: (table, key, row, options) => driver.insert(table, key, row, options),
-		delete: (table, key, options) => driver.delete(table, key, options),
+		read: driver.read.bind(driver),
+		write: driver.write.bind(driver),
+		insert: driver.insert.bind(driver),
+		delete: driver.delete.bind(driver),
 		keys: (table) => driver.keys(table),
 		scan: (table) => driver.scan(table),
 		clear: (table) => driver.clear(table),
-		snapshot: (tables) => driver.snapshot(tables),
 		async transaction(scope) {
 			try {
 				return await transact(scope)
@@ -836,6 +835,17 @@ export function tempDatabasePath(): { readonly path: string; readonly cleanup: (
 		path: join(scratch.path, 'database.json'),
 		cleanup: () => scratch.destroy(),
 	}
+}
+
+/**
+ * Reads a SQLite file's change counter, header bytes 24 to 27, which each commit under a
+ * rollback journal moves by one.
+ *
+ * @param path - The database file
+ * @returns The counter, a big-endian 32-bit integer
+ */
+export function readChangeCounter(path: string): number {
+	return readFileSync(path).readUInt32BE(24)
 }
 
 /**
@@ -900,7 +910,7 @@ export async function createForeignKeyFixture(
  * `users` table carrying one of each codec-relevant
  * column type (text, `integer`, `boolean`, a nullable `json`) and a `posts` table
  * keyed by a non-`id` primary column (`slug`), so the driver test proves the CRUD /
- * key-order / snapshot / codec contract.
+ * key-order / batch / codec contract.
  *
  * @param options - `indexes` parameterizes the `users` table's secondary index set
  *   (each inner array is one index's column list); defaults to `[['name']]`. The

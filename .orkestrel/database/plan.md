@@ -60,7 +60,10 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
 - **The open decisions are ruled** in `designs/native.md` § Addendum: the open decisions, from a `planner` consultation, two refuter rounds, and the probes it cites; three items wait on taverna's session (§ Open decisions).
 - **Each repository carries scaffold 0.0.135**: database `9a053b9`, relation `2590be0`, sqlite `1e8b0db`; indexeddb adopts it when its writer returns. Every gate passes except one vendored `tests/config.test.ts` case that raises `ENOTDIR` on Linux, owed to scaffold.
 - **Coverage wave, landed:** sqlite `12bca99`. In progress: the indexeddb rows (rangePrefix, the raising read, the index reconcile), and database's journal, batches, and contract cache.
-- **Next:** finish the indexeddb and database coverage units, then relation, then the release visit in layer order.
+- **Coverage wave, relation:** landed as relation `a1e6443`.
+- **Coverage wave, database core:** the before-image journal, the batches, and the contract cache land in the commit that records this line, after one review round in two lanes and two closure checks.
+- **The user's ruling of 2026-11-14:** after database, relation, sqlite, and indexeddb close, `@orkestrel/contract` joins the campaign, and the costs the coverage wave measured in it become units under the same canon, probes first: the object guard (about 3 µs per row, 41 to 45% of the SQLite batched cells), `parseEnum` (6.35 µs against 15 to 68 ns for a prebuilt `literalOf`), and `resolveField` (0.79 µs against 0.023 µs for `Reflect.get`).
+- **Next:** finish the indexeddb and database coverage units, then the release visit in layer order.
 
 ## Sequence
 
@@ -79,7 +82,8 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
      - the IndexedDB plans of `designs/native.md` § 5: access-path ranking, `any`, `starts`, compound indexes, native order, paging and count, and batched streaming;
      - the before-image journal in place of `snapshot`;
      - the batches;
-     - the SQLite completion of § 4 and the Addendum: the statement cache, `BEGIN IMMEDIATE`, a `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize = 0x10002` at a writable open, `pragma(name)`, the drop of undeclared indexes at open on both engines, the rank expression for a column that is both optional and nullable, the integer `sum` as `TOTAL`, the `RECORD` mapping, and the pragma guards at the driver's doors.
+     - the SQLite completion of § 4 and the Addendum: the statement cache, `BEGIN IMMEDIATE`, a `journal_mode`-only WAL default with no busy-timeout default, `PRAGMA optimize = 0x10002` at a writable open, `pragma(name)`, the drop of undeclared indexes at open on both engines, the rank expression for a column that is both optional and nullable, the integer `sum` as `TOTAL`, and the pragma guards at the driver's doors;
+     - the IndexedDB driver's `RECORD` mapping and its drop of undeclared indexes, in the IndexedDB plans unit.
    - **relation:**
      - `link` and `unlink` as one insert and one delete;
      - primary-key loads through `get(keys)`;

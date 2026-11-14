@@ -1,8 +1,14 @@
 import type { DatabaseEventMap, TableSchema, StorageInterface } from '@src/core'
-import { conformDriver, createDatabase, isDatabaseError, planMigration } from '@src/core'
+import {
+	conformDriver,
+	createDatabase,
+	isDatabaseError,
+	planMigration,
+	StorageJournal,
+} from '@src/core'
 import { createJSONDriver, JSONDriver } from '@src/server'
 import { isRecord, stringShape } from '@orkestrel/contract'
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { collect, createRecorders } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -12,6 +18,9 @@ import {
 	DatabaseCounter,
 	createHostileMetadata,
 	createHostileMigration,
+	createRecordedUsers,
+	EMPTY_STORAGE_CASES,
+	EMPTY_TABLE_CASES,
 } from '../../../setup.js'
 import type { JSONTestStorage } from '../../../setupServer.js'
 import {
@@ -33,11 +42,10 @@ describe('driver conformance — JSONDriver', () => {
 
 // The JSON driver's DriverInterface primitives over a real temp file (no
 // mocks — `.claude/rules/tests.md` § Test contract): open + keyed
-// read/write/delete/keys/scan(KEY order)/clear,
-// persistence across a close / reopen, snapshot rollback restoring BOTH memory and
-// the file, and fail-closed recovery on every existing invalid file.
-// It is a decorator over MemoryDriver, so key order and capture-replay snapshot are
-// inherited; these assert the persistence layer the decorator adds.
+// read/write/delete/keys/scan(KEY order)/clear, batches that apply every row or none in
+// memory and in the file, persistence across a close / reopen, and fail-closed recovery on
+// every existing invalid file. It is a decorator over MemoryDriver, so key order is inherited;
+// these assert the persistence layer the decorator adds.
 
 // The shared driver-conformance schema (a text-primary `users` table + a non-`id`
 // primary `posts` table, proving the key is recovered from each table's own primary
@@ -339,391 +347,85 @@ describe('JSONDriver — persistence across reopen', () => {
 	})
 })
 
-describe('JSONDriver — snapshot rollback re-flushes', () => {
-	it('restores both memory and the file to the captured state', async () => {
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await fixture.value.driver.snapshot()
-		// Mutate after the snapshot — these writes also rewrote the file.
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed',
-			age: 99,
-			active: false,
-		})
-		await fixture.value.driver.write('users', 'u2', {
-			id: 'u2',
-			name: 'Ghost',
-			age: 1,
-			active: false,
-		})
-		await fixture.value.driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
-		await rollback()
-
-		// In memory, the state is back to the snapshot.
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		expect(await fixture.value.driver.read('users', 'u2')).toBeUndefined()
-		expect(await fixture.value.driver.keys('posts')).toEqual(['intro'])
-
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed Again',
-			age: 100,
-			active: false,
-		})
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-
-		// And the FILE was re-flushed: a fresh driver on the path reads the restored
-		// state, not the post-snapshot mutations.
+describe('JSONDriver — batches', () => {
+	it('writes every listed row in one flush that a reopened driver reads', async () => {
+		await fixture.value.driver.write(
+			'users',
+			['u1', 'u2'],
+			[
+				{ id: 'u1', name: 'Ada', age: 36, active: true },
+				{ id: 'u2', name: 'Grace', age: 45, active: false },
+			],
+		)
 		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
-		expect(await reopened.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		expect(await reopened.read('users', 'u2')).toBeUndefined()
-		expect(await reopened.keys('posts')).toEqual(['intro'])
+		expect(await reopened.read('users', ['u2', 'missing', 'u1'])).toEqual([
+			{ id: 'u2', name: 'Grace', age: 45, active: false },
+			undefined,
+			{ id: 'u1', name: 'Ada', age: 36, active: true },
+		])
 		await reopened.close()
 	})
 
-	it('captures at its exact writer-queue position', async () => {
-		const first = fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'First',
-			age: 1,
-			active: true,
-		})
-		const snapshot = fixture.value.driver.snapshot()
-		const second = fixture.value.driver.write('users', 'u2', {
-			id: 'u2',
-			name: 'Second',
-			age: 2,
-			active: true,
-		})
-		const rollback = await snapshot
-		await Promise.all([first, second])
-		await rollback()
-		expect(await fixture.value.driver.keys('users')).toEqual(['u1'])
-	})
-
-	it('restores through the current memory instance after a transaction replacement', async () => {
+	it('inserts no listed row, in memory or in the file, when the final member conflicts', async () => {
 		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		const rollback = await fixture.value.driver.snapshot(['users', 'users', 'missing'])
-		await fixture.value.driver.transaction(async (storage) => {
-			await storage.write('users', 'u1', {
-				id: 'u1',
-				name: 'Transaction',
-				age: 37,
-				active: false,
-			})
-			await storage.write('users', 'u2', {
-				id: 'u2',
-				name: 'Added',
-				age: 1,
-				active: true,
-			})
-		})
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		expect(await fixture.value.driver.read('users', 'u2')).toBeUndefined()
-	})
-
-	it('adapts captured rows to the current schema and retains current metadata', async () => {
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-			meta: null,
-		})
-		await fixture.value.driver.stamp?.({ version: 1, schema: SCHEMA })
-		const rollback = await fixture.value.driver.snapshot(['users'])
-		const users = SCHEMA.find((table) => table.name === 'users')
-		const posts = SCHEMA.find((table) => table.name === 'posts')
-		if (users === undefined || posts === undefined) throw new Error('Expected driver schema')
-		const current: readonly TableSchema[] = [
-			{
-				...users,
-				columns: [
-					...users.columns.filter((column) => column.name !== 'active' && column.name !== 'meta'),
-					{
-						name: 'nickname',
-						storage: 'text',
-						optional: true,
-						nullable: false,
-					},
-					{
-						name: 'note',
-						storage: 'text',
-						optional: false,
-						nullable: true,
-					},
+		await expect(
+			fixture.value.driver.insert(
+				'users',
+				['u2', 'u1'],
+				[
+					{ id: 'u2', name: 'Grace', age: 45, active: false },
+					{ id: 'u1', name: 'Again', age: 1, active: false },
 				],
-			},
-			posts,
-		]
-		const plan = planMigration(SCHEMA, current, 1, 2)
-		await fixture.value.driver.migrate?.({ plan, metadata: { version: 2, schema: current } })
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed',
-			age: 99,
-			nickname: 'Current',
-			note: 'present',
-		})
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-		})
-		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: current })
-
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed Again',
-			age: 100,
-			note: null,
-		})
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-		})
-		expect(await fixture.value.driver.metadata?.()).toEqual({ version: 2, schema: current })
+			),
+		).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(await fixture.value.driver.keys('users')).toEqual(['u1'])
+		const reopened = createJSONDriver(fixture.value.path)
+		await reopened.open(SCHEMA)
+		expect(await reopened.keys('users')).toEqual(['u1'])
+		await reopened.close()
 	})
 
-	it('skips removed captures and preserves tables added after capture', async () => {
+	it('leaves the file in place for an empty write, insert, or delete list', async () => {
 		await fixture.value.driver.write('users', 'u1', {
 			id: 'u1',
 			name: 'Ada',
 			age: 36,
 			active: true,
 		})
-		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await fixture.value.driver.snapshot()
-		const users = SCHEMA.find((table) => table.name === 'users')
-		if (users === undefined) throw new Error('Expected users schema')
-		const logs: TableSchema = {
-			name: 'logs',
-			primary: 'id',
-			columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-			indexes: [],
-		}
-		const current = [users, logs]
-		await fixture.value.driver.migrate?.({
-			plan: planMigration(SCHEMA, current, 1, 2),
-			metadata: { version: 2, schema: current },
-		})
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed',
-			age: 37,
-			active: false,
-		})
-		await fixture.value.driver.write('logs', 'l1', { id: 'l1' })
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		await expect(fixture.value.driver.keys('posts')).rejects.toMatchObject({ code: 'NOT_FOUND' })
-		expect(await fixture.value.driver.read('logs', 'l1')).toEqual({ id: 'l1' })
+		const before = await stat(fixture.value.path)
+		await fixture.value.driver.write('users', [], [])
+		await fixture.value.driver.insert('users', [], [])
+		expect(await fixture.value.driver.delete('users', [])).toEqual([])
+		const after = await stat(fixture.value.path)
+		// Each flush renames a fresh temp file onto the path, so a flush replaces the inode.
+		expect(after.ino).toBe(before.ino)
+		expect(after.mtimeMs).toBe(before.mtimeMs)
 	})
 
-	it('rejects capture and rollback admission while a transaction is active', async () => {
-		const rollback = await fixture.value.driver.snapshot()
-		await fixture.value.driver.transaction(async () => {
-			await expect(fixture.value.driver.snapshot()).rejects.toMatchObject({ code: 'CONFLICT' })
-			await expect(rollback()).rejects.toMatchObject({ code: 'CONFLICT' })
-		})
-	})
-
-	it('keeps root and file unchanged after rollback persistence failure and permits retry', async () => {
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
-		const rollback = await fixture.value.driver.snapshot(['users'])
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		const currentFile = await readFile(fixture.value.path, 'utf-8')
-		const blocker = `${fixture.value.path}.${process.pid}.3.tmp`
-		await mkdir(blocker)
-		await expect(rollback()).rejects.toMatchObject({
-			code: 'DRIVER',
-			context: { path: fixture.value.path, temp: blocker },
-		})
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		expect(await readFile(fixture.value.path, 'utf-8')).toBe(currentFile)
-
-		await rm(blocker, { recursive: true })
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
-	})
-
-	it('treats an explicit unknown-only capture as a repeatable no-op', async () => {
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
-		const rollback = await fixture.value.driver.snapshot(['missing', 'missing'])
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		await rollback()
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		const parsed: unknown = JSON.parse(await readFile(fixture.value.path, 'utf-8'))
-		expect(isRecord(parsed) && isRecord(parsed.tables) ? parsed.tables.users : undefined).toEqual([
-			{ id: 'u1', name: 'Current', age: 2, active: false },
+	it('deletes a key list from memory and the file, reporting each stored key once', async () => {
+		await fixture.value.driver.write(
+			'users',
+			['u1', 'u2'],
+			[
+				{ id: 'u1', name: 'Ada', age: 36, active: true },
+				{ id: 'u2', name: 'Grace', age: 45, active: false },
+			],
+		)
+		expect(await fixture.value.driver.delete('users', ['u1', 'missing', 'u1'])).toEqual([
+			true,
+			false,
+			false,
 		])
-	})
-
-	it('skips a same-name table removed and re-added inside a committed transaction', async () => {
-		const users = SCHEMA.find((table) => table.name === 'users')
-		if (users === undefined) throw new Error('Expected users schema')
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
-		const rollback = await fixture.value.driver.snapshot(['users'])
-		await fixture.value.driver.transaction(async (storage) => {
-			await storage.migrate?.({
-				plan: {
-					from: 1,
-					to: 2,
-					steps: [
-						{ operation: 'table.remove', table: 'users' },
-						{ operation: 'table.add', table: users },
-					],
-				},
-			})
-			await storage.write('users', 'u2', {
-				id: 'u2',
-				name: 'Replacement',
-				age: 2,
-				active: false,
-			})
-		})
-
-		await rollback()
-		expect(await fixture.value.driver.keys('users')).toEqual(['u2'])
-		expect(await fixture.value.driver.read('users', 'u2')).toEqual({
-			id: 'u2',
-			name: 'Replacement',
-			age: 2,
-			active: false,
-		})
 		const reopened = createJSONDriver(fixture.value.path)
 		await reopened.open(SCHEMA)
 		expect(await reopened.keys('users')).toEqual(['u2'])
 		await reopened.close()
-	})
-
-	it('rejects an incompatible replay before changing memory or file and permits retry', async () => {
-		const incompatible = SCHEMA.map((table): TableSchema =>
-			table.name === 'users'
-				? {
-						...table,
-						columns: table.columns.map((column) =>
-							column.name === 'age' ? { ...column, storage: 'text' } : column,
-						),
-					}
-				: table,
-		)
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
-		const rollback = await fixture.value.driver.snapshot(['users'])
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		const currentFile = await readFile(fixture.value.path, 'utf-8')
-		await fixture.value.driver.open(incompatible)
-
-		await expect(rollback()).rejects.toMatchObject({ code: 'MIGRATION' })
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Current',
-			age: 2,
-			active: false,
-		})
-		expect(await readFile(fixture.value.path, 'utf-8')).toBe(currentFile)
-
-		await fixture.value.driver.open(SCHEMA)
-		await rollback()
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Captured',
-			age: 1,
-			active: true,
-		})
 	})
 })
 
@@ -1808,6 +1510,29 @@ describe('JSONDriver — driver error seam', () => {
 		temp.cleanup()
 	})
 
+	it('keeps every cleared row in memory when the clear flush fails', async () => {
+		const temp = tempDatabasePath()
+		const rows = Array.from({ length: 3 }, (_, index) => ({
+			id: `u${index}`,
+			name: 'Ada',
+			age: index,
+			active: true,
+		}))
+		const blocked = createJSONDriver(temp.path)
+		await blocked.open(SCHEMA)
+		await blocked.write(
+			'users',
+			rows.map((row) => row.id),
+			rows,
+		)
+		await rm(temp.path)
+		await mkdir(temp.path)
+		await expect(blocked.clear('users')).rejects.toMatchObject({ code: 'DRIVER' })
+		expect(await blocked.read('users', ['u0', 'u1', 'u2'])).toEqual(rows)
+		await blocked.close()
+		temp.cleanup()
+	})
+
 	it('reports distinct persistence and cleanup faults while restoring memory and recovering', async () => {
 		const temp = `${fixture.value.path}.${process.pid}.1.tmp`
 		await mkdir(temp)
@@ -1848,48 +1573,6 @@ describe('JSONDriver — driver error seam', () => {
 			active: true,
 		})
 		await fixture.value.driver.close()
-	})
-})
-
-describe('JSONDriver — scoped snapshot', () => {
-	it('restores only the snapshotted table on rollback, in memory and in the file', async () => {
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		await fixture.value.driver.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await fixture.value.driver.snapshot(['users'])
-
-		await fixture.value.driver.write('users', 'u1', {
-			id: 'u1',
-			name: 'Changed',
-			age: 99,
-			active: false,
-		})
-		await fixture.value.driver.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
-		await rollback()
-
-		expect(await fixture.value.driver.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
-		})
-		expect(await fixture.value.driver.keys('posts')).toEqual(['extra', 'intro'])
-
-		const raw = await readFile(fixture.value.path, 'utf-8')
-		const parsed: unknown = JSON.parse(raw)
-		expect(parsed).toEqual({
-			tables: {
-				users: [{ id: 'u1', name: 'Ada', age: 36, active: true }],
-				posts: [
-					{ slug: 'extra', title: 'Extra' },
-					{ slug: 'intro', title: 'Intro' },
-				],
-			},
-		})
 	})
 })
 
@@ -1996,4 +1679,57 @@ describe('JSONDriver — atomic flush', () => {
 			},
 		})
 	})
+})
+
+describe('JSONDriver — empty lists', () => {
+	for (const { member, run, expected } of EMPTY_STORAGE_CASES) {
+		it(`answers an empty ${member} list and touches no row`, async () => {
+			const temp = tempDatabasePath()
+			const { recorder, db } = createRecordedUsers(createJSONDriver(temp.path))
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(recorder.driver))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+				temp.cleanup()
+			}
+		})
+
+		it(`answers an empty ${member} list through the journal and restores nothing`, async () => {
+			const temp = tempDatabasePath()
+			const { recorder, db } = createRecordedUsers(createJSONDriver(temp.path))
+			try {
+				await db.open()
+				const journal = new StorageJournal(recorder.driver)
+				const { value, calls } = await recorder.measure(async () => {
+					const answer = await run(journal)
+					await journal.restore()
+					return answer
+				})
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+				temp.cleanup()
+			}
+		})
+	}
+
+	for (const { member, run, expected } of EMPTY_TABLE_CASES) {
+		it(`answers Table ${member} of an empty list and touches no row`, async () => {
+			const temp = tempDatabasePath()
+			const { recorder, db, users } = createRecordedUsers(createJSONDriver(temp.path))
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(users))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+				temp.cleanup()
+			}
+		})
+	}
 })

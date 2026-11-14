@@ -70,7 +70,9 @@ export class DatabaseError extends Error {
  */
 export function isDatabaseError(value: unknown): value is DatabaseError {
 	return holds(() => {
-		if (!isInstance(value, Error) || INTRINSICS.prototype(value) === Error.prototype) return false
+		const intrinsic = INTRINSICS.error
+		if (!isInstance(value, intrinsic) || INTRINSICS.prototype(value) === intrinsic.prototype)
+			return false
 		const brand = INTRINSICS.describe(value, Symbol.for('@orkestrel/database.DatabaseError'))
 		if (brand === undefined || brand.value !== value) return false
 		const code: unknown = INTRINSICS.reflect.read(value, 'code')

@@ -1,8 +1,8 @@
 # @orkestrel/database
 
-> One typed database API for keyed rows, fluent queries, cursors, and
-> whole-store transactions, running unchanged over an in-memory map, a JSON
-> file, SQLite, or IndexedDB.
+> One typed database API for keyed rows, batches, fluent queries, cursors, and
+> transactions, running unchanged over an in-memory map, a JSON file, SQLite, or
+> IndexedDB.
 
 Declare your tables with the `createDatabase` function, hold each
 `TableInterface` it hands back, and reach rows by key or through the fluent

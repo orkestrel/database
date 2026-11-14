@@ -602,6 +602,34 @@ export function compileQuerySQL(input: QueryInput | undefined, schema: TableSche
 }
 
 /**
+ * Compiles the statement that inserts one row of a table, binding one parameter per declared
+ * column in schema order.
+ *
+ * @param schema - The table schema
+ * @param replace - If `true`, the row replaces a stored row with the same primary key; if
+ *   `false`, a stored row with that key fails the statement's primary-key constraint
+ * @returns The `INSERT` statement, the same text for every row of the table
+ *
+ * @example
+ * ```ts
+ * compileInsertSQL(schema, true)
+ * // 'INSERT OR REPLACE INTO "users" ("id", "name") VALUES (?, ?)'
+ * ```
+ */
+export function compileInsertSQL(schema: TableSchema, replace: boolean): string {
+	const names = schema.columns.map((column) => quoteIdentifier(column.name))
+	return (
+		(replace ? 'INSERT OR REPLACE INTO ' : 'INSERT INTO ') +
+		quoteIdentifier(schema.name) +
+		' (' +
+		names.join(', ') +
+		') VALUES (' +
+		names.map(() => '?').join(', ') +
+		')'
+	)
+}
+
+/**
  * Projects a {@link TableSchema} to its `CREATE TABLE IF NOT EXISTS` statement.
  *
  * @param schema - The table schema

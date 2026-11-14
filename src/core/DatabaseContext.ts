@@ -17,6 +17,7 @@ import { attempt, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
 import { checkAbort, equalsValue, normalizeDriverSchema, planMigration } from './helpers.js'
+import { StorageJournal } from './StorageJournal.js'
 import { TransactionScope } from './TransactionScope.js'
 
 /**
@@ -210,15 +211,15 @@ export class DatabaseContext implements AdmissionInterface {
 					throw error
 				}
 			}
-			const rollback = await this.#driver.snapshot()
+			const journal = new StorageJournal(this.#driver)
 			this.#emitter.emit('transaction')
-			const outcome = await scope(this.#driver, lifetime)
+			const outcome = await scope(this.#journal(journal), lifetime)
 			if (outcome.success) {
 				this.#emitter.emit('commit')
 				return outcome.value
 			}
 			try {
-				await rollback()
+				await journal.restore()
 			} catch (cause) {
 				throw this.#rollbackError(outcome.error, cause)
 			}
@@ -371,6 +372,25 @@ export class DatabaseContext implements AdmissionInterface {
 		return {
 			plan,
 			metadata: { version: this.#version, schema: this.#schema },
+		}
+	}
+
+	// The scope's storage: the journal records each write, and the driver's native read members
+	// answer reads, so a native read sees the scope's writes.
+	#journal(journal: StorageJournal): StorageInterface {
+		const driver = this.#driver
+		return {
+			read: journal.read.bind(journal),
+			write: journal.write.bind(journal),
+			insert: journal.insert.bind(journal),
+			delete: journal.delete.bind(journal),
+			keys: journal.keys.bind(journal),
+			scan: journal.scan.bind(journal),
+			clear: journal.clear.bind(journal),
+			...(driver.plan === undefined ? {} : { plan: driver.plan.bind(driver) }),
+			...(driver.records === undefined ? {} : { records: driver.records.bind(driver) }),
+			...(driver.stream === undefined ? {} : { stream: driver.stream.bind(driver) }),
+			...(driver.aggregate === undefined ? {} : { aggregate: driver.aggregate.bind(driver) }),
 		}
 	}
 

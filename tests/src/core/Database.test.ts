@@ -11,13 +11,16 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type { DatabaseEvent, MigrateEvent, UserRow } from '../../setup.js'
-import { createDatabase, createMemoryDriver, isDatabaseError } from '@src/core'
+import { createDatabase, createMemoryDriver, isDatabaseError, StorageJournal } from '@src/core'
 import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
 import { createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
+	buildUserRows,
 	createConstrainedUsersDatabase as userDatabase,
 	createMemoryAdapter,
+	createRecordedUsers,
+	interceptStorage,
 	DatabaseCounter,
 	DatabaseSwitch,
 	ReopenDriverFixture,
@@ -26,7 +29,9 @@ import {
 	createReconciliationDriver,
 	IteratorSource,
 	RecordingIterator,
+	StorageRecorder,
 	tableSchemas,
+	tallyCalls,
 } from '../../setup.js'
 
 // Database-level behavior only — lazy connect / close lifecycle, the per-table
@@ -392,14 +397,14 @@ describe('transactions', () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const blocked = new DatabaseSwitch(true)
-		const driver = createMemoryAdapter(memory, {
-			async write(table, key, row, options) {
+		const driver = interceptStorage(memory, {
+			async write(table, keys, rows, options) {
 				if (blocked.active) {
 					blocked.disable()
 					entered.resolve()
 					await release.promise
 				}
-				await memory.write(table, key, row, options)
+				await memory.write(table, keys, rows, options)
 			},
 		})
 		const db = createDatabase({
@@ -429,15 +434,17 @@ describe('transactions', () => {
 		const release = Promise.withResolvers<void>()
 		const closes = createRecorder<[]>()
 		const blocked = new DatabaseSwitch(true)
-		const driver = createMemoryAdapter(memory, {
-			async write(table, key, row, options) {
+		const intercepted = interceptStorage(memory, {
+			async write(table, keys, rows, options) {
 				if (blocked.active) {
 					blocked.disable()
 					entered.resolve()
 					await release.promise
 				}
-				await memory.write(table, key, row, options)
+				await memory.write(table, keys, rows, options)
 			},
+		})
+		const driver = createMemoryAdapter(intercepted, {
 			async close() {
 				closes.handler()
 				await memory.close()
@@ -540,14 +547,14 @@ describe('transactions', () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const held = new DatabaseSwitch(true)
-		const driver = createMemoryAdapter(memory, {
-			async read(table, key) {
+		const driver = interceptStorage(memory, {
+			async read(table, keys) {
 				if (held.active) {
 					held.disable()
 					entered.resolve()
 					await release.promise
 				}
-				return memory.read(table, key)
+				return memory.read(table, keys)
 			},
 		})
 		const db = createDatabase({
@@ -604,13 +611,13 @@ describe('transactions', () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
 		const blocking = new DatabaseSwitch()
-		const driver = createMemoryAdapter(memory, {
-			async write(table, key, row, options) {
+		const driver = interceptStorage(memory, {
+			async write(table, keys, rows, options) {
 				if (blocking.active) {
 					entered.resolve()
 					await release.promise
 				}
-				await memory.write(table, key, row, options)
+				await memory.write(table, keys, rows, options)
 			},
 		})
 		const db = createDatabase({
@@ -637,8 +644,8 @@ describe('transactions', () => {
 	})
 })
 
-describe('transaction() abort signal (snapshot floor)', () => {
-	it('checks the abort signal at entry before touching the snapshot floor', async () => {
+describe('transaction() abort signal (journal scope)', () => {
+	it('checks the abort signal at entry before creating the journal', async () => {
 		const { db } = userDatabase()
 		const controller = new AbortController()
 		controller.abort('too slow')
@@ -729,12 +736,12 @@ describe('Database — emitter (push observation surface)', () => {
 		const memory = createMemoryDriver()
 		const failure = new Error('rollback failed')
 		const reason = new Error('scope failed')
-		const driver = createMemoryAdapter(memory, {
-			async snapshot() {
-				await memory.snapshot()
-				return async () => {
-					throw failure
-				}
+		const failing = new DatabaseSwitch()
+		// The journal restores a scope's inserted row through a delete, which fails here.
+		const driver = interceptStorage(memory, {
+			async delete(table, keys, options) {
+				if (failing.active) throw failure
+				return memory.delete(table, keys, options)
 			},
 		})
 		const db = createDatabase({
@@ -745,6 +752,7 @@ describe('Database — emitter (push observation surface)', () => {
 		const error = await db
 			.transaction(async (transaction) => {
 				await transaction.table('users').set({ id: 'u1', name: 'Ada', age: 36 })
+				failing.enable()
 				throw reason
 			})
 			.catch((caught: unknown) => caught)
@@ -762,11 +770,11 @@ describe('Database — emitter (push observation surface)', () => {
 		const reason = new Error('native scope failed')
 		const driver = createMemoryAdapter(memory, {
 			async transaction(scope) {
-				const rollback = await memory.snapshot()
+				const journal = new StorageJournal(memory)
 				try {
-					return await scope(memory)
+					return await scope(journal)
 				} catch {
-					await rollback()
+					await journal.restore()
 					throw cleanup
 				}
 			},
@@ -1240,5 +1248,217 @@ describe('version reconciliation (open())', () => {
 		})
 		await expect(db.open()).resolves.toBeUndefined()
 		expect(db.status).toBe('open')
+	})
+})
+
+describe('Database — journal scope on a driver without transaction', () => {
+	it('reads K prior rows, restores K on rejection, and never scans', async () => {
+		const { recorder, db, users } = createRecordedUsers()
+		const rows = buildUserRows(1000)
+		await users.set(rows)
+		const touched = rows.slice(0, 10)
+		const reason = new Error('scope failed')
+		const { calls } = await recorder.measure(() =>
+			db
+				.transaction(async (transaction) => {
+					await transaction.table('users').set(touched.map((row) => ({ ...row, name: 'Changed' })))
+					throw reason
+				})
+				.catch((error: unknown) => error),
+		)
+		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 10, rows: 10 })
+		// One write for the scope's batch, one for the restore.
+		expect(tallyCalls(calls, 'write')).toEqual({ calls: 2, keys: 20, rows: 0 })
+		expect(tallyCalls(calls, 'scan').calls).toBe(0)
+		expect(tallyCalls(calls, 'keys').calls).toBe(0)
+		expect(await users.get(touched.map((row) => row.id))).toEqual(touched)
+	})
+
+	it('deletes on rejection each key the scope inserted', async () => {
+		const { recorder, db, users } = createRecordedUsers()
+		await users.set(buildUserRows(2))
+		const { calls } = await recorder.measure(() =>
+			db
+				.transaction(async (transaction) => {
+					await transaction.table('users').add([
+						{ id: 'n1', name: 'New', age: 1 },
+						{ id: 'n2', name: 'New', age: 2 },
+					])
+					await transaction.table('users').remove('u0')
+					throw new Error('scope failed')
+				})
+				.catch((error: unknown) => error),
+		)
+		expect(tallyCalls(calls, 'delete')).toEqual({ calls: 2, keys: 3, rows: 0 })
+		expect(await users.keys()).toEqual(['u0', 'u1'])
+		expect(await users.get('u0')).toEqual({ id: 'u0', name: 'User 0', age: 0 })
+	})
+
+	it('journals a cleared table alone and restores it on rejection', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		const db = createDatabase({
+			driver: recorder.driver,
+			tables: {
+				users: { id: stringShape(), name: stringShape() },
+				posts: { id: stringShape(), title: stringShape() },
+			},
+		})
+		await db.table('users').set([
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: 'Grace' },
+		])
+		await db.table('posts').set({ id: 'p1', title: 'Intro' })
+		const { calls } = await recorder.measure(() =>
+			db
+				.transaction(async (transaction) => {
+					await transaction.table('users').clear()
+					await transaction.table('users').set({ id: 'u3', name: 'Alan' })
+					throw new Error('scope failed')
+				})
+				.catch((error: unknown) => error),
+		)
+		expect(tallyCalls(calls, 'keys').calls).toBe(1)
+		expect(tallyCalls(calls, 'scan').calls).toBe(0)
+		// The users capture reads its two rows; a write to the cleared table reads no prior row.
+		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 2, rows: 2 })
+		expect(await db.table('users').keys()).toEqual(['u1', 'u2'])
+		expect(await db.table('posts').keys()).toEqual(['p1'])
+	})
+
+	it('records nothing for a failed first-touch read, so a later write records its prior row', async () => {
+		const memory = createMemoryDriver()
+		const failing = new DatabaseSwitch(true)
+		const failure = new Error('transient read failure')
+		const driver = interceptStorage(memory, {
+			async read(table, keys) {
+				if (failing.active) {
+					failing.disable()
+					throw failure
+				}
+				return memory.read(table, keys)
+			},
+		})
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users')
+		await users.set({ id: 'u1', name: 'Ada' })
+		failing.enable()
+		const reason = new Error('scope failed')
+		const outcomes = Promise.withResolvers<readonly string[]>()
+		await expect(
+			db.transaction(async (transaction) => {
+				const scoped = transaction.table('users')
+				const first = await scoped.set({ id: 'u1', name: 'First' }).then(
+					() => 'written',
+					(error: unknown) => (error === failure ? 'read failed' : 'unexpected'),
+				)
+				const second = await scoped.set({ id: 'u1', name: 'Second' }).then(
+					() => 'written',
+					() => 'refused',
+				)
+				outcomes.resolve([first, second])
+				throw reason
+			}),
+		).rejects.toBe(reason)
+		expect(await outcomes.promise).toEqual(['read failed', 'written'])
+		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada' })
+	})
+
+	it('records nothing for a failed clear capture, so a retried clear and a later write restore', async () => {
+		const memory = createMemoryDriver()
+		const failing = new DatabaseSwitch()
+		const failure = new Error('transient capture failure')
+		const driver = interceptStorage(memory, {
+			async read(table, keys) {
+				if (failing.active) {
+					failing.disable()
+					throw failure
+				}
+				return memory.read(table, keys)
+			},
+		})
+		const db = createDatabase({
+			driver,
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users')
+		await users.set([
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: 'Grace' },
+		])
+		const reason = new Error('scope failed')
+		const outcomes = Promise.withResolvers<readonly string[]>()
+		await expect(
+			db.transaction(async (transaction) => {
+				const scoped = transaction.table('users')
+				failing.enable()
+				const first = await scoped.clear().then(
+					() => 'cleared',
+					(error: unknown) => (error === failure ? 'capture failed' : 'unexpected'),
+				)
+				const retried = await scoped.clear().then(
+					() => 'cleared',
+					() => 'refused',
+				)
+				const written = await scoped.set({ id: 'u3', name: 'Alan' }).then(
+					() => 'written',
+					() => 'refused',
+				)
+				outcomes.resolve([first, retried, written])
+				throw reason
+			}),
+		).rejects.toBe(reason)
+		expect(await outcomes.promise).toEqual(['capture failed', 'cleared', 'written'])
+		expect(await users.get(['u1', 'u2', 'u3'])).toEqual([
+			{ id: 'u1', name: 'Ada' },
+			{ id: 'u2', name: 'Grace' },
+			undefined,
+		])
+	})
+
+	it('keeps every write of a scope that fulfills, recording no restore', async () => {
+		const { recorder, db, users } = createRecordedUsers()
+		await users.set(buildUserRows(3))
+		const { calls } = await recorder.measure(() =>
+			db.transaction(async (transaction) => {
+				await transaction.table('users').update(['u0', 'u1'], { name: 'Kept' })
+			}),
+		)
+		expect(tallyCalls(calls, 'write')).toEqual({ calls: 1, keys: 2, rows: 0 })
+		expect((await users.get(['u0', 'u1', 'u2'])).map((row) => row?.name)).toEqual([
+			'Kept',
+			'Kept',
+			'User 2',
+		])
+	})
+})
+
+describe('Database — contract cache', () => {
+	it('gives an imported view of a same-named table its own stable contract', async () => {
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape({ min: 1 }) } },
+		})
+		const strict = db.import({ users: { id: stringShape(), name: stringShape({ min: 5 }) } })
+		const loose = db.table('users')
+		const tight = strict.table('users')
+		expect(db.table('users').contract).toBe(loose.contract)
+		expect(strict.table('users').contract).toBe(tight.contract)
+		expect(tight.contract).not.toBe(loose.contract)
+		await expect(loose.set({ id: 'u1', name: '' })).rejects.toMatchObject({ code: 'VALIDATION' })
+		await expect(tight.set({ id: 'u1', name: 'Ada' })).rejects.toMatchObject({ code: 'VALIDATION' })
+		await loose.set({ id: 'u1', name: 'Ada' })
+		await tight.set({ id: 'u2', name: 'Grace' })
+		expect(await loose.keys()).toEqual(['u1', 'u2'])
+	})
+
+	it('compiles each table contract once and shares it with every transaction', async () => {
+		const { db } = userDatabase()
+		const contract = db.table('users').contract
+		expect(db.table('users').contract).toBe(contract)
+		const scoped = await db.transaction(async (transaction) => transaction.table('users').contract)
+		expect(scoped).toBe(contract)
 	})
 })

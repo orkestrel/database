@@ -90,6 +90,106 @@ export function validatePage(input?: QueryInput): void {
 }
 
 /**
+ * Assembles the entries of a storage write from its keys and rows, one row per key.
+ *
+ * @remarks
+ * A single key and row form one entry. Two lists pair by position.
+ *
+ * @param keys - The key, or the batch's keys
+ * @param rows - The row, or the batch's rows in the order of `keys`
+ * @returns One `[key, row]` entry per key, in the batch's order
+ * @throws {@link DatabaseError} `VALIDATION` when one argument is a list and the other is not,
+ *   or when the lists differ in length
+ *
+ * @example
+ * ```ts
+ * buildBatch('u1', { id: 'u1' }) // [['u1', { id: 'u1' }]]
+ * buildBatch(['u1', 'u2'], [{ id: 'u1' }]) // throws VALIDATION
+ * ```
+ */
+export function buildBatch(
+	keys: Key | readonly Key[],
+	rows: Row | readonly Row[],
+): ReadonlyArray<readonly [Key, Row]> {
+	if (!isArray(keys) && !isArray(rows)) return [[keys, rows]]
+	if (!isArray(keys) || !isArray(rows) || keys.length !== rows.length) {
+		throw new DatabaseError('VALIDATION', 'A batch write needs one row per key', {
+			keys: isArray(keys) ? keys.length : 1,
+			rows: isArray(rows) ? rows.length : 1,
+		})
+	}
+	return keys.map((key, index) => {
+		const row = rows[index]
+		if (!isRecord(row)) {
+			throw new DatabaseError('VALIDATION', 'A batch row is not a record', { index })
+		}
+		return [key, row] as const
+	})
+}
+
+/**
+ * Computes what a batch delete reports per key: true for the first occurrence of a key that
+ * held a row, and false for a miss and for every repeat of a key.
+ *
+ * @param keys - The keys of the batch, in its order, compared by `SameValueZero`
+ * @param existed - Whether each key held a row before the batch, by position
+ * @returns One result per key, in the batch's order
+ *
+ * @example
+ * ```ts
+ * computeRemoved(['a', 'b', 'a'], [true, false, true]) // [true, false, false]
+ * ```
+ */
+export function computeRemoved(
+	keys: readonly unknown[],
+	existed: readonly boolean[],
+): readonly boolean[] {
+	const first = computeFirstIndexes(keys)
+	return keys.map((key, index) => existed[index] === true && first.get(key) === index)
+}
+
+/**
+ * Computes the position of each key's first occurrence in a batch.
+ *
+ * @param keys - The keys of the batch, in its order, compared by `SameValueZero`
+ * @returns Each distinct key mapped to the position it first appears at
+ *
+ * @example
+ * ```ts
+ * computeFirstIndexes(['a', 'b', 'a']) // Map { 'a' => 0, 'b' => 1 }
+ * ```
+ */
+export function computeFirstIndexes(keys: readonly unknown[]): ReadonlyMap<unknown, number> {
+	return new Map([...keys.entries()].reverse().map(([index, key]) => [key, index]))
+}
+
+/**
+ * Applies a keyed operation that takes a key list to a single key or a key list, and answers in
+ * the form the call took.
+ *
+ * @remarks
+ * A single key reaches the operation as a list of one, and its answer is that list's first
+ * result, or `false` when the operation reports none.
+ *
+ * @param keys - The key, or the key list
+ * @param operation - The operation over a key list, answering one result per key
+ * @returns The one result for a single key, or every result for a list
+ *
+ * @example
+ * ```ts
+ * await applyKeys('u1', async (keys) => keys.map(() => true)) // true
+ * await applyKeys(['u1', 'u2'], async (keys) => keys.map(() => false)) // [false, false]
+ * ```
+ */
+export async function applyKeys(
+	keys: Key | readonly Key[],
+	operation: (keys: readonly Key[]) => Promise<readonly boolean[]>,
+): Promise<boolean | readonly boolean[]> {
+	const answers = await operation(isArray(keys) ? keys : [keys])
+	return isArray(keys) ? answers : answers[0] === true
+}
+
+/**
  * Drops each clause a read does not hold, so an absent clause is an absent key.
  *
  * @remarks
@@ -1445,7 +1545,7 @@ export async function* streamPlannedRows(
  * import { createMemoryDriver, readPlannedRows } from '@orkestrel/database'
  *
  * const driver = createMemoryDriver()
- * await driver.open([{ name: 'users', primary: 'id', columns: [], indexes: [] }])
+ * await driver.open([{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }])
  * await driver.write('users', 'u1', { id: 'u1', age: 36 })
  * await readPlannedRows(driver, 'users', { limit: 1 }) // [{ id: 'u1', age: 36 }]
  * ```
@@ -1495,7 +1595,7 @@ export async function readPlannedRows(
  * import { createMemoryDriver, readPlannedAggregate } from '@orkestrel/database'
  *
  * const driver = createMemoryDriver()
- * await driver.open([{ name: 'users', primary: 'id', columns: [], indexes: [] }])
+ * await driver.open([{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }])
  * await driver.write('users', 'u1', { id: 'u1', age: 36 })
  * await readPlannedAggregate(driver, 'users', {}, { operation: 'sum', column: 'age' }) // 36
  * ```
@@ -1602,11 +1702,12 @@ export async function* scanPlans(
  * `insert` calls produce exactly one commit and one `CONFLICT`; pre-aborted
  * `write`, `insert`, and `delete` calls leave storage unchanged; `delete`
  * returns `true` then `false`; `keys`/`scan` yield in ascending key order;
- * `clear` empties only its target table; `snapshot`'s rollback thunk
- * restores pre-snapshot state, including a nested field mutated in place on
- * a read-back row between capture and restore; a scoped
- * `snapshot(['users'])` rolls back only the named table, leaving a
- * concurrent mutation to another table intact; a non-`id` primary key
+ * `clear` empties only its target table; a list read copies each prior row out and a list
+ * delete and a list write restore them, the calls the core's journal makes; a list read
+ * answers in key order, a list write applies every row, a list insert with a conflicting
+ * final member and a mismatched batch apply none, and a list delete reports each key once;
+ * inside a transaction, a conflicting list insert applies no row and the scope commits the
+ * rest; a non-`id` primary key
  * (`posts.slug`) round-trips; a nested-object row round-trips structurally
  * (through {@link equalsValue}). The optional surface is presence-gated: when
  * `migrate` exists, a `column.remove` plan strips the column from stored
@@ -1944,78 +2045,139 @@ export async function* scanDriver(
 		}
 	}
 
-	// g. snapshot rollback restores pre-snapshot state.
-	snapshotPhase: {
+	// g. journal round trip: a list read of prior rows, then a list delete and a list write put
+	// them back — the calls a core journal makes to roll a scope back.
+	{
 		try {
 			const driver = factory()
 			await driver.open(CONFORMANCE_SCHEMA)
-			const original = { id: 'u1', name: 'Ada', age: 30 }
+			const original = { id: 'u1', name: 'Ada', age: 30, meta: { tags: ['a'] } }
 			await driver.write('users', 'u1', original)
-			const rollback = await driver.snapshot()
-			await driver.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
-			await driver.delete('users', 'u1')
-			await rollback()
-			const keys = [...(await driver.keys('users'))]
-			if (!equalsValue(keys, ['u1'])) {
-				await driver.close()
-				yield {
-					check: 'snapshot-rollback',
-					message: 'snapshot rollback must restore the pre-snapshot key set',
-					context: { table: 'users', expected: ['u1'], actual: keys },
-				}
-				break snapshotPhase
+			const touched = ['u1', 'u2']
+			const priors = await driver.read('users', touched)
+			const [alias] = await driver.read('users', ['u1'])
+			// A list read copies each row out, so a nested change to it reaches no stored row.
+			if (isRecord(alias) && isRecord(alias.meta) && Array.isArray(alias.meta.tags)) {
+				alias.meta.tags.push('mutated-after-read')
 			}
+			await driver.write('users', 'u1', { id: 'u1', name: 'Grace', age: 40 })
+			await driver.insert('users', 'u2', { id: 'u2', name: 'Alan', age: 41 })
+			const present = touched.flatMap((key, index) => {
+				const row = priors[index]
+				return row === undefined ? [] : [[key, row] as const]
+			})
+			await driver.delete(
+				'users',
+				touched.filter((_, index) => priors[index] === undefined),
+			)
+			await driver.write(
+				'users',
+				present.map(([key]) => key),
+				present.map(([, row]) => row),
+			)
+			const keys = [...(await driver.keys('users'))]
 			const restored = await driver.read('users', 'u1')
 			await driver.close()
-			if (restored === undefined || !equalsValue(restored, original)) {
+			if (!equalsValue(keys, ['u1']) || !equalsValue(restored, original)) {
 				yield {
-					check: 'snapshot-rollback-value',
-					message: 'snapshot rollback must restore pre-snapshot row values',
-					context: { table: 'users', expected: original, actual: restored },
+					check: 'journal-rollback',
+					message:
+						'a list read must copy each prior row out, and a list delete and a list write must restore them',
+					context: {
+						table: 'users',
+						expected: { keys: ['u1'], row: original },
+						actual: { keys, row: restored },
+					},
 				}
 			}
 		} catch (error) {
 			yield {
-				check: 'snapshot',
+				check: 'journal-rollback',
 				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}
 		}
 	}
 
-	// g2. snapshot rollback survives a nested field mutated between capture and restore.
-	try {
-		const driver = factory()
-		await driver.open(CONFORMANCE_SCHEMA)
-		const original = { id: 'u3', name: 'Nested', age: 20, meta: { tags: ['a'] } }
-		await driver.write('users', 'u3', original)
-		const rollback = await driver.snapshot()
-		const before = await driver.read('users', 'u3')
-		if (isRecord(before) && isRecord(before.meta) && Array.isArray(before.meta.tags)) {
-			before.meta.tags.push('mutated-before-restore')
-		}
-		await driver.write('users', 'u3', {
-			id: 'u3',
-			name: 'Nested',
-			age: 20,
-			meta: { tags: ['a', 'mutated-after-write'] },
-		})
-		await rollback()
-		const restored = await driver.read('users', 'u3')
-		await driver.close()
-		if (restored === undefined || !equalsValue(restored, original)) {
-			yield {
-				check: 'snapshot-nested',
-				message:
-					'snapshot rollback must restore pre-snapshot nested field values, unaffected by a later in-place mutation of a read-back row',
-				context: { table: 'users', expected: original, actual: restored },
+	// g2. batches: a list read answers in key order, a list write applies every row, a list insert
+	// with a conflicting final member applies none, a list delete reports each key, and lists of
+	// different lengths refuse ahead of any write.
+	batchPhase: {
+		try {
+			const driver = factory()
+			await driver.open(CONFORMANCE_SCHEMA)
+			const ada = { id: 'a', name: 'Ada', age: 30 }
+			const grace = { id: 'b', name: 'Grace', age: 40 }
+			await driver.write('users', ['b', 'a'], [grace, ada])
+			const read = await driver.read('users', ['a', 'z', 'b'])
+			if (!equalsValue(read, [ada, undefined, grace])) {
+				await driver.close()
+				yield {
+					check: 'batch-read',
+					message: 'a list write must apply every row, and a list read must answer in key order',
+					context: { table: 'users', expected: [ada, undefined, grace], actual: read },
+				}
+				break batchPhase
 			}
-		}
-	} catch (error) {
-		yield {
-			check: 'snapshot-nested',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
+			const conflict = await captureFailure(() =>
+				driver.insert(
+					'users',
+					['c', 'a'],
+					[
+						{ id: 'c', name: 'Alan', age: 41 },
+						{ id: 'a', name: 'Again', age: 1 },
+					],
+				),
+			)
+			const shape = await captureFailure(() =>
+				driver.write('users', ['d', 'e'], [{ id: 'd', name: 'Dora', age: 2 }]),
+			)
+			const kept = [...(await driver.keys('users'))]
+			if (
+				!isDatabaseError(conflict) ||
+				conflict.code !== 'CONFLICT' ||
+				!isDatabaseError(shape) ||
+				shape.code !== 'VALIDATION' ||
+				!equalsValue(kept, ['a', 'b'])
+			) {
+				await driver.close()
+				yield {
+					check: 'batch-atomic',
+					message:
+						'a list insert with a conflicting member must refuse CONFLICT and a mismatched batch VALIDATION, each applying no row',
+					context: {
+						table: 'users',
+						expected: { insert: 'CONFLICT', write: 'VALIDATION', keys: ['a', 'b'] },
+						actual: {
+							insert: isDatabaseError(conflict) ? conflict.code : conflict,
+							write: isDatabaseError(shape) ? shape.code : shape,
+							keys: kept,
+						},
+					},
+				}
+				break batchPhase
+			}
+			const removed = await driver.delete('users', ['a', 'z', 'a'])
+			const left = [...(await driver.keys('users'))]
+			await driver.close()
+			if (!equalsValue(removed, [true, false, false]) || !equalsValue(left, ['b'])) {
+				yield {
+					check: 'batch-delete',
+					message:
+						'a list delete must report true for the first occurrence of each key that held a row',
+					context: {
+						table: 'users',
+						expected: { removed: [true, false, false], keys: ['b'] },
+						actual: { removed, keys: left },
+					},
+				}
+			}
+		} catch (error) {
+			yield {
+				check: 'batch',
+				message: isError(error) ? error.message : String(error),
+				context: { error },
+			}
 		}
 	}
 
@@ -2334,40 +2496,56 @@ export async function* scanDriver(
 		}
 	}
 
-	// n. scoped snapshot rolls back only the named table.
+	// n. batches inside a transaction (presence-gated): a list write the scope commits applies
+	// every row, and a list insert that conflicts inside a scope applies none while the scope
+	// continues and commits.
 	scopedPhase: {
 		try {
 			const driver = factory()
+			if (driver.transaction === undefined) break scopedPhase
 			await driver.open(CONFORMANCE_SCHEMA)
-			const original = { id: 'u1', name: 'Ada', age: 30 }
-			await driver.write('users', 'u1', original)
-			await driver.write('posts', 'p1', { slug: 'p1', title: 'Post' })
-			const rollback = await driver.snapshot(['users'])
-			await driver.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40 })
-			await driver.write('posts', 'p2', { slug: 'p2', title: 'Another post' })
-			await rollback()
-			const usersKeys = [...(await driver.keys('users'))]
-			if (!equalsValue(usersKeys, ['u1'])) {
-				await driver.close()
-				yield {
-					check: 'snapshot-scoped-users',
-					message: 'a scoped snapshot must roll back only the named table',
-					context: { table: 'users', expected: ['u1'], actual: usersKeys },
-				}
-				break scopedPhase
-			}
-			const postsKeys = [...(await driver.keys('posts'))].sort()
+			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30 })
+			const conflict = await driver.transaction(async (storage) => {
+				await storage.write(
+					'users',
+					['u2', 'u3'],
+					[
+						{ id: 'u2', name: 'Grace', age: 40 },
+						{ id: 'u3', name: 'Alan', age: 41 },
+					],
+				)
+				return captureFailure(() =>
+					storage.insert(
+						'users',
+						['u4', 'u1'],
+						[
+							{ id: 'u4', name: 'Dora', age: 2 },
+							{ id: 'u1', name: 'Again', age: 1 },
+						],
+					),
+				)
+			})
+			const keys = [...(await driver.keys('users'))]
 			await driver.close()
-			if (!equalsValue(postsKeys, ['p1', 'p2'])) {
+			if (
+				!isDatabaseError(conflict) ||
+				conflict.code !== 'CONFLICT' ||
+				!equalsValue(keys, ['u1', 'u2', 'u3'])
+			) {
 				yield {
-					check: 'snapshot-scoped-posts',
-					message: "a scoped snapshot must leave an unnamed table's mutations intact",
-					context: { table: 'posts', expected: ['p1', 'p2'], actual: postsKeys },
+					check: 'transaction-batch',
+					message:
+						'inside a transaction a list write must apply every row and a conflicting list insert none',
+					context: {
+						table: 'users',
+						expected: { insert: 'CONFLICT', keys: ['u1', 'u2', 'u3'] },
+						actual: { insert: isDatabaseError(conflict) ? conflict.code : conflict, keys },
+					},
 				}
 			}
 		} catch (error) {
 			yield {
-				check: 'snapshot-scoped',
+				check: 'transaction-batch',
 				message: isError(error) ? error.message : String(error),
 				context: { error },
 			}

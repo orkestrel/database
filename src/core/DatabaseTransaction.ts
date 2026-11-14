@@ -10,8 +10,7 @@ import type {
 	StorageInterface,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
-import { createContract, objectShape } from '@orkestrel/contract'
-import { requireColumns, resolvePrimary } from './helpers.js'
+import { resolvePrimary } from './helpers.js'
 import { Table } from './Table.js'
 
 /**
@@ -29,7 +28,7 @@ export class DatabaseTransaction<
 	T extends TableMap = TableMap,
 > implements DatabaseStorageInterface<T> {
 	readonly #driver: StorageInterface
-	readonly #tables: T
+	readonly #contract: <K extends keyof T & string>(name: K) => ContractInterface<RowOf<T[K]>>
 	readonly #primary: PrimaryMap
 	readonly #generate: KeyFunction | undefined
 	readonly #error: EmitterErrorHandler | undefined
@@ -37,14 +36,14 @@ export class DatabaseTransaction<
 
 	constructor(
 		driver: StorageInterface,
-		tables: T,
+		contract: <K extends keyof T & string>(name: K) => ContractInterface<RowOf<T[K]>>,
 		primary: PrimaryMap,
 		generate: KeyFunction | undefined,
 		error: EmitterErrorHandler | undefined,
 		scope: TransactionScope,
 	) {
 		this.#driver = driver
-		this.#tables = tables
+		this.#contract = contract
 		this.#primary = primary
 		this.#generate = generate
 		this.#error = error
@@ -53,12 +52,7 @@ export class DatabaseTransaction<
 
 	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
 		this.#scope.check()
-		const columns = requireColumns(this.#tables, name)
-		return this.#build(
-			name,
-			resolvePrimary(this.#primary, name),
-			createContract(objectShape(columns)),
-		)
+		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name))
 	}
 
 	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {

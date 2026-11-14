@@ -73,3 +73,33 @@ describe('isDatabaseError', () => {
 		expect(isDatabaseError(new DatabaseError(code, 'failure', { table: 'users' }))).toBe(true)
 	})
 })
+
+describe('isDatabaseError — the intrinsic Error', () => {
+	// The guard reads the `Error` the contract package captured at load, so replacing the live
+	// global changes neither the instance check nor the `Error.prototype` comparison.
+	it('reads the captured Error for the instance check', () => {
+		const error = new DatabaseError('CONFLICT', 'Row exists')
+		const plain = Object.assign(new Error('Row exists'), { code: 'CONFLICT' })
+		const original = globalThis.Error
+		Reflect.set(globalThis, 'Error', RangeError)
+		try {
+			expect(isDatabaseError(error)).toBe(true)
+			expect(isDatabaseError(plain)).toBe(false)
+		} finally {
+			Reflect.set(globalThis, 'Error', original)
+		}
+	})
+
+	it('reads the captured Error for the prototype comparison', () => {
+		const error = new DatabaseError('CONFLICT', 'Row exists')
+		const plain = Object.assign(new Error('Row exists'), { code: 'CONFLICT' })
+		const original = globalThis.Error
+		Reflect.set(globalThis, 'Error', DatabaseError)
+		try {
+			expect(isDatabaseError(error)).toBe(true)
+			expect(isDatabaseError(plain)).toBe(false)
+		} finally {
+			Reflect.set(globalThis, 'Error', original)
+		}
+	})
+})

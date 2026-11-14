@@ -29,11 +29,19 @@ import type {
 	Row,
 	RowOf,
 	TableInterface,
+	TableMap,
 	TableSchema,
 } from '@src/core'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
-import type { FieldPath } from '@orkestrel/contract'
-import { integerShape, literalShape, objectShape, stringShape } from '@orkestrel/contract'
+import type { ContractInterface, FieldPath } from '@orkestrel/contract'
+import {
+	createContract,
+	integerShape,
+	isArray,
+	literalShape,
+	objectShape,
+	stringShape,
+} from '@orkestrel/contract'
 import {
 	applyQuery,
 	normalizeReadInput,
@@ -42,7 +50,12 @@ import {
 	CONFORMANCE_SCHEMA,
 	createDatabase,
 	extractKey,
+	applyKeys,
 	createMemoryDriver,
+	buildBatch,
+	MemoryDriver,
+	requireColumns,
+	StorageJournal,
 	StreamPage,
 } from '@src/core'
 
@@ -209,6 +222,75 @@ export function createConstrainedUsersDatabase(error?: EmitterErrorHandler): {
 	return { db, users: db.table('users') }
 }
 
+/**
+ * Creates the constrained users table over a {@link StorageRecorder} on a real driver, so a
+ * test reads the driver calls each table operation makes.
+ *
+ * @param driver - The real driver to record. Default: a fresh Memory driver
+ * @returns The recorder, the database, and its users table
+ */
+export function createRecordedUsers(driver: DriverInterface = createMemoryDriver()): {
+	readonly recorder: StorageRecorder
+	readonly db: DatabaseInterface
+	readonly users: TableInterface<UserRow>
+} {
+	const recorder = new StorageRecorder(driver)
+	const db = createDatabase({
+		driver: recorder.driver,
+		tables: {
+			users: { id: stringShape(), name: stringShape({ min: 1 }), age: integerShape({ min: 0 }) },
+		},
+	})
+	return { recorder, db, users: db.table('users') }
+}
+
+/** Shapes one empty-list call on a storage's list member and the answer it must give. */
+export interface EmptyStorageCase {
+	readonly member: StorageMember
+	readonly run: (storage: StorageInterface) => Promise<unknown>
+	readonly expected: unknown
+}
+
+/** Lists the empty-list call of each storage list member, on the `users` table. */
+export const EMPTY_STORAGE_CASES: readonly EmptyStorageCase[] = Object.freeze([
+	{ member: 'read', run: (storage) => storage.read('users', []), expected: [] },
+	{ member: 'write', run: (storage) => storage.write('users', [], []), expected: undefined },
+	{ member: 'insert', run: (storage) => storage.insert('users', [], []), expected: undefined },
+	{ member: 'delete', run: (storage) => storage.delete('users', []), expected: [] },
+])
+
+/** Shapes one empty-list call on a table's list overload and the answer it must give. */
+export interface EmptyTableCase {
+	readonly member: string
+	readonly run: (users: TableInterface<UserRow>) => Promise<unknown>
+	readonly expected: unknown
+}
+
+/** Lists the empty-list call of each table list overload. */
+export const EMPTY_TABLE_CASES: readonly EmptyTableCase[] = Object.freeze([
+	{ member: 'set', run: (users) => users.set([]), expected: [] },
+	{ member: 'add', run: (users) => users.add([]), expected: [] },
+	{ member: 'get', run: (users) => users.get([]), expected: [] },
+	{ member: 'resolve', run: (users) => users.resolve([]), expected: [] },
+	{ member: 'has', run: (users) => users.has([]), expected: [] },
+	{ member: 'update', run: (users) => users.update([], { name: 'Renamed' }), expected: [] },
+	{ member: 'remove', run: (users) => users.remove([]), expected: true },
+])
+
+/**
+ * Builds the users rows a batch reading writes, keyed `u0` onward.
+ *
+ * @param count - The number of rows
+ * @returns The rows
+ */
+export function buildUserRows(count: number): readonly UserRow[] {
+	return Array.from({ length: count }, (_, index) => ({
+		id: `u${index}`,
+		name: `User ${index}`,
+		age: index,
+	}))
+}
+
 /** Declares the exact columns the Cursor behavior and transaction-lifetime scenarios read. */
 export const CURSOR_COLUMNS = {
 	id: stringShape(),
@@ -263,15 +345,117 @@ export function createMemoryAdapter(
 	return {
 		open: (tables) => memory.open(tables),
 		close: () => memory.close(),
-		read: (table, key) => memory.read(table, key),
-		write: (table, key, row, options) => memory.write(table, key, row, options),
-		insert: (table, key, row, options) => memory.insert(table, key, row, options),
-		delete: (table, key, options) => memory.delete(table, key, options),
+		read: memory.read.bind(memory),
+		write: memory.write.bind(memory),
+		insert: memory.insert.bind(memory),
+		delete: memory.delete.bind(memory),
 		keys: (table) => memory.keys(table),
 		scan: (table) => memory.scan(table),
 		clear: (table) => memory.clear(table),
-		snapshot: (tables) => memory.snapshot(tables),
 		...overrides,
+	}
+}
+
+/** Holds the list-form handlers {@link interceptStorage} puts in front of a driver's keyed members. */
+export interface StorageHandlers {
+	readonly read?: (table: string, keys: readonly Key[]) => Promise<ReadonlyArray<Row | undefined>>
+	readonly write?: (
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	) => Promise<void>
+	readonly delete?: (
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	) => Promise<readonly boolean[]>
+}
+
+/**
+ * Puts list-form handlers in front of a real driver's keyed members, each single call reaching
+ * its handler as a list of one.
+ *
+ * @param source - The real driver
+ * @param handlers - The handlers to run in place of `read`, `write`, or `delete`
+ * @returns The driver with the handled members replaced
+ */
+export function interceptStorage(
+	source: DriverInterface,
+	handlers: StorageHandlers,
+): DriverInterface {
+	const intercepted = new InterceptedStorage(source, handlers)
+	return createMemoryAdapter(source, {
+		read: intercepted.read.bind(intercepted),
+		write: intercepted.write.bind(intercepted),
+		delete: intercepted.delete.bind(intercepted),
+	})
+}
+
+/** Routes a driver's keyed members through {@link StorageHandlers}, keeping their overloads. */
+export class InterceptedStorage {
+	readonly #source: DriverInterface
+	readonly #handlers: StorageHandlers
+
+	constructor(source: DriverInterface, handlers: StorageHandlers) {
+		this.#source = source
+		this.#handlers = handlers
+	}
+
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
+		const handler = this.#handlers.read
+		if (handler === undefined) {
+			// The ternary only selects the overload; both arms make the same call.
+			return isArray(keys) ? this.#source.read(table, keys) : this.#source.read(table, keys)
+		}
+		if (isArray(keys)) return handler(table, keys)
+		const [row] = await handler(table, [keys])
+		return row
+	}
+
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
+		const listed = entries.map(([key]) => key)
+		const values = entries.map(([, row]) => row)
+		const handler = this.#handlers.write
+		if (handler === undefined) await this.#source.write(table, listed, values, options)
+		else await handler(table, listed, values, options)
+	}
+
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
+		const handler = this.#handlers.delete
+		return applyKeys(keys, (listed) =>
+			handler === undefined
+				? this.#source.delete(table, listed, options)
+				: handler(table, listed, options),
+		)
 	}
 }
 
@@ -445,7 +629,7 @@ export class RecordingDriverFixture {
 	constructor(aggregatesUndefined: boolean) {
 		this.#undefined = aggregatesUndefined
 		this.#driver = {
-			...createMemoryAdapter(this.#memory, { snapshot: () => this.#memory.snapshot() }),
+			...createMemoryAdapter(this.#memory),
 			plan: this.#planCall.bind(this),
 			records: this.#recordsCall.bind(this),
 			stream: this.#streamCall.bind(this),
@@ -504,34 +688,179 @@ export type StorageMember =
 	| 'stream'
 	| 'aggregate'
 
-/** Shapes one driver call a {@link StorageRecorder} observed: the member and the rows it returned. */
+/** Shapes one driver call a {@link StorageRecorder} observed: the member, the keys it addressed, and the rows it returned. */
 export interface StorageCall {
 	readonly member: StorageMember
+	readonly keys: number
 	readonly rows: number
 	readonly scoped: boolean
 }
 
-/** Shapes the calls and returned rows of one member across a slice of a recorder's log. */
+/** Shapes the calls, addressed keys, and returned rows of one member across a slice of a recorder's log. */
 export interface StorageTally {
 	readonly calls: number
+	readonly keys: number
 	readonly rows: number
 }
 
 /**
- * Totals the calls and returned rows of one member across recorded calls.
+ * Totals the calls, addressed keys, and returned rows of one member across recorded calls.
  *
  * @param calls - The recorded calls to read
  * @param member - The member to total
- * @returns The member's call count and row total
+ * @returns The member's call count, key total, and row total
  */
 export function tallyCalls(calls: readonly StorageCall[], member: StorageMember): StorageTally {
 	const matched = calls.filter((call) => call.member === member)
-	return { calls: matched.length, rows: matched.reduce((total, call) => total + call.rows, 0) }
+	return {
+		calls: matched.length,
+		keys: matched.reduce((total, call) => total + call.keys, 0),
+		rows: matched.reduce((total, call) => total + call.rows, 0),
+	}
 }
 
 /**
- * Wraps a real driver and records the rows each storage member returns, inside a transaction
- * scope too — the rows-read instrument of the native-first acceptance readings.
+ * Wraps a real storage's required members and appends one {@link StorageCall} per call to a
+ * recorder's log, keeping the keyed members' single and list overloads.
+ */
+export class RecordedStorage implements StorageInterface {
+	readonly #storage: StorageInterface
+	readonly #scoped: boolean
+	readonly #calls: StorageCall[]
+
+	constructor(storage: StorageInterface, scoped: boolean, calls: StorageCall[]) {
+		this.#storage = storage
+		this.#scoped = scoped
+		this.#calls = calls
+	}
+
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
+		if (!isArray(keys)) {
+			const row = await this.#storage.read(table, keys)
+			this.#record('read', 1, row === undefined ? 0 : 1)
+			return row
+		}
+		const rows = await this.#storage.read(table, keys)
+		this.#record('read', keys.length, rows.filter((row) => row !== undefined).length)
+		return rows
+	}
+
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
+		await this.#storage.write(
+			table,
+			entries.map(([key]) => key),
+			entries.map(([, row]) => row),
+			options,
+		)
+		this.#record('write', entries.length, 0)
+	}
+
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
+		await this.#storage.insert(
+			table,
+			entries.map(([key]) => key),
+			entries.map(([, row]) => row),
+			options,
+		)
+		this.#record('insert', entries.length, 0)
+	}
+
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
+		return applyKeys(keys, async (listed) => {
+			const removed = await this.#storage.delete(table, listed, options)
+			this.#record('delete', listed.length, 0)
+			return removed
+		})
+	}
+
+	async keys(table: string): Promise<readonly Key[]> {
+		const keys = await this.#storage.keys(table)
+		this.#record('keys', 0, 0)
+		return keys
+	}
+
+	scan(table: string): AsyncIterable<Row> {
+		return iterateRecorded(this.#storage.scan(table), (rows) => this.#record('scan', 0, rows))
+	}
+
+	async clear(table: string): Promise<void> {
+		await this.#storage.clear(table)
+		this.#record('clear', 0, 0)
+	}
+
+	#record(member: StorageMember, keys: number, rows: number): void {
+		this.#calls.push({ member, keys, rows, scoped: this.#scoped })
+	}
+}
+
+/**
+ * Yields a source's rows and reports how many it yielded when the consumer stops or the
+ * source ends.
+ *
+ * @param source - The rows to pass through
+ * @param report - Receives the count of rows yielded
+ * @yields Each row of the source
+ */
+export async function* iterateRecorded(
+	source: AsyncIterable<Row>,
+	report: (rows: number) => void,
+): AsyncIterable<Row> {
+	const counter = new StreamPage(0)
+	try {
+		for await (const row of source) {
+			counter.next()
+			yield row
+		}
+	} finally {
+		report(counter.count)
+	}
+}
+
+/**
+ * Wraps a real driver and records the keys each storage member addresses and the rows it
+ * returns, inside a transaction scope too — the rows-read instrument of the native-first
+ * acceptance readings.
  */
 export class StorageRecorder {
 	readonly #source: DriverInterface
@@ -574,7 +903,6 @@ export class StorageRecorder {
 			...this.#wrap(source, false),
 			open: source.open.bind(source),
 			close: source.close.bind(source),
-			snapshot: source.snapshot.bind(source),
 		}
 		if (source.transaction === undefined) return base
 		return {
@@ -585,14 +913,15 @@ export class StorageRecorder {
 	}
 
 	#wrap(storage: StorageInterface, scoped: boolean): StorageInterface {
+		const recorded = new RecordedStorage(storage, scoped, this.#calls)
 		return {
-			read: this.#read.bind(this, storage, scoped),
-			write: this.#write.bind(this, storage, scoped),
-			insert: this.#insert.bind(this, storage, scoped),
-			delete: this.#delete.bind(this, storage, scoped),
-			keys: this.#keys.bind(this, storage, scoped),
-			scan: this.#scan.bind(this, storage, scoped),
-			clear: this.#clear.bind(this, storage, scoped),
+			read: recorded.read.bind(recorded),
+			write: recorded.write.bind(recorded),
+			insert: recorded.insert.bind(recorded),
+			delete: recorded.delete.bind(recorded),
+			keys: recorded.keys.bind(recorded),
+			scan: recorded.scan.bind(recorded),
+			clear: recorded.clear.bind(recorded),
 			...(storage.migrate === undefined ? {} : { migrate: storage.migrate.bind(storage) }),
 			...(storage.metadata === undefined ? {} : { metadata: storage.metadata.bind(storage) }),
 			...(storage.stamp === undefined ? {} : { stamp: storage.stamp.bind(storage) }),
@@ -615,72 +944,10 @@ export class StorageRecorder {
 		return source.transaction((storage) => scope(this.#wrap(storage, true)))
 	}
 
-	async #read(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		key: Key,
-	): Promise<Row | undefined> {
-		const row = await storage.read(table, key)
-		this.#calls.push({ member: 'read', rows: row === undefined ? 0 : 1, scoped })
-		return row
-	}
-
-	async #write(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		await storage.write(table, key, row, options)
-		this.#calls.push({ member: 'write', rows: 0, scoped })
-	}
-
-	async #insert(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		await storage.insert(table, key, row, options)
-		this.#calls.push({ member: 'insert', rows: 0, scoped })
-	}
-
-	async #delete(
-		storage: StorageInterface,
-		scoped: boolean,
-		table: string,
-		key: Key,
-		options?: OperationOptions,
-	): Promise<boolean> {
-		const removed = await storage.delete(table, key, options)
-		this.#calls.push({ member: 'delete', rows: 0, scoped })
-		return removed
-	}
-
-	async #keys(storage: StorageInterface, scoped: boolean, table: string): Promise<readonly Key[]> {
-		const keys = await storage.keys(table)
-		this.#calls.push({ member: 'keys', rows: 0, scoped })
-		return keys
-	}
-
-	#scan(storage: StorageInterface, scoped: boolean, table: string): AsyncIterable<Row> {
-		return this.#iterate('scan', storage.scan(table), scoped)
-	}
-
-	async #clear(storage: StorageInterface, scoped: boolean, table: string): Promise<void> {
-		await storage.clear(table)
-		this.#calls.push({ member: 'clear', rows: 0, scoped })
-	}
-
 	#plan(storage: StorageInterface, scoped: boolean, table: string, input: ReadInput): ReadPlan {
 		if (storage.plan === undefined) throw new Error('The storage declares no plan')
 		const split = storage.plan(table, input)
-		this.#calls.push({ member: 'plan', rows: 0, scoped })
+		this.#calls.push({ member: 'plan', keys: 0, rows: 0, scoped })
 		return split
 	}
 
@@ -692,7 +959,7 @@ export class StorageRecorder {
 	): Promise<readonly Row[]> {
 		if (storage.records === undefined) throw new Error('The storage declares no records')
 		const rows = await storage.records(table, input)
-		this.#calls.push({ member: 'records', rows: rows.length, scoped })
+		this.#calls.push({ member: 'records', keys: 0, rows: rows.length, scoped })
 		return rows
 	}
 
@@ -703,7 +970,9 @@ export class StorageRecorder {
 		input: QueryInput,
 	): AsyncIterable<Row> {
 		if (storage.stream === undefined) throw new Error('The storage declares no stream')
-		return this.#iterate('stream', storage.stream(table, input), scoped)
+		return iterateRecorded(storage.stream(table, input), (rows) => {
+			this.#calls.push({ member: 'stream', keys: 0, rows, scoped })
+		})
 	}
 
 	async #aggregate(
@@ -716,25 +985,8 @@ export class StorageRecorder {
 	): Promise<number | undefined> {
 		if (storage.aggregate === undefined) throw new Error('The storage declares no aggregate')
 		const value = await storage.aggregate(table, operation, column, input)
-		this.#calls.push({ member: 'aggregate', rows: 0, scoped })
+		this.#calls.push({ member: 'aggregate', keys: 0, rows: 0, scoped })
 		return value
-	}
-
-	// Count the rows one iteration yields, recorded when the consumer stops or the source ends.
-	async *#iterate(
-		member: StorageMember,
-		source: AsyncIterable<Row>,
-		scoped: boolean,
-	): AsyncIterable<Row> {
-		const counter = new StreamPage(0)
-		try {
-			for await (const row of source) {
-				counter.next()
-				yield row
-			}
-		} finally {
-			this.#calls.push({ member, rows: counter.count, scoped })
-		}
 	}
 }
 
@@ -802,7 +1054,8 @@ export async function* streamPlannedSplit(
 
 /**
  * Runs a transaction scope the way a {@link PlannedSplit} driver does: over the planned
- * driver, or over a storage without `plan` for `unscoped`, restoring the rows on rejection.
+ * driver, or over a storage without `plan` for `unscoped`, journaling each write and restoring
+ * the touched rows on rejection.
  *
  * @param memory - The Memory driver holding the rows
  * @param storage - The planned storage
@@ -816,11 +1069,29 @@ export async function runPlannedTransaction<R>(
 	split: PlannedSplit,
 	scope: (storage: StorageInterface) => Promise<R>,
 ): Promise<R> {
-	const rollback = await memory.snapshot()
+	const journal = new StorageJournal(memory)
+	const scoped: StorageInterface =
+		split === 'unscoped'
+			? journal
+			: {
+					read: journal.read.bind(journal),
+					write: journal.write.bind(journal),
+					insert: journal.insert.bind(journal),
+					delete: journal.delete.bind(journal),
+					keys: journal.keys.bind(journal),
+					scan: journal.scan.bind(journal),
+					clear: journal.clear.bind(journal),
+					...(storage.plan === undefined ? {} : { plan: storage.plan.bind(storage) }),
+					...(storage.records === undefined ? {} : { records: storage.records.bind(storage) }),
+					...(storage.stream === undefined ? {} : { stream: storage.stream.bind(storage) }),
+					...(storage.aggregate === undefined
+						? {}
+						: { aggregate: storage.aggregate.bind(storage) }),
+				}
 	try {
-		return await scope(split === 'unscoped' ? createMemoryAdapter(memory) : storage)
+		return await scope(scoped)
 	} catch (error) {
-		await rollback()
+		await journal.restore()
 		throw error
 	}
 }
@@ -843,6 +1114,27 @@ export function createPlannedDriver(split: PlannedSplit = 'native'): DriverInter
 		transaction: (scope) => runPlannedTransaction(memory, driver, split, scope),
 	})
 	return driver
+}
+
+/**
+ * Creates a Memory-backed driver that declares every optional storage member: a plan that
+ * keeps every read native, `records`, `stream`, and `aggregate` answered over the stored
+ * rows, and the Memory driver's own `migrate`, `metadata`, and `stamp`.
+ *
+ * @returns The driver
+ */
+export function createCompleteDriver(): DriverInterface {
+	const memory = new MemoryDriver()
+	return createMemoryAdapter(memory, {
+		plan: (_table, input) => splitPlannedRead('native', input),
+		records: (table, input) => readPlannedSplit(memory, table, input, 'native'),
+		stream: (table, input) => streamPlannedSplit(memory, table, input, 'native'),
+		aggregate: async (table, operation, column, input) =>
+			computeAggregate(await readPlannedSplit(memory, table, input, 'native'), operation, column),
+		migrate: memory.migrate.bind(memory),
+		metadata: memory.metadata.bind(memory),
+		stamp: memory.stamp.bind(memory),
+	})
 }
 
 /** Counts protocol transitions within one test scenario. */
@@ -904,6 +1196,19 @@ export const COLUMNS = {
 	users: { id: stringShape(), name: stringShape(), age: integerShape() },
 }
 
+/**
+ * Creates the contract source a {@link DatabaseTransaction} reads its tables' contracts from,
+ * compiling each table's contract on each call.
+ *
+ * @param tables - The declared tables
+ * @returns The source, which throws `NOT_FOUND` for an undeclared table
+ */
+export function createContractSource<T extends TableMap>(
+	tables: T,
+): <K extends keyof T & string>(name: K) => ContractInterface<RowOf<T[K]>> {
+	return (name) => createContract(objectShape(requireColumns(tables, name)))
+}
+
 export async function transactionView(): Promise<{
 	readonly view: DatabaseTransaction<typeof COLUMNS>
 	readonly scope: TransactionScope
@@ -913,7 +1218,14 @@ export async function transactionView(): Promise<{
 	await driver.open(tableSchemas('users'))
 	const scope = new TransactionScope()
 	return {
-		view: new DatabaseTransaction(driver, COLUMNS, {}, undefined, undefined, scope),
+		view: new DatabaseTransaction<typeof COLUMNS>(
+			driver,
+			createContractSource(COLUMNS),
+			{},
+			undefined,
+			undefined,
+			scope,
+		),
 		scope,
 		driver,
 	}
@@ -1079,16 +1391,15 @@ export function createDescendingKeyDriver(): DriverInterface {
 	return {
 		open: (tables) => inner.open(tables),
 		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
+		read: inner.read.bind(inner),
+		write: inner.write.bind(inner),
+		insert: inner.insert.bind(inner),
+		delete: inner.delete.bind(inner),
 		async keys(table: string): Promise<readonly Key[]> {
 			return [...(await inner.keys(table))].reverse()
 		},
 		scan: (table) => inner.scan(table),
 		clear: (table) => inner.clear(table),
-		snapshot: () => inner.snapshot(),
 	}
 }
 
@@ -1097,14 +1408,13 @@ export function createMismatchedMetadataDriver(): DriverInterface {
 	return {
 		open: (tables) => inner.open(tables),
 		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
+		read: inner.read.bind(inner),
+		write: inner.write.bind(inner),
+		insert: inner.insert.bind(inner),
+		delete: inner.delete.bind(inner),
 		keys: (table) => inner.keys(table),
 		scan: (table) => inner.scan(table),
 		clear: (table) => inner.clear(table),
-		snapshot: (tables) => inner.snapshot(tables),
 		async metadata() {
 			return { version: 99, schema: [] }
 		},
@@ -1114,20 +1424,14 @@ export function createMismatchedMetadataDriver(): DriverInterface {
 	}
 }
 
-export function createWholeSnapshotDriver(): DriverInterface {
-	const inner = createMemoryDriver()
-	return {
-		open: (tables) => inner.open(tables),
-		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
-		keys: (table) => inner.keys(table),
-		scan: (table) => inner.scan(table),
-		clear: (table) => inner.clear(table),
-		snapshot: () => inner.snapshot(),
-	}
+/**
+ * Creates a Memory-backed driver whose list insert applies each row in turn, so a conflicting
+ * final member leaves the rows ahead of it — the per-row batch a conformant driver refuses.
+ *
+ * @returns The driver
+ */
+export function createPartialBatchDriver(): DriverInterface {
+	return new PartialBatchFixture().driver
 }
 
 export function createDoublyBrokenDriver(): DriverInterface {
@@ -1139,16 +1443,15 @@ export function createCrashingDriver(): DriverInterface {
 	return {
 		open: (tables) => inner.open(tables),
 		close: () => inner.close(),
-		read: (table, key) => inner.read(table, key),
-		write: (table, key, row) => inner.write(table, key, row),
-		insert: (table, key, row) => inner.insert(table, key, row),
-		delete: (table, key) => inner.delete(table, key),
+		read: inner.read.bind(inner),
+		write: inner.write.bind(inner),
+		insert: inner.insert.bind(inner),
+		delete: inner.delete.bind(inner),
 		keys: (table) => inner.keys(table),
 		scan(): AsyncIterable<Row> {
 			throw new Error('scan exploded')
 		},
 		clear: (table) => inner.clear(table),
-		snapshot: (tables) => inner.snapshot(tables),
 	}
 }
 
@@ -1266,23 +1569,67 @@ export class ReferenceDriverFixture {
 			write: this.#write.bind(this),
 			read: this.#read.bind(this),
 			keys: this.#keys.bind(this),
-			snapshot: (tables) => this.#memory.snapshot(this.#descending ? tables : undefined),
 		})
 	}
 
-	async #write(table: string, key: Key, row: Row): Promise<void> {
-		await this.#memory.write(table, key, row)
-		this.#stored.set(key, row)
+	// Keep each written row by reference, so a later caller change reaches the stored row.
+	#write(table: string, keys: readonly Key[], rows: readonly Row[]): Promise<void>
+	#write(table: string, key: Key, row: Row): Promise<void>
+	async #write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
+		await this.#memory.write(
+			table,
+			entries.map(([key]) => key),
+			entries.map(([, row]) => row),
+		)
+		for (const [key, row] of entries) this.#stored.set(key, row)
 	}
 
-	async #read(table: string, key: Key): Promise<Row | undefined> {
-		if (this.#stored.has(key)) return this.#stored.get(key)
-		return this.#memory.read(table, key)
+	#read(table: string, key: Key): Promise<Row | undefined>
+	#read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async #read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
+		if (!isArray(keys)) return this.#stored.get(keys) ?? this.#memory.read(table, keys)
+		const rows = await this.#memory.read(table, keys)
+		return keys.map((key, index) => this.#stored.get(key) ?? rows[index])
 	}
 
 	async #keys(table: string): Promise<readonly Key[]> {
 		const keys = await this.#memory.keys(table)
 		return this.#descending ? [...keys].reverse() : keys
+	}
+}
+
+/** Owns a Memory driver whose list insert applies each row in turn. */
+export class PartialBatchFixture {
+	readonly #memory = createMemoryDriver()
+
+	get driver(): DriverInterface {
+		return createMemoryAdapter(this.#memory, { insert: this.#insert.bind(this) })
+	}
+
+	#insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	#insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async #insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		for (const [key, row] of buildBatch(keys, rows)) {
+			await this.#memory.insert(table, key, row, options)
+		}
 	}
 }
 

@@ -1,9 +1,21 @@
 import type { Migration, TableSchema } from '@src/core'
-import { conformDriver, createMemoryDriver, isDatabaseError, planMigration } from '@src/core'
+import {
+	conformDriver,
+	createMemoryDriver,
+	isDatabaseError,
+	planMigration,
+	StorageJournal,
+} from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { createUnclonableMetadata, tableSchemas } from '../../../setup.js'
+import {
+	createRecordedUsers,
+	createUnclonableMetadata,
+	EMPTY_STORAGE_CASES,
+	EMPTY_TABLE_CASES,
+	tableSchemas,
+} from '../../../setup.js'
 
 // The shared driver-conformance battery over this backend. `conformDriver` (`@src/core`) owns the
 // schema, the required-primitive checks, and the presence-gated optional-hook coverage (migrate /
@@ -191,37 +203,82 @@ describe('MemoryDriver', () => {
 		expect([...reread.bytes]).toEqual([1, 2, 3])
 	})
 
-	it('rolls back to a snapshot', async () => {
-		const driver = createMemoryDriver()
-		await driver.open(tableSchemas('t'))
-		await driver.write('t', 'a', { id: 'a', n: 1 })
-		const rollback = await driver.snapshot()
-		await driver.write('t', 'a', { id: 'a', n: 2 })
-		await driver.write('t', 'b', { id: 'b' })
-		expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 2 })
-		await rollback()
-		expect(await driver.read('t', 'a')).toEqual({ id: 'a', n: 1 })
-		expect(await driver.read('t', 'b')).toBeUndefined()
-	})
+	describe('batches', () => {
+		it('reads a key list in its order, with undefined for each miss', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write('users', 'u1', { id: 'u1', n: 1 })
+			await driver.write('users', 'u2', { id: 'u2', n: 2 })
+			expect(await driver.read('users', ['u2', 'missing', 'u1'])).toEqual([
+				{ id: 'u2', n: 2 },
+				undefined,
+				{ id: 'u1', n: 1 },
+			])
+		})
 
-	it('rolls back a NESTED field mutated in place (on a read-back row) between snapshot and restore', async () => {
-		const driver = createMemoryDriver()
-		await driver.open(tableSchemas('t'))
-		const original = { id: 'a', meta: { tags: ['x'] } }
-		await driver.write('t', 'a', original)
-		const rollback = await driver.snapshot()
-		// Read back the row and mutate its nested field in place — a snapshot
-		// that shares nested references (or only clones top-level fields) would
-		// restore this mutated value instead of the pre-snapshot one.
-		const before = await driver.read('t', 'a')
-		if (before !== undefined && isRecord(before.meta) && Array.isArray(before.meta.tags)) {
-			before.meta.tags.push('mutated-between-snapshot-and-restore')
-		}
-		await driver.write('t', 'a', { id: 'a', meta: { tags: ['x', 'overwritten'] } })
-		await rollback()
-		expect(await driver.read('t', 'a')).toEqual({ id: 'a', meta: { tags: ['x'] } })
-	})
+		it('writes every listed row at the key of its position', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write(
+				'users',
+				['u1', 'u2'],
+				[
+					{ id: 'caller', n: 1 },
+					{ id: 'u2', n: 2 },
+				],
+			)
+			expect(await driver.read('users', ['u1', 'u2'])).toEqual([
+				{ id: 'u1', n: 1 },
+				{ id: 'u2', n: 2 },
+			])
+		})
 
+		it('writes no listed row when a final row cannot be stored', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await expect(
+				driver.write('users', ['u1', 'u2'], [{ id: 'u1' }, { id: 'u2', run: () => 'unclonable' }]),
+			).rejects.toMatchObject({ name: 'DataCloneError' })
+			expect(await driver.keys('users')).toEqual([])
+		})
+
+		it('inserts no listed row when the final member conflicts', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write('users', 'u1', { id: 'u1', n: 1 })
+			await expect(
+				driver.insert('users', ['u2', 'u3', 'u1'], [{ id: 'u2' }, { id: 'u3' }, { id: 'u1' }]),
+			).rejects.toMatchObject({ code: 'CONFLICT', context: { key: 'u1' } })
+			expect(await driver.keys('users')).toEqual(['u1'])
+		})
+
+		it('inserts no listed row when the batch repeats a key', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await expect(
+				driver.insert('users', ['u2', 'u2'], [{ id: 'u2' }, { id: 'u2' }]),
+			).rejects.toMatchObject({ code: 'CONFLICT', context: { key: 'u2' } })
+			expect(await driver.keys('users')).toEqual([])
+		})
+
+		it('deletes a key list, reporting true for the first occurrence of each stored key', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await driver.write('users', ['u1', 'u2'], [{ id: 'u1' }, { id: 'u2' }])
+			expect(await driver.delete('users', ['u1', 'missing', 'u1'])).toEqual([true, false, false])
+			expect(await driver.keys('users')).toEqual(['u2'])
+		})
+
+		it('refuses lists of different lengths ahead of any write', async () => {
+			const driver = createMemoryDriver()
+			await driver.open(tableSchemas('users'))
+			await expect(driver.write('users', ['u1', 'u2'], [{ id: 'u1' }])).rejects.toMatchObject({
+				code: 'VALIDATION',
+				context: { keys: 2, rows: 1 },
+			})
+			expect(await driver.keys('users')).toEqual([])
+		})
+	})
 	it('declares no plan and no stream, so the core answers every read over scan', () => {
 		const driver = createMemoryDriver()
 		expect(driver.plan).toBeUndefined()
@@ -412,176 +469,51 @@ describe('MemoryDriver', () => {
 			expect(await driver.metadata?.()).toEqual({ version: 3, schema: tableSchemas('users') })
 		})
 	})
+})
 
-	describe('scoped snapshot', () => {
-		it('restores only the listed tables; unlisted tables keep later mutations', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('users', 'posts'))
-			await driver.write('users', 'a', { id: 'a', n: 1 })
-			await driver.write('posts', 'p1', { id: 'p1', n: 1 })
-			const rollback = await driver.snapshot(['users'])
-			await driver.write('users', 'a', { id: 'a', n: 2 })
-			await driver.write('posts', 'p1', { id: 'p1', n: 2 })
-			await rollback()
-			expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
-			expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', n: 2 })
-		})
-
-		it('with no argument still restores the whole store', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('users', 'posts'))
-			await driver.write('users', 'a', { id: 'a', n: 1 })
-			await driver.write('posts', 'p1', { id: 'p1', n: 1 })
-			const rollback = await driver.snapshot()
-			await driver.write('users', 'a', { id: 'a', n: 2 })
-			await driver.write('posts', 'p1', { id: 'p1', n: 2 })
-			await rollback()
-			expect(await driver.read('users', 'a')).toEqual({ id: 'a', n: 1 })
-			expect(await driver.read('posts', 'p1')).toEqual({ id: 'p1', n: 1 })
-		})
-	})
-
-	describe('schema-aware snapshot', () => {
-		it('ignores unknown names without restoring a known table', async () => {
-			const driver = createMemoryDriver()
-			await driver.open(tableSchemas('users'))
-			await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-			const rollback = await driver.snapshot(['missing', 'missing'])
-			await driver.write('users', 'u1', { id: 'u1', value: 'current' })
-			await rollback()
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
-		})
-
-		it('restores captured rows repeatedly while preserving a later table and current metadata', async () => {
-			const driver = createMemoryDriver()
-			const before = tableSchemas('users')
-			const logs: TableSchema = {
-				name: 'logs',
-				primary: 'id',
-				columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-				indexes: [],
+describe('MemoryDriver — empty lists', () => {
+	for (const { member, run, expected } of EMPTY_STORAGE_CASES) {
+		it(`answers an empty ${member} list and touches no row`, async () => {
+			const { recorder, db } = createRecordedUsers(createMemoryDriver())
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(recorder.driver))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
 			}
-			const current = [...before, logs]
-			await driver.open(before)
-			await driver.stamp?.({ version: 1, schema: before })
-			await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-			const rollback = await driver.snapshot()
-			await driver.migrate?.({
-				plan: planMigration(before, current, 1, 2),
-				metadata: { version: 2, schema: current },
-			})
-			await driver.write('users', 'u1', { id: 'u1', value: 'changed' })
-			await driver.write('users', 'u2', { id: 'u2' })
-			await driver.write('logs', 'l1', { id: 'l1', value: 'current' })
-
-			await rollback()
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
-			expect(await driver.read('users', 'u2')).toBeUndefined()
-			expect(await driver.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
-			expect(await driver.metadata?.()).toEqual({ version: 2, schema: current })
-
-			await driver.write('users', 'u1', { id: 'u1', value: 'changed again' })
-			await rollback()
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'captured' })
-			expect(await driver.read('logs', 'l1')).toEqual({ id: 'l1', value: 'current' })
 		})
 
-		it('skips a captured table removed after capture', async () => {
-			const driver = createMemoryDriver()
-			const schema = tableSchemas('users')
-			await driver.open(schema)
-			await driver.write('users', 'u1', { id: 'u1' })
-			const rollback = await driver.snapshot()
-			await driver.migrate?.({ plan: planMigration(schema, []) })
-			await rollback()
-			await expect(driver.keys('users')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+		it(`answers an empty ${member} list through the journal and restores nothing`, async () => {
+			const { recorder, db } = createRecordedUsers(createMemoryDriver())
+			try {
+				await db.open()
+				const journal = new StorageJournal(recorder.driver)
+				const { value, calls } = await recorder.measure(async () => {
+					const answer = await run(journal)
+					await journal.restore()
+					return answer
+				})
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+			}
 		})
+	}
 
-		it('skips a same-name table removed and re-added by one ordered migration', async () => {
-			const driver = createMemoryDriver()
-			const [users] = tableSchemas('users')
-			if (users === undefined) throw new Error('Expected users schema')
-			await driver.open([users])
-			await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-			const rollback = await driver.snapshot()
-			await driver.migrate?.({
-				plan: {
-					from: 1,
-					to: 2,
-					steps: [
-						{ operation: 'table.remove', table: 'users' },
-						{ operation: 'table.add', table: users },
-					],
-				},
-			})
-			await driver.write('users', 'u2', { id: 'u2', value: 'replacement' })
-			await rollback()
-			expect(await driver.keys('users')).toEqual(['u2'])
-			expect(await driver.read('users', 'u2')).toEqual({
-				id: 'u2',
-				value: 'replacement',
-			})
+	for (const { member, run, expected } of EMPTY_TABLE_CASES) {
+		it(`answers Table ${member} of an empty list and touches no row`, async () => {
+			const { recorder, db, users } = createRecordedUsers(createMemoryDriver())
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(users))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+			}
 		})
-
-		it('adapts captured rows through a compatible column removal', async () => {
-			const driver = createMemoryDriver()
-			const before: TableSchema = {
-				name: 'users',
-				primary: 'id',
-				columns: [
-					{ name: 'id', storage: 'text', optional: false, nullable: false },
-					{ name: 'legacy', storage: 'text', optional: false, nullable: false },
-				],
-				indexes: [],
-			}
-			const current: TableSchema = {
-				...before,
-				columns: [before.columns[0]].filter(
-					(column): column is NonNullable<typeof column> => column !== undefined,
-				),
-			}
-			await driver.open([before])
-			await driver.write('users', 'u1', { id: 'u1', legacy: 'captured' })
-			const rollback = await driver.snapshot()
-			await driver.migrate?.({ plan: planMigration([before], [current]) })
-			await driver.write('users', 'u1', { id: 'u1', current: true })
-			await rollback()
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
-		})
-
-		it('rejects incompatible replay before mutation and remains retryable', async () => {
-			const driver = createMemoryDriver()
-			const before: TableSchema = {
-				name: 'users',
-				primary: 'id',
-				columns: [
-					{ name: 'id', storage: 'text', optional: false, nullable: false },
-					{ name: 'value', storage: 'text', optional: false, nullable: false },
-				],
-				indexes: [],
-			}
-			const primary = before.columns[0]
-			if (primary === undefined) throw new Error('Expected the primary column fixture')
-			const incompatible: TableSchema = {
-				...before,
-				columns: [primary, { name: 'value', storage: 'integer', optional: false, nullable: false }],
-			}
-			const compatible: TableSchema = {
-				...before,
-				columns: [primary],
-			}
-			await driver.open([before])
-			await driver.write('users', 'u1', { id: 'u1', value: 'captured' })
-			const rollback = await driver.snapshot()
-			await driver.write('users', 'u1', { id: 'u1', value: 'current' })
-			await driver.open([incompatible])
-
-			await expect(rollback()).rejects.toMatchObject({ code: 'MIGRATION' })
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1', value: 'current' })
-
-			await driver.open([compatible])
-			await rollback()
-			expect(await driver.read('users', 'u1')).toEqual({ id: 'u1' })
-		})
-	})
+	}
 })

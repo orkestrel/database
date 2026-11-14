@@ -9,18 +9,20 @@ import type {
 	TableSchema,
 } from '../types.js'
 import { cloneDriverMetadata, cloneMigrationInput } from '../cloners.js'
+import { isArray } from '@orkestrel/contract'
 import { DatabaseError } from '../errors.js'
 import {
 	bindRowKey,
 	checkAbort,
 	compareValues,
+	computeFirstIndexes,
+	computeRemoved,
 	equalsValue,
+	buildBatch,
 	migrateRows,
 	normalizeDriverSchema,
-	planMigration,
 	projectMigrationSchema,
 } from '../helpers.js'
-import { isKey } from '../validators.js'
 
 /**
  * Implements the reference {@link DriverInterface} — nested maps, no I/O.
@@ -29,14 +31,14 @@ import { isKey } from '../validators.js'
  * The in-between made concrete: it runs identically in a browser or on a server,
  * so it is the storage behind tests, ephemeral caches, and any code that wants
  * the database API without a persistent backend. Rows are deep-copied (through
- * `structuredClone`) in and out — at `write`, `read`, `scan`, and both
- * snapshot capture and restore — so a caller mutating a nested field of an input
- * row, a returned row, or a row mutated in place between snapshot and rollback
- * can never perturb stored state; a shallow `{ ...row }` spread
+ * `structuredClone`) in and out — at `write`, `insert`, `read`, and `scan` — so a caller
+ * mutating a nested field of an input row or a returned row can never perturb stored state;
+ * a shallow `{ ...row }` spread
  * would still share nested object/array references. Metadata instead routes
  * through `cloneDriverMetadata`: `stamp` and migration snapshot exact JSON at
- * ingress, and `metadata` returns a distinct deeply frozen owned copy. `snapshot`
- * clones every table to give transactions an exact rollback point. `scan` and
+ * ingress, and `metadata` returns a distinct deeply frozen owned copy. A list write or insert
+ * clones and checks every row ahead of the first store change, so it applies every row or
+ * none. It declares no `transaction`; the core's journal carries a scope over it. `scan` and
  * `keys` yield in key order — sorted by the core {@link compareValues} total
  * order, the same contract the SQLite (`ORDER BY`) and IndexedDB (key-ordered
  * reads) backends honor, so an unordered read agrees across every backend rather
@@ -45,53 +47,97 @@ import { isKey } from '../validators.js'
  */
 export class MemoryDriver implements DriverInterface {
 	readonly #tables = new Map<string, Map<Key, Row>>()
-	#identities = new Map<string, object>()
 	#schema: readonly TableSchema[] = []
 	#metadata: DriverMetadata | undefined
 
 	async open(schema: readonly TableSchema[]): Promise<void> {
 		const owned = normalizeDriverSchema(schema)
 		const deployed = normalizeDriverSchema(this.#metadata?.schema ?? owned)
-		const names = new Set(deployed.map((table) => table.name))
-		for (const name of this.#identities.keys()) {
-			if (!names.has(name)) this.#identities.delete(name)
-		}
 		for (const table of deployed) {
 			if (!this.#tables.has(table.name)) this.#tables.set(table.name, new Map())
-			if (!this.#identities.has(table.name)) this.#identities.set(table.name, {})
 		}
 		this.#schema = deployed
 	}
 
 	async close(): Promise<void> {}
 
-	async read(table: string, key: Key): Promise<Row | undefined> {
-		const row = this.#store(table).get(key)
-		return row === undefined ? undefined : structuredClone(row)
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
+		const store = this.#store(table)
+		if (!isArray(keys)) return this.#clone(store.get(keys))
+		return keys.map((key) => this.#clone(store.get(key)))
 	}
 
-	async write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
 		checkAbort(options?.signal)
-		const primary = this.#table(table).primary
-		this.#store(table).set(key, structuredClone(bindRowKey(row, primary, key)))
+		this.#apply(table, this.#own(table, entries))
 	}
 
-	async insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		const entries = buildBatch(keys, rows)
 		checkAbort(options?.signal)
 		const store = this.#store(table)
-		if (store.has(key)) {
-			throw new DatabaseError('CONFLICT', `Row '${key}' already exists in table '${table}'`, {
+		const listed = entries.map(([key]) => key)
+		const first = computeFirstIndexes(listed)
+		const taken = listed.find((key, index) => store.has(key) || first.get(key) !== index)
+		if (taken !== undefined) {
+			throw new DatabaseError('CONFLICT', `Row '${taken}' already exists in table '${table}'`, {
 				table,
-				key,
+				key: taken,
 			})
 		}
-		const primary = this.#table(table).primary
-		store.set(key, structuredClone(bindRowKey(row, primary, key)))
+		this.#apply(table, this.#own(table, entries))
 	}
 
-	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
 		checkAbort(options?.signal)
-		return this.#store(table).delete(key)
+		const store = this.#store(table)
+		if (!isArray(keys)) return store.delete(keys)
+		const removed = computeRemoved(
+			keys,
+			keys.map((key) => store.has(key)),
+		)
+		for (const key of keys) store.delete(key)
+		return removed
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
@@ -108,85 +154,6 @@ export class MemoryDriver implements DriverInterface {
 
 	async clear(table: string): Promise<void> {
 		this.#store(table).clear()
-	}
-
-	/**
-	 * Captures the current state and returns a thunk that rolls back to it.
-	 *
-	 * @remarks
-	 * Capture owns rows, schema, and one session-local table identity. Replay
-	 * adapts rows to each surviving same-identity table's current schema before
-	 * changing storage. Removed or replaced tables are skipped; uncaptured and
-	 * later-added tables retain their current rows. Schema and metadata are never
-	 * restored.
-	 *
-	 * @param tables - The table names to scope the snapshot to; omitted captures every table
-	 * @returns A thunk that restores the captured tables
-	 */
-	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		const names =
-			tables === undefined
-				? this.#schema.map((table) => table.name)
-				: [...new Set(tables)].filter((name) => this.#schema.some((table) => table.name === name))
-		const captured = new Map<
-			string,
-			{
-				readonly identity: object
-				readonly rows: ReadonlyMap<Key, Row>
-				readonly schema: TableSchema
-			}
-		>()
-		for (const name of names) {
-			const schema = this.#schema.find((table) => table.name === name)
-			const store = this.#tables.get(name)
-			const identity = this.#identities.get(name)
-			if (schema === undefined || store === undefined || identity === undefined) continue
-			const rows = new Map<Key, Row>()
-			for (const [key, row] of store) rows.set(key, structuredClone(row))
-			captured.set(name, { identity, rows, schema })
-		}
-		return async () => {
-			const replacements = new Map<Map<Key, Row>, ReadonlyMap<Key, Row>>()
-			for (const [name, capture] of captured) {
-				const schema = this.#schema.find((table) => table.name === name)
-				const store = this.#tables.get(name)
-				if (
-					schema === undefined ||
-					store === undefined ||
-					this.#identities.get(name) !== capture.identity
-				) {
-					continue
-				}
-				const plan = planMigration([capture.schema], [schema])
-				const entries = [...capture.rows.entries()]
-				const migrated = migrateRows(
-					entries.map(([, row]) => row),
-					plan.steps,
-				)
-				if (migrated.length !== entries.length) {
-					throw new DatabaseError('MIGRATION', 'Snapshot row count changed during migration', {
-						table: name,
-					})
-				}
-				const rows = new Map<Key, Row>()
-				for (const [index, [key]] of entries.entries()) {
-					const row = migrated[index]
-					if (!isKey(key) || row === undefined) {
-						throw new DatabaseError('MIGRATION', 'Snapshot row has no usable primary key', {
-							table: name,
-							column: schema.primary,
-							index,
-						})
-					}
-					rows.set(key, structuredClone(bindRowKey(row, schema.primary, key)))
-				}
-				replacements.set(store, rows)
-			}
-			for (const [store, rows] of replacements) {
-				store.clear()
-				for (const [key, row] of rows) store.set(key, row)
-			}
-		}
 	}
 
 	/**
@@ -236,13 +203,33 @@ export class MemoryDriver implements DriverInterface {
 			})
 		}
 		const candidate = this.#copy(this.#tables)
-		const identities = this.#projectIdentities(this.#identities, owned.plan.steps)
 		for (const step of owned.plan.steps) this.#migrate(candidate, step)
 		this.#tables.clear()
 		for (const [name, store] of candidate) this.#tables.set(name, store)
-		this.#identities = identities
 		this.#schema = schema
 		if (owned.metadata !== undefined) this.#metadata = owned.metadata
+	}
+
+	// Copy a stored row out, so a caller mutating it never reaches stored state.
+	#clone(row: Row | undefined): Row | undefined {
+		return row === undefined ? undefined : structuredClone(row)
+	}
+
+	// Bind and clone every entry ahead of the first store change, so a row that cannot be
+	// cloned refuses the whole batch.
+	#own(
+		table: string,
+		entries: ReadonlyArray<readonly [Key, Row]>,
+	): ReadonlyArray<readonly [Key, Row]> {
+		const primary = this.#table(table).primary
+		return entries.map(
+			([key, row]) => [key, structuredClone(bindRowKey(row, primary, key))] as const,
+		)
+	}
+
+	#apply(table: string, entries: ReadonlyArray<readonly [Key, Row]>): void {
+		const store = this.#store(table)
+		for (const [key, row] of entries) store.set(key, row)
 	}
 
 	// A table's keys in key order — the contract `scan` and `keys` yield in.
@@ -270,18 +257,6 @@ export class MemoryDriver implements DriverInterface {
 			copy.set(name, cloned)
 		}
 		return copy
-	}
-
-	#projectIdentities(
-		identities: ReadonlyMap<string, object>,
-		steps: readonly MigrationStep[],
-	): Map<string, object> {
-		const projected = new Map(identities)
-		for (const step of steps) {
-			if (step.operation === 'table.add') projected.set(step.table.name, {})
-			if (step.operation === 'table.remove') projected.delete(step.table)
-		}
-		return projected
 	}
 
 	#table(name: string): TableSchema {

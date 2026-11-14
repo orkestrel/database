@@ -28,6 +28,7 @@ import {
 	createMemoryDriver,
 	isDatabaseError,
 	planMigration,
+	StorageJournal,
 } from '@src/core'
 import {
 	compileQuerySQL,
@@ -46,13 +47,15 @@ import {
 	stringShape,
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
-import { collect, createRecorders } from '@orkestrel/test'
+import { captureError, collect, createRecorders, requireValue } from '@orkestrel/test'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
 	buildCondition,
 	DatabaseFixture,
-	DatabaseSwitch,
+	createRecordedUsers,
 	createUnclonableMetadata,
+	EMPTY_STORAGE_CASES,
+	EMPTY_TABLE_CASES,
 	tallyCalls,
 } from '../../../setup.js'
 import {
@@ -77,6 +80,7 @@ import {
 	matrixReads,
 	pagingRows,
 	pinnedRead,
+	readChangeCounter,
 	replaceTransactionFailure,
 	tempDatabasePath,
 } from '../../../setupServer.js'
@@ -85,7 +89,7 @@ import {
 // (`:memory:` and temp files, no mocks — `.claude/rules/tests.md`
 // § Test contract): the shared conformance
 // battery, keyed CRUD, codec round-trips, the CLOSED gate, native aggregate,
-// snapshot, migrate atomicity, metadata/stamp persistence, a native transaction
+// batches, migrate atomicity, metadata/stamp persistence, a native transaction
 // through both the driver directly and the core `Database.transaction`, stream
 // laziness, and trusted-parity spot checks against the core engine.
 
@@ -1066,346 +1070,133 @@ describe('SQLiteDriver — native aggregate', () => {
 	})
 })
 
-describe('SQLiteDriver — snapshot', () => {
-	it('rolls every table back to the captured state', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.value.write('posts', 'intro', { slug: 'intro', title: 'Intro' })
-		const rollback = await driver.value.snapshot()
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await driver.value.write('users', 'u2', { id: 'u2', name: 'Ghost', age: 1, active: false })
-		await driver.value.write('posts', 'extra', { slug: 'extra', title: 'Extra' })
-		await rollback()
-		expect(await driver.value.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Ada',
-			age: 36,
-			active: true,
+describe('SQLiteDriver — a settled scope', () => {
+	it('refuses CONFLICT ahead of a malformed page on every scoped read member', async () => {
+		const captured = Promise.withResolvers<StorageInterface>()
+		await driver.value.transaction?.(async (storage) => {
+			captured.resolve(storage)
 		})
-		expect(await driver.value.read('users', 'u2')).toBeUndefined()
-		expect(await driver.value.keys('posts')).toEqual(['intro'])
-	})
-
-	it('scoped snapshot(["users"]) leaves other tables untouched', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.value.write('posts', 'p1', { slug: 'p1', title: 'Post' })
-		const rollback = await driver.value.snapshot(['users'])
-		await driver.value.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40, active: true })
-		await driver.value.write('posts', 'p2', { slug: 'p2', title: 'Another' })
-		await rollback()
-		expect(await driver.value.keys('users')).toEqual(['u1'])
-		expect(await driver.value.keys('posts')).toEqual(['p1', 'p2'])
-	})
-
-	it('adapts captured rows to a surviving table schema before replay', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		const rollback = await driver.value.snapshot(['users'])
-		const users = SCHEMA.find((table) => table.name === 'users')
-		if (users === undefined) throw new Error('Expected users schema')
-		const declared: readonly TableSchema[] = [
-			{
-				...users,
-				columns: users.columns.filter((column) => column.name !== 'active'),
-			},
-			...SCHEMA.filter((table) => table.name !== 'users'),
-		]
-		await driver.value.migrate?.({
-			plan: planMigration(SCHEMA, declared),
+		const storage = await captured.promise
+		const page = { limit: -1 }
+		await expect(requireValue(storage.records)('users', page)).rejects.toMatchObject({
+			code: 'CONFLICT',
 		})
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99 })
-		await rollback()
-		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
-	})
-
-	it('does not replay captured rows into a removed and recreated same-name table', async () => {
-		await driver.value.write('users', 'captured', {
-			id: 'captured',
-			name: 'Ada',
-			age: 36,
-			active: true,
+		await expect(
+			requireValue(storage.aggregate)('users', 'count', 'id', page),
+		).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(captureError(() => requireValue(storage.stream)('users', page))).toMatchObject({
+			code: 'CONFLICT',
 		})
-		const rollback = await driver.value.snapshot(['users'])
-		const users = SCHEMA.find((table) => table.name === 'users')
-		if (users === undefined) throw new Error('Expected users schema')
-		await driver.value.migrate?.({
-			plan: {
-				from: 0,
-				to: 1,
-				steps: [
-					{ operation: 'table.remove', table: 'users' },
-					{ operation: 'table.add', table: users },
-				],
-			},
-		})
-		await driver.value.write('users', 'replacement', {
-			id: 'replacement',
-			name: 'Grace',
-			age: 40,
-			active: true,
-		})
-		await rollback()
-		expect(await driver.value.keys('users')).toEqual(['replacement'])
-	})
-
-	it('treats an explicit unknown-only snapshot as a repeatable no-op', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		const rollback = await driver.value.snapshot(['missing', 'missing'])
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await rollback()
-		await rollback()
-		expect(await driver.value.read('users', 'u1')).toEqual({
-			id: 'u1',
-			name: 'Changed',
-			age: 99,
-			active: false,
+		expect(captureError(() => requireValue(storage.plan)('users', page))).toMatchObject({
+			code: 'CONFLICT',
 		})
 	})
 
-	it('keeps a table added after a whole-database capture', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		const rollback = await driver.value.snapshot()
-		const migrate = driver.value.migrate
-		if (migrate === undefined) throw new Error('SQLiteDriver is missing its migrate hook')
-		await migrate.call(driver.value, {
-			plan: {
-				from: 0,
-				to: 1,
-				steps: [
-					{
-						operation: 'table.add',
-						table: {
-							name: 'logs',
-							primary: 'id',
-							columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-							indexes: [],
-						},
-					},
-				],
-			},
+	it('validates the page first on the root path, which has no scope', async () => {
+		const page = { limit: -1 }
+		await expect(driver.value.records?.('users', page)).rejects.toMatchObject({
+			code: 'VALIDATION',
 		})
-		await driver.value.write('logs', 'l1', { id: 'l1' })
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await rollback()
-		expect(await driver.value.keys('logs')).toEqual(['l1'])
-		expect((await driver.value.read('users', 'u1'))?.name).toBe('Ada')
 	})
+})
 
-	it('skips a captured table removed before replay', async () => {
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await driver.value.write('posts', 'p1', { slug: 'p1', title: 'Post' })
-		const rollback = await driver.value.snapshot(['users'])
-		const migrate = driver.value.migrate
-		if (migrate === undefined) throw new Error('SQLiteDriver is missing its migrate hook')
-		await migrate.call(driver.value, {
-			plan: {
-				from: 0,
-				to: 1,
-				steps: [{ operation: 'table.remove', table: 'users' }],
-			},
-		})
-		await rollback()
-		const removed = await driver.value.keys('users').catch((caught: unknown) => caught)
-		expect(isDatabaseError(removed) ? removed.code : 'not-database').toBe('NOT_FOUND')
-		expect(await driver.value.keys('posts')).toEqual(['p1'])
-	})
-
-	it('preserves current metadata and replays the same capture exactly twice', async () => {
-		const stamp = driver.value.stamp
-		if (stamp === undefined) throw new Error('SQLiteDriver is missing its stamp hook')
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-		await stamp.call(driver.value, { version: 1, schema: SCHEMA })
-		const rollback = await driver.value.snapshot(['users'])
-		await stamp.call(driver.value, { version: 2, schema: SCHEMA })
-		await driver.value.write('users', 'u1', { id: 'u1', name: 'Changed', age: 99, active: false })
-		await rollback()
-		await driver.value.write('users', 'u2', { id: 'u2', name: 'Grace', age: 40, active: true })
-		await rollback()
-		expect(await driver.value.keys('users')).toEqual(['u1'])
-		expect((await driver.value.read('users', 'u1'))?.name).toBe('Ada')
-		expect(await driver.value.metadata?.()).toEqual({ version: 2, schema: SCHEMA })
-	})
-
-	it('fails incompatible same-identity replay before row changes and succeeds after correction', async () => {
-		const schema: readonly TableSchema[] = [
-			{
-				name: 'values',
-				primary: 'id',
-				columns: [
-					{ name: 'id', storage: 'text', optional: false, nullable: false },
-					{ name: 'value', storage: 'integer', optional: true, nullable: false },
-				],
-				indexes: [],
-			},
-		]
-		const initial = schema[0]
-		if (initial === undefined) throw new Error('Expected initial snapshot schema')
-		const integer = initial.columns[1]
-		if (integer === undefined) throw new Error('Expected integer value column')
-		const changed: TableSchema = {
-			...initial,
-			columns: [
-				{ name: 'id', storage: 'text', optional: false, nullable: false },
-				{ name: 'value', storage: 'real', optional: true, nullable: false },
+describe('SQLiteDriver — batches', () => {
+	it('reads a key list with one statement, in its order, with undefined for each miss', async () => {
+		await driver.value.write(
+			'users',
+			['u1', 'u2'],
+			[
+				{ id: 'u1', name: 'Ada', age: 36, active: true },
+				{ id: 'u2', name: 'Grace', age: 45, active: false },
 			],
-		}
-		const real = changed.columns[1]
-		if (real === undefined) throw new Error('Expected real value column')
-		const target = createSQLiteDriver({ path: ':memory:' })
-		try {
-			await target.open(schema)
-			await target.write('values', 'v1', { id: 'v1', value: 10 })
-			const rollback = await target.snapshot()
-			const migrate = target.migrate
-			if (migrate === undefined) throw new Error('SQLiteDriver is missing its migrate hook')
-			await migrate.call(target, {
-				plan: {
-					from: 0,
-					to: 1,
-					steps: [
-						{ operation: 'column.remove', table: 'values', column: 'value' },
-						{
-							operation: 'column.add',
-							table: 'values',
-							column: real,
-						},
-					],
-				},
-			})
-			await target.write('values', 'v1', { id: 'v1', value: 99.5 })
-			const incompatible = await rollback().catch((caught: unknown) => caught)
-			expect(isDatabaseError(incompatible) ? incompatible.code : 'not-database').toBe('MIGRATION')
-			expect(await target.read('values', 'v1')).toEqual({ id: 'v1', value: 99.5 })
-
-			await migrate.call(target, {
-				plan: {
-					from: 1,
-					to: 2,
-					steps: [
-						{ operation: 'column.remove', table: 'values', column: 'value' },
-						{
-							operation: 'column.add',
-							table: 'values',
-							column: integer,
-						},
-					],
-				},
-			})
-			await target.write('values', 'v1', { id: 'v1', value: 77 })
-			await rollback()
-			expect(await target.read('values', 'v1')).toEqual({ id: 'v1', value: 10 })
-		} finally {
-			await target.close()
-		}
+		)
+		expect(await driver.value.read('users', ['u2', 'missing', 'u1'])).toEqual([
+			{ id: 'u2', name: 'Grace', age: 45, active: false },
+			undefined,
+			{ id: 'u1', name: 'Ada', age: 36, active: true },
+		])
+		expect(await driver.value.read('users', [])).toEqual([])
 	})
 
-	it('rolls a multi-table replay back atomically after real native failure and retries', async () => {
+	it('inserts no listed row when the final member conflicts', async () => {
+		await driver.value.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+		await expect(
+			driver.value.insert(
+				'users',
+				['u2', 'u3', 'u1'],
+				[
+					{ id: 'u2', name: 'Grace', age: 45, active: false },
+					{ id: 'u3', name: 'Alan', age: 41, active: true },
+					{ id: 'u1', name: 'Again', age: 1, active: false },
+				],
+			),
+		).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(await driver.value.keys('users')).toEqual(['u1'])
+	})
+
+	it('rolls a conflicting batch back to its savepoint and keeps the scope open', async () => {
+		const conflict = await driver.value.transaction?.(async (storage) => {
+			await storage.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
+			return storage
+				.insert(
+					'users',
+					['u2', 'u1'],
+					[
+						{ id: 'u2', name: 'Grace', age: 45, active: false },
+						{ id: 'u1', name: 'Again', age: 1, active: false },
+					],
+				)
+				.then(
+					() => 'fulfilled',
+					(error: unknown) => (isDatabaseError(error) ? error.code : 'unexpected'),
+				)
+		})
+		expect(conflict).toBe('CONFLICT')
+		expect(await driver.value.keys('users')).toEqual(['u1'])
+	})
+
+	it('deletes a key list with one statement, reporting each stored key once', async () => {
+		await driver.value.write(
+			'users',
+			['u1', 'u2'],
+			[
+				{ id: 'u1', name: 'Ada', age: 36, active: true },
+				{ id: 'u2', name: 'Grace', age: 45, active: false },
+			],
+		)
+		expect(await driver.value.delete('users', ['u1', 'missing', 'u1'])).toEqual([
+			true,
+			false,
+			false,
+		])
+		expect(await driver.value.keys('users')).toEqual(['u2'])
+	})
+
+	it('commits a batch once, read through the file change counter under a rollback journal', async () => {
 		const temp = tempDatabasePath()
-		const target = createSQLiteDriver({ path: temp.path })
-		const native = createSQLiteDatabase({ path: temp.path })
+		const counted = createSQLiteDriver({ path: temp.path, pragmas: { journal_mode: 'DELETE' } })
 		try {
-			await target.open(SCHEMA)
-			await target.write('users', 'u1', { id: 'u1', name: 'Ada', age: 36, active: true })
-			await target.write('posts', 'p1', { slug: 'p1', title: 'Captured' })
-			const rollback = await target.snapshot()
-			await target.write('users', 'u1', {
-				id: 'u1',
-				name: 'Changed',
-				age: 99,
-				active: false,
-			})
-			await target.write('posts', 'p1', { slug: 'p1', title: 'Changed' })
-			native.connect()
-			native.execute(
-				'CREATE TRIGGER "posts_replay_guard" BEFORE INSERT ON "posts" ' +
-					"BEGIN SELECT RAISE(ABORT, 'replay blocked'); END",
+			await counted.open(SCHEMA)
+			await counted.write('users', 'u0', { id: 'u0', name: 'Seed', age: 1, active: true })
+			const before = readChangeCounter(temp.path)
+			await counted.write(
+				'users',
+				['u1', 'u2', 'u3', 'u4'],
+				[
+					{ id: 'u1', name: 'Ada', age: 36, active: true },
+					{ id: 'u2', name: 'Grace', age: 45, active: false },
+					{ id: 'u3', name: 'Alan', age: 41, active: true },
+					{ id: 'u4', name: 'Dora', age: 2, active: false },
+				],
 			)
-			native.close()
-			const failed = await rollback().catch((caught: unknown) => caught)
-			expect(isDatabaseError(failed) ? failed.code : 'not-database').toBe('CONFLICT')
-			expect((await target.read('users', 'u1'))?.name).toBe('Changed')
-			expect((await target.read('posts', 'p1'))?.title).toBe('Changed')
-
-			native.connect()
-			native.execute('DROP TRIGGER "posts_replay_guard"')
-			native.close()
-			await rollback()
-			expect((await target.read('users', 'u1'))?.name).toBe('Ada')
-			expect((await target.read('posts', 'p1'))?.title).toBe('Captured')
+			const batch = readChangeCounter(temp.path) - before
+			await counted.write('users', 'u5', { id: 'u5', name: 'Edsger', age: 3, active: true })
+			await counted.write('users', 'u6', { id: 'u6', name: 'Barbara', age: 4, active: true })
+			// The control: each lone write is its own commit, so the counter moves once per write.
+			expect(readChangeCounter(temp.path) - before - batch).toBe(2)
+			expect(batch).toBe(1)
 		} finally {
-			native.close()
-			await target.close()
-			temp.cleanup()
-		}
-	})
-
-	it('contains a real dropped-table capture fault as DRIVER with the SQLite cause nested', async () => {
-		const temp = tempDatabasePath()
-		const onDisk = createSQLiteDriver({ path: temp.path })
-		const native = createSQLiteDatabase({ path: temp.path })
-		try {
-			await onDisk.open(SCHEMA)
-			native.connect()
-			native.execute('DROP TABLE "posts"')
-			const error = await onDisk.snapshot().catch((caught: unknown) => caught)
-			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
-			expect(error.code).toBe('DRIVER')
-			expect(isSQLiteError(error.context?.cause)).toBe(true)
-		} finally {
-			native.close()
-			await onDisk.close()
-			temp.cleanup()
-		}
-	})
-
-	it('contains a zero-timeout replay lock and restores successfully when retried', async () => {
-		const temp = tempDatabasePath()
-		const onDisk = createSQLiteDriver({ path: temp.path, timeout: 0 })
-		const locker = createSQLiteDatabase({ path: temp.path, timeout: 0 })
-		const locked = new DatabaseSwitch()
-		try {
-			await onDisk.open(SCHEMA)
-			await onDisk.write('users', 'u1', {
-				id: 'u1',
-				name: 'Ada',
-				age: 36,
-				active: true,
-			})
-			const rollback = await onDisk.snapshot()
-			await onDisk.write('users', 'u1', {
-				id: 'u1',
-				name: 'Changed',
-				age: 99,
-				active: false,
-			})
-			locker.connect()
-			locker.execute('BEGIN EXCLUSIVE')
-			locked.enable()
-			const error = await rollback().catch((caught: unknown) => caught)
-			if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
-			expect(error.code).toBe('DRIVER')
-			expect(error.context?.code).toBe('BUSY')
-			expect(error.context?.retryable).toBe(true)
-			expect(isSQLiteError(error.context?.cause)).toBe(true)
-
-			locker.rollback()
-			locked.disable()
-			await rollback()
-			expect(await onDisk.read('users', 'u1')).toEqual({
-				id: 'u1',
-				name: 'Ada',
-				age: 36,
-				active: true,
-			})
-			await onDisk.write('users', 'u2', {
-				id: 'u2',
-				name: 'Grace',
-				age: 40,
-				active: true,
-			})
-			expect(await onDisk.keys('users')).toEqual(['u1', 'u2'])
-		} finally {
-			if (locked.active) locker.rollback()
-			locker.close()
-			await onDisk.close()
+			await counted.close()
 			temp.cleanup()
 		}
 	})
@@ -2896,8 +2687,8 @@ describe('SQLiteDriver — native-first paging readings', () => {
 			}),
 		)
 		expect(value.map((row) => row.position)).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28, 29])
-		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 10 })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: 10 })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
 	})
 
 	it('reads one page of a descending text order from the driver with no scan', async () => {
@@ -2912,8 +2703,8 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		expect(value.map((row) => row.position)).toEqual([
 			1479, 1478, 1477, 1476, 1475, 1474, 1473, 1472, 1471, 1470,
 		])
-		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 10 })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: 10 })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
 	})
 
 	it('counts in one aggregate call that returns no row', async () => {
@@ -2921,9 +2712,9 @@ describe('SQLiteDriver — native-first paging readings', () => {
 			lines.count({ conditions: [book] }),
 		)
 		expect(value).toBe(1500)
-		expect(tallyCalls(calls, 'aggregate')).toEqual({ calls: 1, rows: 0 })
-		expect(tallyCalls(calls, 'records')).toEqual({ calls: 0, rows: 0 })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'aggregate')).toMatchObject({ calls: 1, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
 	})
 
 	it('reads the rows a like matches from the driver with no scan', async () => {
@@ -2932,8 +2723,8 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		)
 		expect(value).toHaveLength(100)
 		expect(fixture.recorder.driver.plan?.('lines', { conditions: [like] })?.residual).toEqual({})
-		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: 100 })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: 100 })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
 	})
 
 	it('plans a one-clause any on an optional key column with an empty residual', async () => {
@@ -2945,8 +2736,8 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		)
 		expect(value.map((row) => row.id)).toEqual(expected.map((row) => row.id))
 		expect(fixture.recorder.driver.plan?.('lines', { conditions: [parents] })?.residual).toEqual({})
-		expect(tallyCalls(calls, 'records')).toEqual({ calls: 1, rows: expected.length })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: expected.length })
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
 	})
 
 	it('repeats each reading inside a transaction', async () => {
@@ -2967,10 +2758,10 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		)
 		expect(value).toEqual({ page: 10, count: 1500, matched: 100, related: 42 })
 		const scoped = calls.filter((call) => call.scoped)
-		expect(tallyCalls(scoped, 'records')).toEqual({ calls: 3, rows: 152 })
-		expect(tallyCalls(scoped, 'aggregate')).toEqual({ calls: 1, rows: 0 })
-		expect(tallyCalls(scoped, 'scan')).toEqual({ calls: 0, rows: 0 })
-		expect(tallyCalls(scoped, 'stream')).toEqual({ calls: 0, rows: 0 })
+		expect(tallyCalls(scoped, 'records')).toMatchObject({ calls: 3, rows: 152 })
+		expect(tallyCalls(scoped, 'aggregate')).toMatchObject({ calls: 1, rows: 0 })
+		expect(tallyCalls(scoped, 'scan')).toMatchObject({ calls: 0, rows: 0 })
+		expect(tallyCalls(scoped, 'stream')).toMatchObject({ calls: 0, rows: 0 })
 	})
 })
 
@@ -3120,4 +2911,51 @@ describe('SQLiteDriver — the pragma allowlist', () => {
 			}),
 		).not.toThrow()
 	})
+})
+
+describe('SQLiteDriver — empty lists', () => {
+	for (const { member, run, expected } of EMPTY_STORAGE_CASES) {
+		it(`answers an empty ${member} list and touches no row`, async () => {
+			const { recorder, db } = createRecordedUsers(createSQLiteDriver({ path: ':memory:' }))
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(recorder.driver))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+			}
+		})
+
+		it(`answers an empty ${member} list through the journal and restores nothing`, async () => {
+			const { recorder, db } = createRecordedUsers(createSQLiteDriver({ path: ':memory:' }))
+			try {
+				await db.open()
+				const journal = new StorageJournal(recorder.driver)
+				const { value, calls } = await recorder.measure(async () => {
+					const answer = await run(journal)
+					await journal.restore()
+					return answer
+				})
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+			}
+		})
+	}
+
+	for (const { member, run, expected } of EMPTY_TABLE_CASES) {
+		it(`answers Table ${member} of an empty list and touches no row`, async () => {
+			const { recorder, db, users } = createRecordedUsers(createSQLiteDriver({ path: ':memory:' }))
+			try {
+				await db.open()
+				const { value, calls } = await recorder.measure(() => run(users))
+				expect(value).toEqual(expected)
+				expect(calls.filter((call) => call.keys > 0 || call.rows > 0)).toEqual([])
+			} finally {
+				await db.close()
+			}
+		})
+	}
 })

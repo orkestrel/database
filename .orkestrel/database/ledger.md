@@ -23,3 +23,6 @@
 | 2026-11-13 | The pragma guards and the header comment in sqlite | opus (Opus 5.5) | sqlite `12bca99` |
 | 2026-11-13 | Review and closure check of the sqlite unit (Sonnet for Opus-written work, Astra dark) | reviewer (Sonnet 5.5) | sqlite `12bca99` |
 | 2026-11-13 | Gate runs on sqlite and relation | verifier (Haiku 5.5) | sqlite `12bca99`, `1e8b0db`; relation `2590be0` |
+| 2026-11-14 | Relation's coverage rows: `link` one insert, `unlink` one remove, keyed loads, the guide's limits, the census rows | opus (Opus 5.5); reviewer (Sonnet 5.5) review and closure checks; verifier (Haiku 5.5) gates | relation `a1e6443` |
+| 2026-11-14 | Database's core rows: the before-image journal, the batches, the contract cache | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and two closure checks; verifier (Haiku 5.5) gates | `plan.md` § State |
+| 2026-11-14 | After the four packages close, `@orkestrel/contract` joins the campaign, and its measured costs (the object guard, `parseEnum`, `resolveField`) become units under the same canon | user | `plan.md` § State |

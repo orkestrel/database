@@ -1,5 +1,6 @@
 import type {
 	AggregateOperation,
+	ColumnSchema,
 	QueryInput,
 	DriverInterface,
 	DriverMetadata,
@@ -25,25 +26,28 @@ import {
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import type { SQLiteDriverOptions } from '../types.js'
 import {
+	applyKeys,
 	bindRowKey,
 	cloneDriverMetadata,
 	cloneMigrationInput,
 	checkAbort,
+	computeRemoved,
 	DatabaseError,
 	DriverIterator,
 	equalsValue,
-	extractKey,
+	buildBatch,
+	findColumn,
 	isDatabaseError,
-	isKey,
-	migrateRows,
 	normalizeDriverSchema,
-	planMigration,
 	projectMigrationSchema,
+	ScopedStorage,
 	validatePage,
 } from '@src/core'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
 import {
 	compileAggregateSQL,
+	compileInsertSQL,
+	compileListSQL,
 	compileQuerySQL,
 	compileWhereSQL,
 	schemaToIndexes,
@@ -97,12 +101,10 @@ import { METADATA_TABLE } from '../constants.js'
  * inside its own `database.transact` otherwise — a mid-plan failure rolls
  * back atomically either way, an improvement over the non-atomic `MemoryDriver`
  * / `JSONDriver` migrate; a step referencing an undeclared table throws
- * `DatabaseError` `MIGRATION` before any DDL for that step runs. `snapshot` is
- * capture-replay (SELECT the named tables' rows, replay through DELETE + INSERT OR
- * REPLACE inside a native transaction on rollback) rather than a SQL
- * `SAVEPOINT`, since the core `transaction` calls the rollback thunk only on
- * failure with no commit-on-success signal — a long-lived `SAVEPOINT` would
- * leave the connection uncommitted (lost on close). Every backend interaction
+ * `DatabaseError` `MIGRATION` before any DDL for that step runs. A list write or insert runs
+ * one prepared statement per row as one commit: one transaction outside a scope, one savepoint
+ * inside one, so a conflicting row applies none of the batch. A list read and a list delete
+ * are each one statement, the keys bound as one JSON parameter. Every backend interaction
  * runs through `#guard`, which maps a thrown backend `SQLiteError` (or any
  * unexpected non-`SQLiteError` throw) to a typed {@link DatabaseError} — never
  * a raw backend error escapes `DriverInterface`: `CONSTRAINT` → `CONFLICT`, the
@@ -223,24 +225,65 @@ export class SQLiteDriver implements DriverInterface {
 		})
 	}
 
-	async read(table: string, key: Key): Promise<Row | undefined> {
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
 		this.#root()
-		return this.#read(table, key)
+		// The ternary only selects the overload; both arms make the same call.
+		return isArray(keys) ? this.#read(table, keys) : this.#read(table, keys)
 	}
 
-	async write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
 		this.#root()
-		await this.#write(table, key, row, options)
+		this.#put(table, buildBatch(keys, rows), true, options)
 	}
 
-	async insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
 		this.#root()
-		await this.#insert(table, key, row, options)
+		this.#put(table, buildBatch(keys, rows), false, options)
 	}
 
-	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
 		this.#root()
-		return this.#delete(table, key, options)
+		// The ternary only selects the overload; both arms make the same call.
+		return isArray(keys) ? this.#delete(table, keys, options) : this.#delete(table, keys, options)
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
@@ -266,7 +309,7 @@ export class SQLiteDriver implements DriverInterface {
 	 */
 	plan(table: string, input: ReadInput): ReadPlan {
 		this.#root()
-		return planSQLiteQuery(input, this.#table(table))
+		return this.#plan(table, input)
 	}
 
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
@@ -401,167 +444,155 @@ export class SQLiteDriver implements DriverInterface {
 		await this.#stamp(metadata)
 	}
 
-	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		this.#root()
-		// Capture-replay rather than a SQL SAVEPOINT: the core `transaction` calls
-		// the rollback thunk only on failure, with no commit-on-success signal — a
-		// long-lived SAVEPOINT would leave the connection in an uncommitted
-		// transaction (lost on close). Captured logical rows are adapted to each
-		// surviving same-identity table before replay.
-		const captured = this.#guard(() => {
-			const database = this.#require()
-			const names = tables === undefined ? [...this.#schema.keys()] : [...new Set(tables)]
-			const snapshots = new Map<
-				string,
-				{
-					readonly identity: object
-					readonly rows: readonly Row[]
-					readonly schema: TableSchema
-				}
-			>()
-			for (const name of names) {
-				const schema = this.#schema.get(name)
-				const identity = this.#identities.get(name)
-				if (schema === undefined || identity === undefined) continue
-				snapshots.set(name, {
-					identity,
-					rows: database
-						.prepare('SELECT * FROM ' + quoteIdentifier(name))
-						.all()
-						.map((row) => decodeRow(row, schema)),
-					schema,
-				})
-			}
-			return snapshots
-		})
-		return async () => {
-			this.#root()
-			const replacements = new Map<
-				string,
-				{
-					readonly names: readonly string[]
-					readonly values: ReadonlyArray<readonly SQLiteValue[]>
-				}
-			>()
-			for (const [name, capture] of captured) {
-				const schema = this.#schema.get(name)
-				if (schema === undefined || this.#identities.get(name) !== capture.identity) continue
-				const plan = planMigration([capture.schema], [schema])
-				const rows = migrateRows(capture.rows, plan.steps)
-				if (rows.length !== capture.rows.length) {
-					throw new DatabaseError('MIGRATION', 'Snapshot row count changed during migration', {
-						table: name,
-					})
-				}
-				const names = schema.columns.map((column) => column.name)
-				const values: Array<readonly SQLiteValue[]> = []
-				for (const [index, row] of rows.entries()) {
-					const key = extractKey(row, schema.primary)
-					if (!isKey(key)) {
-						throw new DatabaseError('MIGRATION', 'Snapshot row has no usable primary key', {
-							table: name,
-							column: schema.primary,
-							index,
-						})
-					}
-					const encoded = encodeRow(bindRowKey(row, schema.primary, key), schema)
-					values.push(extractValues(encoded, names, name))
-				}
-				replacements.set(name, { names, values })
-			}
-			this.#guard(() => {
-				const current = this.#require()
-				current.transact(() => {
-					for (const [name, replacement] of replacements) {
-						current.execute('DELETE FROM ' + quoteIdentifier(name))
-						const statement = current.prepare(
-							'INSERT OR REPLACE INTO ' +
-								quoteIdentifier(name) +
-								' (' +
-								replacement.names.map(quoteIdentifier).join(', ') +
-								') VALUES (' +
-								replacement.names.map(() => '?').join(', ') +
-								')',
-						)
-						for (const values of replacement.values) statement.execute(values)
-					}
-				})
-			})
-		}
-	}
-
 	// === Private
 
-	async #read(table: string, key: Key): Promise<Row | undefined> {
+	#read(table: string, key: Key): Promise<Row | undefined>
+	#read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async #read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
 		const schema = this.#table(table)
 		return this.#guard(() => {
-			const row = this.#require()
-				.prepare(
-					'SELECT * FROM ' +
-						quoteIdentifier(table) +
-						' WHERE ' +
-						quoteIdentifier(schema.primary) +
-						' = ?',
-				)
-				.get([this.#key(key, schema)])
-			return row === undefined ? undefined : decodeRow(row, schema)
-		})
-	}
-
-	async #write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
-		const schema = this.#table(table)
-		this.#guard(() => {
-			const encoded = encodeRow(bindRowKey(row, schema.primary, key), schema)
-			const names = schema.columns.map((column) => column.name)
-			const values = extractValues(encoded, names, table)
-			const statement = this.#require().prepare(
-				'INSERT OR REPLACE INTO ' +
-					quoteIdentifier(table) +
-					' (' +
-					names.map(quoteIdentifier).join(', ') +
-					') VALUES (' +
-					names.map(() => '?').join(', ') +
-					')',
-			)
-			checkAbort(options?.signal)
-			statement.execute(values)
-		})
-	}
-
-	async #insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
-		const schema = this.#table(table)
-		this.#guard(() => {
-			const encoded = encodeRow(bindRowKey(row, schema.primary, key), schema)
-			const names = schema.columns.map((column) => column.name)
-			const values = extractValues(encoded, names, table)
-			const statement = this.#require().prepare(
-				'INSERT INTO ' +
-					quoteIdentifier(table) +
-					' (' +
-					names.map(quoteIdentifier).join(', ') +
-					') VALUES (' +
-					names.map(() => '?').join(', ') +
-					')',
-			)
-			checkAbort(options?.signal)
-			statement.execute(values)
-		})
-	}
-
-	async #delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
-		const schema = this.#table(table)
-		return this.#guard(() => {
-			const statement = this.#require().prepare(
-				'DELETE FROM ' +
+			const database = this.#require()
+			if (!isArray(keys)) {
+				const row = database
+					.prepare(
+						'SELECT * FROM ' +
+							quoteIdentifier(table) +
+							' WHERE ' +
+							quoteIdentifier(schema.primary) +
+							' = ?',
+					)
+					.get([this.#key(keys, schema)])
+				return row === undefined ? undefined : decodeRow(row, schema)
+			}
+			if (keys.length === 0) return []
+			// One statement for the whole list, its keys bound as one JSON parameter.
+			const { sql, parameters } = compileListSQL(
+				'SELECT * FROM ' +
 					quoteIdentifier(table) +
 					' WHERE ' +
 					quoteIdentifier(schema.primary) +
-					' = ?',
+					' IN ',
+				'',
+				keys,
+				false,
+				this.#primary(schema),
 			)
-			checkAbort(options?.signal)
-			const result = statement.execute([this.#key(key, schema)])
-			return result.changes > 0
+			const found = new Map(
+				database
+					.prepare(sql)
+					.all(parameters)
+					.map((row) => [row[schema.primary], decodeRow(row, schema)] as const),
+			)
+			return keys.map((key) => found.get(this.#key(key, schema)))
 		})
+	}
+
+	#write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	#write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async #write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		this.#put(table, buildBatch(keys, rows), true, options)
+	}
+
+	#insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	#insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async #insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
+		this.#put(table, buildBatch(keys, rows), false, options)
+	}
+
+	// Write every entry through one prepared statement, as one commit: a lone statement commits
+	// itself, a list runs in one transaction outside a scope and in one savepoint inside one.
+	#put(
+		table: string,
+		entries: ReadonlyArray<readonly [Key, Row]>,
+		replace: boolean,
+		options: OperationOptions | undefined,
+	): void {
+		const schema = this.#table(table)
+		this.#guard(() => {
+			const names = schema.columns.map((column) => column.name)
+			const values = entries.map(([key, row]) =>
+				extractValues(encodeRow(bindRowKey(row, schema.primary, key), schema), names, table),
+			)
+			const database = this.#require()
+			const statement = database.prepare(compileInsertSQL(schema, replace))
+			checkAbort(options?.signal)
+			const [single] = values
+			if (values.length === 1 && single !== undefined) {
+				statement.execute(single)
+				return
+			}
+			if (values.length === 0) return
+			if (database.transacting) {
+				this.#contain(database, () => {
+					for (const value of values) statement.execute(value)
+				})
+				return
+			}
+			database.transact(() => {
+				for (const value of values) statement.execute(value)
+			})
+		})
+	}
+
+	#delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	#delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async #delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
+		const schema = this.#table(table)
+		return applyKeys(keys, async (listed) =>
+			this.#guard(() => {
+				// One statement for the whole list; RETURNING names each key it removed.
+				const { sql, parameters } = compileListSQL(
+					'DELETE FROM ' +
+						quoteIdentifier(table) +
+						' WHERE ' +
+						quoteIdentifier(schema.primary) +
+						' IN ',
+					' RETURNING ' + quoteIdentifier(schema.primary),
+					listed,
+					false,
+					this.#primary(schema),
+				)
+				const statement = this.#require().prepare(sql)
+				checkAbort(options?.signal)
+				const deleted = new Set(statement.all(parameters).map((row) => row[schema.primary]))
+				const encoded = listed.map((key) => this.#key(key, schema))
+				return computeRemoved(
+					encoded,
+					encoded.map((key) => deleted.has(key)),
+				)
+			}),
+		)
 	}
 
 	async #keys(table: string): Promise<readonly Key[]> {
@@ -590,7 +621,12 @@ export class SQLiteDriver implements DriverInterface {
 		}
 	}
 
+	#plan(table: string, input: ReadInput): ReadPlan {
+		return planSQLiteQuery(input, this.#table(table))
+	}
+
 	async #records(table: string, input: QueryInput): Promise<readonly Row[]> {
+		validatePage(input)
 		const schema = this.#table(table)
 		return this.#guard(() => {
 			const { sql, parameters } = compileQuerySQL(input, schema)
@@ -607,6 +643,7 @@ export class SQLiteDriver implements DriverInterface {
 		column: FieldPath,
 		input: QueryInput,
 	): Promise<number | undefined> {
+		validatePage(input)
 		const schema = this.#table(table)
 		return this.#guard(() => {
 			// The WHERE clause alone: paging never applies to the one aggregate row.
@@ -623,6 +660,12 @@ export class SQLiteDriver implements DriverInterface {
 			// Over zero matched rows SUM / AVG / MIN / MAX are SQL NULL, the core's undefined.
 			return value === null || value === undefined ? undefined : Number(value)
 		})
+	}
+
+	// Validate the page ahead of the lazy stream, so a bad page refuses at the call.
+	#streamRows(table: string, input: QueryInput): AsyncIterable<Row> {
+		validatePage(input)
+		return this.#stream(table, input)
 	}
 
 	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
@@ -893,122 +936,30 @@ export class SQLiteDriver implements DriverInterface {
 		}
 	}
 
+	// The driver's unchecked storage, wrapped once in the scope's lifetime boundary.
 	#capability(token: SQLiteTransaction): StorageInterface {
-		return {
-			read: this.#readTransaction.bind(this, token),
-			write: this.#writeTransaction.bind(this, token),
-			insert: this.#insertTransaction.bind(this, token),
-			delete: this.#deleteTransaction.bind(this, token),
-			keys: this.#keysTransaction.bind(this, token),
-			scan: this.#scanTransaction.bind(this, token),
-			clear: this.#clearTransaction.bind(this, token),
-			plan: this.#planTransaction.bind(this, token),
-			records: this.#recordsTransaction.bind(this, token),
-			stream: this.#streamTransaction.bind(this, token),
-			aggregate: this.#aggregateTransaction.bind(this, token),
-			migrate: this.#migrateTransaction.bind(this, token),
-			metadata: this.#metadataTransaction.bind(this, token),
-			stamp: this.#stampTransaction.bind(this, token),
-		}
-	}
-
-	async #readTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		key: Key,
-	): Promise<Row | undefined> {
-		this.#requireTransaction(token)
-		return this.#read(table, key)
-	}
-
-	async #writeTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		this.#requireTransaction(token)
-		await this.#write(table, key, row, options)
-	}
-
-	async #insertTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		this.#requireTransaction(token)
-		await this.#insert(table, key, row, options)
-	}
-
-	async #deleteTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		key: Key,
-		options?: OperationOptions,
-	): Promise<boolean> {
-		this.#requireTransaction(token)
-		return this.#delete(table, key, options)
-	}
-
-	async #keysTransaction(token: SQLiteTransaction, table: string): Promise<readonly Key[]> {
-		this.#requireTransaction(token)
-		return this.#keys(table)
-	}
-
-	#scanTransaction(token: SQLiteTransaction, table: string): AsyncIterable<Row> {
-		return new DriverIterator(this.#scan(table)[Symbol.asyncIterator](), () => {
-			this.#requireTransaction(token)
-		})
-	}
-
-	#planTransaction(token: SQLiteTransaction, table: string, input: ReadInput): ReadPlan {
-		this.#requireTransaction(token)
-		return planSQLiteQuery(input, this.#table(table))
-	}
-
-	async #recordsTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		input: QueryInput,
-	): Promise<readonly Row[]> {
-		validatePage(input)
-		this.#requireTransaction(token)
-		return this.#records(table, input)
-	}
-
-	#streamTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		input: QueryInput,
-	): AsyncIterable<Row> {
-		validatePage(input)
-		return new DriverIterator(this.#stream(table, input)[Symbol.asyncIterator](), () => {
-			this.#requireTransaction(token)
-		})
-	}
-
-	async #aggregateTransaction(
-		token: SQLiteTransaction,
-		table: string,
-		operation: AggregateOperation,
-		column: FieldPath,
-		input: QueryInput,
-	): Promise<number | undefined> {
-		validatePage(input)
-		this.#requireTransaction(token)
-		return this.#aggregate(table, operation, column, input)
-	}
-
-	async #clearTransaction(token: SQLiteTransaction, table: string): Promise<void> {
-		this.#requireTransaction(token)
-		await this.#clear(table)
+		return new ScopedStorage(
+			{
+				read: this.#read.bind(this),
+				write: this.#write.bind(this),
+				insert: this.#insert.bind(this),
+				delete: this.#delete.bind(this),
+				keys: this.#keys.bind(this),
+				scan: this.#scan.bind(this),
+				clear: this.#clear.bind(this),
+				plan: this.#plan.bind(this),
+				records: this.#records.bind(this),
+				stream: this.#streamRows.bind(this),
+				aggregate: this.#aggregate.bind(this),
+				migrate: this.#migrateTransaction.bind(this, token),
+				metadata: this.#metadata.bind(this),
+				stamp: this.#stamp.bind(this),
+			},
+			() => this.#requireTransaction(token),
+		)
 	}
 
 	async #migrateTransaction(token: SQLiteTransaction, input: MigrationInput): Promise<void> {
-		this.#requireTransaction(token)
 		const database = this.#require()
 		const owned = cloneMigrationInput(input)
 		const candidate = token.schema
@@ -1025,33 +976,43 @@ export class SQLiteDriver implements DriverInterface {
 			})
 		}
 		this.#guard(() => {
-			database.execute('SAVEPOINT "_orkestrel_migration"')
-			try {
+			this.#contain(database, () => {
 				this.#applyPlan(database, owned)
 				if (owned.metadata !== undefined) {
 					this.#writeMetadata(database, owned.metadata)
 				}
-				database.execute('RELEASE SAVEPOINT "_orkestrel_migration"')
-			} catch (error) {
-				try {
-					database.execute('ROLLBACK TO SAVEPOINT "_orkestrel_migration"')
-				} finally {
-					database.execute('RELEASE SAVEPOINT "_orkestrel_migration"')
-				}
-				throw error
-			}
+			})
 		})
 		token.project(projected, projectedIdentities)
 	}
 
-	async #metadataTransaction(token: SQLiteTransaction): Promise<DriverMetadata | undefined> {
-		this.#requireTransaction(token)
-		return this.#metadata()
+	// Run work inside one savepoint of the open transaction: a throw rolls the work back and
+	// leaves the transaction open, because the published wrapper has no savepoint manager.
+	#contain(database: SQLiteDatabaseInterface, operation: () => void): void {
+		database.execute('SAVEPOINT "_orkestrel_scope"')
+		try {
+			operation()
+			database.execute('RELEASE SAVEPOINT "_orkestrel_scope"')
+		} catch (error) {
+			try {
+				database.execute('ROLLBACK TO SAVEPOINT "_orkestrel_scope"')
+			} finally {
+				database.execute('RELEASE SAVEPOINT "_orkestrel_scope"')
+			}
+			throw error
+		}
 	}
 
-	async #stampTransaction(token: SQLiteTransaction, metadata: DriverMetadata): Promise<void> {
-		this.#requireTransaction(token)
-		await this.#stamp(metadata)
+	// The primary column's declaration, which encodes a key for binding.
+	#primary(schema: TableSchema): ColumnSchema {
+		return (
+			findColumn(schema.primary, schema) ?? {
+				name: schema.primary,
+				storage: 'text',
+				optional: false,
+				nullable: false,
+			}
+		)
 	}
 
 	#requireTransaction(token: SQLiteTransaction): void {
@@ -1138,16 +1099,7 @@ export class SQLiteDriver implements DriverInterface {
 
 	// Encode a primary key for binding against its column's stored type.
 	#key(key: Key, schema: TableSchema): SQLiteValue {
-		const primary = schema.columns.find((column) => column.name === schema.primary)
-		return encodeValue(
-			key,
-			primary ?? {
-				name: schema.primary,
-				storage: 'text',
-				optional: false,
-				nullable: false,
-			},
-		)
+		return encodeValue(key, this.#primary(schema))
 	}
 
 	// Walk a migration plan's steps, executing each one's projected DDL and updating

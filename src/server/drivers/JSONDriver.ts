@@ -10,7 +10,7 @@ import type {
 	StorageInterface,
 } from '@src/core'
 import {
-	bindRowKey,
+	applyKeys,
 	DatabaseError,
 	DriverIterator,
 	MemoryDriver,
@@ -18,12 +18,13 @@ import {
 	cloneDriverMetadata,
 	cloneMigrationInput,
 	equalsValue,
+	buildBatch,
 	extractKey,
 	isDatabaseError,
-	migrateRows,
 	normalizeDriverSchema,
-	planMigration,
 	projectMigrationSchema,
+	ScopedStorage,
+	StorageJournal,
 } from '@src/core'
 import { attempt, isArray, isRecord } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -38,9 +39,10 @@ import { matchesAbsentPath } from '../helpers.js'
  * @remarks
  * A decorator, not a reimplementation: storage primitives delegate to an inner
  * {@link MemoryDriver}, while this layer owns persistence, writer ordering,
- * isolated transactions, and queued row-snapshot restoration. `open`
- * loads the file into memory; every mutation (`write` / `delete` / `clear`) flushes
- * the whole store back. The file is one JSON object, `{ metadata?: DriverMetadata, tables: {
+ * and isolated transactions. `open` loads the file into memory; every mutation (`write` /
+ * `insert` / `delete` / `clear`, a list included) records its prior rows in a
+ * {@link StorageJournal}, applies to memory, and flushes the whole store back once; a failed
+ * flush restores the journaled rows, so memory and the file hold the same rows. The file is one JSON object, `{ metadata?: DriverMetadata, tables: {
  * [name]: rows } }` — `metadata` is present only once the store has been `stamp`ed
  * (an unstamped store omits `metadata`); a per-table array of rows, each row carrying its own
  * primary (the table contract), so the key is recovered on load with
@@ -96,25 +98,69 @@ export class JSONDriver implements DriverInterface {
 		await this.#memory.close()
 	}
 
-	async read(table: string, key: Key): Promise<Row | undefined> {
+	read(table: string, key: Key): Promise<Row | undefined>
+	read(table: string, keys: readonly Key[]): Promise<ReadonlyArray<Row | undefined>>
+	async read(
+		table: string,
+		keys: Key | readonly Key[],
+	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
 		this.#root()
 		await this.#chain
-		return this.#memory.read(table, key)
+		// The ternary only selects the overload; both arms make the same call.
+		return isArray(keys) ? this.#memory.read(table, keys) : this.#memory.read(table, keys)
 	}
 
-	async write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	write(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	write(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async write(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
 		this.#root()
-		await this.#enqueue(() => this.#write(table, key, row, options), options?.signal)
+		const entries = buildBatch(keys, rows)
+		await this.#enqueue(() => this.#write(table, entries, false, options), options?.signal)
 	}
 
-	async insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void> {
+	insert(
+		table: string,
+		keys: readonly Key[],
+		rows: readonly Row[],
+		options?: OperationOptions,
+	): Promise<void>
+	insert(table: string, key: Key, row: Row, options?: OperationOptions): Promise<void>
+	async insert(
+		table: string,
+		keys: Key | readonly Key[],
+		rows: Row | readonly Row[],
+		options?: OperationOptions,
+	): Promise<void> {
 		this.#root()
-		await this.#enqueue(() => this.#insert(table, key, row, options), options?.signal)
+		const entries = buildBatch(keys, rows)
+		await this.#enqueue(() => this.#write(table, entries, true, options), options?.signal)
 	}
 
-	async delete(table: string, key: Key, options?: OperationOptions): Promise<boolean> {
+	delete(table: string, key: Key, options?: OperationOptions): Promise<boolean>
+	delete(
+		table: string,
+		keys: readonly Key[],
+		options?: OperationOptions,
+	): Promise<readonly boolean[]>
+	async delete(
+		table: string,
+		keys: Key | readonly Key[],
+		options?: OperationOptions,
+	): Promise<boolean | readonly boolean[]> {
 		this.#root()
-		return this.#enqueue(() => this.#delete(table, key, options), options?.signal)
+		return applyKeys(keys, (listed) =>
+			this.#enqueue(() => this.#delete(table, listed, options), options?.signal),
+		)
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
@@ -148,30 +194,6 @@ export class JSONDriver implements DriverInterface {
 	async transaction<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R> {
 		this.#root()
 		return this.#enqueue(() => this.#transact(scope))
-	}
-
-	/**
-	 * Captures an owned row snapshot at an exact writer-queue position.
-	 *
-	 * @remarks
-	 * Capture owns table names, schemas, rows, and one session-local identity per
-	 * table. Rollback is repeatable: it clones the then-current root into a
-	 * candidate, adapts captured rows to each surviving same-identity table
-	 * through the portable migration engine, persists the candidate with current
-	 * metadata, and publishes memory only after file replacement succeeds.
-	 * Removed, replaced, uncaptured, and later-added tables remain untouched.
-	 *
-	 * @param tables - Existing tables to capture; omitted captures every current table
-	 * @returns A repeatable rollback operation
-	 */
-	async snapshot(tables?: readonly string[]): Promise<() => Promise<void>> {
-		this.#root()
-		const names = tables === undefined ? undefined : [...tables]
-		const captured = await this.#enqueue(() => this.#capture(names))
-		return async () => {
-			this.#root()
-			await this.#enqueue(() => this.#restore(captured))
-		}
 	}
 
 	async metadata(): Promise<DriverMetadata | undefined> {
@@ -322,126 +344,26 @@ export class JSONDriver implements DriverInterface {
 		return candidate
 	}
 
-	async #capture(names: readonly string[] | undefined) {
-		const selected = names === undefined ? undefined : new Set(names)
-		const captured = new Map<
-			string,
-			{ readonly identity: object; readonly schema: TableSchema; readonly rows: readonly Row[] }
-		>()
-		for (const table of this.#schema) {
-			if (selected !== undefined && !selected.has(table.name)) continue
-			const identity = this.#identities.get(table.name)
-			if (identity === undefined) continue
-			const rows: Row[] = []
-			for await (const row of this.#memory.scan(table.name)) rows.push(row)
-			captured.set(table.name, { identity, schema: table, rows })
-		}
-		return captured
-	}
-
-	async #restore(
-		captured: ReadonlyMap<
-			string,
-			{ readonly identity: object; readonly schema: TableSchema; readonly rows: readonly Row[] }
-		>,
-	): Promise<void> {
-		const replacements = new Map<string, ReadonlyMap<Key, Row>>()
-		for (const [name, capture] of captured) {
-			const current = this.#schema.find((table) => table.name === name)
-			if (current === undefined || this.#identities.get(name) !== capture.identity) continue
-			const plan = planMigration([capture.schema], [current])
-			const migrated = migrateRows(capture.rows, plan.steps)
-			if (migrated.length !== capture.rows.length) {
-				throw new DatabaseError('MIGRATION', 'Snapshot row count changed during migration', {
-					table: name,
-				})
-			}
-			const rows = new Map<Key, Row>()
-			for (const [index, row] of migrated.entries()) {
-				const key = extractKey(row, current.primary)
-				if (key === undefined) {
-					throw new DatabaseError(
-						'MIGRATION',
-						`migrate: captured row is missing primary column '${current.primary}'`,
-						{ table: name, column: current.primary, index },
-					)
-				}
-				rows.set(key, bindRowKey(row, current.primary, key))
-			}
-			replacements.set(name, rows)
-		}
-		const candidate = await this.#clone()
-		for (const [name, rows] of replacements) {
-			await candidate.clear(name)
-			for (const [key, row] of rows) await candidate.write(name, key, row)
-		}
-		const metadata = await candidate.metadata()
-		await this.#serialize(undefined, candidate, this.#schema, metadata)
-		this.#memory = candidate
-		this.#metadata = metadata === undefined ? undefined : cloneDriverMetadata(metadata)
-	}
-
 	#capability(token: JSONTransaction): StorageInterface {
-		return {
-			read: this.#readCandidate.bind(this, token),
-			write: this.#writeCandidate.bind(this, token),
-			insert: this.#insertCandidate.bind(this, token),
-			delete: this.#deleteCandidate.bind(this, token),
-			keys: this.#keysCandidate.bind(this, token),
-			scan: this.#scanCandidate.bind(this, token),
-			clear: this.#clearCandidate.bind(this, token),
-			migrate: this.#migrateCandidate.bind(this, token),
-			metadata: this.#metadataCandidate.bind(this, token),
-			stamp: this.#stampCandidate.bind(this, token),
-		}
-	}
-
-	async #readCandidate(token: JSONTransaction, table: string, key: Key): Promise<Row | undefined> {
-		return this.#requireCandidate(token).read(table, key)
-	}
-
-	async #writeCandidate(
-		token: JSONTransaction,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		await this.#requireCandidate(token).write(table, key, row, options)
-	}
-
-	async #insertCandidate(
-		token: JSONTransaction,
-		table: string,
-		key: Key,
-		row: Row,
-		options?: OperationOptions,
-	): Promise<void> {
-		await this.#requireCandidate(token).insert(table, key, row, options)
-	}
-
-	async #deleteCandidate(
-		token: JSONTransaction,
-		table: string,
-		key: Key,
-		options?: OperationOptions,
-	): Promise<boolean> {
-		return this.#requireCandidate(token).delete(table, key, options)
-	}
-
-	async #keysCandidate(token: JSONTransaction, table: string): Promise<readonly Key[]> {
-		return this.#requireCandidate(token).keys(table)
-	}
-
-	#scanCandidate(token: JSONTransaction, table: string): AsyncIterable<Row> {
-		const source = this.#requireCandidate(token).scan(table)
-		return new DriverIterator(source[Symbol.asyncIterator](), () => {
-			this.#requireCandidate(token)
-		})
-	}
-
-	async #clearCandidate(token: JSONTransaction, table: string): Promise<void> {
-		await this.#requireCandidate(token).clear(table)
+		// The candidate store answers the scope, wrapped once in the scope's lifetime boundary.
+		const memory = token.memory
+		return new ScopedStorage(
+			{
+				read: memory.read.bind(memory),
+				write: memory.write.bind(memory),
+				insert: memory.insert.bind(memory),
+				delete: memory.delete.bind(memory),
+				keys: memory.keys.bind(memory),
+				scan: memory.scan.bind(memory),
+				clear: memory.clear.bind(memory),
+				migrate: this.#migrateCandidate.bind(this, token),
+				metadata: this.#metadataCandidate.bind(this, token),
+				stamp: this.#stampCandidate.bind(this, token),
+			},
+			() => {
+				this.#requireCandidate(token)
+			},
+		)
 	}
 
 	async #migrateCandidate(token: JSONTransaction, input: MigrationInput): Promise<void> {
@@ -661,61 +583,53 @@ export class JSONDriver implements DriverInterface {
 		})
 	}
 
+	// Apply every entry to memory through a journal and flush once; a failed flush restores the
+	// entries' prior rows, so memory and the file keep the same rows.
 	async #write(
 		table: string,
-		key: Key,
-		row: Row,
+		entries: ReadonlyArray<readonly [Key, Row]>,
+		insert: boolean,
 		options: OperationOptions | undefined,
 	): Promise<void> {
-		const previous = await this.#memory.read(table, key)
-		await this.#memory.write(table, key, row, options)
-		try {
-			await this.#serialize(options?.signal)
-		} catch (error) {
-			if (previous === undefined) await this.#memory.delete(table, key)
-			else await this.#memory.write(table, key, previous)
-			throw error
+		const keys = entries.map(([key]) => key)
+		const rows = entries.map(([, row]) => row)
+		// An empty batch changes no row: refuse an unknown table or an abort, and leave the file.
+		if (entries.length === 0) {
+			await this.#memory.write(table, keys, rows, options)
+			return
 		}
+		const journal = new StorageJournal(this.#memory)
+		if (insert) await journal.insert(table, keys, rows, options)
+		else await journal.write(table, keys, rows, options)
+		await this.#persist(journal, options?.signal)
 	}
 
-	async #insert(
+	async #delete(
 		table: string,
-		key: Key,
-		row: Row,
+		keys: readonly Key[],
 		options: OperationOptions | undefined,
-	): Promise<void> {
-		await this.#memory.insert(table, key, row, options)
-		try {
-			await this.#serialize(options?.signal)
-		} catch (error) {
-			await this.#memory.delete(table, key)
-			throw error
-		}
+	): Promise<readonly boolean[]> {
+		const journal = new StorageJournal(this.#memory)
+		const removed = await journal.delete(table, keys, options)
+		// A delete that removed no row leaves the file as it is.
+		if (removed.includes(true)) await this.#persist(journal, options?.signal)
+		else checkAbort(options?.signal)
+		return removed
 	}
 
-	async #delete(table: string, key: Key, options: OperationOptions | undefined): Promise<boolean> {
-		const previous = await this.#memory.read(table, key)
-		if (previous === undefined) {
-			checkAbort(options?.signal)
-			return false
-		}
-		await this.#memory.delete(table, key, options)
-		try {
-			await this.#serialize(options?.signal)
-		} catch (error) {
-			await this.#memory.write(table, key, previous)
-			throw error
-		}
-		return true
-	}
-
+	// Flush the table as empty ahead of clearing memory, so a failed flush leaves memory holding
+	// every row it held; the empty list read refuses an unknown table first.
 	async #clear(table: string): Promise<void> {
-		const rollback = await this.#memory.snapshot([table])
+		await this.#memory.read(table, [])
+		await this.#serialize(undefined, this.#memory, this.#schema, this.#metadata, table)
 		await this.#memory.clear(table)
+	}
+
+	async #persist(journal: StorageJournal, signal?: AbortSignal): Promise<void> {
 		try {
-			await this.#serialize()
+			await this.#serialize(signal)
 		} catch (error) {
-			await rollback()
+			await journal.restore()
 			throw error
 		}
 	}
@@ -756,12 +670,17 @@ export class JSONDriver implements DriverInterface {
 		memory = this.#memory,
 		schema = this.#schema,
 		metadata = this.#metadata,
+		cleared?: string,
 	): Promise<void> {
 		const owned = metadata === undefined ? undefined : cloneDriverMetadata(metadata)
 		const tables: Record<string, readonly Row[]> = {}
 		checkAbort(signal)
 		for (const table of schema) {
 			const rows: Row[] = []
+			if (table.name === cleared) {
+				tables[table.name] = rows
+				continue
+			}
 			for await (const row of memory.scan(table.name)) {
 				checkAbort(signal)
 				rows.push(row)

@@ -1,11 +1,19 @@
-import type { DriverMetadata } from '@src/core'
+import type { DriverMetadata, Key, TableMap } from '@src/core'
+import type { StorageCall } from './setup.js'
 import { compileGuard, integerShape, stringShape } from '@orkestrel/contract'
 import { createMemoryDriver } from '@src/core'
 import { collect, createRecorder, requireValue } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
+	buildUserRows,
 	collectRankStreamIds,
+	createContractSource,
+	createPartialBatchDriver,
+	createRecordedUsers,
+	interceptStorage,
+	iterateRecorded,
+	RecordedStorage,
 	createConstrainedUsersDatabase,
 	createCursorDatabase,
 	createMemoryAdapter,
@@ -385,11 +393,94 @@ describe('StorageRecorder and tallyCalls', () => {
 			return { rows: rows.length, row }
 		})
 		expect(value).toEqual({ rows: 2, row: undefined })
-		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, rows: 2 })
-		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, rows: 0 })
+		expect(tallyCalls(calls, 'scan')).toEqual({ calls: 1, keys: 0, rows: 2 })
+		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 1, rows: 0 })
 		expect(calls.every((call) => !call.scoped)).toBe(true)
 		expect(recorder.driver.transaction).toBeUndefined()
 		expect(recorder.source.stream).toBeUndefined()
+	})
+})
+
+describe('RecordedStorage', () => {
+	it('records the keys each keyed call addresses and the rows a list read returns', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		const calls: StorageCall[] = []
+		const recorded = new RecordedStorage(memory, true, calls)
+		await recorded.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+		await recorded.insert('users', 'c', { id: 'c' })
+		expect(await recorded.read('users', ['a', 'missing'])).toEqual([{ id: 'a' }, undefined])
+		expect(await recorded.delete('users', ['a', 'b'])).toEqual([true, true])
+		expect(calls).toEqual([
+			{ member: 'write', keys: 2, rows: 0, scoped: true },
+			{ member: 'insert', keys: 1, rows: 0, scoped: true },
+			{ member: 'read', keys: 2, rows: 1, scoped: true },
+			{ member: 'delete', keys: 2, rows: 0, scoped: true },
+		])
+	})
+})
+
+describe('iterateRecorded', () => {
+	it('reports the rows a consumer pulled when it stops early', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		await memory.write('users', ['a', 'b'], [{ id: 'a' }, { id: 'b' }])
+		const reports = createRecorder<[rows: number]>()
+		const source = iterateRecorded(memory.scan('users'), reports.handler)
+		for await (const row of source) {
+			expect(row).toEqual({ id: 'a' })
+			break
+		}
+		expect(reports.calls).toEqual([[1]])
+	})
+})
+
+describe('interceptStorage', () => {
+	it('hands every keyed call to its handler as a list, and forwards an unhandled member', async () => {
+		const memory = createMemoryDriver()
+		await memory.open(tableSchemas('users'))
+		const writes = createRecorder<[keys: readonly Key[]]>()
+		const driver = interceptStorage(memory, {
+			async write(table, keys, rows, options) {
+				writes.handler(keys)
+				await memory.write(table, keys, rows, options)
+			},
+		})
+		await driver.write('users', 'a', { id: 'a' })
+		await driver.write('users', ['b'], [{ id: 'b' }])
+		expect(writes.calls).toEqual([[['a']], [['b']]])
+		expect(await driver.read('users', 'a')).toEqual({ id: 'a' })
+		expect(await driver.delete('users', 'a')).toBe(true)
+	})
+})
+
+describe('createPartialBatchDriver', () => {
+	it('applies the rows ahead of a conflicting final member, as a per-row batch does', async () => {
+		const driver = createPartialBatchDriver()
+		await driver.open(tableSchemas('users'))
+		await driver.write('users', 'a', { id: 'a' })
+		await expect(
+			driver.insert('users', ['b', 'a'], [{ id: 'b' }, { id: 'a' }]),
+		).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(await driver.keys('users')).toEqual(['a', 'b'])
+	})
+})
+
+describe('createRecordedUsers and buildUserRows', () => {
+	it('records the driver calls of the users table it builds', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const rows = buildUserRows(3)
+		expect(rows.map((row) => row.id)).toEqual(['u0', 'u1', 'u2'])
+		const { calls } = await recorder.measure(() => users.set(rows))
+		expect(tallyCalls(calls, 'write')).toEqual({ calls: 1, keys: 3, rows: 0 })
+	})
+})
+
+describe('createContractSource', () => {
+	it('compiles the contract of each declared table and refuses an undeclared one', () => {
+		const source = createContractSource<TableMap>(INTEGRATION_TABLES)
+		expect(source('users').is(createUserRow())).toBe(true)
+		expect(() => source('posts')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }))
 	})
 })
 

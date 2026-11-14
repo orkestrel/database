@@ -21,8 +21,10 @@ import {
 import { collect, createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
+	buildUserRows,
 	createConstrainedUsersDatabase,
 	createMemoryAdapter,
+	createRecordedUsers,
 	createRecordingDriver,
 	createUserRow,
 	HOOK_TABLES,
@@ -32,6 +34,7 @@ import {
 	createSeededUsersTable,
 	RECORDING_AGGREGATE,
 	RECORDING_ROW,
+	tallyCalls,
 } from '../../setup.js'
 
 // The authoritative behavior tests for `Table` — keyed CRUD and its batch
@@ -288,9 +291,11 @@ describe('Table — batch overloads (array in → array out, same order)', () =>
 		// update(keys[], changes) → booleans (same changes applied to each)
 		expect(await users.update(['u1', 'u2'], { age: 50 })).toEqual([true, true])
 		expect((await users.get('u2'))?.age).toBe(50)
-		// remove(keys[]) → booleans
-		expect(await users.remove(['u1', 'missing'])).toEqual([true, false])
+		// remove(keys[]) → true only when every listed key was removed
+		expect(await users.remove(['u1', 'missing'])).toBe(false)
 		expect(await users.count()).toBe(1)
+		expect(await users.remove(['u2'])).toBe(true)
+		expect(await users.count()).toBe(0)
 	})
 
 	it('resolve(keys[]) returns rows in order or throws on any miss', async () => {
@@ -303,7 +308,7 @@ describe('Table — batch overloads (array in → array out, same order)', () =>
 		await expect(users.resolve(['u1', 'missing'])).rejects.toMatchObject({ code: 'NOT_FOUND' })
 	})
 
-	it('add(rows[]) inserts each or throws CONFLICT on a duplicate', async () => {
+	it('add(rows[]) inserts no row when its final member conflicts', async () => {
 		const users = userTable()
 		await users.add(createUserRow())
 		await expect(
@@ -312,6 +317,145 @@ describe('Table — batch overloads (array in → array out, same order)', () =>
 				{ id: 'u1', name: 'Dup', age: 1 },
 			]),
 		).rejects.toMatchObject({ code: 'CONFLICT' })
+		expect(await users.keys()).toEqual(['u1'])
+	})
+
+	it('set(rows[]) writes no row when the contract refuses its final member', async () => {
+		const users = userTable()
+		await expect(
+			users.set([
+				{ id: 'u1', name: 'Ada', age: 36 },
+				{ id: 'u2', name: '', age: 41 },
+			]),
+		).rejects.toMatchObject({ code: 'VALIDATION' })
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('update(keys[]) writes no row when the contract refuses one merged row', async () => {
+		const users = userTable()
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+		])
+		await expect(users.update(['u1', 'u2'], { age: -1 })).rejects.toMatchObject({
+			code: 'VALIDATION',
+		})
+		expect(await users.get(['u1', 'u2'])).toEqual([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+		])
+	})
+})
+
+describe('Table — remove of a key list', () => {
+	it('returns true only when every listed key was removed', async () => {
+		const users = userTable()
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+			{ id: 'u3', name: 'Cy', age: 29 },
+		])
+		expect(await users.remove(['u1', 'absent'])).toBe(false)
+		expect(await users.keys()).toEqual(['u2', 'u3'])
+		expect(await users.remove(['u2', 'u3'])).toBe(true)
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('reads a key repeated in one call as one key, removing it once and answering true', async () => {
+		const users = userTable()
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+		])
+		const removed = createRecorder<[key: Key]>()
+		users.emitter.on('remove', removed.handler)
+		expect(await users.remove(['u1', 'u1'])).toBe(true)
+		expect(removed.calls).toEqual([['u1']])
+		expect(await users.remove(['u2', 'u2', 'absent'])).toBe(false)
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('reads a repeated key as one key through a transaction view', async () => {
+		const { db, users } = createConstrainedUsersDatabase()
+		await users.set({ id: 'u1', name: 'Ada', age: 36 })
+		const answer = await db.transaction(async (transaction) =>
+			transaction.table('users').remove(['u1', 'u1']),
+		)
+		expect(answer).toBe(true)
+		expect(await users.keys()).toEqual([])
+	})
+
+	it('returns the same answer through a transaction view', async () => {
+		const { db, users } = createConstrainedUsersDatabase()
+		await users.set([
+			{ id: 'u1', name: 'Ada', age: 36 },
+			{ id: 'u2', name: 'Bo', age: 41 },
+		])
+		const answers = await db.transaction(async (transaction) => {
+			const scoped = transaction.table('users')
+			return [await scoped.remove(['u1', 'absent']), await scoped.remove(['u2'])]
+		})
+		expect(answers).toEqual([false, true])
+		expect(await users.keys()).toEqual([])
+	})
+})
+
+describe('Table — one driver call per batch', () => {
+	it('sets 100 rows with one write call', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const { calls } = await recorder.measure(() => users.set(buildUserRows(100)))
+		expect(tallyCalls(calls, 'write')).toEqual({ calls: 1, keys: 100, rows: 0 })
+		expect(calls).toHaveLength(1)
+	})
+
+	it('adds 100 rows with one insert call', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const { calls } = await recorder.measure(() => users.add(buildUserRows(100)))
+		expect(tallyCalls(calls, 'insert')).toEqual({ calls: 1, keys: 100, rows: 0 })
+		expect(calls).toHaveLength(1)
+	})
+
+	it('reads 100 keys with one read call for get, resolve, and has', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const rows = buildUserRows(100)
+		await users.set(rows)
+		const keys = rows.map((row) => row.id)
+		const reads = [
+			(await recorder.measure(() => users.get(keys))).calls,
+			(await recorder.measure(() => users.resolve(keys))).calls,
+			(await recorder.measure(() => users.has(keys))).calls,
+		]
+		for (const calls of reads) {
+			expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 100, rows: 100 })
+			expect(calls).toHaveLength(1)
+		}
+	})
+
+	it('removes 100 keys with one delete call and emits remove for each removed row', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const rows = buildUserRows(100)
+		await users.set(rows)
+		const removed = createRecorder<[key: Key]>()
+		users.emitter.on('remove', removed.handler)
+		const keys = [...rows.map((row) => row.id), 'missing']
+		const { value, calls } = await recorder.measure(() => users.remove(keys))
+		expect(tallyCalls(calls, 'delete')).toEqual({ calls: 1, keys: 101, rows: 0 })
+		expect(calls).toHaveLength(1)
+		expect(value).toBe(false)
+		expect(removed.calls).toHaveLength(100)
+	})
+
+	it('updates 100 keys with one read call and one write call', async () => {
+		const { recorder, users } = createRecordedUsers()
+		const rows = buildUserRows(100)
+		await users.set(rows)
+		const keys = [...rows.map((row) => row.id), 'missing']
+		const { value, calls } = await recorder.measure(() => users.update(keys, { name: 'Renamed' }))
+		expect(tallyCalls(calls, 'read')).toEqual({ calls: 1, keys: 101, rows: 100 })
+		expect(tallyCalls(calls, 'write')).toEqual({ calls: 1, keys: 100, rows: 0 })
+		expect(calls).toHaveLength(2)
+		expect(value).toEqual([...rows.map(() => true), false])
+		expect((await users.get('u7'))?.name).toBe('Renamed')
 	})
 })
 
@@ -368,27 +512,21 @@ describe('Table — batch write abort signal (`.claude/rules/patterns.md` § Bat
 		expect(await users.keys()).toEqual([])
 	})
 
-	it('aborting between items after the first write leaves the first item applied (no rollback)', async () => {
+	it('applies every row of a batch whose signal aborts after the driver commits', async () => {
 		const users = userTable()
 		const controller = new AbortController()
-		// The table emitter fires `write` AFTER the driver write completes but BEFORE
-		// `#each` proceeds to the next item — abort from inside the listener to land
-		// squarely in the between-items gate without any mocks.
-		users.emitter.on('write', () => controller.abort('stop after first'))
-		const error = await captureFailure(async () => {
-			await users.set(
-				[
-					{ id: 'u1', name: 'Ada', age: 36 },
-					{ id: 'u2', name: 'Bo', age: 41 },
-				],
-				{ signal: controller.signal },
-			)
-		})
-		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('ABORTED')
-		// The first item is already applied — no rollback (`.claude/rules/patterns.md`
-		// § Batch operations).
-		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada', age: 36 })
-		expect(await users.get('u2')).toBeUndefined()
+		// The `write` events fire after the one driver call commits the batch, so an abort
+		// there finds every row applied.
+		users.emitter.on('write', () => controller.abort('stop after commit'))
+		const keys = await users.set(
+			[
+				{ id: 'u1', name: 'Ada', age: 36 },
+				{ id: 'u2', name: 'Bo', age: 41 },
+			],
+			{ signal: controller.signal },
+		)
+		expect(keys).toEqual(['u1', 'u2'])
+		expect(await users.keys()).toEqual(['u1', 'u2'])
 	})
 })
 

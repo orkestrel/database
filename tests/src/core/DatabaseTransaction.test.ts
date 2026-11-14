@@ -1,10 +1,17 @@
 import { captureError } from '@orkestrel/test'
 import { optionalShape, stringShape } from '@orkestrel/contract'
+import type { TableMap } from '@src/core'
 import { createMemoryDriver, isDatabaseError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { DatabaseTransaction } from '../../../src/core/DatabaseTransaction.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
-import { COLUMNS, DatabaseCounter, tableSchemas, transactionView } from '../../setup.js'
+import {
+	COLUMNS,
+	createContractSource,
+	DatabaseCounter,
+	tableSchemas,
+	transactionView,
+} from '../../setup.js'
 
 // `DatabaseTransaction` (`src/core/DatabaseTransaction.ts`) is the interned table-only
 // view a transaction callback receives as its `DatabaseStorageInterface`. In production
@@ -43,7 +50,7 @@ describe('table()', () => {
 		// runtime refusal — not the compiler — is what this asserts.
 		const open: DatabaseTransaction = new DatabaseTransaction(
 			driver,
-			COLUMNS,
+			createContractSource<TableMap>(COLUMNS),
 			{},
 			undefined,
 			undefined,
@@ -57,9 +64,9 @@ describe('table()', () => {
 		const driver = createMemoryDriver()
 		await driver.open(tableSchemas('posts'))
 		const columns = { posts: { slug: stringShape(), title: stringShape() } }
-		const view = new DatabaseTransaction(
+		const view = new DatabaseTransaction<typeof columns>(
 			driver,
-			columns,
+			createContractSource(columns),
 			{ posts: 'slug' },
 			undefined,
 			undefined,
@@ -86,9 +93,9 @@ describe('the scoped table it builds', () => {
 		await driver.open(tableSchemas('events'))
 		const columns = { events: { id: optionalShape(stringShape()), kind: stringShape() } }
 		const minted = new DatabaseCounter()
-		const view = new DatabaseTransaction(
+		const view = new DatabaseTransaction<typeof columns>(
 			driver,
-			columns,
+			createContractSource(columns),
 			{},
 			() => {
 				minted.next()
