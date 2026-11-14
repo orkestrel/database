@@ -20,6 +20,7 @@ import {
 } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { captureError } from '@orkestrel/test'
+import { CLONE_NODE_LIMIT } from '@orkestrel/contract'
 import { buildCondition as cond } from '../../setup.js'
 
 // The SQLite ↔ JS codecs as pure functions (no DB needed): the SQL
@@ -79,6 +80,46 @@ describe('encodeValue / decodeValue — round-trips', () => {
 		expect(Array.isArray(decoded) && Array.isArray(decoded[0])).toBe(true)
 		expect(decodeValue(text, JSON_COLUMN) === decoded).toBe(false)
 		expect(Object.isFrozen(decoded)).toBe(false)
+	})
+
+	it('decodes a valid json cell to the value its parse returns', () => {
+		for (const text of [
+			'{"__proto__":{"polluted":1},"a":1}',
+			'"\\ud800"',
+			'[-0,0,1e308,9007199254740993]',
+			'{"2":"two","1":"one","b":"b"}',
+			'[[],{},[[{}]],{"x":[null,true,false]}]',
+			'null',
+		]) {
+			expect({ text, decoded: decodeValue(text, JSON_COLUMN) }).toEqual({
+				text,
+				decoded: JSON.parse(text),
+			})
+		}
+	})
+
+	it('refuses a json cell holding a non-finite number with DRIVER', () => {
+		for (const text of ['1e999', '[1e999]', '{"x":{"y":-1e999}}']) {
+			expect(() => decodeValue(text, JSON_COLUMN, { table: 'users', key: 'u1' })).toThrow(
+				expect.objectContaining({
+					code: 'DRIVER',
+					context: { table: 'users', key: 'u1', column: 'value', storage: 'json' },
+				}),
+			)
+		}
+	})
+
+	it('refuses a json cell past the clone node limit with DRIVER, and decodes one at it', () => {
+		const within = `[${Array.from({ length: CLONE_NODE_LIMIT - 1 }, () => '0').join(',')}]`
+		const past = `[${Array.from({ length: CLONE_NODE_LIMIT }, () => '0').join(',')}]`
+		const decoded = decodeValue(within, JSON_COLUMN)
+		expect(Array.isArray(decoded) && decoded.length === CLONE_NODE_LIMIT - 1).toBe(true)
+		expect(() => decodeValue(past, JSON_COLUMN, { table: 'users', key: 'u1' })).toThrow(
+			expect.objectContaining({
+				code: 'DRIVER',
+				context: { table: 'users', key: 'u1', column: 'value', storage: 'json' },
+			}),
+		)
 	})
 
 	it('keeps a number / bigint for integer and real, refusing incompatible values', () => {

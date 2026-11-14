@@ -16,6 +16,7 @@ import { inferSentinelType } from './inferers.js'
 import {
 	attempt,
 	cloneJSONValue,
+	CLONE_NODE_LIMIT,
 	isBigInt,
 	isBoolean,
 	isError,
@@ -24,6 +25,7 @@ import {
 	isNumber,
 	isString,
 	isUint8Array,
+	matchesJSONValue,
 	preview,
 } from '@orkestrel/contract'
 
@@ -557,7 +559,13 @@ export function decodeValue(
 		case 'json': {
 			if (!isString(value)) break
 			const parsed = attempt<unknown>(() => JSON.parse(value))
-			if (parsed.success) return parsed.value
+			if (!parsed.success) break
+			// The parse is the cell's one copy; the walk copies nothing and refuses a non-finite
+			// number or a tree past the clone node limit.
+			const admitted = attempt(() =>
+				matchesJSONValue(parsed.value, new WeakSet(), { left: CLONE_NODE_LIMIT }),
+			)
+			if (admitted.success && admitted.value) return parsed.value
 			break
 		}
 		case 'integer':
