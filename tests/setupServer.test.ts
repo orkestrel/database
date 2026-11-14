@@ -4,6 +4,7 @@ import { createMemoryDriver } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { captureError, requireValue } from '@orkestrel/test'
+import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import {
 	WORKSPACE_ROOT,
 	GUIDE,
@@ -35,6 +36,10 @@ import {
 	readProjectAliases,
 	readProjectDiagnostics,
 	replaceTransactionFailure,
+	plantTripwire,
+	corruptIndexPage,
+	readStatistics,
+	buildDriverRow,
 	resolveExportKeywords,
 	resolveModuleFile,
 	scanModuleSource,
@@ -883,6 +888,102 @@ describe('driverSchema', () => {
 			expect(await driver.read('users', 'u1')).toMatchObject({ name: 'Ada', active: true })
 		} finally {
 			await driver.close()
+			storage.cleanup()
+		}
+	})
+})
+
+describe('plantTripwire', () => {
+	it('writes a cell the SQLite driver refuses to decode at the named key alone', async () => {
+		const storage = tempDatabasePath()
+		const driver = createSQLiteDriver({ path: storage.path })
+		try {
+			await driver.open(driverSchema())
+			await driver.write('users', ['u1', 'u2'], [buildDriverRow('u1'), buildDriverRow('u2')])
+			plantTripwire(storage.path, 'users', 'u1', 'name')
+			await expect(driver.read('users', 'u1')).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { table: 'users', key: 'u1', column: 'name' },
+			})
+			expect(await driver.read('users', 'u2')).toEqual(buildDriverRow('u2'))
+		} finally {
+			await driver.close()
+			storage.cleanup()
+		}
+	})
+
+	it('throws when no row holds the key, so a missed tripwire never reads as planted', async () => {
+		const storage = tempDatabasePath()
+		const driver = createSQLiteDriver({ path: storage.path })
+		try {
+			await driver.open(driverSchema())
+			expect(() => plantTripwire(storage.path, 'users', 'missing', 'name')).toThrow(
+				'No row of users holds the tripwire key missing',
+			)
+		} finally {
+			await driver.close()
+			storage.cleanup()
+		}
+	})
+})
+
+describe('readStatistics', () => {
+	it('answers an empty record for a file that holds no sqlite_stat1, and each index after one', () => {
+		const storage = tempDatabasePath()
+		const database = createSQLiteDatabase({ path: storage.path })
+		try {
+			database.connect()
+			database.execute('CREATE TABLE "items" ("id" TEXT PRIMARY KEY, "tag" TEXT)')
+			database.execute('CREATE INDEX "items_tag" ON "items" ("tag")')
+			database.execute("INSERT INTO \"items\" VALUES ('a', 'x'), ('b', 'x')")
+			expect(readStatistics(storage.path, 'items')).toEqual({})
+			database.execute('ANALYZE')
+			expect(readStatistics(storage.path, 'items')).toEqual({
+				items_tag: '2 2',
+				sqlite_autoindex_items_1: '2 1',
+			})
+		} finally {
+			database.close()
+			storage.cleanup()
+		}
+	})
+})
+
+describe('corruptIndexPage', () => {
+	it('corrupts the named index alone, so the table still reads by its key', () => {
+		const storage = tempDatabasePath()
+		const database = createSQLiteDatabase({ path: storage.path })
+		try {
+			database.connect()
+			database.execute('CREATE TABLE "items" ("id" TEXT PRIMARY KEY, "tag" TEXT)')
+			database.execute('CREATE INDEX "items_tag" ON "items" ("tag")')
+			database.execute("INSERT INTO \"items\" VALUES ('a', 'x'), ('b', 'y')")
+			database.close()
+			corruptIndexPage(storage.path, 'items_tag')
+			database.connect()
+			expect(database.prepare('SELECT "tag" FROM "items" WHERE "id" = ?').get(['b'])).toEqual({
+				tag: 'y',
+			})
+			expect(() => database.prepare('SELECT "id" FROM "items" WHERE "tag" = ?').all(['y'])).toThrow(
+				expect.objectContaining({ context: { errcode: 11 } }),
+			)
+		} finally {
+			database.close()
+			storage.cleanup()
+		}
+	})
+
+	it('throws when the file holds no index of that name', () => {
+		const storage = tempDatabasePath()
+		const database = createSQLiteDatabase({ path: storage.path })
+		try {
+			database.connect()
+			database.execute('CREATE TABLE "items" ("id" TEXT PRIMARY KEY)')
+			database.close()
+			expect(() => corruptIndexPage(storage.path, 'items_tag')).toThrow(
+				'The file holds no index named items_tag',
+			)
+		} finally {
 			storage.cleanup()
 		}
 	})

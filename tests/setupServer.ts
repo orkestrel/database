@@ -3,6 +3,7 @@ import type { DatabaseInterface, IndexMap, RowOf, TableInterface } from '@src/co
 import { createDatabase, createMemoryDriver } from '@src/core'
 import { StorageRecorder } from './setup.js'
 import {
+	attempt,
 	booleanShape,
 	integerShape,
 	jsonShape,
@@ -27,7 +28,7 @@ import {
 	readPlannedAggregate,
 	readPlannedRows,
 } from '@src/core'
-import { collect } from '@orkestrel/test'
+import { collect, waitForEvent } from '@orkestrel/test'
 import type { JSONDriver } from '@src/server'
 import type { TeardownInterface } from '@orkestrel/test'
 import { fileURLToPath } from 'node:url'
@@ -44,22 +45,32 @@ import type { ExportKeyword, SurfaceSymbol } from '@orkestrel/guide'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { computeSymbolKey } from '@orkestrel/guide'
 import { createRequire } from 'node:module'
-import type { SQLiteDatabaseInterface } from '@orkestrel/sqlite'
+import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
 import { createSQLiteDatabase } from '@orkestrel/sqlite'
 import {
 	compileQuerySQL,
 	createSQLiteDriver,
 	SQLiteDriver as SQLiteDriverClass,
 	planSQLiteQuery,
+	quoteIdentifier,
 	schemaToIndexes,
 	schemaToTable,
 } from '@src/server'
 import { createScratch } from '@orkestrel/test/server'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import {
+	closeSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readdirSync,
+	statSync,
+	writeSync,
+} from 'node:fs'
 import { parseProjectConfig, scanDiagnostics } from '@orkestrel/probe/server'
 import { parseSync } from 'vite'
 import { spawnSync } from 'node:child_process'
+import { Worker } from 'node:worker_threads'
 
 // The compiler this workspace installs, run as a command rather than called in
 // process: the command and its plain-text diagnostics are the same across the
@@ -2350,27 +2361,170 @@ export function matrixSchema(
 }
 
 /**
- * Stores a blob in two paging rows a native read never decodes: the `book` of `line-1999`,
- * which no paging reading matches, and the `parent` of `line-1400`, which matches
- * `book = 'b1'` but sits outside every page. A read that decodes every row, or every row its
- * filter matches, raises `DRIVER` on one of them.
+ * Plants the rows-read tripwire: a blob, written through a second connection, in a declared
+ * `text` column of one row keyed by `id`. The SQLite driver cannot decode the cell, so a read
+ * that decodes the row raises `DRIVER` naming the table, the key, and the column. Plant it at a
+ * key inside a read's range and beyond its page, and a read that reads past its bound fails.
  *
- * @param path - The SQLite file the paging database holds
+ * @param path - The SQLite file
+ * @param table - The table holding the row
+ * @param key - The row's `id`
+ * @param column - The `text` column the blob replaces
+ * @throws An `Error` when no row holds the key, so a tripwire that missed never reads as set
  */
-export function corruptPagingRow(path: string): void {
+export function plantTripwire(path: string, table: string, key: string, column: string): void {
 	const database = createSQLiteDatabase({ path })
 	database.connect()
 	try {
-		database
-			.prepare('UPDATE "lines" SET "book" = ? WHERE "id" = ?')
-			.execute([new Uint8Array([0]), 'line-1999'])
-		database
-			.prepare('UPDATE "lines" SET "parent" = ? WHERE "id" = ?')
-			.execute([new Uint8Array([0]), 'line-1400'])
+		const { changes } = database
+			.prepare(
+				'UPDATE ' +
+					quoteIdentifier(table) +
+					' SET ' +
+					quoteIdentifier(column) +
+					' = ? WHERE "id" = ?',
+			)
+			.execute([new Uint8Array([0]), key])
+		if (changes !== 1) throw new Error(`No row of ${table} holds the tripwire key ${key}`)
 	} finally {
 		database.close()
 	}
 }
+
+/**
+ * Holds the write lock of a SQLite file on a worker thread: the worker opens its own
+ * connection, takes `BEGIN IMMEDIATE`, runs one write, and commits after `delay` ms.
+ *
+ * @param path - The SQLite file
+ * @param sql - The write the holder runs inside its transaction
+ * @param parameters - The write's bound values
+ * @param delay - The time the holder keeps the lock, in ms
+ * @returns The worker and a promise that settles when the holder has committed
+ */
+export async function holdWriteLock(
+	path: string,
+	sql: string,
+	parameters: readonly SQLiteValue[],
+	delay: number,
+): Promise<{ readonly worker: Worker; readonly committed: Promise<readonly [unknown]> }> {
+	const worker = new Worker(HOLDER_SOURCE, {
+		eval: true,
+		workerData: { path, sql, parameters, delay },
+	})
+	await waitForEvent<readonly [unknown]>((listener) => {
+		worker.once('message', listener)
+		return () => worker.off('message', listener)
+	}, 'the worker holds the write lock')
+	const committed = waitForEvent<readonly [unknown]>((listener) => {
+		worker.once('message', listener)
+		return () => worker.off('message', listener)
+	}, 'the worker commits')
+	return { worker, committed }
+}
+
+/**
+ * Builds one row of the driver battery's `users` table ({@link SQLITE_SCHEMA}).
+ *
+ * @param id - The row's key, also its name
+ * @returns The row
+ */
+export function buildDriverRow(id: string): Row {
+	return { id, name: id, age: 1, active: true }
+}
+
+/**
+ * Builds the key and row lists of a batch of driver-battery `users` rows: 40 names, each age
+ * once, keys in ascending order.
+ *
+ * @param count - The number of rows
+ * @returns The keys and the rows, in the order a list `write` takes them
+ */
+export function buildDriverRows(count: number): readonly [readonly string[], readonly Row[]] {
+	const rows = Array.from({ length: count }, (_, index) => ({
+		id: 'u' + String(index).padStart(6, '0'),
+		name: 'n' + String(index % 40),
+		age: index,
+		active: true,
+	}))
+	return [rows.map((row) => row.id), rows]
+}
+
+/**
+ * Reads the statistics `sqlite_stat1` holds for one table's indexes, through a second
+ * connection.
+ *
+ * @param path - The SQLite file
+ * @param table - The table
+ * @returns Each index name with its `stat` text, empty when the file holds no `sqlite_stat1`
+ */
+export function readStatistics(path: string, table: string): Readonly<Record<string, string>> {
+	const database = createSQLiteDatabase({ path })
+	database.connect()
+	try {
+		const held = database
+			.prepare('SELECT count(*) AS "count" FROM "sqlite_schema" WHERE "name" = ?')
+			.get(['sqlite_stat1'])
+		if (held?.count === 0) return {}
+		return Object.fromEntries(
+			database
+				.prepare('SELECT "idx", "stat" FROM "sqlite_stat1" WHERE "tbl" = ? ORDER BY "idx"')
+				.all([table])
+				.map((row) => [String(row.idx), String(row.stat)]),
+		)
+	} finally {
+		database.close()
+	}
+}
+
+/**
+ * Overwrites the root page of one index of a closed SQLite file with `0xff` bytes, located
+ * through `sqlite_schema.rootpage` and the page size, so a read of that index raises
+ * `SQLITE_CORRUPT` while the table and its other indexes read as before.
+ *
+ * @param path - The SQLite file, closed and checkpointed
+ * @param index - The index name
+ * @throws An `Error` when the file holds no index of that name
+ */
+export function corruptIndexPage(path: string, index: string): void {
+	const database = createSQLiteDatabase({ path })
+	database.connect()
+	const located = attempt(() => ({
+		root: Number(
+			database
+				.prepare('SELECT "rootpage" FROM "sqlite_schema" WHERE "type" = ? AND "name" = ?')
+				.get(['index', index])?.rootpage,
+		),
+		size: Number(database.pragma('page_size')),
+	}))
+	database.close()
+	if (!located.success) throw located.error
+	const { root, size } = located.value
+	if (!Number.isInteger(root) || root < 1) throw new Error(`The file holds no index named ${index}`)
+	const handle = openSync(path, 'r+')
+	try {
+		writeSync(handle, Buffer.alloc(size, 0xff), 0, size, (root - 1) * size)
+	} finally {
+		closeSync(handle)
+	}
+}
+
+/**
+ * Holds the worker-thread write holder's source: it runs from text because a worker cannot
+ * resolve this workspace's aliases, and it reaches `node:sqlite` alone.
+ */
+export const HOLDER_SOURCE = [
+	"const { parentPort, workerData } = require('node:worker_threads')",
+	"const { DatabaseSync } = require('node:sqlite')",
+	'const database = new DatabaseSync(workerData.path)',
+	"database.exec('BEGIN IMMEDIATE')",
+	'database.prepare(workerData.sql).run(...workerData.parameters)',
+	"parentPort.postMessage('held')",
+	'setTimeout(() => {',
+	"\tdatabase.exec('COMMIT')",
+	'\tdatabase.close()',
+	"\tparentPort.postMessage('committed')",
+	'}, workerData.delay)',
+].join('\n')
 
 /**
  * Creates the paging database over an injected internal fallback: a SQLite driver whose
@@ -2433,4 +2587,204 @@ export class PartialFallbackSQLiteDriver extends SQLiteDriverClass {
 			...(input.offset === undefined ? {} : { offset: input.offset }),
 		})
 	}
+}
+
+/** Holds the columns of the nested prefilter table: a `json` column that is both optional and nullable. */
+export const NESTED_TABLES = {
+	docs: { id: stringShape(), meta: optionalShape(nullableShape(jsonShape())) },
+}
+
+/**
+ * Holds the nested prefilter rows: every scalar class at `meta.tag` and the classes a JSON
+ * function reads alike (`1`, `true`, and `'1'`; `null` and absence), an object and an array at
+ * the path, a dotted key, a deeper path, and heads that hold explicit `null`, no value, a
+ * scalar, and an array.
+ */
+export const NESTED_ROWS: ReadonlyArray<RowOf<typeof NESTED_TABLES.docs>> = Object.freeze([
+	{ id: 'd01', meta: { tag: 'red' } },
+	{ id: 'd02', meta: { tag: 'Red' } },
+	{ id: 'd03', meta: { tag: '1' } },
+	{ id: 'd04', meta: { tag: 1 } },
+	{ id: 'd05', meta: { tag: 1.5 } },
+	{ id: 'd06', meta: { tag: 2 ** 60 } },
+	{ id: 'd07', meta: { tag: 2 ** 60 + 256 } },
+	{ id: 'd08', meta: { tag: true } },
+	{ id: 'd09', meta: { tag: false } },
+	{ id: 'd10', meta: { tag: 0 } },
+	{ id: 'd11', meta: { tag: null } },
+	{ id: 'd12', meta: { other: 'red' } },
+	{ id: 'd13', meta: { tag: { red: 1 } } },
+	{ id: 'd14', meta: { tag: ['red'] } },
+	{ id: 'd15', meta: { tag: 'x😀y' } },
+	{ id: 'd16', meta: { 'a.b': 'red', a: { b: 'blue' } } },
+	{ id: 'd17', meta: null },
+	{ id: 'd18' },
+	{ id: 'd19', meta: 'red' },
+	{ id: 'd20', meta: ['red', 1] },
+	{ id: 'd21', meta: { tag: 'null' } },
+	{ id: 'd22', meta: { tag: 0.1 } },
+	{ id: 'd23', meta: { deep: { tag: 'red' } } },
+	{ id: 'd24', meta: { tag: '' } },
+	{ id: 'd25', meta: { 'x.y': 3, x: { y: 9 } } },
+	{ id: 'd26', meta: { 'x.y': 4 } },
+	{ id: 'd27', meta: { 'a\u0000b': 'red', a: { b: 'red' } } },
+])
+
+/** Holds the scalar operands of each nested prefilter class. */
+export const NESTED_OPERANDS = {
+	string: ['red', '1', 'x😀y', 'null', '', 'blue'],
+	number: [1, 1.5, 2 ** 60, 2 ** 60 + 256, 0, -0, 0.1, 7],
+	boolean: [true, false],
+	null: [null],
+	undefined: [undefined],
+} as const
+
+/** Names a scalar class of the nested prefilter. */
+export type NestedClass = keyof typeof NESTED_OPERANDS
+
+/** Lists the scalar classes of the nested prefilter. */
+export const NESTED_CLASSES: readonly NestedClass[] = Object.freeze([
+	'string',
+	'number',
+	'boolean',
+	'null',
+	'undefined',
+])
+
+/** Holds the query that lists a table's indexes by name, the column `name` in name order. */
+export const INDEX_LIST_SQL = 'SELECT "name" FROM pragma_index_list(?) ORDER BY "name"'
+
+/**
+ * Builds the nested prefilter reads of one operator over one scalar class: each operand alone
+ * at each path for `equals` and `not`, and the class's whole list, the list beside an operand
+ * of every other class, and the empty list for `any` and `none`.
+ *
+ * @param operator - The equality-family operator
+ * @param scalar - The operand class
+ * @returns The reads
+ */
+export function nestedReads(
+	operator: 'equals' | 'not' | 'any' | 'none',
+	scalar: NestedClass,
+): readonly QueryInput[] {
+	const operands: readonly unknown[] = NESTED_OPERANDS[scalar]
+	const paths = [
+		['meta', 'tag'],
+		['meta', 'a.b'],
+		['meta', 'deep', 'tag'],
+	]
+	const lists =
+		operator === 'any' || operator === 'none'
+			? [operands, [...operands, 'red', 1, true, null, undefined], []]
+			: operands.map((operand) => [operand])
+	return paths.flatMap((column) =>
+		lists.map((values) => ({
+			conditions: [{ column, operator, values, connector: 'and' as const }],
+		})),
+	)
+}
+
+/**
+ * Creates the nested prefilter databases: one over a SQLite driver and one over the Memory
+ * driver, each holding {@link NESTED_ROWS}.
+ *
+ * @returns The SQLite driver, its database, and the Memory database
+ */
+export async function createNestedTables(): Promise<{
+	readonly driver: SQLiteDriver
+	readonly sqlite: DatabaseInterface<typeof NESTED_TABLES>
+	readonly memory: DatabaseInterface<typeof NESTED_TABLES>
+}> {
+	const driver = createSQLiteDriver({ path: ':memory:' })
+	const sqlite = createDatabase({ driver, tables: NESTED_TABLES })
+	const memory = createDatabase({ driver: createMemoryDriver(), tables: NESTED_TABLES })
+	for (const database of [sqlite, memory]) await database.table('docs').set(NESTED_ROWS)
+	return { driver, sqlite, memory }
+}
+
+/** Holds the columns of the bench table, the client shape the bench readings use. */
+export const BENCH_TABLES = {
+	items: {
+		id: stringShape(),
+		organization: stringShape(),
+		rank: integerShape(),
+		body: stringShape(),
+	},
+}
+
+/** Holds the bench table's index: its tenant column. */
+export const BENCH_INDEXES: IndexMap = { items: [['organization']] }
+
+/** Holds the bench table's row count, the size of taverna's data slice. */
+export const BENCH_ROWS = 80646
+
+/** Names a bench row width: narrow rows, or mostly short text with a tail of long text. */
+export type BenchWidth = 'narrow' | 'mixed'
+
+/**
+ * Builds one bench row: 40 tenants and, for mixed rows, a body of 24 characters with every
+ * seventh at 300 and every fiftieth at 2000.
+ *
+ * @param index - The row's position
+ * @param width - The row width
+ * @returns The row
+ */
+export function buildBenchRow(index: number, width: BenchWidth): RowOf<typeof BENCH_TABLES.items> {
+	const length = width === 'narrow' ? 1 : index % 50 === 0 ? 2000 : index % 7 === 0 ? 300 : 24
+	return {
+		id: 'k' + String(index).padStart(7, '0'),
+		organization: 'o' + String(index % 40),
+		rank: index,
+		body: 'x'.repeat(length),
+	}
+}
+
+/**
+ * Yields bench keys without end, stepping through every row by a stride coprime to
+ * {@link BENCH_ROWS}, so consecutive reads land on distant pages.
+ *
+ * @param step - The stride
+ * @yields The next key
+ */
+export function* cycleBenchKeys(step: number): Generator<string, never> {
+	while (true) {
+		yield* Array.from({ length: BENCH_ROWS }, (_, index) =>
+			String(buildBenchRow((index * step) % BENCH_ROWS, 'narrow').id),
+		)
+	}
+}
+
+/**
+ * Creates the bench database on a file under WAL with `synchronous` FULL, seeded with
+ * {@link BENCH_ROWS} rows, and a second wrapper connection to the file for the wrapper-alone
+ * arms.
+ *
+ * @param path - The SQLite file
+ * @param width - The row width
+ * @returns The database and the connected wrapper; the caller closes both
+ */
+export async function createBenchDatabase(
+	path: string,
+	width: BenchWidth,
+): Promise<{
+	readonly database: DatabaseInterface<typeof BENCH_TABLES>
+	readonly wrapper: SQLiteDatabaseInterface
+}> {
+	const database = createDatabase({
+		driver: createSQLiteDriver({ path, pragmas: { synchronous: 'FULL' } }),
+		tables: BENCH_TABLES,
+		indexes: BENCH_INDEXES,
+	})
+	const rows = Array.from({ length: BENCH_ROWS }, (_, index) => buildBenchRow(index, width))
+	for (const offset of Array.from(
+		{ length: Math.ceil(BENCH_ROWS / 5000) },
+		(_, index) => index * 5000,
+	)) {
+		await database.transaction(async (scope) => {
+			await scope.table('items').set(rows.slice(offset, offset + 5000))
+		})
+	}
+	const wrapper = createSQLiteDatabase({ path })
+	wrapper.connect()
+	return { database, wrapper }
 }

@@ -11,7 +11,7 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { CompiledSQL } from './types.js'
 import { DatabaseError, findColumn, validatePage } from '@src/core'
-import { isFiniteNumber, isString } from '@orkestrel/contract'
+import { isBoolean, isFiniteNumber, isNumber, isString } from '@orkestrel/contract'
 import {
 	computeSuccessor,
 	deriveSQLiteIndexName,
@@ -19,7 +19,7 @@ import {
 	matchesPrimaryPin,
 	quoteIdentifier,
 } from './helpers.js'
-import { inferValueStorage } from './inferers.js'
+import { inferSentinelType, inferValueStorage } from './inferers.js'
 
 /**
  * Maps a portable {@link ColumnStorage} to its SQLite column type.
@@ -43,38 +43,102 @@ export function compileColumnSQL(storage: ColumnStorage): string {
 }
 
 /**
- * Compiles a {@link FieldPath} to the SQL expression that reads it.
+ * Compiles the keys of a nested path to a SQL string literal holding its JSON path, each key a
+ * quoted label.
  *
  * @remarks
- * A flat path compiles to the quoted column; a nested path compiles to a
- * `json_extract` over the head column with the rest of the path as its accessor.
+ * A quoted label reads every key as one object member, a `.`, a space, or a `[` included: a
+ * backslash and a double quote are escaped with a backslash, and a single quote is doubled for
+ * the SQL literal. A key never reads as an array index, so `'0'` names an object member only.
  *
- * @param path - The field path
- * @returns The SQL expression selecting the value
+ * @param keys - The keys after the head column
+ * @returns The SQL string literal of the JSON path
+ *
+ * @example
+ * ```ts
+ * compileJSONPathSQL(['user', 'a.b']) // `'$."user"."a.b"'`
+ * ```
  */
-export function compileFieldSQL(path: FieldPath): string {
-	if (isString(path)) return quoteIdentifier(path)
-	const [column, ...nested] = path
+export function compileJSONPathSQL(keys: readonly string[]): string {
+	const labels = keys.map((key) => '."' + key.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"')
+	return "'$" + labels.join('').replaceAll("'", "''") + "'"
+}
+
+/**
+ * Compiles the arguments a JSON function reads a nested path through: the head column, read
+ * only when it holds text, and the path's quoted labels.
+ *
+ * @remarks
+ * A head that is both optional and nullable stores explicit `null` as an empty blob, which the
+ * JSON functions refuse as malformed JSON, so a head that holds no text reads as `NULL`, the
+ * core's absent path.
+ *
+ * @param path - The nested field path: a head column, then its keys
+ * @returns The two SQL arguments, comma-separated
+ * @throws A `VALIDATION` {@link DatabaseError} when the path holds no column
+ *
+ * @example
+ * ```ts
+ * compileJSONAccessSQL(['profile', 'score'])
+ * // `CASE WHEN typeof("profile") = 'text' THEN "profile" END, '$."score"'`
+ * ```
+ */
+export function compileJSONAccessSQL(path: readonly string[]): string {
+	const [column, ...keys] = path
 	if (column === undefined) {
 		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
 	}
-	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
-	return 'json_extract(' + quoteIdentifier(column) + ", '$" + rest + "')"
+	const head = quoteIdentifier(column)
+	return (
+		'CASE WHEN typeof(' + head + ") = 'text' THEN " + head + ' END, ' + compileJSONPathSQL(keys)
+	)
+}
+
+/**
+ * Compiles a {@link FieldPath} to the SQL expression that reads it.
+ *
+ * @remarks
+ * A flat path compiles to the quoted column; a nested path compiles to a `json_extract` through
+ * {@link compileJSONAccessSQL}.
+ *
+ * @param path - The field path
+ * @returns The SQL expression selecting the value
+ *
+ * @example
+ * ```ts
+ * compileFieldSQL(['profile', 'score'])
+ * // `json_extract(CASE WHEN typeof("profile") = 'text' THEN "profile" END, '$."score"')`
+ * ```
+ */
+export function compileFieldSQL(path: FieldPath): string {
+	return isString(path) ? quoteIdentifier(path) : 'json_extract(' + compileJSONAccessSQL(path) + ')'
 }
 
 /**
  * Compiles an {@link AggregateOperation} over a {@link FieldPath}.
  *
+ * @remarks
+ * `sum` compiles to `TOTAL`, the engine's floating-point sum, which `SUM` matches below 2^53
+ * and which never overflows: an integer `SUM` past 2^53 raises when it is read into a
+ * JavaScript number. Over no value but `NULL` it answers `NULL`, as `SUM` does.
+ *
  * @param operation - The aggregate to compute
  * @param column - The column or nested path to aggregate
  * @returns The SQL aggregate expression
+ *
+ * @example
+ * ```ts
+ * compileAggregateSQL('sum', 'age') // 'CASE WHEN COUNT("age") = 0 THEN NULL ELSE TOTAL("age") END'
+ * ```
  */
 export function compileAggregateSQL(operation: AggregateOperation, column: FieldPath): string {
 	switch (operation) {
 		case 'count':
 			return 'COUNT(*)'
-		case 'sum':
-			return 'SUM(' + compileFieldSQL(column) + ')'
+		case 'sum': {
+			const field = compileFieldSQL(column)
+			return 'CASE WHEN COUNT(' + field + ') = 0 THEN NULL ELSE TOTAL(' + field + ') END'
+		}
 		case 'average':
 			return 'AVG(' + compileFieldSQL(column) + ')'
 		case 'minimum':
@@ -85,27 +149,24 @@ export function compileAggregateSQL(operation: AggregateOperation, column: Field
 }
 
 /**
- * Compiles a nested {@link FieldPath} to the `json_type(<col>, <path>)` SQL
- * expression — the {@link compileFieldSQL} `json_extract` sibling used to tell a
- * present JSON `null` apart from an absent path (both read back as SQL `NULL`
- * through `json_extract`, but `json_type` reports `'null'` for the former and
- * SQL `NULL` for the latter).
+ * Compiles a nested {@link FieldPath} to the SQL expression that reads the JSON type at the
+ * path, through {@link compileJSONAccessSQL}.
+ *
+ * @remarks
+ * `json_extract` reads both a present JSON `null` and an absent path as SQL `NULL`;
+ * `json_type` reads `'null'` for the first and SQL `NULL` for the second.
  *
  * @param path - The nested field path (a column plus its JSON keys)
  * @returns The SQL expression reading the value's JSON type
  *
  * @example
  * ```ts
- * compileJSONTypeSQL(['payload', 'user', 'id']) // "json_type(\"payload\", '$.user.id')"
+ * compileJSONTypeSQL(['payload', 'tag'])
+ * // `json_type(CASE WHEN typeof("payload") = 'text' THEN "payload" END, '$."tag"')`
  * ```
  */
 export function compileJSONTypeSQL(path: readonly string[]): string {
-	const [column, ...nested] = path
-	if (column === undefined) {
-		throw new DatabaseError('VALIDATION', 'A field path must contain at least one column')
-	}
-	const rest = nested.map((key) => '.' + key.replaceAll("'", "''")).join('')
-	return 'json_type(' + quoteIdentifier(column) + ", '$" + rest + "')"
+	return 'json_type(' + compileJSONAccessSQL(path) + ')'
 }
 
 // The `QueryInput` → parameterized SQL compiler. It turns the native side of a
@@ -121,7 +182,8 @@ export function compileJSONTypeSQL(path: readonly string[]): string {
  * @remarks
  * Every operand is run through `encodeValue`: a flat column encodes operands with its
  * declared storage, and a nested `FieldPath` encodes each operand as the native scalar
- * `json_extract` returns. The core's total order ranks an absent value and `null` below
+ * `json_extract` returns. `equals`, `not`, `any`, and `none` on a nested path compile through
+ * {@link compileNestedSQL}. The core's total order ranks an absent value and `null` below
  * every value, so `below`, `to`, `not`, and `none` match them; the fragments add the
  * column's null test, chosen from its flags. A column that is both optional and nullable
  * stores explicit `null` as a sentinel — an empty blob for `text` and the text `null`
@@ -156,6 +218,15 @@ export function compileConditionSQL(
 	schema: TableSchema,
 	pinned = false,
 ): CompiledSQL {
+	if (
+		!isString(condition.column) &&
+		(condition.operator === 'equals' ||
+			condition.operator === 'not' ||
+			condition.operator === 'any' ||
+			condition.operator === 'none')
+	) {
+		return compileNestedSQL(condition)
+	}
 	const column = (pinned ? '+' : '') + compileFieldSQL(condition.column)
 	const nested = !isString(condition.column)
 	const declared = isString(condition.column) ? findColumn(condition.column, schema) : undefined
@@ -171,7 +242,7 @@ export function compileConditionSQL(
 					: declared.optional
 						? 'optional'
 						: 'required'
-	const sentinel = declared?.storage === 'text' || declared?.storage === 'json' ? 'blob' : 'text'
+	const sentinel = inferSentinelType(declared?.storage)
 	const absent =
 		flags === 'both'
 			? '(' + column + ' IS NULL OR typeof(' + column + ") = '" + sentinel + "')"
@@ -191,25 +262,14 @@ export function compileConditionSQL(
 	const textual = texted ? '' : ' AND typeof(' + column + ") = 'text'"
 	const first = condition.values[0]
 	const second = condition.values[1]
-	// The nested `json_type` read disambiguates a present JSON `null` from an absent path.
-	const jsonType = isString(condition.column) ? '' : compileJSONTypeSQL(condition.column)
 	switch (condition.operator) {
 		case 'equals': {
-			if (flags === 'nested' && (first === null || first === undefined)) {
-				return { sql: jsonType + " = 'null'", parameters: [] }
-			}
 			if (first === null) return { sql: nulled === '' ? '0' : nulled, parameters: [] }
 			if (first === undefined) return { sql: absented === '' ? '0' : absented, parameters: [] }
 			return compileBoundSQL(column + ' = ?', [first], nested, declared)
 		}
 		case 'not': {
 			if (first === null || first === undefined) {
-				if (flags === 'nested') {
-					return {
-						sql: '(' + jsonType + ' IS NULL OR ' + jsonType + " != 'null')",
-						parameters: [],
-					}
-				}
 				if (first === null) {
 					if (flags === 'nullable') return { sql: column + ' IS NOT NULL', parameters: [] }
 					return { sql: nulled === '' ? '1' : 'NOT ' + nulled, parameters: [] }
@@ -291,7 +351,6 @@ export function compileConditionSQL(
 		}
 		case 'any': {
 			if (condition.values.length === 0) return { sql: '0', parameters: [] }
-			if (nested) return compileListSQL(column + ' IN ', '', condition.values, nested, declared)
 			const listed = condition.values.filter((value) => value !== null && value !== undefined)
 			const parts = [
 				...(listed.length > 0
@@ -308,15 +367,6 @@ export function compileConditionSQL(
 		}
 		case 'none': {
 			if (condition.values.length === 0) return { sql: '1', parameters: [] }
-			if (nested) {
-				return compileListSQL(
-					'(' + column + ' NOT IN ',
-					' OR ' + column + ' IS NULL)',
-					condition.values,
-					nested,
-					declared,
-				)
-			}
 			const listed = condition.values.filter((value) => value !== null && value !== undefined)
 			const parts = [
 				...(listed.length > 0
@@ -344,6 +394,82 @@ export function compileConditionSQL(
 		case 'present':
 			return { sql: compileGuardedSQL(column + ' IS NOT NULL', valued), parameters: [] }
 	}
+}
+
+/**
+ * Compiles an `equals`, `not`, `any`, or `none` condition on a nested path to a form that tests
+ * the JSON type the path holds beside its value.
+ *
+ * @remarks
+ * Each operand class has its own term: a string reads `json_type` `text` and its value, a
+ * number reads `integer` or `real` and its value, `true`, `false`, and `null` read their JSON
+ * type, and an absent path reads a `NULL` type. Strings and numbers bind as one JSON list read
+ * through `json_each`, so a stored number and a listed one pass through the same JSON text
+ * parser. `not` and `none` negate the membership with `NULL` read as no match. Both reads go
+ * through {@link compileJSONAccessSQL}. Any other operand compares as the JSON text of its
+ * value. The SQLite planner sends a condition here as a prefilter only when every operand is a
+ * scalar and every key is one a JSON path label names as the core does, and the core rechecks
+ * it.
+ *
+ * @param condition - The condition, whose column is a nested path
+ * @returns The SQL fragment and its bound parameters
+ *
+ * @example
+ * ```ts
+ * compileNestedSQL({ column: ['meta', 'flag'], operator: 'equals', values: [true], connector: 'and' })
+ * // { sql: `json_type(CASE WHEN typeof("meta") = 'text' THEN "meta" END, '$."flag"') = 'true'`, parameters: [] }
+ * ```
+ */
+export function compileNestedSQL(condition: Condition): CompiledSQL {
+	const path = isString(condition.column) ? [condition.column] : condition.column
+	const type = compileJSONTypeSQL(path)
+	const value = compileFieldSQL(path)
+	const listed = condition.operator === 'any' || condition.operator === 'none'
+	const operands = listed ? condition.values : [condition.values[0]]
+	const strings = operands.filter(isString)
+	const numbers = operands.filter(isNumber)
+	const others = operands.filter(
+		(operand) =>
+			!isString(operand) &&
+			!isNumber(operand) &&
+			!isBoolean(operand) &&
+			operand !== null &&
+			operand !== undefined,
+	)
+	const member = compileJoinedSQL(
+		[
+			...(strings.length > 0
+				? [
+						{
+							sql: '(' + type + " = 'text' AND " + value + ' IN (SELECT value FROM json_each(?)))',
+							parameters: [JSON.stringify(strings)],
+						},
+					]
+				: []),
+			...(numbers.length > 0
+				? [
+						{
+							sql:
+								'(' +
+								type +
+								" IN ('integer', 'real') AND " +
+								value +
+								' IN (SELECT value FROM json_each(?)))',
+							parameters: [JSON.stringify(numbers)],
+						},
+					]
+				: []),
+			...(operands.includes(true) ? [{ sql: type + " = 'true'", parameters: [] }] : []),
+			...(operands.includes(false) ? [{ sql: type + " = 'false'", parameters: [] }] : []),
+			...(operands.includes(null) ? [{ sql: type + " = 'null'", parameters: [] }] : []),
+			...(operands.includes(undefined) ? [{ sql: type + ' IS NULL', parameters: [] }] : []),
+			...others.map((operand) => compileBoundSQL(value + ' = ?', [operand], true, undefined)),
+		],
+		' OR ',
+		'0',
+	)
+	if (condition.operator === 'equals' || condition.operator === 'any') return member
+	return { sql: 'NOT COALESCE(' + member.sql + ', 0)', parameters: member.parameters }
 }
 
 /**
@@ -504,7 +630,10 @@ export function compileWhereSQL(
  * read has no order, so a read without an order returns ascending key order. The primary
  * term is skipped when the primary is already an explicit order term. `pinned` writes each
  * explicit term behind the unary `+`, so an order keeps the engine on the primary-key access
- * path {@link compileWhereSQL} pins.
+ * path {@link compileWhereSQL} pins. A column that is both optional and nullable stores
+ * explicit `null` as a sentinel that sorts among its values, so its term follows a rank in
+ * the same direction: absent ranks 0, `null` ranks 1, and a value ranks 2, which is the core's
+ * total order.
  *
  * @param order - The explicit order terms, or `undefined`
  * @param schema - The table's schema (for the primary key)
@@ -523,12 +652,22 @@ export function compileOrderSQL(
 	schema: TableSchema,
 	pinned = false,
 ): string {
-	const terms = (order ?? []).map(
-		(term) =>
-			(pinned ? '+' : '') +
-			compileFieldSQL(term.column) +
-			(term.direction === 'descending' ? ' DESC' : ' ASC'),
-	)
+	const terms = (order ?? []).flatMap((term) => {
+		const direction = term.direction === 'descending' ? ' DESC' : ' ASC'
+		const field = compileFieldSQL(term.column)
+		const declared = isString(term.column) ? findColumn(term.column, schema) : undefined
+		const sorted = (pinned ? '+' : '') + field + direction
+		if (declared === undefined || !declared.optional || !declared.nullable) return [sorted]
+		const rank =
+			'CASE WHEN ' +
+			field +
+			' IS NULL THEN 0 WHEN typeof(' +
+			field +
+			") = '" +
+			inferSentinelType(declared.storage) +
+			"' THEN 1 ELSE 2 END"
+		return [rank + direction, sorted]
+	})
 	const ordersByPrimary = (order ?? []).some(
 		(term) => isString(term.column) && term.column === schema.primary,
 	)

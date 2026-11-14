@@ -10,7 +10,9 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import type { SQLiteRow, SQLiteValue } from '@orkestrel/sqlite'
 import { DatabaseError, findColumn, MAX_PATTERN_LENGTH, normalizeReadInput } from '@src/core'
+import { isPragmaName, isPragmaValue } from '@orkestrel/sqlite'
 import { PRAGMA_NAMES } from './constants.js'
+import { inferSentinelType } from './inferers.js'
 import {
 	attempt,
 	cloneJSONValue,
@@ -19,6 +21,7 @@ import {
 	isError,
 	isFiniteNumber,
 	isInteger,
+	isNumber,
 	isString,
 	isUint8Array,
 	preview,
@@ -30,8 +33,7 @@ import {
 // `decodeRow` lift the per-cell codecs across a whole schema; the SQL
 // `quoteIdentifier` contains identifier input. The SQL emitters live together
 // in `compilers.ts`; this module owns the planner, codecs, value extraction, and
-// persisted-name derivation. Its SQLite import is type-only and cannot couple
-// the emitted JavaScript to the native package.
+// persisted-name derivation. Its one SQLite value import is the wrapper's pragma guards.
 
 // === Filesystem classification
 
@@ -73,7 +75,8 @@ export function matchesAbsentPath(error: unknown): boolean {
 // the contract's meaning goes to the plan's native side, which `compileQuerySQL` compiles,
 // and only the rest goes to the residual the core runs. A flat declared `text`, `integer`,
 // `real`, or `boolean` column is native under every operator, with the forms chosen from the
-// column's flags; a nested path and a `json` or `blob` column stay residual.
+// column's flags; the equality family on a nested scalar under a `json` head is a prefilter
+// on both sides; every other nested path and a `json` or `blob` column stay residual.
 
 /**
  * Reports whether an operand has the storage class a declared column stores, so a bound
@@ -192,16 +195,64 @@ export function matchesSQLiteCondition(condition: Condition, schema: TableSchema
 }
 
 /**
+ * Reports whether SQLite applies a superset form of one {@link Condition} that the core then
+ * rechecks: `equals`, `not`, `any`, or `none` on a nested path under a declared `json` head,
+ * with scalar operands.
+ *
+ * @remarks
+ * The path holds a head and at least one key, and a JSON path label names each key as the
+ * core does: a canonical array index such as `0` and `length` reach an array member in the
+ * core, while a label names an object member only, and a key holding U+0000 ends the SQL text
+ * the label sits in. Every operand is a string, a number, a boolean, `null`, or `undefined`.
+ * {@link compileNestedSQL} compiles the form.
+ *
+ * @param condition - The condition to test
+ * @param schema - The table's schema
+ * @returns True if the condition goes to both sides of the plan; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesSQLitePrefilter({ column: ['meta', 'tag'], operator: 'equals', values: ['red'], connector: 'and' }, schema) // true
+ * matchesSQLitePrefilter({ column: ['meta', '0'], operator: 'equals', values: ['red'], connector: 'and' }, schema) // false
+ * ```
+ */
+export function matchesSQLitePrefilter(condition: Condition, schema: TableSchema): boolean {
+	if (isString(condition.column)) return false
+	const [head, ...keys] = condition.column
+	return (
+		head !== undefined &&
+		keys.length > 0 &&
+		findColumn(head, schema)?.storage === 'json' &&
+		keys.every(
+			(key) => key !== 'length' && !key.includes('\u0000') && !/^(?:0|[1-9]\d*)$/u.test(key),
+		) &&
+		(condition.operator === 'equals' ||
+			condition.operator === 'not' ||
+			condition.operator === 'any' ||
+			condition.operator === 'none') &&
+		condition.values.every(
+			(value) =>
+				value === null ||
+				value === undefined ||
+				isString(value) ||
+				isNumber(value) ||
+				isBoolean(value),
+		)
+	)
+}
+
+/**
  * Splits a read into the part SQLite answers natively and the residual the core runs — the
  * SQLite driver's `plan`.
  *
  * @remarks
  * When every connector is `and`, each condition {@link matchesSQLiteCondition} answers goes
- * native and the rest go residual; when any connector is `or`, the conditions go native
- * together or residual together. The order goes native when every term names a flat
- * declared column that is not both optional and nullable: SQL places `NULL` lowest in both
- * directions, the core's place for an absent or `null` value, while the sentinel of a column
- * with both flags sorts among its values. The page goes native when the residual holds no
+ * native, each condition {@link matchesSQLitePrefilter} admits goes to both sides, and the
+ * rest go residual; when any connector is `or`, the conditions go native together or
+ * residual together. The order goes native when every term names a flat declared column:
+ * SQL places `NULL` lowest in both directions, the core's place for an absent or `null`
+ * value, and {@link compileOrderSQL} ranks the sentinel of a column that is both optional and
+ * nullable between absence and the values. The page goes native when the residual holds no
  * condition and no order. The aggregate goes native when the residual holds no condition
  * and it is `count`, or `sum`, `average`, `minimum`, or `maximum` on a flat declared
  * `integer` or `real` column that is not both optional and nullable, under the engine's
@@ -224,17 +275,20 @@ export function planSQLiteQuery(input: ReadInput, schema: TableSchema): ReadPlan
 	const answered = conditions.filter((condition) => matchesSQLiteCondition(condition, schema))
 	const folded = conditions.slice(1).some((condition) => condition.connector === 'or')
 	const whole = answered.length === conditions.length
-	const native = whole ? conditions : folded ? [] : answered
+	const native = whole
+		? conditions
+		: folded
+			? []
+			: conditions.filter(
+					(condition) => answered.includes(condition) || matchesSQLitePrefilter(condition, schema),
+				)
 	const residual = whole
 		? []
 		: folded
 			? conditions
 			: conditions.filter((condition) => !answered.includes(condition))
 	const order = read.order ?? []
-	const ordered = order.every((term) => {
-		const column = findSQLiteColumn(term.column, schema)
-		return column !== undefined && !(column.optional && column.nullable)
-	})
+	const ordered = order.every((term) => findSQLiteColumn(term.column, schema) !== undefined)
 	const paged = residual.length === 0 && ordered
 	const aggregate = read.aggregate
 	const measured = aggregate === undefined ? undefined : findSQLiteColumn(aggregate.column, schema)
@@ -341,13 +395,15 @@ export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage)
 // === Connection settings
 
 /**
- * Validates the `pragmas` option of the SQLite driver: each name must be one of
- * {@link PRAGMA_NAMES}, matched exactly, and each value a finite number or a bare keyword.
+ * Validates the `pragmas` option of the SQLite driver: each name must pass `isPragmaName` and
+ * be one of {@link PRAGMA_NAMES}, matched exactly, and each value must pass `isPragmaValue`.
  *
  * @remarks
- * A bare keyword is ASCII letters and underscores, such as `WAL` or `FULL`, so a value can
- * neither chain a statement nor carry another setting. The check runs before the driver
- * connects.
+ * `@orkestrel/sqlite` owns the pragma syntax: a name is ASCII letters, digits, and
+ * underscores, and a value is a 32-bit signed integer or a bare keyword of ASCII letters and
+ * underscores, such as `WAL` or `FULL`, so a value can neither chain a statement nor carry
+ * another setting. {@link PRAGMA_NAMES} is the planner's fact: the names that change no read
+ * result. The check runs before the driver connects.
  *
  * @param pragmas - The PRAGMA names and values to apply at open, or `undefined` for none
  * @throws A `VALIDATION` {@link DatabaseError} naming the refused pragma, and its value when
@@ -357,23 +413,24 @@ export function matchesSQLiteAffinity(declared: unknown, storage: ColumnStorage)
  * ```ts
  * validatePragmas({ journal_mode: 'WAL' }) // returns
  * validatePragmas({ case_sensitive_like: 'ON' }) // throws VALIDATION
+ * validatePragmas({ cache_size: 2147483648 }) // throws VALIDATION
  * ```
  */
 export function validatePragmas(
 	pragmas: Readonly<Record<string, string | number>> | undefined,
 ): void {
 	for (const [name, value] of Object.entries(pragmas ?? {})) {
-		if (!PRAGMA_NAMES.includes(name)) {
+		if (!isPragmaName(name) || !PRAGMA_NAMES.includes(name)) {
 			throw new DatabaseError(
 				'VALIDATION',
 				`SQLite pragma ${preview(name)} is refused: the driver admits only ${PRAGMA_NAMES.join(', ')}, which change no read result`,
 				{ pragma: name },
 			)
 		}
-		if (!(isFiniteNumber(value) || (isString(value) && /^[A-Za-z_]+$/.test(value)))) {
+		if (!isPragmaValue(value)) {
 			throw new DatabaseError(
 				'VALIDATION',
-				`SQLite pragma ${preview(name)} takes a finite number or a bare keyword, not ${preview(value)}`,
+				`SQLite pragma ${preview(name)} takes a 32-bit signed integer or a keyword of ASCII letters and underscores, not ${preview(value)}`,
 				{ pragma: name, value: preview(value) },
 			)
 		}
@@ -428,7 +485,7 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 	if (value === null) {
 		if (!column.nullable) return null
 		if (!column.optional) return null
-		return column.storage === 'text' || column.storage === 'json' ? new Uint8Array() : String(null)
+		return inferSentinelType(column.storage) === 'blob' ? new Uint8Array() : String(null)
 	}
 	switch (column.storage) {
 		case 'boolean':
@@ -487,7 +544,7 @@ export function decodeValue(
 	if (
 		column.optional &&
 		column.nullable &&
-		(column.storage === 'text' || column.storage === 'json'
+		(inferSentinelType(column.storage) === 'blob'
 			? isUint8Array(value) && value.byteLength === 0
 			: value === String(null))
 	) {

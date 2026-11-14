@@ -2,7 +2,6 @@ import type {
 	AggregateOperation,
 	ColumnSchema,
 	QueryInput,
-	DriverInterface,
 	DriverMetadata,
 	Key,
 	MigrationInput,
@@ -22,9 +21,10 @@ import {
 	isInteger,
 	isNumber,
 	isString,
+	preview,
 } from '@orkestrel/contract'
 import type { SQLiteDatabaseInterface, SQLiteValue } from '@orkestrel/sqlite'
-import type { SQLiteDriverOptions } from '../types.js'
+import type { SQLiteDriverInterface, SQLiteDriverOptions } from '../types.js'
 import {
 	applyKeys,
 	bindRowKey,
@@ -43,7 +43,7 @@ import {
 	ScopedStorage,
 	validatePage,
 } from '@src/core'
-import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
+import { createSQLiteDatabase, isPragmaName, isSQLiteError } from '@orkestrel/sqlite'
 import {
 	compileAggregateSQL,
 	compileInsertSQL,
@@ -65,17 +65,22 @@ import {
 	quoteIdentifier,
 	validatePragmas,
 } from '../helpers.js'
+import { SQLiteConnection } from '../SQLiteConnection.js'
 import { SQLiteTransaction } from '../SQLiteTransaction.js'
 import { METADATA_TABLE } from '../constants.js'
 
 /**
- * Implements the {@link DriverInterface} over SQLite — the server-native, trusted-mode
+ * Implements the {@link SQLiteDriverInterface} over SQLite — the server-native, trusted-mode
  * backend built on the published `@orkestrel/sqlite` synchronous wrapper.
  *
  * @remarks
  * A thin adapter: it implements the storage primitives the core database layer
- * needs by delegating to the wrapper's prepared statements — it never touches
- * raw `node:sqlite`. `open` issues `CREATE TABLE IF NOT EXISTS` with real typed
+ * needs through the wrapper's prepared statements, which each open connection's
+ * {@link SQLiteConnection} caches by SQL text — it never touches raw `node:sqlite`. A
+ * writable file opens under `journal_mode = WAL` unless `pragmas` names `journal_mode`. Inside
+ * its schema transaction, a writable `open` drops each created index of a deployed table that
+ * the deployed schema no longer declares, and after it runs `PRAGMA optimize = 0x10002`.
+ * `open` issues `CREATE TABLE IF NOT EXISTS` with real typed
  * columns (mapped from each {@link TableSchema}'s portable column types) and a
  * `PRIMARY KEY`, plus a `CREATE INDEX IF NOT EXISTS` per declared index (both
  * reopen-safe), and readies a reserved `_metadata` single-row table `metadata()` /
@@ -91,14 +96,14 @@ import { METADATA_TABLE } from '../constants.js'
  * to SQL with `compileQuerySQL`, and `aggregate` runs a SQL
  * `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` (through `compileAggregateSQL`) over the same
  * compiled WHERE. A stored value that does not match its declaration raises `DRIVER`.
- * `transaction` runs a callback inside native `BEGIN` / `COMMIT` / `ROLLBACK`, passing a
+ * `transaction` runs a callback inside native `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`, passing a
  * scoped storage capability that declares the same native members and becomes invalid
  * after settlement. `migrate` runs the
  * plan's projected DDL ({@link import('../compilers.js').stepToSQL}) inside
  * whichever native transaction is active: joined into the active transaction
  * callback when one exists (the core's versioned reconcile path wraps migrate +
- * stamp in one native `BEGIN`, and node:sqlite rejects a nested `BEGIN`), or
- * inside its own `database.transact` otherwise — a mid-plan failure rolls
+ * stamp in one native transaction, and node:sqlite rejects a nested `BEGIN`), or
+ * inside its own `BEGIN IMMEDIATE` transaction otherwise — a mid-plan failure rolls
  * back atomically either way, an improvement over the non-atomic `MemoryDriver`
  * / `JSONDriver` migrate; a step referencing an undeclared table throws
  * `DatabaseError` `MIGRATION` before any DDL for that step runs. A list write or insert runs
@@ -110,16 +115,17 @@ import { METADATA_TABLE } from '../constants.js'
  * a raw backend error escapes `DriverInterface`: `CONSTRAINT` → `CONFLICT`, the
  * wrapper's own `CLOSED` → `CLOSED`, `BUSY` (a locked database that outlasted
  * the configured `timeout`) → a retryable `DRIVER` (`context.retryable` is
- * `true`), and `UNKNOWN` / any other throw → `DRIVER`. The original error is
+ * `true`), and `UNKNOWN` / any other throw → `DRIVER`, `SQLITE_LOCKED` included: a lock the
+ * same connection holds carries no `retryable`, and `context.cause.context.errcode` is 6. The original error is
  * preserved as `context.cause`. A `DatabaseError` this driver throws directly
  * (`CLOSED` from the `#require` gate, `NOT_FOUND` from `#table`, `MIGRATION`
  * from a migration-plan fault) passes through `#guard` unchanged, never
  * re-wrapped.
  */
-export class SQLiteDriver implements DriverInterface {
+export class SQLiteDriver implements SQLiteDriverInterface {
 	readonly #path: string
 	readonly #options: SQLiteDriverOptions
-	#database: SQLiteDatabaseInterface | undefined
+	#connection: SQLiteConnection | undefined
 	#schema = new Map<string, TableSchema>()
 	#identities = new Map<string, object>()
 	readonly #transactions = new Set<SQLiteTransaction>()
@@ -147,12 +153,14 @@ export class SQLiteDriver implements DriverInterface {
 			)
 		}
 		this.#guard(() => {
-			const current = this.#database
+			const current = this.#connection
 			const previousIdentities = this.#identities
-			this.#database = undefined
+			this.#connection = undefined
 			this.#schema = new Map()
 			this.#identities = new Map()
-			current?.close()
+			current?.database.close()
+			const writable = this.#options.readonly !== true
+			const pragmas = Object.entries(this.#options.pragmas ?? {})
 			const database = createSQLiteDatabase({
 				path: this.#path,
 				...(this.#options.readonly !== undefined ? { readonly: this.#options.readonly } : {}),
@@ -163,14 +171,20 @@ export class SQLiteDriver implements DriverInterface {
 			})
 			try {
 				database.connect()
-				for (const [name, value] of Object.entries(this.#options.pragmas ?? {})) {
-					database.pragma(name, value)
+				if (
+					writable &&
+					this.#path !== ':memory:' &&
+					!pragmas.some(([name]) => name === 'journal_mode')
+				) {
+					database.execute('PRAGMA journal_mode = WAL')
 				}
+				for (const [name, value] of pragmas) database.pragma(name, value)
+				const connection = new SQLiteConnection(database)
 				const map = new Map<string, TableSchema>()
 				const identities = new Map<string, object>()
-				database.transact(() => {
+				this.#transact(database, () => {
 					this.#ensureMetadataTable(database)
-					const stored = this.#readMetadata(database)
+					const stored = this.#readMetadata(connection)
 					const deployed = normalizeDriverSchema(stored?.schema ?? owned)
 					const missing = new Map<string, readonly string[] | undefined>()
 					for (const table of deployed) {
@@ -193,6 +207,7 @@ export class SQLiteDriver implements DriverInterface {
 							database.execute(schemaToTable(table))
 							for (const sql of schemaToIndexes(table)) database.execute(sql)
 						} else {
+							if (writable) this.#dropIndexes(database, table)
 							for (const [index, group] of table.indexes.entries()) {
 								if (absent.includes(deriveSQLiteIndexName(table.name, group))) {
 									const sql = schemaToIndexes(table)[index]
@@ -203,9 +218,24 @@ export class SQLiteDriver implements DriverInterface {
 						identities.set(table.name, previousIdentities.get(table.name) ?? {})
 					}
 				})
+				// Analyze each table that has no statistics or changed tenfold, without a row bound. A
+				// busy refusal changes cost only, and the next writable open analyzes again; any other
+				// refusal, a corrupt index included, fails the open. Unproven: no test stages a busy
+				// refusal here, because the schema transaction takes the same write lock immediately before
+				// on the same thread; a seam between the two would reopen it.
+				const analysis = writable
+					? attempt(() => database.execute('PRAGMA optimize = 0x10002'))
+					: undefined
+				if (
+					analysis !== undefined &&
+					!analysis.success &&
+					!(isSQLiteError(analysis.error) && analysis.error.code === 'BUSY')
+				) {
+					throw analysis.error
+				}
 				this.#schema = map
 				this.#identities = identities
-				this.#database = database
+				this.#connection = connection
 			} catch (error) {
 				try {
 					database.close()
@@ -220,9 +250,45 @@ export class SQLiteDriver implements DriverInterface {
 	async close(): Promise<void> {
 		this.#root()
 		this.#guard(() => {
-			this.#database?.close()
-			this.#database = undefined
+			this.#connection?.database.close()
+			this.#connection = undefined
 		})
+	}
+
+	/**
+	 * Runs `PRAGMA name` with no value and returns the first value the engine answers.
+	 *
+	 * @remarks
+	 * A name the engine treats as an action runs that action: a `pragma('optimize')` call writes
+	 * statistics bounded by the engine's default analysis limit. The name must pass
+	 * `isPragmaName` from `@orkestrel/sqlite`; a call while a transaction is active raises
+	 * `CONFLICT`. The `pragmas` option is the one place a setting is written.
+	 *
+	 * @param name - The pragma name
+	 * @returns The first value of the engine's answer, or `undefined` when it answers no row
+	 * @throws A `VALIDATION` {@link DatabaseError} for a malformed name, ahead of any SQL
+	 *
+	 * @example
+	 * ```ts
+	 * import { createSQLiteDriver } from '@orkestrel/database/server'
+	 *
+	 * const driver = createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { synchronous: 'FULL' } })
+	 * await driver.open([])
+	 * driver.pragma('synchronous') // 2
+	 * driver.pragma('journal_mode') // 'wal'
+	 * ```
+	 */
+	pragma(name: string): SQLiteValue | undefined {
+		if (!isPragmaName(name)) {
+			throw new DatabaseError(
+				'VALIDATION',
+				`SQLite pragma name ${preview(name)} is refused: a name is ASCII letters, digits, and underscores, opening with a letter or an underscore`,
+				{ pragma: preview(name) },
+			)
+		}
+		this.#root()
+		const connection = this.#require()
+		return this.#guard(() => connection.database.pragma(name))
 	}
 
 	read(table: string, key: Key): Promise<Row | undefined>
@@ -337,10 +403,12 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	/**
-	 * Begins a native transaction — real `BEGIN`, `COMMIT`, `ROLLBACK`.
+	 * Begins a native transaction — real `BEGIN IMMEDIATE`, `COMMIT`, `ROLLBACK`.
 	 *
 	 * @remarks
-	 * The callback receives a scoped {@link StorageInterface}. Fulfillment
+	 * `BEGIN IMMEDIATE` takes the write lock before the callback runs, so a lock another
+	 * connection holds refuses the scope at its start as a retryable `DRIVER`, after the busy
+	 * `timeout` when one is set. The callback receives a scoped {@link StorageInterface}. Fulfillment
 	 * commits and returns its value; rejection rolls back and preserves the
 	 * original error. Root operations and nesting conflict while active, and a
 	 * captured capability conflicts after settlement.
@@ -349,8 +417,8 @@ export class SQLiteDriver implements DriverInterface {
 	 */
 	async transaction<R>(scope: (storage: StorageInterface) => Promise<R>): Promise<R> {
 		this.#root()
-		const database = this.#require()
-		this.#guard(() => database.begin())
+		const database = this.#require().database
+		this.#guard(() => database.execute('BEGIN IMMEDIATE'))
 		const token = new SQLiteTransaction(this.#schema, this.#identities)
 		this.#transactions.add(token)
 		try {
@@ -377,13 +445,13 @@ export class SQLiteDriver implements DriverInterface {
 	 * @remarks
 	 * Atomicity is provided by whichever native transaction is active: when this
 	 * driver's own `transaction()` callback is active (the core's versioned
-	 * reconcile / migrate path joins migrate + stamp under one native `BEGIN`),
+	 * reconcile / migrate path joins migrate + stamp under one native transaction),
 	 * the plan's DDL runs directly inside that enclosing transaction — a mid-plan
 	 * failure rejects the callback and the driver rolls it back. node:sqlite (and
 	 * SQLite generally) rejects a nested `BEGIN`, so this driver must never open a
 	 * second native transaction while one is already open. Otherwise (no
 	 * enclosing transaction), `migrate` wraps the plan in its own native
-	 * `database.transaction` — atomic on its own: a mid-plan failure rolls
+	 * `BEGIN IMMEDIATE` transaction — atomic on its own: a mid-plan failure rolls
 	 * back every DDL statement already applied by the plan. A scoped migration
 	 * uses one fixed internal savepoint literal because the published SQLite
 	 * wrapper intentionally exposes raw `execute` but no savepoint manager. That
@@ -397,7 +465,7 @@ export class SQLiteDriver implements DriverInterface {
 	 */
 	async migrate(input: MigrationInput): Promise<void> {
 		this.#root()
-		const database = this.#require()
+		const connection = this.#require()
 		const owned = cloneMigrationInput(input)
 		const projected = projectMigrationSchema([...this.#schema.values()], owned.plan.steps)
 		const identities = this.#projectIdentities(this.#identities, owned.plan.steps)
@@ -411,10 +479,10 @@ export class SQLiteDriver implements DriverInterface {
 			})
 		}
 		this.#guard(() => {
-			database.transact(() => {
-				this.#applyPlan(database, owned)
+			this.#transact(connection.database, () => {
+				this.#applyPlan(connection.database, owned)
 				if (owned.metadata !== undefined) {
-					this.#writeMetadata(database, owned.metadata)
+					this.#writeMetadata(connection, owned.metadata)
 				}
 			})
 		})
@@ -454,9 +522,9 @@ export class SQLiteDriver implements DriverInterface {
 	): Promise<Row | undefined | ReadonlyArray<Row | undefined>> {
 		const schema = this.#table(table)
 		return this.#guard(() => {
-			const database = this.#require()
+			const connection = this.#require()
 			if (!isArray(keys)) {
-				const row = database
+				const row = connection
 					.prepare(
 						'SELECT * FROM ' +
 							quoteIdentifier(table) +
@@ -481,7 +549,7 @@ export class SQLiteDriver implements DriverInterface {
 				this.#primary(schema),
 			)
 			const found = new Map(
-				database
+				connection
 					.prepare(sql)
 					.all(parameters)
 					.map((row) => [row[schema.primary], decodeRow(row, schema)] as const),
@@ -536,8 +604,8 @@ export class SQLiteDriver implements DriverInterface {
 			const values = entries.map(([key, row]) =>
 				extractValues(encodeRow(bindRowKey(row, schema.primary, key), schema), names, table),
 			)
-			const database = this.#require()
-			const statement = database.prepare(compileInsertSQL(schema, replace))
+			const connection = this.#require()
+			const statement = connection.prepare(compileInsertSQL(schema, replace))
 			checkAbort(options?.signal)
 			const [single] = values
 			if (values.length === 1 && single !== undefined) {
@@ -545,13 +613,13 @@ export class SQLiteDriver implements DriverInterface {
 				return
 			}
 			if (values.length === 0) return
-			if (database.transacting) {
-				this.#contain(database, () => {
+			if (connection.database.transacting) {
+				this.#contain(connection.database, () => {
 					for (const value of values) statement.execute(value)
 				})
 				return
 			}
-			database.transact(() => {
+			this.#transact(connection.database, () => {
 				for (const value of values) statement.execute(value)
 			})
 		})
@@ -686,7 +754,7 @@ export class SQLiteDriver implements DriverInterface {
 		parameters: readonly SQLiteValue[] = [],
 	): AsyncIterable<Row> {
 		const iterator = this.#guard(() =>
-			this.#require().prepare(sql).iterate(parameters)[Symbol.iterator](),
+			this.#require().database.prepare(sql).iterate(parameters)[Symbol.iterator](),
 		)
 		try {
 			while (true) {
@@ -856,8 +924,8 @@ export class SQLiteDriver implements DriverInterface {
 		return missing
 	}
 
-	#readMetadata(database: SQLiteDatabaseInterface): DriverMetadata | undefined {
-		const row = database
+	#readMetadata(connection: SQLiteConnection): DriverMetadata | undefined {
+		const row = connection
 			.prepare(
 				'SELECT "version", "schema" FROM ' + quoteIdentifier(METADATA_TABLE) + ' WHERE "id" = 1',
 			)
@@ -908,13 +976,13 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	async #stamp(metadata: DriverMetadata): Promise<void> {
-		const database = this.#require()
+		const connection = this.#require()
 		const owned = cloneDriverMetadata(metadata)
-		this.#guard(() => this.#writeMetadata(database, owned))
+		this.#guard(() => this.#writeMetadata(connection, owned))
 	}
 
-	#writeMetadata(database: SQLiteDatabaseInterface, metadata: DriverMetadata): void {
-		database
+	#writeMetadata(connection: SQLiteConnection, metadata: DriverMetadata): void {
+		connection
 			.prepare(
 				'INSERT OR REPLACE INTO ' +
 					quoteIdentifier(METADATA_TABLE) +
@@ -960,7 +1028,7 @@ export class SQLiteDriver implements DriverInterface {
 	}
 
 	async #migrateTransaction(token: SQLiteTransaction, input: MigrationInput): Promise<void> {
-		const database = this.#require()
+		const connection = this.#require()
 		const owned = cloneMigrationInput(input)
 		const candidate = token.schema
 		const identities = token.identities
@@ -976,14 +1044,41 @@ export class SQLiteDriver implements DriverInterface {
 			})
 		}
 		this.#guard(() => {
-			this.#contain(database, () => {
-				this.#applyPlan(database, owned)
+			this.#contain(connection.database, () => {
+				this.#applyPlan(connection.database, owned)
 				if (owned.metadata !== undefined) {
-					this.#writeMetadata(database, owned.metadata)
+					this.#writeMetadata(connection, owned.metadata)
 				}
 			})
 		})
 		token.project(projected, projectedIdentities)
+	}
+
+	// Run work in one transaction that takes the write lock at its start, so a contended writer
+	// is refused before any work, and a set busy timeout applies there.
+	#transact(database: SQLiteDatabaseInterface, work: () => void): void {
+		database.execute('BEGIN IMMEDIATE')
+		try {
+			work()
+			database.commit()
+		} catch (error) {
+			if (database.transacting) database.rollback()
+			throw error
+		}
+	}
+
+	// Drop each index created on a deployed table that its schema no longer declares.
+	#dropIndexes(database: SQLiteDatabaseInterface, schema: TableSchema): void {
+		const declared = new Set(
+			schema.indexes.map((group) => deriveSQLiteIndexName(schema.name, group)),
+		)
+		for (const index of database
+			.prepare('SELECT "name", "origin" FROM pragma_index_list(?)')
+			.all([schema.name])) {
+			if (index.origin === 'c' && isString(index.name) && !declared.has(index.name)) {
+				database.execute('DROP INDEX ' + quoteIdentifier(index.name))
+			}
+		}
 	}
 
 	// Run work inside one savepoint of the open transaction: a throw rolls the work back and
@@ -1065,13 +1160,13 @@ export class SQLiteDriver implements DriverInterface {
 		}
 	}
 
-	#require(): SQLiteDatabaseInterface {
-		if (this.#database === undefined) {
+	#require(): SQLiteConnection {
+		if (this.#connection === undefined) {
 			throw new DatabaseError('CLOSED', `SQLite database '${this.#path}' is not open`, {
 				path: this.#path,
 			})
 		}
-		return this.#database
+		return this.#connection
 	}
 
 	#projectIdentities(

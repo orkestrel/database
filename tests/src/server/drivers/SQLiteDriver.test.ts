@@ -23,6 +23,7 @@ import {
 	applyQuery,
 	computeAggregate,
 	conformDriver,
+	planRead,
 	readPlannedAggregate,
 	createDatabase,
 	createMemoryDriver,
@@ -47,7 +48,14 @@ import {
 	stringShape,
 } from '@orkestrel/contract'
 import { createSQLiteDatabase, isSQLiteError } from '@orkestrel/sqlite'
-import { captureError, collect, createRecorders, requireValue } from '@orkestrel/test'
+import {
+	captureError,
+	collect,
+	createRecorder,
+	createRecorders,
+	requireValue,
+	waitForDelay,
+} from '@orkestrel/test'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
 	buildCondition,
@@ -70,9 +78,19 @@ import {
 	collectSQLiteRecords,
 	createForeignKeyFixture,
 	createExplainDatabase,
-	corruptPagingRow,
 	createFallbackPagingDatabase,
 	createMatrixTables,
+	createNestedTables,
+	holdWriteLock,
+	NESTED_CLASSES,
+	nestedReads,
+	INDEX_LIST_SQL,
+	driverSchema,
+	plantTripwire,
+	readStatistics,
+	buildDriverRow,
+	buildDriverRows,
+	corruptIndexPage,
 	matrixSchema,
 	createPagingDatabase,
 	EXPLAIN_SCHEMA,
@@ -2607,7 +2625,18 @@ describe('SQLiteDriver — native-first paging readings', () => {
 
 	beforeAll(async () => {
 		await lines.set(pagingRows())
-		corruptPagingRow(temp.path)
+		// Each tripwire sits on the row immediately past one read's bound. line-0030 follows the
+		// position and ascending text pages (20 to 29). line-0057 is the first parent index entry of
+		// p7, the value after p6 that the any read lists last; its text holds the tripwire, so its
+		// parent still matches a widened list, and the blob sorts first in a descending text order.
+		// That shifts the descending text page to 1480 to 1471, which line-1470 follows.
+		// line-1400 sits between the listed keys 1399 and 1401, and no paging reading matches
+		// line-1999's book.
+		plantTripwire(temp.path, 'lines', 'line-0030', 'parent')
+		plantTripwire(temp.path, 'lines', 'line-1470', 'parent')
+		plantTripwire(temp.path, 'lines', 'line-1400', 'parent')
+		plantTripwire(temp.path, 'lines', 'line-0057', 'text')
+		plantTripwire(temp.path, 'lines', 'line-1999', 'book')
 	})
 
 	afterAll(async () => {
@@ -2620,7 +2649,7 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		try {
 			await expect(fallback.table('lines').records({ conditions: [like] })).rejects.toMatchObject({
 				code: 'DRIVER',
-				context: { table: 'lines', key: 'line-1400', column: 'parent' },
+				context: { table: 'lines', key: 'line-0030', column: 'parent' },
 			})
 		} finally {
 			await fallback.close()
@@ -2633,7 +2662,7 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		try {
 			await expect(
 				Array.fromAsync(fallback.table('lines').scan({ conditions: [like] })),
-			).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-1400', column: 'parent' } })
+			).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-0030', column: 'parent' } })
 		} finally {
 			await fallback.close()
 		}
@@ -2647,7 +2676,7 @@ describe('SQLiteDriver — native-first paging readings', () => {
 			for (const operation of ['sum', 'average', 'minimum', 'maximum'] as const) {
 				await expect(
 					fallback.table('lines').aggregate(operation, 'position', { conditions: [book] }),
-				).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-1400', column: 'parent' } })
+				).rejects.toMatchObject({ code: 'DRIVER', context: { key: 'line-0030', column: 'parent' } })
 				expect(await lines.aggregate(operation, 'position', { conditions: [book] })).toBe(
 					expected[operation],
 				)
@@ -2669,7 +2698,7 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		try {
 			await expect(partial.table('lines').records(input)).rejects.toMatchObject({
 				code: 'DRIVER',
-				context: { key: 'line-1400', column: 'parent' },
+				context: { key: 'line-0030', column: 'parent' },
 			})
 		} finally {
 			await partial.close()
@@ -2701,7 +2730,7 @@ describe('SQLiteDriver — native-first paging readings', () => {
 			}),
 		)
 		expect(value.map((row) => row.position)).toEqual([
-			1479, 1478, 1477, 1476, 1475, 1474, 1473, 1472, 1471, 1470,
+			1480, 1479, 1478, 1477, 1476, 1475, 1474, 1473, 1472, 1471,
 		])
 		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: 10 })
 		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
@@ -2738,6 +2767,17 @@ describe('SQLiteDriver — native-first paging readings', () => {
 		expect(fixture.recorder.driver.plan?.('lines', { conditions: [parents] })?.residual).toEqual({})
 		expect(tallyCalls(calls, 'records')).toMatchObject({ calls: 1, rows: expected.length })
 		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 0, rows: 0 })
+	})
+
+	it('reads a key list without decoding an unlisted row, and raises on a listed tripwire', async () => {
+		const keys = ['line-1398', 'line-1399', 'line-1401']
+		const { value, calls } = await fixture.recorder.measure(() => lines.get(keys))
+		expect(value.map((row) => row?.id)).toEqual(keys)
+		expect(tallyCalls(calls, 'read')).toMatchObject({ calls: 1, rows: 3 })
+		await expect(lines.get([...keys, 'line-1400'])).rejects.toMatchObject({
+			code: 'DRIVER',
+			context: { key: 'line-1400', column: 'parent' },
+		})
 	})
 
 	it('repeats each reading inside a transaction', async () => {
@@ -2836,8 +2876,7 @@ describe('SQLiteDriver — operator, storage, and flag matrix against the core e
 				try {
 					const schema = matrixSchema(storage, optional, nullable)
 					for (const input of matrixReads(storage)) {
-						const native = input.conditions === undefined || planSQLiteQuery(input, schema).residual
-						expect({ input, residual: native === true ? {} : native }).toEqual({
+						expect({ input, residual: planSQLiteQuery(input, schema).residual }).toEqual({
 							input,
 							residual: {},
 						})
@@ -2903,6 +2942,19 @@ describe('SQLiteDriver — the pragma allowlist', () => {
 		}
 	})
 
+	it('refuses a number outside a 32-bit signed integer, which an integer pragma misreads', () => {
+		for (const value of [2147483648, -2147483649, 1.5, 1e21]) {
+			expect(() =>
+				createSQLiteDriver({ path: ':memory:', pragmas: { cache_size: value } }),
+			).toThrow(
+				expect.objectContaining({
+					code: 'VALIDATION',
+					context: { pragma: 'cache_size', value: String(value) },
+				}),
+			)
+		}
+	})
+
 	it('admits an allowlisted name with a keyword or a finite number', () => {
 		expect(() =>
 			createSQLiteDriver({
@@ -2958,4 +3010,591 @@ describe('SQLiteDriver — empty lists', () => {
 			}
 		})
 	}
+})
+
+describe('SQLiteDriver — BEGIN IMMEDIATE across two drivers on one file', () => {
+	it('refuses a scope at BEGIN with a retryable DRIVER and no wait, serves a read, and runs it after the holder settles', async () => {
+		const temp = tempDatabasePath()
+		const holder = createSQLiteDriver({ path: temp.path })
+		const waiter = createSQLiteDriver({ path: temp.path })
+		const release = Promise.withResolvers<void>()
+		try {
+			await holder.open(SCHEMA)
+			await waiter.open(SCHEMA)
+			await holder.write('users', 'u0', buildDriverRow('u0'))
+			const held = holder.transaction?.(async (storage) => {
+				await storage.write('users', 'u1', buildDriverRow('u1'))
+				await release.promise
+			})
+			const entered = createRecorder()
+			const refused = await waiter
+				.transaction?.(async (storage) => {
+					entered.handler()
+					await storage.write('users', 'u2', buildDriverRow('u2'))
+				})
+				.catch((caught: unknown) => caught)
+			expect(refused).toMatchObject({ code: 'DRIVER', context: { retryable: true } })
+			expect(entered.count).toBe(0)
+			expect(waiter.pragma('busy_timeout')).toBe(0)
+			expect(await waiter.read('users', 'u0')).toEqual(buildDriverRow('u0'))
+			expect(await waiter.read('users', 'u1')).toBeUndefined()
+			release.resolve()
+			await held
+			await waiter.transaction?.(async (storage) =>
+				storage.write('users', 'u2', buildDriverRow('u2')),
+			)
+			expect(await waiter.keys('users')).toEqual(['u0', 'u1', 'u2'])
+		} finally {
+			release.resolve()
+			await waitForDelay()
+			await holder.close()
+			await waiter.close()
+			temp.cleanup()
+		}
+	})
+
+	it('refuses a batch while another driver holds a scope, writing no row', async () => {
+		const temp = tempDatabasePath()
+		const holder = createSQLiteDriver({ path: temp.path })
+		const waiter = createSQLiteDriver({ path: temp.path })
+		const release = Promise.withResolvers<void>()
+		try {
+			await holder.open(SCHEMA)
+			await waiter.open(SCHEMA)
+			const held = holder.transaction?.(async (storage) => {
+				await storage.write('users', 'u1', buildDriverRow('u1'))
+				await release.promise
+			})
+			await expect(
+				waiter.write('users', ['u2', 'u3'], [buildDriverRow('u2'), buildDriverRow('u3')]),
+			).rejects.toMatchObject({ code: 'DRIVER', context: { retryable: true } })
+			release.resolve()
+			await held
+			expect(await waiter.keys('users')).toEqual(['u1'])
+		} finally {
+			release.resolve()
+			await waitForDelay()
+			await holder.close()
+			await waiter.close()
+			temp.cleanup()
+		}
+	})
+
+	it('runs an open whose schema transaction reads before it writes after a worker-thread holder commits', async () => {
+		const temp = tempDatabasePath()
+		const first = createSQLiteDriver({ path: temp.path })
+		const target = createSQLiteDriver({ path: temp.path, timeout: 5000 })
+		try {
+			await first.open(driverSchema({ indexes: [['name'], ['age']] }))
+			await first.write('users', 'u0', buildDriverRow('u0'))
+			await first.close()
+			const { worker, committed } = await holdWriteLock(
+				temp.path,
+				'INSERT INTO "users" ("id", "name", "age", "active") VALUES (?, ?, ?, ?)',
+				['w1', 'w1', 1, 1],
+				50,
+			)
+			try {
+				// The open reads its metadata and validates before it drops the age index.
+				await target.open(driverSchema({ indexes: [['name']] }))
+				await committed
+				expect(await target.keys('users')).toEqual(['u0', 'w1'])
+				const plain = createSQLiteDatabase({ path: temp.path })
+				plain.connect()
+				try {
+					expect(
+						plain
+							.prepare(INDEX_LIST_SQL)
+							.all(['users'])
+							.map((row) => row.name),
+					).toEqual(['idx_5_users_4_name', 'sqlite_autoindex_users_1'])
+				} finally {
+					plain.close()
+				}
+			} finally {
+				await worker.terminate()
+			}
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+
+	it('waits out a holder on a worker thread under an explicit timeout, starting the scope after its commit', async () => {
+		const temp = tempDatabasePath()
+		const waiter = createSQLiteDriver({ path: temp.path, timeout: 5000 })
+		try {
+			await waiter.open(SCHEMA)
+			await waiter.write('users', 'u0', buildDriverRow('u0'))
+			const { worker, committed } = await holdWriteLock(
+				temp.path,
+				'INSERT INTO "users" ("id", "name", "age", "active") VALUES (?, ?, ?, ?)',
+				['w1', 'w1', 1, 1],
+				50,
+			)
+			try {
+				const seen = await waiter.transaction?.(async (storage) => {
+					const before = await storage.read('users', 'w1')
+					await storage.write('users', 'u2', buildDriverRow('u2'))
+					return before
+				})
+				expect(seen).toEqual(buildDriverRow('w1'))
+				await committed
+				expect(await waiter.keys('users')).toEqual(['u0', 'u2', 'w1'])
+			} finally {
+				await worker.terminate()
+			}
+		} finally {
+			await waiter.close()
+			temp.cleanup()
+		}
+	})
+})
+
+describe('SQLiteDriver — the WAL default', () => {
+	it('opens a writable file under WAL and issues nothing else', async () => {
+		const temp = tempDatabasePath()
+		const target = createSQLiteDriver({ path: temp.path })
+		try {
+			await target.open(SCHEMA)
+			expect(target.pragma('journal_mode')).toBe('wal')
+			expect(target.pragma('busy_timeout')).toBe(0)
+			const plain = createSQLiteDatabase({ path: temp.path })
+			plain.connect()
+			try {
+				expect(target.pragma('synchronous')).toBe(plain.pragma('synchronous'))
+			} finally {
+				plain.close()
+			}
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+
+	it('runs an application entry after the default, and an application journal_mode in its place', async () => {
+		const temp = tempDatabasePath()
+		const synced = createSQLiteDriver({ path: temp.path, pragmas: { synchronous: 'OFF' } })
+		const journaled = createSQLiteDriver({ path: temp.path, pragmas: { journal_mode: 'DELETE' } })
+		try {
+			await synced.open(SCHEMA)
+			expect([synced.pragma('journal_mode'), synced.pragma('synchronous')]).toEqual(['wal', 0])
+			await synced.close()
+			await journaled.open(SCHEMA)
+			expect(journaled.pragma('journal_mode')).toBe('delete')
+		} finally {
+			await synced.close()
+			await journaled.close()
+			temp.cleanup()
+		}
+	})
+
+	it('leaves the journal of a memory database and of a readonly open alone', async () => {
+		const memory = createSQLiteDriver({ path: ':memory:' })
+		const temp = tempDatabasePath()
+		const writer = createSQLiteDriver({ path: temp.path, pragmas: { journal_mode: 'DELETE' } })
+		const reader = createSQLiteDriver({ path: temp.path, readonly: true })
+		try {
+			await memory.open(SCHEMA)
+			expect(memory.pragma('journal_mode')).toBe('memory')
+			await writer.open(SCHEMA)
+			await writer.close()
+			await reader.open(SCHEMA)
+			expect(reader.pragma('journal_mode')).toBe('delete')
+		} finally {
+			await memory.close()
+			await reader.close()
+			temp.cleanup()
+		}
+	})
+})
+
+describe('SQLiteDriver — statistics at a writable open', () => {
+	// 20000 rows over 40 names pass the default mask's analysis limit, which estimates the
+	// name index at 401 rows per value where the unbounded mask reads the exact 500.
+	it('analyzes a file grown from empty at its reopen without a row bound, and nothing at close', async () => {
+		const temp = tempDatabasePath()
+		const target = createSQLiteDriver({ path: temp.path })
+		try {
+			await target.open(SCHEMA)
+			await target.write('users', ...buildDriverRows(20000))
+			await target.close()
+			expect(readStatistics(temp.path, 'users')).toEqual({})
+			await target.open(SCHEMA)
+			expect(readStatistics(temp.path, 'users')).toEqual({
+				idx_5_users_3_age_4_name: '20000 1 1',
+				idx_5_users_4_name: '20000 500',
+				sqlite_autoindex_users_1: '20000 1',
+			})
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+
+	it('refuses an open whose analysis finds a corrupt index, publishing no connection', async () => {
+		const temp = tempDatabasePath()
+		const seed = createSQLiteDriver({ path: temp.path })
+		const target = createSQLiteDriver({ path: temp.path })
+		try {
+			await seed.open(SCHEMA)
+			await seed.write('users', ...buildDriverRows(2000))
+			await seed.close()
+			expect(readStatistics(temp.path, 'users')).toEqual({})
+			corruptIndexPage(temp.path, 'idx_5_users_4_name')
+			await expect(target.open(SCHEMA)).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { cause: { code: 'UNKNOWN', context: { errcode: 11 } } },
+			})
+			await expect(target.read('users', 'u000001')).rejects.toMatchObject({ code: 'CLOSED' })
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+
+	it('analyzes an index the open itself created', async () => {
+		const temp = tempDatabasePath()
+		const plain = createSQLiteDatabase({ path: temp.path })
+		const target = createSQLiteDriver({ path: temp.path })
+		try {
+			plain.connect()
+			plain.execute(USERS_SQL)
+			plain.execute(POSTS_SQL)
+			const insert = plain.prepare(
+				'INSERT INTO "users" ("id", "name", "age", "active") VALUES (?, ?, ?, ?)',
+			)
+			for (const row of buildDriverRows(400)[1]) {
+				insert.execute([String(row.id), String(row.name), Number(row.age), 1])
+			}
+			plain.close()
+			await target.open(SCHEMA)
+			expect(Object.keys(readStatistics(temp.path, 'users'))).toEqual([
+				'idx_5_users_3_age_4_name',
+				'idx_5_users_4_name',
+				'sqlite_autoindex_users_1',
+			])
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+})
+
+describe('SQLiteDriver — pragma', () => {
+	it('reads a setting the pragmas option wrote, and runs an action pragma', async () => {
+		const temp = tempDatabasePath()
+		const target = createSQLiteDriver({ path: temp.path, pragmas: { synchronous: 'FULL' } })
+		try {
+			await target.open(SCHEMA)
+			expect(target.pragma('synchronous')).toBe(2)
+			expect(target.pragma('optimize')).toBeUndefined()
+		} finally {
+			await target.close()
+			temp.cleanup()
+		}
+	})
+
+	it('refuses a malformed name with VALIDATION ahead of any SQL, open or closed', async () => {
+		const target = createSQLiteDriver({ path: ':memory:' })
+		const names = ['main.synchronous', 'synchronous; DROP TABLE users', ' synchronous', '1st', '']
+		for (const name of names) {
+			expect(captureError(() => target.pragma(name))).toMatchObject({
+				code: 'VALIDATION',
+				context: { pragma: JSON.stringify(name) },
+			})
+		}
+		await target.open(SCHEMA)
+		try {
+			for (const name of names) {
+				expect(captureError(() => target.pragma(name))).toMatchObject({ code: 'VALIDATION' })
+			}
+			expect(await target.keys('users')).toEqual([])
+		} finally {
+			await target.close()
+		}
+	})
+
+	it('is a root member: a transaction refuses it, and its scope does not declare it', async () => {
+		const scoped = await driver.value.transaction?.(async (storage) => {
+			expect(captureError(() => driver.value.pragma('synchronous'))).toMatchObject({
+				code: 'CONFLICT',
+			})
+			return 'pragma' in storage
+		})
+		expect(scoped).toBe(false)
+	})
+})
+
+describe('SQLiteDriver — the index reconcile at open', () => {
+	it('drops a declared index the reopen no longer declares, keeping its rows, so a read on it scans', async () => {
+		const temp = tempDatabasePath()
+		const both = createSQLiteDriver({ path: temp.path })
+		const one = createSQLiteDriver({ path: temp.path })
+		const schema = driverSchema({ indexes: [['name'], ['age']] })
+		try {
+			await both.open(schema)
+			await both.write('users', ['u1', 'u2'], [buildDriverRow('u1'), buildDriverRow('u2')])
+			await both.close()
+			await one.open(driverSchema({ indexes: [['name']] }))
+			const plain = createSQLiteDatabase({ path: temp.path })
+			plain.connect()
+			try {
+				expect(
+					plain
+						.prepare(INDEX_LIST_SQL)
+						.all(['users'])
+						.map((row) => row.name),
+				).toEqual(['idx_5_users_4_name', 'sqlite_autoindex_users_1'])
+				const plan = plain
+					.prepare('EXPLAIN QUERY PLAN SELECT * FROM "users" WHERE "age" = ?')
+					.all([1])
+					.map((row) => String(row.detail))
+				expect(plan).toEqual(['SCAN users'])
+			} finally {
+				plain.close()
+			}
+			expect(await one.read('users', ['u1', 'u2'])).toEqual([
+				buildDriverRow('u1'),
+				buildDriverRow('u2'),
+			])
+		} finally {
+			await both.close()
+			await one.close()
+			temp.cleanup()
+		}
+	})
+
+	it('drops a plain index another connection created, and a readonly open drops nothing', async () => {
+		const temp = tempDatabasePath()
+		const writer = createSQLiteDriver({ path: temp.path })
+		const reader = createSQLiteDriver({ path: temp.path, readonly: true })
+		try {
+			await writer.open(SCHEMA)
+			await writer.close()
+			const plain = createSQLiteDatabase({ path: temp.path })
+			plain.connect()
+			try {
+				plain.execute('CREATE INDEX "manual" ON "users" ("age")')
+				await reader.open(SCHEMA)
+				expect(
+					plain
+						.prepare(INDEX_LIST_SQL)
+						.all(['users'])
+						.map((row) => row.name),
+				).toContain('manual')
+				await reader.close()
+				await writer.open(SCHEMA)
+				expect(
+					plain
+						.prepare(INDEX_LIST_SQL)
+						.all(['users'])
+						.map((row) => row.name),
+				).toEqual(['idx_5_users_3_age_4_name', 'idx_5_users_4_name', 'sqlite_autoindex_users_1'])
+			} finally {
+				plain.close()
+			}
+		} finally {
+			await writer.close()
+			await reader.close()
+			temp.cleanup()
+		}
+	})
+})
+
+describe('SQLiteDriver — an order on a column with both flags', () => {
+	for (const storage of ['text', 'integer'] as const) {
+		it(`orders ${storage} natively with the core's rows, beside the primary key, a page, and a pinned key list`, async () => {
+			const { sqlite, memory } = await createMatrixTables(storage, true, true)
+			const schema = matrixSchema(storage, true, true)
+			try {
+				const listed = buildCondition('id', 'any', ['v1', 'w2', 'null', 'absent', 'v4', 'missing'])
+				for (const input of [
+					{ order: [{ column: 'value', direction: 'descending' as const }] },
+					{
+						order: [
+							{ column: 'value', direction: 'ascending' as const },
+							{ column: 'id', direction: 'descending' as const },
+						],
+						limit: 4,
+						offset: 1,
+					},
+					{
+						conditions: [listed],
+						order: [{ column: 'value', direction: 'descending' as const }],
+						limit: 3,
+						offset: 1,
+					},
+				]) {
+					expect(planSQLiteQuery(input, schema)).toEqual({ native: input, residual: {} })
+					const actual = await sqlite.table('cells').records(input)
+					expect({ input, rows: actual }).toEqual({
+						input,
+						rows: await memory.table('cells').records(input),
+					})
+					expect(actual.length).toBeGreaterThan(0)
+				}
+			} finally {
+				await sqlite.close()
+				await memory.close()
+			}
+		})
+	}
+})
+
+describe('SQLiteDriver — nested-path prefilters against the core engine', () => {
+	for (const operator of ['equals', 'not', 'any', 'none'] as const) {
+		for (const scalar of NESTED_CLASSES) {
+			it(`prefilters ${operator} over ${scalar} operands with a superset the core rechecks`, async () => {
+				const { driver: target, sqlite, memory } = await createNestedTables()
+				try {
+					for (const input of nestedReads(operator, scalar)) {
+						const plan = planRead(target, 'docs', input)
+						expect({ input, plan }).toEqual({
+							input,
+							plan: { native: input, residual: input },
+						})
+						const expected = await memory.table('docs').records(input)
+						const prefiltered = (await target.records?.('docs', plan.native)) ?? []
+						const missing = expected.filter(
+							(row) => !prefiltered.some((kept) => kept.id === row.id),
+						)
+						expect({ input, missing }).toEqual({ input, missing: [] })
+						expect({ input, rows: await sqlite.table('docs').records(input) }).toEqual({
+							input,
+							rows: expected,
+						})
+					}
+				} finally {
+					await sqlite.close()
+					await memory.close()
+				}
+			})
+		}
+	}
+})
+
+describe('SQLiteDriver — nested keys a JSON path must quote', () => {
+	it('reads a key holding a dot through records, stream, and aggregate like the core', async () => {
+		const { driver: target, sqlite, memory } = await createNestedTables()
+		try {
+			const input = {
+				conditions: [buildCondition(['meta', 'x.y'], 'above', [0])],
+				order: [{ column: ['meta', 'x.y'], direction: 'descending' as const }],
+			}
+			const expected = await memory.table('docs').records(input)
+			expect(expected.map((row) => row.id)).toEqual(['d26', 'd25'])
+			expect(await target.records?.('docs', input)).toEqual(expected)
+			expect(await collect(requireValue(target.stream).call(target, 'docs', input))).toEqual(
+				expected,
+			)
+			expect(await target.aggregate?.('docs', 'sum', ['meta', 'x.y'], {})).toBe(
+				await memory.table('docs').aggregate('sum', ['meta', 'x.y']),
+			)
+		} finally {
+			await sqlite.close()
+			await memory.close()
+		}
+	})
+
+	it('reads a key holding U+0000 in the core, which no JSON path label can name', async () => {
+		const { driver: target, sqlite, memory } = await createNestedTables()
+		try {
+			const input = { conditions: [buildCondition(['meta', 'a\u0000b'], 'equals', ['red'])] }
+			expect(target.plan?.('docs', input)).toEqual({ native: {}, residual: input })
+			const expected = await memory.table('docs').records(input)
+			expect(expected.map((row) => row.id)).toEqual(['d27'])
+			expect(await sqlite.table('docs').records(input)).toEqual(expected)
+		} finally {
+			await sqlite.close()
+			await memory.close()
+		}
+	})
+})
+
+describe('SQLiteDriver — an integer sum as TOTAL', () => {
+	it('returns the engine float sum past 2^53, and undefined over an empty set', async () => {
+		const target = createSQLiteDriver({ path: ':memory:' })
+		const database = createDatabase({
+			driver: target,
+			tables: { totals: { id: stringShape(), amount: integerShape() } },
+		})
+		try {
+			const totals = database.table('totals')
+			const empty = { conditions: [buildCondition('id', 'equals', ['none'])] }
+			expect(await totals.aggregate('sum', 'amount', empty)).toBeUndefined()
+			await totals.set([
+				{ id: 'a', amount: Number.MAX_SAFE_INTEGER },
+				{ id: 'b', amount: Number.MAX_SAFE_INTEGER },
+			])
+			expect(
+				target.plan?.('totals', { aggregate: { operation: 'sum', column: 'amount' } }),
+			).toEqual({
+				native: { aggregate: { operation: 'sum', column: 'amount' } },
+				residual: {},
+			})
+			expect(await totals.aggregate('sum', 'amount')).toBe(18014398509481982)
+			expect(await totals.aggregate('sum', 'amount', empty)).toBeUndefined()
+		} finally {
+			await database.close()
+		}
+	})
+})
+
+describe('SQLiteDriver — SQLITE_LOCKED', () => {
+	it('raises DRIVER without retryable, carrying errcode 6, when a migrate drops an index a stream reads under', async () => {
+		await driver.value.write('users', 'u1', buildDriverRow('u1'))
+		const stream = requireValue(driver.value.stream).call(driver.value, 'users', {})
+		const iterator = stream[Symbol.asyncIterator]()
+		try {
+			await iterator.next()
+			const error = await driver.value
+				.migrate?.({
+					plan: {
+						from: 1,
+						to: 2,
+						steps: [{ operation: 'index.remove', table: 'users', index: ['name'] }],
+					},
+				})
+				.catch((caught: unknown) => caught)
+			expect(error).toMatchObject({
+				code: 'DRIVER',
+				context: { cause: { context: { errcode: 6 } } },
+			})
+			expect(isDatabaseError(error) ? error.context?.retryable : 'not-database').toBeUndefined()
+		} finally {
+			await iterator.return?.()
+		}
+		expect(await driver.value.keys('users')).toEqual(['u1'])
+	})
+})
+
+describe('SQLiteDriver — the statement cache beside an open stream', () => {
+	it('runs a same-text stream and records while a stream holds its own statement open', async () => {
+		await driver.value.write(
+			'users',
+			['u1', 'u2', 'u3'],
+			[buildDriverRow('u1'), buildDriverRow('u2'), buildDriverRow('u3')],
+		)
+		const stream = requireValue(driver.value.stream)
+		const held = stream.call(driver.value, 'users', {})[Symbol.asyncIterator]()
+		try {
+			expect((await held.next()).value).toEqual(buildDriverRow('u1'))
+			expect((await collect(stream.call(driver.value, 'users', {}))).map((row) => row.id)).toEqual([
+				'u1',
+				'u2',
+				'u3',
+			])
+			expect((await driver.value.records?.('users', {}))?.map((row) => row.id)).toEqual([
+				'u1',
+				'u2',
+				'u3',
+			])
+			expect((await held.next()).value).toEqual(buildDriverRow('u2'))
+			expect((await held.next()).value).toEqual(buildDriverRow('u3'))
+			expect((await held.next()).done).toBe(true)
+		} finally {
+			await held.return?.()
+		}
+	})
 })

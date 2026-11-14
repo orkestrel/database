@@ -1,4 +1,5 @@
-// The server surface's shared constants — the reserved names its drivers claim.
+// The server surface's shared constants: the reserved names its drivers claim, the pragmas the
+// SQLite driver admits, and its statement cache's bound.
 
 /**
  * Names the reserved metadata table the {@link SQLiteDriver} creates on `open` to
@@ -10,6 +11,25 @@
  * reservation — the caller's concern to avoid, documented on the driver class.
  */
 export const METADATA_TABLE = '_metadata'
+
+/**
+ * Bounds the prepared statements one {@link SQLiteConnection} keeps, evicting the least
+ * recently used past it.
+ *
+ * @remarks
+ * The bound caps how many prepared statements one connection holds, and with them their
+ * resident memory and the Map an eviction walks. It sits above the texts a driver repeats: a
+ * fixed set per table and one per read shape, because `any`, `none`, a key list, and a page
+ * bind their values as parameters.
+ *
+ * @example
+ * ```ts
+ * import { STATEMENT_LIMIT } from '@orkestrel/database/server'
+ *
+ * STATEMENT_LIMIT // 256
+ * ```
+ */
+export const STATEMENT_LIMIT = 256
 
 /**
  * Lists the PRAGMA names the {@link SQLiteDriver} admits in its `pragmas` option, each matched

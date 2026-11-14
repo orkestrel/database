@@ -12,6 +12,7 @@ import {
 	findSQLiteColumn,
 	matchesAbsentPath,
 	matchesSQLiteCondition,
+	matchesSQLitePrefilter,
 	matchesPrimaryPin,
 	matchesSQLiteAffinity,
 	planSQLiteQuery,
@@ -255,15 +256,19 @@ describe('planSQLiteQuery — order and aggregate coverage', () => {
 		}
 	})
 
-	it('leaves a nested path, a json column, and a column with both flags residual', () => {
-		for (const [column, schema] of [
-			[['meta', 'a'], ORDER_SCHEMA],
-			['meta', ORDER_SCHEMA],
-			['rank', AGGREGATE_SCHEMA],
-		] as const) {
+	it('leaves a nested path and a json column residual', () => {
+		for (const column of [['meta', 'a'], 'meta']) {
 			const order = [{ column, direction: 'ascending' as const }]
-			expect(planSQLiteQuery({ order }, schema)).toEqual({ native: {}, residual: { order } })
+			expect(planSQLiteQuery({ order }, ORDER_SCHEMA)).toEqual({ native: {}, residual: { order } })
 		}
+	})
+
+	it('orders a column with both flags natively, with its page', () => {
+		const order = [{ column: 'rank', direction: 'descending' as const }]
+		expect(planSQLiteQuery({ order, limit: 2, offset: 1 }, AGGREGATE_SCHEMA)).toEqual({
+			native: { order, limit: 2, offset: 1 },
+			residual: {},
+		})
 	})
 
 	it('computes count natively whatever the column, and the numeric aggregates on a numeric column with at most one flag', () => {
@@ -340,6 +345,41 @@ describe('planSQLiteQuery', () => {
 		})
 	})
 
+	it('prefilters an equality-family condition on a nested scalar on both sides', () => {
+		for (const operator of ['equals', 'not', 'any', 'none'] as const) {
+			const prefilter = cond(['meta', 'tag'], operator, ['red', 1, true, null, undefined])
+			expect(planSQLiteQuery({ conditions: [named, prefilter], limit: 3 }, SCHEMA)).toEqual({
+				native: { conditions: [named, prefilter] },
+				residual: { conditions: [prefilter], limit: 3 },
+			})
+		}
+	})
+
+	it('keeps a nested condition SQLite cannot prefilter on the residual side alone', () => {
+		for (const condition of [
+			cond(['meta', '0'], 'equals', ['red']),
+			cond(['meta', 'tags', 'length'], 'equals', [2]),
+			cond(['meta', 'tag'], 'equals', [{ red: true }]),
+			cond(['meta', 'tag'], 'any', ['red', 7n]),
+			cond(['meta', 'tag'], 'like', ['r%']),
+			cond(['name', 'tag'], 'equals', ['red']),
+			cond(['meta'], 'equals', ['red']),
+		]) {
+			expect(planSQLiteQuery({ conditions: [named, condition] }, SCHEMA)).toEqual({
+				native: { conditions: [named] },
+				residual: { conditions: [condition] },
+			})
+		}
+	})
+
+	it('keeps an or read with a prefilter whole on the residual side', () => {
+		const either = cond(['meta', 'tag'], 'equals', ['red'], 'or')
+		expect(planSQLiteQuery({ conditions: [named, either] }, SCHEMA)).toEqual({
+			native: {},
+			residual: { conditions: [named, either] },
+		})
+	})
+
 	it('keeps an aggregate native only over a native filter', () => {
 		const aggregate = { operation: 'sum' as const, column: 'age' }
 		const above = cond('age', 'above', [1])
@@ -360,6 +400,32 @@ describe('planSQLiteQuery', () => {
 			native: {},
 			residual: { aggregate: ranked },
 		})
+	})
+})
+
+describe('matchesSQLitePrefilter', () => {
+	it('admits the equality family on a nested object member under a json head', () => {
+		expect(
+			matchesSQLitePrefilter(cond(['meta', 'a.b', '01'], 'not', ['x']), CONDITION_SCHEMA),
+		).toBe(true)
+		expect(
+			matchesSQLitePrefilter(cond(['meta', 'n'], 'none', [Number.NaN, -0]), CONDITION_SCHEMA),
+		).toBe(true)
+	})
+
+	it('refuses a flat column, a key that can name an array member, and a non-scalar operand', () => {
+		for (const condition of [
+			cond('meta', 'equals', ['x']),
+			cond(['meta', '10'], 'equals', ['x']),
+			cond(['meta', 'length'], 'equals', [1]),
+			cond(['meta', 'a\u0000b'], 'equals', ['x']),
+			cond(['meta', 'a'], 'equals', [['x']]),
+			cond(['meta', 'a'], 'between', [1, 2]),
+			cond(['age', 'a'], 'equals', [1]),
+			cond(['missing', 'a'], 'equals', [1]),
+		]) {
+			expect(matchesSQLitePrefilter(condition, CONDITION_SCHEMA)).toBe(false)
+		}
 	})
 })
 

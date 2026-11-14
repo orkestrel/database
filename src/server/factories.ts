@@ -1,5 +1,5 @@
 import type { DriverInterface } from '@src/core'
-import type { SQLiteDriverOptions } from './types.js'
+import type { SQLiteDriverInterface, SQLiteDriverOptions } from './types.js'
 import { JSONDriver } from './drivers/JSONDriver.js'
 import { SQLiteDriver } from './drivers/SQLiteDriver.js'
 
@@ -38,8 +38,8 @@ export function createJSONDriver(path: string): DriverInterface {
 }
 
 /**
- * Creates a trusted-mode, server-native SQLite {@link DriverInterface} for a database path,
- * or for `:memory:` when explicitly requested.
+ * Creates a trusted-mode, server-native SQLite {@link SQLiteDriverInterface} for a database
+ * path, or for `:memory:` when explicitly requested.
  *
  * @remarks
  * Pass it to `createDatabase` from `@orkestrel/database` to run the typed
@@ -49,14 +49,15 @@ export function createJSONDriver(path: string): DriverInterface {
  * typed `CREATE TABLE` / `CREATE INDEX` statements (reopen-safe) plus a reserved
  * `_metadata` table for `metadata()` / `stamp()` — avoid naming a table `_metadata`.
  * Querying, paging, and aggregation run natively (`records` / `count` /
- * `aggregate` / `stream`); `transaction` and `migrate` use real `BEGIN` /
- * `COMMIT` / `ROLLBACK`, so `migrate` is atomic even mid-plan.
+ * `aggregate` / `stream`); `transaction` and `migrate` use real `BEGIN IMMEDIATE` /
+ * `COMMIT` / `ROLLBACK`, so `migrate` is atomic even mid-plan. A writable file opens under
+ * `journal_mode = WAL`, and `pragma(name)` reads one connection setting back.
  *
  * @param options - The {@link SQLiteDriverOptions} bag (`path`, `readonly`,
  *   `timeout`, `references`, `pragmas`); `references` directly enables or
  *   disables foreign-key enforcement, and omission retains the upstream
  *   default; pass `path: ':memory:'` for an in-memory database
- * @returns A {@link DriverInterface} backed by SQLite
+ * @returns A {@link SQLiteDriverInterface} backed by SQLite
  *
  * @example
  * ```ts
@@ -71,9 +72,9 @@ export function createJSONDriver(path: string): DriverInterface {
  * await db.table('users').set({ id: 'u1', name: 'Ada' }) // persisted to app.sqlite
  *
  * // Or with additional options:
- * createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { journal_mode: 'WAL' } })
+ * createSQLiteDriver({ path: 'data/app.sqlite', pragmas: { synchronous: 'FULL' } })
  * ```
  */
-export function createSQLiteDriver(options: SQLiteDriverOptions): DriverInterface {
+export function createSQLiteDriver(options: SQLiteDriverOptions): SQLiteDriverInterface {
 	return new SQLiteDriver(options)
 }

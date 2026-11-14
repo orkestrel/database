@@ -486,7 +486,9 @@ await new GuideCommand({
 			expect(quoteIdentifier('order')).toBe('"order"')
 			expect(deriveSQLiteIndexName('users', ['age'])).toBe('idx_5_users_3_age')
 			expect(compileColumnSQL('integer')).toBe('INTEGER')
-			expect(compileFieldSQL(['profile', 'score'])).toBe('json_extract("profile", \'$.score\')')
+			expect(compileFieldSQL(['profile', 'score'])).toBe(
+				'json_extract(CASE WHEN typeof("profile") = \'text\' THEN "profile" END, \'$."score"\')',
+			)
 			expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
 			expect(
 				planSQLiteQuery({ aggregate: { operation: 'minimum', column: 'age' } }, schema).residual,

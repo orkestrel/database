@@ -1,4 +1,5 @@
 export * from './types.js'
+export * from './SQLiteConnection.js'
 export * from './SQLiteTransaction.js'
 export * from './JSONTransaction.js'
 export * from './compilers.js'

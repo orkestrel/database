@@ -25,4 +25,7 @@
 | 2026-11-13 | Gate runs on sqlite and relation | verifier (Haiku 5.5) | sqlite `12bca99`, `1e8b0db`; relation `2590be0` |
 | 2026-11-14 | Relation's coverage rows: `link` one insert, `unlink` one remove, keyed loads, the guide's limits, the census rows | opus (Opus 5.5); reviewer (Sonnet 5.5) review and closure checks; verifier (Haiku 5.5) gates | relation `a1e6443` |
 | 2026-11-14 | Database's core rows: the before-image journal, the batches, the contract cache | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and two closure checks; verifier (Haiku 5.5) gates | `plan.md` § State |
+| 2026-11-14 | IndexedDB's coverage rows, its scaffold 0.0.135 adoption, and the fleet's Node range | opus (Opus 5.5); reviewer (Sonnet 5.5) one review and eight closure checks; verifier (Haiku 5.5) gates | indexeddb `1c2d789`, `047b06a`, `dd33924`, `31334c5` |
+| 2026-11-14 | Database's SQLite completion rows | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and one closure check; verifier (Haiku 5.5) gates | `plan.md` § State |
+| 2026-11-14 | The query door stays derived from contract; the contract cost units move ahead of the coverage wave's release, and contract releases first | user | `plan.md` § State |
 | 2026-11-14 | After the four packages close, `@orkestrel/contract` joins the campaign, and its measured costs (the object guard, `parseEnum`, `resolveField`) become units under the same canon | user | `plan.md` § State |

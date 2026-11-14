@@ -32,3 +32,25 @@ export function inferValueStorage(value: unknown): ColumnStorage {
 	if (isObject(value)) return 'json'
 	return 'text'
 }
+
+/**
+ * Reads the SQLite storage class of the sentinel a column that is both optional and nullable
+ * stores for explicit `null`.
+ *
+ * @remarks
+ * A `text` or `json` column stores an empty blob, which no text value equals; every other
+ * storage stores the text `null`, which no value of its class equals. An absent storage returns
+ * `'text'`.
+ *
+ * @param storage - The column's declared storage, or `undefined` for an undeclared column
+ * @returns `'blob'` or `'text'`
+ *
+ * @example
+ * ```ts
+ * inferSentinelType('text') // 'blob'
+ * inferSentinelType('integer') // 'text'
+ * ```
+ */
+export function inferSentinelType(storage: ColumnStorage | undefined): 'blob' | 'text' {
+	return storage === 'text' || storage === 'json' ? 'blob' : 'text'
+}

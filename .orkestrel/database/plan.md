@@ -63,7 +63,10 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
 - **Coverage wave, relation:** landed as relation `a1e6443`.
 - **Coverage wave, database core:** the before-image journal, the batches, and the contract cache land in the commit that records this line, after one review round in two lanes and two closure checks.
 - **The user's ruling of 2026-11-14:** after database, relation, sqlite, and indexeddb close, `@orkestrel/contract` joins the campaign, and the costs the coverage wave measured in it become units under the same canon, probes first: the object guard (about 3 µs per row, 41 to 45% of the SQLite batched cells), `parseEnum` (6.35 µs against 15 to 68 ns for a prebuilt `literalOf`), and `resolveField` (0.79 µs against 0.023 µs for `Reflect.get`).
-- **Next:** finish the indexeddb and database coverage units, then the release visit in layer order.
+- **Coverage wave, database SQLite completion:** the statement cache, `BEGIN IMMEDIATE`, the WAL default, statistics at a writable open, `pragma(name)`, the index reconcile, the rank order, the nested prefilters, `TOTAL`, the tripwire, and the SQLite bench file land in the commit that records this line, built against the sqlite candidate (`12bca99`, `44db024`) through an uncommitted tarball pin.
+- **Coverage wave, indexeddb:** landed as indexeddb `1c2d789`, with scaffold 0.0.135 (`047b06a`, `dd33924`) and the fleet's Node range (`31334c5`).
+- **The user's ruling of 2026-11-14 on the query door's cost:** the door stays derived from `@orkestrel/contract`. Its compiled guards cost about 14.5 µs per one-condition read (+104.8% on a SQLite primary-key `records` read against 0.0.24, past the identical-sides spread), so the contract cost units move ahead of the coverage wave's release, and contract releases first in that wave.
+- **Next:** finish the database coverage units (SQLite completion, the query door, the IndexedDB plans), then the contract cost units, then the release visit in layer order from contract.
 
 ## Sequence
 

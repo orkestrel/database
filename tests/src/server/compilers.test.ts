@@ -14,6 +14,10 @@ import {
 	compileGuardedSQL,
 	compileInsertSQL,
 	compileJoinedSQL,
+	compileJSONAccessSQL,
+	compileJSONPathSQL,
+	compileJSONTypeSQL,
+	compileNestedSQL,
 	schemaToIndexes,
 	schemaToTable,
 	stepToSQL,
@@ -60,19 +64,33 @@ describe('SQL declaration compilers', () => {
 	it('compiles flat and nested fields with contained identifiers and paths', () => {
 		expect(compileFieldSQL('payload')).toBe('"payload"')
 		expect(compileFieldSQL(['payload', 'user', 'id'])).toBe(
-			'json_extract("payload", \'$.user.id\')',
+			'json_extract(CASE WHEN typeof("payload") = \'text\' THEN "payload" END, \'$."user"."id"\')',
 		)
-		expect(compileFieldSQL(['payload', "a'b"])).toBe("json_extract(\"payload\", '$.a''b')")
+		expect(compileFieldSQL(['payload', "a'b", 'c.d'])).toBe(
+			'json_extract(CASE WHEN typeof("payload") = \'text\' THEN "payload" END, \'$."a\'\'b"."c.d"\')',
+		)
+		expect(compileJSONAccessSQL(['payload'])).toBe(
+			'CASE WHEN typeof("payload") = \'text\' THEN "payload" END, \'$\'',
+		)
+		expect(() => compileJSONAccessSQL([])).toThrow(expect.objectContaining({ code: 'VALIDATION' }))
 	})
 
-	it('compiles every aggregate without changing SQL bytes', () => {
+	it('quotes each path key as one object member label', () => {
+		expect(compileJSONPathSQL([])).toBe("'$'")
+		expect(compileJSONPathSQL(['a.b', 'c d', '0'])).toBe('\'$."a.b"."c d"."0"\'')
+		expect(compileJSONPathSQL(['a"b', 'c\\d'])).toBe('\'$."a\\"b"."c\\\\d"\'')
+	})
+
+	it('compiles every aggregate, a sum as TOTAL with NULL over no value', () => {
 		expect(compileAggregateSQL('count', 'age')).toBe('COUNT(*)')
-		expect(compileAggregateSQL('sum', 'age')).toBe('SUM("age")')
+		expect(compileAggregateSQL('sum', 'age')).toBe(
+			'CASE WHEN COUNT("age") = 0 THEN NULL ELSE TOTAL("age") END',
+		)
 		expect(compileAggregateSQL('average', 'age')).toBe('AVG("age")')
 		expect(compileAggregateSQL('minimum', 'age')).toBe('MIN("age")')
 		expect(compileAggregateSQL('maximum', 'age')).toBe('MAX("age")')
-		expect(compileAggregateSQL('sum', ['payload', 'score'])).toBe(
-			'SUM(json_extract("payload", \'$.score\'))',
+		expect(compileAggregateSQL('maximum', ['payload', 'score'])).toBe(
+			'MAX(json_extract(CASE WHEN typeof("payload") = \'text\' THEN "payload" END, \'$."score"\'))',
 		)
 	})
 })
@@ -275,61 +293,48 @@ describe('compileQuerySQL — operators', () => {
 		})
 	})
 
-	it('compiles a nested FieldPath to json_extract binding the native scalar', () => {
-		// json_extract returns the unquoted native scalar (here the number 9), so the
-		// operand binds as `9` — NOT JSON.stringify(9) = '9' (a string), which would
-		// match zero rows. This is the operand-encoding fix.
+	it('compiles a nested number equals to its JSON type beside a listed value', () => {
+		// A listed number passes through the same JSON parser as the stored one.
 		expect(compile({ conditions: [cond(['meta', 'info', 'score'], 'equals', [9])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.info.score\') = ? ORDER BY "id" ASC',
-			parameters: [9],
+			sql: 'WHERE (json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."info"."score"\') IN (\'integer\', \'real\') AND json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."info"."score"\') IN (SELECT value FROM json_each(?))) ORDER BY "id" ASC',
+			parameters: ['[9]'],
 		})
 	})
 
-	it('binds a nested string operand as the raw string (not JSON-quoted)', () => {
-		// A nested string operand binds as `green`, not JSON.stringify('green') =
-		// '"green"' — json_extract returns the string unquoted.
-		expect(compile({ conditions: [cond(['payload', 'tag'], 'equals', ['green'])] })).toEqual({
-			sql: 'WHERE json_extract("payload", \'$.tag\') = ? ORDER BY "id" ASC',
-			parameters: ['green'],
+	it('compiles a nested string equals to its JSON type beside a listed value', () => {
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'equals', ['green'])] })).toEqual({
+			sql: 'WHERE (json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."tag"\') = \'text\' AND json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."tag"\') IN (SELECT value FROM json_each(?))) ORDER BY "id" ASC',
+			parameters: ['["green"]'],
 		})
 	})
 
-	it('binds a nested boolean operand as 1 / 0', () => {
-		// A JSON boolean comes back from json_extract as integer 1/0, so `true` binds
-		// as `1` — not JSON.stringify(true) = 'true'.
-		expect(compile({ conditions: [cond(['payload', 'flag'], 'equals', [true])] })).toEqual({
-			sql: 'WHERE json_extract("payload", \'$.flag\') = ? ORDER BY "id" ASC',
-			parameters: [1],
-		})
-	})
-
-	it("escapes a ' in a nested json-path part (no SQL-literal break-out)", () => {
-		// A part with a single quote must be doubled (`x''y`), so a caller-supplied
-		// key can't terminate the json-path string literal and inject SQL. The
-		// operand binds as the raw string `v` (the native json_extract scalar).
-		expect(compile({ conditions: [cond(['meta', "x'y"], 'equals', ['v'])] })).toEqual({
-			sql: 'WHERE json_extract("meta", \'$.x\'\'y\') = ? ORDER BY "id" ASC',
-			parameters: ['v'],
-		})
-	})
-
-	it("compiles a nested equals(null) to json_type = 'null' (present-null only)", () => {
-		// json_extract collapses BOTH a present JSON `null` AND an absent path to SQL
-		// `NULL` — indistinguishable. json_type disambiguates: `'null'` only for a
-		// present JSON null, matching the engine's `compareValues(null, null) === 0`
-		// (absent decodes to `undefined`, which does NOT equal `null`).
-		expect(compile({ conditions: [cond(['meta', 'note'], 'equals', [null])] })).toEqual({
-			sql: 'WHERE json_type("meta", \'$.note\') = \'null\' ORDER BY "id" ASC',
+	it('compiles a nested boolean equals to its JSON type alone', () => {
+		// A JSON true reads back as the integer 1, which a number 1 also reads back as.
+		expect(compile({ conditions: [cond(['meta', 'flag'], 'equals', [true])] })).toEqual({
+			sql: 'WHERE json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."flag"\') = \'true\' ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
 
-	it("compiles a nested not(null) to (json_type IS NULL OR json_type != 'null')", () => {
-		// Matches absent (json_type IS NULL) or present-scalar (json_type != 'null');
-		// excludes only a present JSON null — matching the engine's
-		// `compareValues(value, null) !== 0`.
+	it("doubles a ' in a nested path label (no SQL-literal break-out)", () => {
+		expect(compile({ conditions: [cond(['meta', "x'y"], 'equals', [null])] })).toEqual({
+			sql: 'WHERE json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."x\'\'y"\') = \'null\' ORDER BY "id" ASC',
+			parameters: [],
+		})
+	})
+
+	it('compiles a nested equals(undefined) to a NULL json_type, apart from equals(null)', () => {
+		// json_extract reads both a present JSON null and an absent path as SQL NULL; json_type
+		// reads 'null' for the first and NULL for the second.
+		expect(compile({ conditions: [cond(['meta', 'note'], 'equals', [undefined])] })).toEqual({
+			sql: 'WHERE json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."note"\') IS NULL ORDER BY "id" ASC',
+			parameters: [],
+		})
+	})
+
+	it('compiles a nested not(null) to the negated membership with NULL read as no match', () => {
 		expect(compile({ conditions: [cond(['meta', 'note'], 'not', [null])] })).toEqual({
-			sql: 'WHERE (json_type("meta", \'$.note\') IS NULL OR json_type("meta", \'$.note\') != \'null\') ORDER BY "id" ASC',
+			sql: 'WHERE NOT COALESCE(json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."note"\') = \'null\', 0) ORDER BY "id" ASC',
 			parameters: [],
 		})
 	})
@@ -339,16 +344,40 @@ describe('compileQuerySQL — operators', () => {
 		// `IS NULL` clause catches both — matching the engine, where both an
 		// undefined (rank 0) and a null (rank 1) nested value rank below any scalar.
 		expect(compile({ conditions: [cond(['meta', 'score'], 'below', [18])] })).toEqual({
-			sql: 'WHERE (json_extract("meta", \'$.score\') < ? OR json_extract("meta", \'$.score\') IS NULL) ORDER BY "id" ASC',
+			sql: 'WHERE (json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."score"\') < ? OR json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."score"\') IS NULL) ORDER BY "id" ASC',
 			parameters: [18],
 		})
 	})
 
-	it('compiles a nested none to NOT IN json_each OR json_extract IS NULL', () => {
-		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', ['a', 'b'])] })).toEqual({
-			sql: 'WHERE (json_extract("meta", \'$.tag\') NOT IN (SELECT value FROM json_each(?)) OR json_extract("meta", \'$.tag\') IS NULL) ORDER BY "id" ASC',
-			parameters: ['["a","b"]'],
+	it('compiles a nested any and none over every scalar class, one term per class', () => {
+		const type = 'json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."tag"\')'
+		const value = 'json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."tag"\')'
+		const member = `((${type} = 'text' AND ${value} IN (SELECT value FROM json_each(?))) OR (${type} IN ('integer', 'real') AND ${value} IN (SELECT value FROM json_each(?))) OR ${type} = 'false' OR ${type} = 'null' OR ${type} IS NULL)`
+		const values = ['a', 1, false, null, undefined, 'b', 2.5]
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'any', values)] })).toEqual({
+			sql: `WHERE ${member} ORDER BY "id" ASC`,
+			parameters: ['["a","b"]', '[1,2.5]'],
 		})
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', values)] })).toEqual({
+			sql: `WHERE NOT COALESCE(${member}, 0) ORDER BY "id" ASC`,
+			parameters: ['["a","b"]', '[1,2.5]'],
+		})
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'any', [])] }).sql).toBe(
+			'WHERE 0 ORDER BY "id" ASC',
+		)
+		expect(compile({ conditions: [cond(['meta', 'tag'], 'none', [])] }).sql).toBe(
+			'WHERE NOT COALESCE(0, 0) ORDER BY "id" ASC',
+		)
+	})
+
+	it("reads a nested path through a head guarded to text, whatever the head's flags", () => {
+		expect(compileNestedSQL(cond(['meta', 'flag'], 'equals', [true]))).toEqual({
+			sql: 'json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."flag"\') = \'true\'',
+			parameters: [],
+		})
+		expect(compileJSONTypeSQL(['meta', 'a.b'])).toBe(
+			'json_type(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."a.b"\')',
+		)
 	})
 
 	it('compiles a flat equals(null) and not(null) by the column flags', () => {
@@ -592,21 +621,17 @@ describe('compileConditionSQL', () => {
 		})
 	})
 
-	it("compiles a nested null equals to json_type = 'null' with no bound param", () => {
-		// A nested (json_extract) field with a null operand under equals compiles
-		// through json_type — 'null' means present-JSON-null, distinguishing it
-		// from an absent path (which json_extract alone cannot tell apart).
-		expect(compileConditionSQL(cond(['meta', 'note'], 'equals', [null]), SCHEMA)).toEqual({
-			sql: "json_type(\"meta\", '$.note') = 'null'",
-			parameters: [],
-		})
+	it('routes a nested equality-family condition to the nested compiler, pinned or not', () => {
+		for (const operator of ['equals', 'not', 'any', 'none'] as const) {
+			const condition = cond(['meta', 'note'], operator, [null])
+			expect(compileConditionSQL(condition, SCHEMA, true)).toEqual(compileNestedSQL(condition))
+		}
 	})
 
-	it('encodes a nested operand as the native json_extract scalar (not JSON-quoted)', () => {
-		// A nested string operand binds raw (`green`), not JSON.stringify('green').
-		expect(compileConditionSQL(cond(['meta', 'tag'], 'equals', ['green']), SCHEMA)).toEqual({
-			sql: 'json_extract("meta", \'$.tag\') = ?',
-			parameters: ['green'],
+	it('compares a nested object operand as the JSON text of its value', () => {
+		expect(compileConditionSQL(cond(['meta', 'tag'], 'equals', [{ a: 1 }]), SCHEMA)).toEqual({
+			sql: 'json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."tag"\') = ?',
+			parameters: ['{"a":1}'],
 		})
 	})
 })
@@ -665,9 +690,33 @@ describe('compileOrderSQL', () => {
 		)
 	})
 
+	it('ranks absence, then null, then values ahead of a column with both flags, in its direction', () => {
+		const schema: TableSchema = {
+			...SCHEMA,
+			columns: [
+				...SCHEMA.columns,
+				{ name: 'note', storage: 'text', optional: true, nullable: true },
+				{ name: 'rank', storage: 'integer', optional: true, nullable: true },
+			],
+		}
+		expect(
+			compileOrderSQL(
+				[
+					{ column: 'note', direction: 'descending' },
+					{ column: 'rank', direction: 'ascending' },
+				],
+				schema,
+				true,
+			),
+		).toBe(
+			'ORDER BY CASE WHEN "note" IS NULL THEN 0 WHEN typeof("note") = \'blob\' THEN 1 ELSE 2 END DESC, +"note" DESC, ' +
+				'CASE WHEN "rank" IS NULL THEN 0 WHEN typeof("rank") = \'text\' THEN 1 ELSE 2 END ASC, +"rank" ASC, "id" ASC',
+		)
+	})
+
 	it('compiles a nested FieldPath order term to json_extract', () => {
 		expect(compileOrderSQL([{ column: ['meta', 'score'], direction: 'ascending' }], SCHEMA)).toBe(
-			'ORDER BY json_extract("meta", \'$.score\') ASC, "id" ASC',
+			'ORDER BY json_extract(CASE WHEN typeof("meta") = \'text\' THEN "meta" END, \'$."score"\') ASC, "id" ASC',
 		)
 	})
 })
