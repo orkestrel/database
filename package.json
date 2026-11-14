@@ -102,7 +102,7 @@
 		"@orkestrel/browser": "^0.0.33",
 		"@orkestrel/guide": "^0.0.31",
 		"@orkestrel/probe": "^0.0.30",
-		"@orkestrel/scaffold": "^0.0.135",
+		"@orkestrel/scaffold": "^0.0.136",
 		"@orkestrel/test": "^0.0.39",
 		"@types/node": "^26.6.6",
 		"@vitest/browser-playwright": "^5.1.0",
