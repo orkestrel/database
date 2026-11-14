@@ -46,6 +46,8 @@ import { projectMigrationSchema } from '../compilers.js'
  */
 export class MemoryDriver implements DriverInterface {
 	readonly #tables = new Map<string, Map<Key, Row>>()
+	// Each store's keys in key order, kept until a write, delete, or clear changes its key set.
+	readonly #orders = new WeakMap<Map<Key, Row>, readonly Key[]>()
 	#schema: readonly TableSchema[] = []
 	#metadata: DriverMetadata | undefined
 
@@ -130,17 +132,15 @@ export class MemoryDriver implements DriverInterface {
 	): Promise<boolean | readonly boolean[]> {
 		checkAbort(options?.signal)
 		const store = this.#store(table)
+		const present = isArray(keys) ? keys.map((key) => store.has(key)) : [store.has(keys)]
+		if (present.includes(true)) this.#orders.delete(store)
 		if (!isArray(keys)) return store.delete(keys)
-		const removed = computeRemoved(
-			keys,
-			keys.map((key) => store.has(key)),
-		)
 		for (const key of keys) store.delete(key)
-		return removed
+		return computeRemoved(keys, present)
 	}
 
 	async keys(table: string): Promise<readonly Key[]> {
-		return this.#ordered(table)
+		return [...this.#ordered(table)]
 	}
 
 	async *scan(table: string): AsyncIterable<Row> {
@@ -152,7 +152,9 @@ export class MemoryDriver implements DriverInterface {
 	}
 
 	async clear(table: string): Promise<void> {
-		this.#store(table).clear()
+		const store = this.#store(table)
+		store.clear()
+		this.#orders.delete(store)
 	}
 
 	/**
@@ -228,14 +230,21 @@ export class MemoryDriver implements DriverInterface {
 
 	#apply(table: string, entries: ReadonlyArray<readonly [Key, Row]>): void {
 		const store = this.#store(table)
+		if (entries.some(([key]) => !store.has(key))) this.#orders.delete(store)
 		for (const [key, row] of entries) store.set(key, row)
 	}
 
 	// A table's keys in key order — the contract `scan` and `keys` yield in.
 	// `compareValues` is the core total order (number < string, natural within),
-	// matching the SQLite `ORDER BY` and IndexedDB key-range orderings.
+	// matching the SQLite `ORDER BY` and IndexedDB key-range orderings. The sort runs once per
+	// key set; a migration publishes fresh stores, so it starts with no kept order.
 	#ordered(table: string): readonly Key[] {
-		return [...this.#store(table).keys()].sort(compareValues)
+		const store = this.#store(table)
+		const kept = this.#orders.get(store)
+		if (kept !== undefined) return kept
+		const ordered = Object.freeze([...store.keys()].sort(compareValues))
+		this.#orders.set(store, ordered)
+		return ordered
 	}
 
 	// A migration step's table must already exist — unlike `#store`, a missing

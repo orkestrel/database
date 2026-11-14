@@ -42,6 +42,7 @@ import {
 	completeFixture,
 	createAbortingRow,
 	createRecordedUsers,
+	buildUserRows,
 	EMPTY_STORAGE_CASES,
 	EMPTY_TABLE_CASES,
 } from '../../../setup.js'
@@ -2704,5 +2705,304 @@ describe('IndexedDBDriver — ill-formed text', () => {
 			await recorder.driver.close()
 			await deleteDatabase(database)
 		}
+	})
+})
+
+// Each public `Table` and cursor operation's driver calls on ten seeded users, read through the
+// exported `StorageRecorder` at the driver boundary. A case counts driver calls, not the
+// IndexedDB transactions beneath one: a stream can open one transaction per batch. `plan` is
+// answered in process. `K` is a three-key list with one absent key. The users table declares no
+// index, so an aggregate over `age` streams the rows the key range selects.
+describe('IndexedDBDriver — round trips per Table operation', () => {
+	const stored = new DatabaseFixture<string>()
+	const recorded = new DatabaseFixture<ReturnType<typeof createRecordedUsers>>()
+	const listed = ['u1', 'u2', 'missing']
+	const later = { conditions: [buildCondition('id', 'above', ['u6'])] }
+	const single = { id: 'n0', name: 'New 0', age: 0 }
+	const added = [
+		{ id: 'n1', name: 'New 1', age: 1 },
+		{ id: 'n2', name: 'New 2', age: 2 },
+		{ id: 'n3', name: 'New 3', age: 3 },
+	]
+
+	beforeEach(async () => {
+		stored.hold(mintDatabase('database-idb-round-trips'))
+		recorded.hold(createRecordedUsers(createIndexedDBDriver(stored.value)))
+		await recorded.value.users.set(buildUserRows(10))
+	})
+
+	afterEach(async () => {
+		await recorded.value.db.close()
+		await deleteDatabase(stored.value)
+		recorded.clear()
+		stored.clear()
+	})
+
+	it('reads one key in one read', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.get('u1'))).toEqual({
+			value: { id: 'u1', name: 'User 1', age: 1 },
+			calls: [{ member: 'read', keys: 1, rows: 1, scoped: false }],
+		})
+	})
+
+	it('reads K keys in one read', async () => {
+		const { recorder, users } = recorded.value
+		const { value, calls } = await recorder.measure(() => users.get(listed))
+		expect({ value: value.map((row) => row?.id), calls }).toEqual({
+			value: ['u1', 'u2', undefined],
+			calls: [{ member: 'read', keys: 3, rows: 2, scoped: false }],
+		})
+	})
+
+	it('resolves one key in one read', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.resolve('u1'))).calls).toEqual([
+			{ member: 'read', keys: 1, rows: 1, scoped: false },
+		])
+	})
+
+	it('resolves K keys in one read', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.resolve(['u1', 'u2', 'u3']))).calls).toEqual([
+			{ member: 'read', keys: 3, rows: 3, scoped: false },
+		])
+	})
+
+	it('checks one key in one read', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.has('u1'))).toEqual({
+			value: true,
+			calls: [{ member: 'read', keys: 1, rows: 1, scoped: false }],
+		})
+	})
+
+	it('checks K keys in one read', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.has(listed))).toEqual({
+			value: [true, true, false],
+			calls: [{ member: 'read', keys: 3, rows: 2, scoped: false }],
+		})
+	})
+
+	it('lists the keys in one keys call', async () => {
+		const { recorder, users } = recorded.value
+		const { value, calls } = await recorder.measure(() => users.keys())
+		expect({ count: value.length, calls }).toEqual({
+			count: 10,
+			calls: [{ member: 'keys', keys: 0, rows: 0, scoped: false }],
+		})
+	})
+
+	it('reads the matching rows in one records call', async () => {
+		const { recorder, users } = recorded.value
+		const { value, calls } = await recorder.measure(() => users.records(later))
+		expect({ value: value.map((row) => row.id), calls }).toEqual({
+			value: ['u7', 'u8', 'u9'],
+			calls: [
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'records', keys: 0, rows: 3, scoped: false },
+			],
+		})
+	})
+
+	it('counts in one aggregate call', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.count(later))).toEqual({
+			value: 3,
+			calls: [
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'aggregate', keys: 0, rows: 0, scoped: false },
+			],
+		})
+	})
+
+	it('computes an aggregate over an unindexed column in one stream of the selected rows', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.aggregate('maximum', 'age', later))).toEqual({
+			value: 9,
+			calls: [
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'stream', keys: 0, rows: 3, scoped: false },
+			],
+		})
+	})
+
+	it('streams the matching rows in one stream call', async () => {
+		const { recorder, users } = recorded.value
+		const { value, calls } = await recorder.measure(() => collect(users.scan(later)))
+		expect({ value: value.map((row) => row.id), calls }).toEqual({
+			value: ['u7', 'u8', 'u9'],
+			calls: [
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'stream', keys: 0, rows: 3, scoped: false },
+			],
+		})
+	})
+
+	it('sets one row in one write', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.set(single))).calls).toEqual([
+			{ member: 'write', keys: 1, rows: 0, scoped: false },
+		])
+	})
+
+	it('sets K rows in one write', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.set(added))).calls).toEqual([
+			{ member: 'write', keys: 3, rows: 0, scoped: false },
+		])
+	})
+
+	it('adds one row in one insert', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.add(single))).calls).toEqual([
+			{ member: 'insert', keys: 1, rows: 0, scoped: false },
+		])
+	})
+
+	it('adds K rows in one insert', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.add(added))).calls).toEqual([
+			{ member: 'insert', keys: 3, rows: 0, scoped: false },
+		])
+	})
+
+	it('updates one row in one read and one write', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.update('u1', { name: 'Renamed' }))).toEqual({
+			value: true,
+			calls: [
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+				{ member: 'write', keys: 1, rows: 0, scoped: false },
+			],
+		})
+	})
+
+	it('updates K keys in one read and one write of the present rows', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.update(listed, { name: 'Renamed' }))).toEqual({
+			value: [true, true, false],
+			calls: [
+				{ member: 'read', keys: 3, rows: 2, scoped: false },
+				{ member: 'write', keys: 2, rows: 0, scoped: false },
+			],
+		})
+	})
+
+	it('removes one row in one delete', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.remove('u1'))).toEqual({
+			value: true,
+			calls: [{ member: 'delete', keys: 1, rows: 0, scoped: false }],
+		})
+	})
+
+	it('removes K keys in one delete', async () => {
+		const { recorder, users } = recorded.value
+		expect(await recorder.measure(() => users.remove(listed))).toEqual({
+			value: false,
+			calls: [{ member: 'delete', keys: 3, rows: 0, scoped: false }],
+		})
+	})
+
+	it('clears the table in one clear call', async () => {
+		const { recorder, users } = recorded.value
+		expect((await recorder.measure(() => users.clear())).calls).toEqual([
+			{ member: 'clear', keys: 0, rows: 0, scoped: false },
+		])
+	})
+
+	it('collects and finds through a query in one records call each', async () => {
+		const { recorder, users } = recorded.value
+		// `Query.find` sends its read with no limit and returns the first row, so it reads every match.
+		const query = users.query().condition(buildCondition('id', 'above', ['u6']))
+		const collected = await recorder.measure(() => query.collect())
+		const found = await recorder.measure(() => query.find())
+		expect([collected.calls, found.value?.id, found.calls]).toEqual([
+			[
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'records', keys: 0, rows: 3, scoped: false },
+			],
+			'u7',
+			[
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'records', keys: 0, rows: 3, scoped: false },
+			],
+		])
+	})
+
+	it('counts in one aggregate call, and sums and streams through a query in one stream each', async () => {
+		const { recorder, users } = recorded.value
+		const query = users.query().condition(buildCondition('id', 'above', ['u6']))
+		const counted = await recorder.measure(() => query.count())
+		const summed = await recorder.measure(() => query.aggregate('sum', 'age'))
+		const streamed = await recorder.measure(() => collect(query.stream()))
+		expect([counted, summed, streamed.calls]).toEqual([
+			{
+				value: 3,
+				calls: [
+					{ member: 'plan', keys: 0, rows: 0, scoped: false },
+					{ member: 'aggregate', keys: 0, rows: 0, scoped: false },
+				],
+			},
+			{
+				value: 24,
+				calls: [
+					{ member: 'plan', keys: 0, rows: 0, scoped: false },
+					{ member: 'stream', keys: 0, rows: 3, scoped: false },
+				],
+			},
+			[
+				{ member: 'plan', keys: 0, rows: 0, scoped: false },
+				{ member: 'stream', keys: 0, rows: 3, scoped: false },
+			],
+		])
+	})
+
+	it('opens a cursor in one keys call and one read of its first row', async () => {
+		const { recorder, users } = recorded.value
+		const { value, calls } = await recorder.measure(() => users.cursor())
+		expect({ first: value.value?.id, calls }).toEqual({
+			first: 'u0',
+			calls: [
+				{ member: 'keys', keys: 0, rows: 0, scoped: false },
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+			],
+		})
+	})
+
+	it('steps a cursor in one read of the next row', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.next())
+		expect({ current: cursor.value?.id, calls }).toEqual({
+			current: 'u1',
+			calls: [{ member: 'read', keys: 1, rows: 1, scoped: false }],
+		})
+	})
+
+	it('updates through a cursor in one read, one write, and one read of the written row', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.update({ name: 'Renamed' }))
+		expect({ current: cursor.value?.name, calls }).toEqual({
+			current: 'Renamed',
+			calls: [
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+				{ member: 'write', keys: 1, rows: 0, scoped: false },
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+			],
+		})
+	})
+
+	it('removes through a cursor in one delete', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.remove())
+		expect({ current: cursor.value, calls }).toEqual({
+			current: undefined,
+			calls: [{ member: 'delete', keys: 1, rows: 0, scoped: false }],
+		})
 	})
 })
