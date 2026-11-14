@@ -23,8 +23,8 @@ persistent drivers ship alongside it: a trusted-mode SQLite driver in
 [`src/server`](../src/server) (surfaced through `@orkestrel/database/server`)
 with native querying, paging, counting, aggregation, transactions, and atomic migration,
 and an IndexedDB driver in [`src/browser`](../src/browser)
-(surfaced through `@orkestrel/database/browser`) whose plan answers one condition with a
-key range over the primary key or an index — beside the I/O-free `MemoryDriver` and the
+(surfaced through `@orkestrel/database/browser`) whose plan answers one ranked access path
+over the primary key or an index, with its order, page, and count — beside the I/O-free `MemoryDriver` and the
 file-persisted `JSONDriver`, whose reads the core answers over `scan`.
 
 ## Surface
@@ -81,20 +81,21 @@ produces the JSON Schema, and seeds fixtures.
 
 ### Classes
 
-| Name                | Kind  | Signature                                                                                                                | Summary                                                                                                                                                                           |
-| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Database`          | class | `new <T extends TableMap = TableMap>(options: DatabaseOptions<T>) => DatabaseInterface<T>`                               | Exposes a typed view over one shared internal lifecycle and storage context.                                                                                                      |
-| `DriverIterator`    | class | `new <T>(source: AsyncIterator<T>, guard: () => void) => AsyncIterableIterator<T>`                                       | Forms the internal continuation boundary for a root driver async iterator.                                                                                                        |
-| `ScopedStorage`     | class | `new (source: StorageInterface, guard: () => void) => StorageInterface`                                                  | Forms the lifetime boundary of a driver's scoped storage: each member runs the guard, then forwards to the storage it wraps.                                                      |
-| `StorageJournal`    | class | `new (source: StorageInterface) => StorageJournalInterface`                                                              | Records the prior row of each key a scope writes or deletes, on its first touch, and restores those keys on request — the transaction floor for a driver without `transaction`.   |
-| `MemoryDriver`      | class | `new () => DriverInterface`                                                                                              | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                                                 |
-| `JSONDriver`        | class | `new (path: string) => DriverInterface`                                                                                  | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                                                     |
-| `SQLiteDriver`      | class | `new (options: SQLiteDriverOptions) => SQLiteDriverInterface`                                                            | Implements the `SQLiteDriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper.                      |
-| `IndexedDBDriver`   | class | `new (name: string) => DriverInterface`                                                                                  | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.                                          |
-| `StreamPage`        | class | `new (offset: number) => StreamPage`                                                                                     | Tracks the matching-row position of one streaming page.                                                                                                                           |
-| `JSONTransaction`   | class | `new (memory: MemoryDriver, schema: readonly TableSchema[], identities: ReadonlyMap<string, object>) => JSONTransaction` | Owns the isolated memory store and schema of one JSON transaction.                                                                                                                |
-| `SQLiteTransaction` | class | `new (schema: ReadonlyMap<string, TableSchema>, identities: ReadonlyMap<string, object>) => SQLiteTransaction`           | Owns the candidate schema and table identities of one SQLite transaction.                                                                                                         |
-| `SQLiteConnection`  | class | `new (database: SQLiteDatabaseInterface) => SQLiteConnection`                                                            | Owns one open SQLite connection of the SQLite driver and the prepared statements it reuses, keyed by SQL text and bounded by `STATEMENT_LIMIT` with least-recently-used eviction. |
+| Name                     | Kind  | Signature                                                                                                                                            | Summary                                                                                                                                                                           |
+| ------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Database`               | class | `new <T extends TableMap = TableMap>(options: DatabaseOptions<T>) => DatabaseInterface<T>`                                                           | Exposes a typed view over one shared internal lifecycle and storage context.                                                                                                      |
+| `DriverIterator`         | class | `new <T>(source: AsyncIterator<T>, guard: () => void) => AsyncIterableIterator<T>`                                                                   | Forms the internal continuation boundary for a root driver async iterator.                                                                                                        |
+| `ScopedStorage`          | class | `new (source: StorageInterface, guard: () => void) => StorageInterface`                                                                              | Forms the lifetime boundary of a driver's scoped storage: each member runs the guard, then forwards to the storage it wraps.                                                      |
+| `StorageJournal`         | class | `new (source: StorageInterface) => StorageJournalInterface`                                                                                          | Records the prior row of each key a scope writes or deletes, on its first touch, and restores those keys on request — the transaction floor for a driver without `transaction`.   |
+| `MemoryDriver`           | class | `new () => DriverInterface`                                                                                                                          | Implements the reference `DriverInterface` — nested maps, no I/O.                                                                                                                 |
+| `JSONDriver`             | class | `new (path: string) => DriverInterface`                                                                                                              | Implements a persistent `DriverInterface` backed by a single JSON file — the reference `MemoryDriver` plus file load / flush.                                                     |
+| `SQLiteDriver`           | class | `new (options: SQLiteDriverOptions) => SQLiteDriverInterface`                                                                                        | Implements the `SQLiteDriverInterface` over SQLite — the server-native, trusted-mode backend built on the published `@orkestrel/sqlite` synchronous wrapper.                      |
+| `IndexedDBDriver`        | class | `new (name: string) => DriverInterface`                                                                                                              | Implements the `DriverInterface` over IndexedDB — the persistent browser backend, built on the published `@orkestrel/indexeddb` wrapper.                                          |
+| `IndexedDBBatchIterator` | class | `new (read: (position: AccessPosition \| undefined, size: number) => Promise<AccessBatch>, limit?: number) => AsyncIterableIterator<readonly Row[]>` | Iterates the batches of one stream, each read by its own call, past the position the previous batch reports, up to a total row limit.                                             |
+| `StreamPage`             | class | `new (offset: number) => StreamPage`                                                                                                                 | Tracks the matching-row position of one streaming page.                                                                                                                           |
+| `JSONTransaction`        | class | `new (memory: MemoryDriver, schema: readonly TableSchema[], identities: ReadonlyMap<string, object>) => JSONTransaction`                             | Owns the isolated memory store and schema of one JSON transaction.                                                                                                                |
+| `SQLiteTransaction`      | class | `new (schema: ReadonlyMap<string, TableSchema>, identities: ReadonlyMap<string, object>) => SQLiteTransaction`                                       | Owns the candidate schema and table identities of one SQLite transaction.                                                                                                         |
+| `SQLiteConnection`       | class | `new (database: SQLiteDatabaseInterface) => SQLiteConnection`                                                                                        | Owns one open SQLite connection of the SQLite driver and the prepared statements it reuses, keyed by SQL text and bounded by `STATEMENT_LIMIT` with least-recently-used eviction. |
 
 ### Server
 
@@ -154,21 +155,33 @@ None of these import a SQLite package; they speak strings and values only.
 
 ### Browser
 
-Pure functions behind the IndexedDB driver's planner — the one condition a key range
-answers stays native, and the core engine runs the rest.
+Pure functions behind the IndexedDB driver's planner: it ranks the access paths a read's
+conditions admit, keeps the one it picks native with the order and page that path serves,
+and leaves the rest to the core engine.
 
-| Name                       | Kind     | Signature                                                                                                       | Summary                                                                                                                                                                                              |
-| -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `conditionToRange`         | function | `(condition: Condition) => IDBKeyRange \| undefined`                                                            | Translates one `Condition` to the `IDBKeyRange` it maps to, when its operator is one of the exact key comparisons over scalar operands; otherwise returns `undefined`.                               |
-| `planIndexedDBQuery`       | function | `(input: ReadInput, schema: TableSchema, available: readonly string[]) => ReadPlan`                             | Splits a read into the part IndexedDB answers natively and the residual the core runs — the IndexedDB driver's `plan`.                                                                               |
-| `findAccessCondition`      | function | `(input: QueryInput \| undefined, schema: TableSchema, available: readonly string[]) => Condition \| undefined` | Finds the condition an IndexedDB read narrows on: the first one an index or the primary key answers with an exact key range.                                                                         |
-| `deriveAccessPlan`         | function | `(condition: Condition \| undefined, schema: TableSchema) => AccessPlan`                                        | Derives the key-range read for the condition an IndexedDB read narrows on.                                                                                                                           |
-| `INDEXABLE_STORAGE`        | const    | `readonly ColumnStorage[]`                                                                                      | Lists the declared `ColumnStorage`s that are valid, orderable IndexedDB keys.                                                                                                                        |
-| `METADATA_STORE`           | const    | `"__metadata__"`                                                                                                | Names the reserved out-of-line store `__metadata__` the `IndexedDBDriver` stamps its `DriverMetadata` into.                                                                                          |
-| `mapIndexedDBError`        | function | `(error: IndexedDBError) => DatabaseError`                                                                      | Maps a backend `IndexedDBError` to the portable `DatabaseError` taxonomy — the default mapping used everywhere except inside `migrate()`.                                                            |
-| `mapMigrationError`        | function | `(error: IndexedDBError) => DatabaseError`                                                                      | Maps a backend `IndexedDBError` to the portable `DatabaseError` taxonomy for use inside `migrate()` — the one context where `UPGRADE` means the migration itself failed, not a generic driver fault. |
-| `deriveIndexedDBIndexName` | function | `(columns: readonly string[]) => string`                                                                        | Derives an IndexedDB index name for a declared column group — a bare column name for a single-column index, a deterministic collision-free encoding for a compound one.                              |
-| `schemaToStore`            | function | `(schema: TableSchema) => StoreDefinition`                                                                      | Projects a table schema into the IndexedDB wrapper's store definition.                                                                                                                               |
+| Name                       | Kind     | Signature                                                                                                                                    | Summary                                                                                                                                                                                              |
+| -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conditionToRange`         | function | `(condition: Condition) => IDBKeyRange \| undefined`                                                                                         | Translates one `Condition` to the `IDBKeyRange` it maps to, when its operator is one of the exact key comparisons over scalar operands; otherwise returns `undefined`.                               |
+| `planIndexedDBQuery`       | function | `(input: ReadInput, schema: TableSchema, available: readonly string[]) => ReadPlan`                                                          | Splits a read into the part IndexedDB answers natively and the residual the core runs — the IndexedDB driver's `plan`.                                                                               |
+| `findAccessPlan`           | function | `(input: ReadInput, schema: TableSchema, available: readonly string[]) => AccessPlan`                                                        | Finds the one access path an IndexedDB read takes.                                                                                                                                                   |
+| `deriveConditionPlan`      | function | `(condition: Condition, schema: TableSchema, available: readonly string[]) => AccessPlan \| undefined`                                       | Derives the access path one condition admits on the primary key or on a single-column index, or `undefined` when it admits none.                                                                     |
+| `deriveCompoundPlan`       | function | `(conditions: readonly Condition[], index: readonly string[], schema: TableSchema, available: readonly string[]) => AccessPlan \| undefined` | Derives the access path a compound index admits for a read's conditions, or `undefined` when it admits none.                                                                                         |
+| `deriveOrderPlan`          | function | `(order: readonly Order[] \| undefined, schema: TableSchema, available: readonly string[]) => AccessPlan \| undefined`                       | Derives the access path an order alone admits: the index whose columns are the order's columns, read in one direction, or `undefined` when no such index serves it.                                  |
+| `rankAccessPlan`           | function | `(plan: AccessPlan) => number`                                                                                                               | Ranks an access path by the rule `findAccessPlan` reads: a lower rank wins.                                                                                                                          |
+| `buildCompoundRange`       | function | `(values: readonly Key[], condition?: Condition) => IDBKeyRange \| undefined`                                                                | Builds the key range over a compound index's array keys that binds its leading columns to `values` and, when given, its next column to a range condition.                                            |
+| `matchesAccessOrder`       | function | `(plan: AccessPlan, order: readonly Order[], primary: string) => boolean`                                                                    | Checks whether an access path reads its rows in an order, ties broken by primary key in the order's direction.                                                                                       |
+| `matchesKeyList`           | function | `(plan: AccessPlan, order: readonly Order[] \| undefined, primary: string) => boolean`                                                       | Checks whether a read lists the primary keys of its access path and sorts them, rather than walking its source in order.                                                                             |
+| `resolveCount`             | function | `(count: number \| undefined) => number \| undefined`                                                                                        | Resolves the count a native `getAll`, `getAllKeys`, or `advance` call takes for a row count.                                                                                                         |
+| `narrowRange`              | function | `(range: IDBKeyRange \| undefined, key: IDBValidKey, direction: IDBCursorDirection, open: boolean) => IDBKeyRange \| undefined`              | Narrows a key range to the keys past one key in a cursor direction, for a stream that resumes after the final key of its last batch.                                                                 |
+| `readIndexNames`           | function | `(database: IDBDatabase, stores: readonly string[]) => ReadonlyMap<string, readonly string[]>`                                               | Reads the index names each listed store of a connected database holds, in one readonly transaction.                                                                                                  |
+| `INDEXABLE_STORAGE`        | const    | `readonly ColumnStorage[]`                                                                                                                   | Lists the declared `ColumnStorage`s that are valid, orderable IndexedDB keys.                                                                                                                        |
+| `METADATA_STORE`           | const    | `"__metadata__"`                                                                                                                             | Names the reserved out-of-line store `__metadata__` the `IndexedDBDriver` stamps its `DriverMetadata` into.                                                                                          |
+| `STREAM_BATCH_SIZE`        | const    | `500`                                                                                                                                        | Holds the number of rows the `IndexedDBDriver` reads per batch when it streams.                                                                                                                      |
+| `COUNT_LIMIT`              | const    | `4294967295`                                                                                                                                 | Holds the largest count IndexedDB's `getAll`, `getAllKeys`, and cursor `advance` accept: the Web IDL `unsigned long` maximum, past which the engine refuses the call with a `TypeError`.             |
+| `mapIndexedDBError`        | function | `(error: IndexedDBError) => DatabaseError`                                                                                                   | Maps a backend `IndexedDBError` to the portable `DatabaseError` taxonomy — the default mapping used everywhere except inside `migrate()`.                                                            |
+| `mapMigrationError`        | function | `(error: IndexedDBError) => DatabaseError`                                                                                                   | Maps a backend `IndexedDBError` to the portable `DatabaseError` taxonomy for use inside `migrate()` — the one context where `UPGRADE` means the migration itself failed, not a generic driver fault. |
+| `deriveIndexedDBIndexName` | function | `(columns: readonly string[]) => string`                                                                                                     | Derives an IndexedDB index name for a declared column group — a bare column name for a single-column index, a deterministic collision-free encoding for a compound one.                              |
+| `schemaToStore`            | function | `(schema: TableSchema) => StoreDefinition`                                                                                                   | Projects a table schema into the IndexedDB wrapper's store definition.                                                                                                                               |
 
 ### Errors
 
@@ -381,7 +394,9 @@ Pure helpers behind the query engine's pattern matching.
 | `CompiledSQL`              | interface | `{ sql, parameters }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents a parameterized SQL fragment or statement plus its bind values. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                               |
 | `SQLiteDriverOptions`      | interface | `{ path, readonly?, timeout?, references?, pragmas? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Configures `createSQLiteDriver`. The `@orkestrel/database/server` entry point exports this type.                                                                                                                                                                                                                         |
 | `SQLiteDriverInterface`    | interface | `{ pragma() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Represents the SQLite driver: the storage contract plus a read of one connection pragma.                                                                                                                                                                                                                                 |
-| `AccessPlan`               | interface | `{ index?, range? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Represents the key-range read behind a plan's native side — an optional index and an optional `IDBKeyRange`. An omitted `index` selects the primary store; an omitted `range` reads the whole store, so `{}` is a whole-store read. The `@orkestrel/database/browser` entry point exports this type.                     |
+| `AccessPlan`               | interface | `{ conditions, columns, prefix, index?, range?, keys? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Represents the one access path an IndexedDB read takes: the conditions it answers, the primary store or the index it reads, and the key range or key list it reads there.                                                                                                                                                |
+| `AccessBatch`              | interface | `{ rows, position? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents one batch a stream reads in one transaction: its rows, and the position of its final entry, which the next batch reads past.                                                                                                                                                                                  |
+| `AccessPosition`           | interface | `{ key, primary }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the position of one entry in an access path: its key in the path's source and its primary key, which are the same key on the primary store.                                                                                                                                                                   |
 | `TableDefinition`          | interface | `{ primary, columns, schema }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Represents one table's portable definition, produced by `export` — the unit of schema / migration exchange across environments.                                                                                                                                                                                          |
 | `DatabaseStorageInterface` | interface | `{ table() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Represents a table-only database view.                                                                                                                                                                                                                                                                                   |
 | `DatabaseInterface`        | interface | `{ emitter, name, status, import(), export(), open(), close(), transaction(), migrate() }`                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents a database — the ergonomic entry point that owns the driver and its tables.                                                                                                                                                                                                                                   |
@@ -697,16 +712,16 @@ These invariants hold across the core database source tree ↔ this guide:
    planned driver against the core engine over `scan`. The following table rules where
    each clause runs in this release:
 
-   | Clause                                                                  | `SQLiteDriver`                                                                                                                                                        | `IndexedDBDriver`                                                                                                  | `MemoryDriver`, `JSONDriver`                                          |
-   | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-   | Every operator on a flat `text`, `integer`, `real`, or `boolean` column | Native under every flag combination, with the null forms chosen from the column's flags; `starts` is an index range and `any` / `none` bind one `json_each` parameter | The first `and`-joined `equals`, `above`, `from`, or `between` over an index, or a comparison over the primary key | Residual over `scan`                                                  |
-   | A nested path; a `json` or `blob` column                                | A prefilter for `equals`, `not`, `any`, and `none` with scalar operands on a nested path under a `json` head, which the core rechecks; residual otherwise             | Residual                                                                                                           | Residual over `scan`                                                  |
-   | An `or` fold                                                            | Native when every condition is; otherwise wholly residual                                                                                                             | Residual                                                                                                           | Residual over `scan`                                                  |
-   | Order                                                                   | Native on a flat column; a column that is both optional and nullable sorts behind a rank of absence, `null`, then its values                                          | Residual                                                                                                           | Residual over `scan`                                                  |
-   | Page                                                                    | `LIMIT` and `OFFSET` when the residual holds no condition and no order                                                                                                | Residual, stopping the stream at `offset + limit` matches                                                          | Residual over `scan`                                                  |
-   | `count`                                                                 | `COUNT(*)` when the residual holds no condition                                                                                                                       | Residual                                                                                                           | Residual over `scan`                                                  |
-   | `sum`, `average`, `minimum`, `maximum`                                  | Native on an `integer` or `real` column that is not both optional and nullable; `sum` is `TOTAL`, `NULL` over no value                                                | Residual                                                                                                           | Residual over `scan`                                                  |
-   | Transaction                                                             | `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`; the scoped capability declares `plan`, `records`, `stream`, and `aggregate`                                                | The core's before-image journal                                                                                    | `JSONDriver`: native; `MemoryDriver`: the core's before-image journal |
+   | Clause                                                                  | `SQLiteDriver`                                                                                                                                                        | `IndexedDBDriver`                                                                                                                                                                                                                                                                                                                                                                                                   | `MemoryDriver`, `JSONDriver`                                          |
+   | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+   | Every operator on a flat `text`, `integer`, `real`, or `boolean` column | Native under every flag combination, with the null forms chosen from the column's flags; `starts` is an index range and `any` / `none` bind one `json_each` parameter | One access path when every connector is `and`, ranked by rule: primary-key `equals` or `any`; a compound index matched on two or more columns; a single-column index with `equals` or `any`, or a compound index whose leading column alone an `equals` binds; then a range or `starts` on the primary key or an index. `below` and `to` read an index only on a required column. The other conditions are residual | Residual over `scan`                                                  |
+   | A nested path; a `json` or `blob` column                                | A prefilter for `equals`, `not`, `any`, and `none` with scalar operands on a nested path under a `json` head, which the core rechecks; residual otherwise             | Residual                                                                                                                                                                                                                                                                                                                                                                                                            | Residual over `scan`                                                  |
+   | An `or` fold                                                            | Native when every condition is; otherwise wholly residual                                                                                                             | Residual                                                                                                                                                                                                                                                                                                                                                                                                            | Residual over `scan`                                                  |
+   | Order                                                                   | Native on a flat column; a column that is both optional and nullable sorts behind a rank of absence, `null`, then its values                                          | Native on the primary key, on a point of an index, and on the access path's index when the order is its unbound required columns in one direction; otherwise residual                                                                                                                                                                                                                                               | Residual over `scan`                                                  |
+   | Page                                                                    | `LIMIT` and `OFFSET` when the residual holds no condition and no order                                                                                                | `records(range, limit)`, or a cursor with `advance(offset)`, when the residual holds no condition and no order; otherwise residual, stopping the stream at `offset + limit` matches                                                                                                                                                                                                                                 | Residual over `scan`                                                  |
+   | `count`                                                                 | `COUNT(*)` when the residual holds no condition                                                                                                                       | `count(range)`, a sum of counts for `any`, when the residual holds no condition                                                                                                                                                                                                                                                                                                                                     | Residual over `scan`                                                  |
+   | `sum`, `average`, `minimum`, `maximum`                                  | Native on an `integer` or `real` column that is not both optional and nullable; `sum` is `TOTAL`, `NULL` over no value                                                | `minimum` and `maximum`: the first entry of the column's index on a required `integer` or `real` column, when the residual holds no condition; `sum` and `average`: residual                                                                                                                                                                                                                                        | Residual over `scan`                                                  |
+   | Transaction                                                             | `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK`; the scoped capability declares `plan`, `records`, `stream`, and `aggregate`                                                | The core's before-image journal                                                                                                                                                                                                                                                                                                                                                                                     | `JSONDriver`: native; `MemoryDriver`: the core's before-image journal |
 
    The rule fixes these semantics on every driver: text order and text ranges are the
    engine's binary order, so SQLite orders by code point where the core orders by UTF-16
@@ -752,13 +767,14 @@ These invariants hold across the core database source tree ↔ this guide:
    `DatabaseError('DRIVER', 'Stored SQLite table is missing')` before any DDL in its
    open transaction, and IndexedDB throws
    `DatabaseError('DRIVER', 'Stored IndexedDB store is missing')` before its final
-   open. Extra tables and stores remain allowed, and SQLite may reconstruct a missing declared index
-   because the table and its records still exist; a writable SQLite open also drops each
+   open. Extra tables and stores remain allowed, apart from an IndexedDB index the deployed
+   schema does not declare, which open drops; SQLite may reconstruct a missing declared index
+   because the table and its records still exist, and a writable SQLite open also drops each
    created index of a deployed table that the deployed schema no longer declares. IndexedDB
    captures the bootstrap connection's exact stores and version in the same
-   lifetime, then pins the persisted final open to that version; a concurrent
-   versionchange makes the stale open reject instead of silently bumping and
-   recreating storage. Existing unreadable, malformed, structurally incompatible,
+   lifetime, then pins the persisted final open to that version, or to the next one when
+   it drops an undeclared index; a concurrent versionchange makes the stale open reject
+   instead of silently bumping and recreating storage. Existing unreadable, malformed, structurally incompatible,
    or physically incomplete state throws `DRIVER` without publishing a handle or
    attempting table/store repair; after external repair, the same driver instance
    may retry `open`.
@@ -868,8 +884,8 @@ These invariants hold across the core database source tree ↔ this guide:
    publish on callback fulfillment). `SQLiteDriver` implements every optional hook — `records?` /
    `aggregate?` / `transaction?` / `stream?` / `migrate?` / `metadata?`
    / `stamp?` — the fully-native backend. `IndexedDBDriver` implements
-   `records?` / `stream?` / `migrate?` / `metadata?` / `stamp?` but
-   omits `transaction?` and `aggregate?` by IndexedDB's nature, not by
+   `records?` / `aggregate?` / `stream?` / `migrate?` / `metadata?` / `stamp?` but
+   omits `transaction?` by IndexedDB's nature, not by
    choice (see `.claude/rules/documentation.md` § Parity). A renamed / added /
    removed method breaks the gate
    until the table is reconciled.
@@ -1077,14 +1093,13 @@ and a reserved
 `_metadata` table (`METADATA_TABLE`) for `metadata?` / `stamp?` versioning — every
 optional `DriverInterface` hook, none skipped. `IndexedDBDriver` in
 `src/browser`, on the published `@orkestrel/indexeddb` wrapper, is the
-persistent browser backend — `planIndexedDBQuery` keeps native the one condition a
-key range over the primary key or a single-column secondary index answers, and leaves the
-rest of the read residual for the core engine; `migrate?` applies a non-empty plan
+persistent browser backend — `planIndexedDBQuery` keeps native the one access path
+`findAccessPlan` ranks first, with the order, page, `count`, `minimum`, and `maximum` that
+path serves, and leaves the rest of the read residual for the core engine; `migrate?` applies a non-empty plan
 and its metadata in one versionchange transaction, and `metadata?` / `stamp?`
 persist into a reserved
 `__metadata__` store (`METADATA_STORE`) — it omits `transaction?` because arbitrary
-callback awaits outlive an auto-committing `IDBTransaction`, and
-`aggregate?` (no native SUM/AVG/MIN/MAX) by IndexedDB's own nature. The core
+callback awaits outlive an auto-committing `IDBTransaction`. The core
 `Database` / `Table` are also **observable** — each owns a typed `emitter`
 (`DatabaseEventMap` / `TableEventMap`) carrying the transaction +
 per-row lifecycle (see [Observing](#observing)); a driver stays a storage
@@ -1128,7 +1143,7 @@ posts.primary // 'slug' — the declared override
 Each `indexes` entry is one (possibly compound) index of column names; they
 flow into each table's derived `TableSchema`. Neither driver here declares a
 native index, so both ignore them; SQLite and IndexedDB build a native index from each
-supported declaration.
+supported declaration, and IndexedDB drops at open an index the declaration no longer names.
 
 ### Swapping the driver
 
@@ -1559,7 +1574,8 @@ await users
 
 The condition operators map to familiar SQL operators. The core engine evaluates each one
 over a residual; SQLite answers each natively on a flat declared column, and IndexedDB
-answers one comparison with a key range, under these same semantics:
+answers the conditions of one access path with a key range or a key list, under these same
+semantics:
 
 | Operator  | SQL           |
 | --------- | ------------- |
@@ -2512,7 +2528,8 @@ A driver's `plan` splits each read into the part its engine answers and the resi
 core runs, under the native-first rule the `DriverInterface` doc block states. A read is
 wholly native when `residual` equals `{}`. `planSQLiteQuery` is the SQLite driver's plan,
 and `compileQuerySQL` compiles its native side; `planIndexedDBQuery` is the IndexedDB
-driver's plan, which keeps one key-range condition native. A driver without `plan`, such as
+driver's plan, which keeps one ranked access path native with the order, page, and count it
+serves. A driver without `plan`, such as
 `MemoryDriver` and `JSONDriver`, answers the whole read as residual over `scan`. `Table` runs
 every read through `readPlannedRows`, `readPlannedAggregate`, and `streamPlannedRows`, the one
 read procedure `scanDriver`'s differential checks.
@@ -2698,7 +2715,7 @@ which `tests/src/server/drivers/SQLiteDriver.bench.ts` reads beside the wrapper 
 
 ### Persistence with the IndexedDB driver
 
-Feature-detects `indexedDB`, opens a database over the IndexedDB driver, writes one row, and runs a query pushed down to a key range:
+Feature-detects `indexedDB`, opens a database over the IndexedDB driver, writes one row, and runs a query the driver answers with a key range:
 
 ```ts
 import { createDatabase } from '@orkestrel/database'
@@ -2716,7 +2733,7 @@ if (typeof indexedDB !== 'undefined') {
 		.table('users')
 		.query()
 		.condition({ column: 'id', operator: 'equals', values: ['u1'], connector: 'and' })
-		.collect() // pushed down to a key range
+		.collect() // answered by a key range on the primary key
 }
 ```
 
@@ -2728,19 +2745,43 @@ publishing schema/identity/connection state or changing the record. The
 bootstrap closes in every outcome, so external repair or version activity is
 not blocked and the same driver may retry. It then connects the deployed
 `DriverMetadata.schema` plus `__metadata__`; it does not create the target declaration
-before reconciliation. Its plan keeps native the one condition a key range over the
-primary key or a single-column secondary index answers (`planIndexedDBQuery`), and the core
-engine runs the rest — see [Plans and residual work](#plans-and-residual-work).
-It implements `plan?` / `records?` / `stream?` / `migrate?` / `metadata?` /
-`stamp?` (persisted into a reserved `__metadata__` store, `METADATA_STORE` —
+before reconciliation.
+
+`open()` drops every index of a deployed table that the deployed schema does not declare: the
+stored schema of a versioned database, and the declared schema of an unversioned one. It
+drops them on its own connection at the next version, then makes its final open pinned for
+a versioned database and unpinned for an unversioned one, and a dropped index loses no row.
+When another connection bumps the version between the driver's read of it and that
+upgrade, `open()` rejects with `DRIVER` whose `context.retryable` is `true`; call
+`open()` again. Two builds that declare different indexes on one unversioned database name
+each drop the other's index at their `open()`, and the other's next open creates it again,
+so give each build its own database name.
+
+The plan keeps native the one access path `findAccessPlan` ranks first, with the order, the
+page, `count`, `minimum`, and `maximum` that path serves (`planIndexedDBQuery`), and the
+core engine runs the rest — see [Plans and residual work](#plans-and-residual-work) and
+[IndexedDB planning](#indexeddb-planning). A stream and `scan` read at most
+`STREAM_BATCH_SIZE` rows per transaction and resume after the final key of each batch,
+because a transaction cannot stay open across your awaits. A native page reads no row past
+`offset + limit`; a page with residual conditions stops after the batch that holds its last
+match. A stream walking the primary key or an index
+holds one batch; a listed stream, an `any` or an index range read out of its index order,
+holds its sorted primary keys plus one batch. A direct stream applies a residual condition
+and page to each batch as it arrives, and only a residual order holds every match. The
+stream reads each batch at its own moment, so a row another write moves past the stream's
+position can appear twice or not at all. A stored value that is no record raises `DRIVER` with `context.code` `'RECORD'`
+from a read, `MIGRATION` inside `migrate()`, and the payload-safe metadata refusal from
+`open()` and `metadata()`; none of them carries the stored value.
+`IndexedDBDriver` implements `plan?` / `records?` / `aggregate?` / `stream?` / `migrate?` /
+`metadata?` / `stamp?` (persisted into a reserved `__metadata__` store, `METADATA_STORE` —
 `open()` throws `DatabaseError('VALIDATION')` if a declared table is
 literally named `__metadata__`), but omits `transaction?` (the underlying
 `IDBTransaction` auto-commits the moment control yields to a non-IDB
-`await`) and `aggregate?` (IndexedDB has no native SUM/AVG/MIN/MAX) by
-IndexedDB's own nature. A non-empty `migrate({ plan, metadata })` performs DDL,
+`await`) by IndexedDB's own nature. A non-empty `migrate({ plan, metadata })` performs DDL,
 row transformations, and the metadata write in the same versionchange
 transaction; a metadata-only input uses one ordinary `__metadata__` write
-transaction. A failed upgrade reconnects the old deployed schema. Each point
+transaction. A failed upgrade reconnects the old deployed schema, pinned at the stored version
+when metadata is stored, so `migrate()` raises `MIGRATION` and leaves the driver usable. Each point
 `write` / `insert` / `delete` still uses one explicit
 wrapper `database.write(table, scope)` transaction: the signal aborts it only
 while active, a signal-driven rollback maps to `DatabaseError('ABORTED')`, and
@@ -2758,17 +2799,26 @@ SQL compilers) keep `validatePage`, whose `VALIDATION` context names the `field`
 
 ### IndexedDB planning
 
-The pure planner behind `IndexedDBDriver`'s `plan` — useful directly to see which condition
-a key range answers before a read touches a browser database:
+The pure planner behind `IndexedDBDriver`'s `plan` shows which access path a read takes
+before the read touches a browser database. When every connector is `and`, it ranks the
+paths the conditions admit by a fixed rule, because IndexedDB has no statistics and reads
+one index per read: primary-key `equals` or `any` first, then a compound index matched on
+two or more columns, then a single-column index with `equals` or `any` beside a compound index
+whose leading column alone an `equals` binds, then a range or `starts` on the primary key or
+an index. An index holds no entry for a row whose field is
+absent or `null`, so `below`, `to`, an order, `minimum`, and `maximum` read an index only
+for a column declared required. `any` reads one `get(keys)` on the primary key, or one
+`only` range per value on an index sorted into primary-key order, and its page reads the
+listed keys first and only the page's rows. When the access path and the order's path
+differ, the access path wins and the order sorts as residual:
 
 ```ts
 import type { Condition, TableSchema } from '@orkestrel/database'
 import { isKey } from '@orkestrel/database'
 import {
 	conditionToRange,
-	deriveAccessPlan,
 	deriveIndexedDBIndexName,
-	findAccessCondition,
+	findAccessPlan,
 	planIndexedDBQuery,
 } from '@orkestrel/database/browser'
 
@@ -2778,8 +2828,9 @@ const schema: TableSchema = {
 	columns: [
 		{ name: 'id', storage: 'text', optional: false, nullable: false },
 		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'city', storage: 'text', optional: true, nullable: false },
 	],
-	indexes: [['age']],
+	indexes: [['age'], ['city']],
 }
 
 isKey('u1') // true — a string is a usable IndexedDB key
@@ -2794,15 +2845,21 @@ const equalsAge: Condition = {
 }
 conditionToRange(equalsAge) // an IDBKeyRange.only(30) — an exact comparison operator
 
-// No condition narrows, so the plan reads the whole store and leaves the read residual:
-planIndexedDBQuery({}, schema, ['age']) // { native: {}, residual: {} }
+// No condition narrows, so the plan reads the whole store; the page is native:
+planIndexedDBQuery({ limit: 10 }, schema, ['age', 'city']) // { native: { limit: 10 }, residual: {} }
 
-// A comparison over the indexed `age` column stays native as that index's range:
+// A range over the required `age` index is the access path, and it serves an order on age:
 const fromAge: Condition = { column: 'age', operator: 'from', values: [18], connector: 'and' }
-planIndexedDBQuery({ conditions: [fromAge], limit: 10 }, schema, ['age'])
-// { native: { conditions: [fromAge] }, residual: { limit: 10 } }
-deriveAccessPlan(findAccessCondition({ conditions: [fromAge] }, schema, ['age']), schema)
-// { index: 'age', range: an IDBKeyRange bounding age >= 18 }
+const byAge = [{ column: 'age', direction: 'descending' as const }]
+planIndexedDBQuery({ conditions: [fromAge], order: byAge, limit: 10 }, schema, ['age', 'city'])
+// { native: { conditions: [fromAge], order: byAge, limit: 10 }, residual: {} }
+
+// `below` on the optional `city` column would miss rows without a city, so it stays residual:
+const belowCity: Condition = { column: 'city', operator: 'below', values: ['m'], connector: 'and' }
+planIndexedDBQuery({ conditions: [belowCity] }, schema, ['age', 'city'])
+// { native: {}, residual: { conditions: [belowCity] } }
+findAccessPlan({ conditions: [fromAge] }, schema, ['age', 'city'])
+// { conditions: [fromAge], columns: ['age'], prefix: 0, index: 'age', range: an IDBKeyRange bounding age >= 18 }
 ```
 
 ### IndexedDB error mapping
@@ -2818,7 +2875,7 @@ import { mapIndexedDBError, mapMigrationError } from '@orkestrel/database/browse
 declare const fault: IndexedDBError // a caught backend fault
 
 mapIndexedDBError(fault) // → DatabaseError('CONFLICT' | 'CLOSED' | 'DRIVER', ...)
-mapMigrationError(fault) // → the same, but an UPGRADE fault becomes 'MIGRATION'
+mapMigrationError(fault) // → the same, but an UPGRADE or a RECORD fault becomes 'MIGRATION'
 ```
 
 ### Practices
@@ -2867,6 +2924,11 @@ that adopts it. A name in this section that the package no longer exports is wri
 | `null` on a column that is not nullable, `undefined` on one that is not optional, or either under a range operator, matching no row                                                                                                                          | `VALIDATION`; read absence with `absent` or `present`                                                                                                                                                                   |
 | A lone surrogate in a `text` value, a key, or a text operand, stored by SQLite as U+FFFD                                                                                                                                                                     | `VALIDATION` with `table` and `column` on every driver                                                                                                                                                                  |
 | A `literalShape` column whose members span more than one class, stored as `text`                                                                                                                                                                             | `json` storage, as a union is                                                                                                                                                                                           |
+| findAccessCondition(input, schema, indexes) and deriveAccessPlan(condition, schema)                                                                                                                                                                          | `findAccessPlan(input, schema, indexes)`, which returns the ranked `AccessPlan`: its `conditions`, `columns`, `prefix`, and `index`, `range`, or `keys`                                                                 |
+| `AccessPlan` as `{ index?, range? }`                                                                                                                                                                                                                         | `{ conditions, columns, prefix, index?, range?, keys? }`; `{}` as a whole-store read is `{ conditions: [], columns: [primary], prefix: 0 }`                                                                             |
+| `IndexedDBDriver` answering one condition natively and reading every candidate row for an order, a page, or a count                                                                                                                                          | It ranks one access path, serves the order, page, `count`, `minimum`, and `maximum` that path serves, declares `aggregate?`, and streams in batches of `STREAM_BATCH_SIZE`                                              |
+| An undeclared index surviving `IndexedDBDriver.open()`                                                                                                                                                                                                       | `open()` drops it on a connection at the next version; a concurrent bump raises `DRIVER` with `context.retryable`                                                                                                       |
+| A stored IndexedDB value that is no record                                                                                                                                                                                                                   | A read raises `DRIVER` with `context.code` `'RECORD'`; `migrate()` raises `MIGRATION`; the metadata record raises the metadata-invalid refusal                                                                          |
 | A transaction on `MemoryDriver` or `IndexedDBDriver` that copied the whole store                                                                                                                                                                             | The journal reads and restores only the keys the scope touched, and a `clear` journals its table alone                                                                                                                  |
 | `createSQLiteDriver` returning `DriverInterface`                                                                                                                                                                                                             | It returns `SQLiteDriverInterface`, which adds the `pragma` method; `SQLiteDriver` implements it                                                                                                                        |
 | A SQLite scope, list write, and `migrate` opening with a deferred `BEGIN`                                                                                                                                                                                    | Each opens with `BEGIN IMMEDIATE`; a contended scope is refused at its start, before its callback runs                                                                                                                  |
@@ -2887,7 +2949,7 @@ exports is written plain, without code formatting.
 | `compileQuerySQL(input, schema)`                                                                                                            | Same name and signature; pass it `planSQLiteQuery(input, schema).native`. Its SQL changes: `starts` compiles to an index range, `any` and `none` bind one `json_each` parameter, every condition beside an `any` on the primary key is pinned behind unary `+`, and the primary-key tie term carries the final order term's direction |
 | matchesConditionExactly                                                                                                                     | `matchesSQLiteCondition(condition, schema)`                                                                                                                                                                                                                                                                                           |
 | matchesOrderExactly, matchesAggregateExactly, EXACT_COLUMN_STORAGE, EXACT_RANGE_COLUMN_STORAGE                                              | Removed; `planSQLiteQuery` answers each question                                                                                                                                                                                                                                                                                      |
-| selectPlan(input, schema, indexes)                                                                                                          | `deriveAccessPlan(findAccessCondition(input, schema, indexes), schema)` for the key-range read, and `planIndexedDBQuery(input, schema, indexes)` for the split                                                                                                                                                                        |
+| selectPlan(input, schema, indexes)                                                                                                          | `findAccessPlan(input, schema, indexes)` for the access path, and `planIndexedDBQuery(input, schema, indexes)` for the split                                                                                                                                                                                                          |
 | QueryPlan                                                                                                                                   | `AccessPlan`                                                                                                                                                                                                                                                                                                                          |
 | `MemoryDriver.stream`, `JSONDriver.stream`                                                                                                  | Removed; call `Table.scan`, or `streamPlannedRows` over the driver                                                                                                                                                                                                                                                                    |
 | `matchesWildcardSegment(value: string, segment: string, …)`                                                                                 | `matchesWildcardSegment(value: readonly string[], segment: readonly string[], …)`, over code points                                                                                                                                                                                                                                   |
@@ -2940,8 +3002,10 @@ to `Scalar`.
 - [`tests/src/server/compilers.test.ts`](../tests/src/server/compilers.test.ts) — the coherent SQL-emitter cluster: column/field/aggregate compilation, table/index/migration DDL, and the strict-page `QueryInput` → SQL pipeline with exact statements and parameters.
 - [`tests/src/server/inferers.test.ts`](../tests/src/server/inferers.test.ts) — `inferValueStorage`'s nested-operand storage inference: the `ColumnStorage` a `json_extract` operand must encode as, over booleans, integral and fractional numbers, bigints, objects and arrays, strings, `null`, and `undefined`; and `inferSentinelType`'s class per storage, read against a declared table and through the `encodeValue` and `decodeValue` sentinel round trip.
 - [`tests/src/server/integration.test.ts`](../tests/src/server/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `SQLiteDriver` (native and residual reads) produce identical rows/counts/aggregates, and the text-order exemption names the ids SQLite returns under its binary order. Each wrong-class read in its refused-parity table raises the same `VALIDATION` refusal on both engines.
-- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, the plan, the rows read per conformance read against 0.0.23, list reads, inserts, and deletes in one transaction each, a journal scope whose native reads see its writes, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, and confirmation that callback `transaction` / native `aggregate` are absent.
-- [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the planner: `conditionToRange` over every comparison operator, `findAccessCondition` / `deriveAccessPlan` index and primary selection, `planIndexedDBQuery`, backend-error mapping, and exact `deriveIndexedDBIndexName` bytes.
+- [`tests/src/browser/drivers/IndexedDBDriver.test.ts`](../tests/src/browser/drivers/IndexedDBDriver.test.ts) — `IndexedDBDriver` against real IndexedDB: metadata-only bootstrap and deployed-schema-first reopen, one-transaction `has`/`get` absence discrimination, fail-closed malformed-metadata preservation (including stored `undefined`) and persisted-store loss with deterministic first-loss evidence, physical non-recreation, extra-store retention, external repair, and same-driver retry; bootstrap-lifetime store/version capture and a competing versionchange proving the persisted final open is pinned and retryable; payload-safe errors and table rejection, closed failed state, reserved-store validation, atomic `add` insertion and duplicate `CONFLICT`, active/pre-dispatch/late abort boundaries, strict direct records/stream paging, the plan, the rows read per conformance read, list reads, inserts, and deletes in one transaction each, a journal scope whose native reads see its writes, schema/rows/metadata in one versionchange migration, metadata-only migration input, failed-upgrade reconnection to the old schema, metadata persistence, backend-fault mapping, confirmation that callback `transaction` is absent, a tripwire beyond each plan class's bound that the read never reaches, the differential of every plan class against the core engine, native counts and index extremes that return no row, streams that read one batch at a time, no index entry for a row missing its field, the index reconcile at open with its retryable concurrent bump, and `DRIVER` for a stored non-record.
+- [`tests/src/browser/drivers/IndexedDBDriver.bench.ts`](../tests/src/browser/drivers/IndexedDBDriver.bench.ts) — a bench no gate collects: the key-list, `any`, ordered page, `equals` page, `any` count, `equals` count, and batch cells over one client-shaped store, each beside the wrapper alone; run it with `vitest bench --config vite.config.ts --project src:browser --mode benchmark`.
+- [`tests/src/browser/IndexedDBBatchIterator.test.ts`](../tests/src/browser/IndexedDBBatchIterator.test.ts) — `IndexedDBBatchIterator` over a real store: each batch resumes from the position the previous batch reports, a short batch ends the stream, and an empty batch ends it too.
+- [`tests/src/browser/helpers.test.ts`](../tests/src/browser/helpers.test.ts) — the planner: `conditionToRange` over every comparison operator and `starts`, `findAccessPlan` ranking and its required-column rule, `deriveConditionPlan`, `deriveCompoundPlan`, `buildCompoundRange`, `rankAccessPlan`, `deriveOrderPlan`, `matchesAccessOrder`, `narrowRange`, `planIndexedDBQuery`, backend-error mapping with `RECORD`, and exact `deriveIndexedDBIndexName` bytes.
 - [`tests/src/browser/factories.test.ts`](../tests/src/browser/factories.test.ts) — `createIndexedDBDriver` returns a working `DriverInterface` instance (a round-trip end to end).
 - [`tests/src/browser/integration.test.ts`](../tests/src/browser/integration.test.ts) — cross-backend behavioral parity: the same `QueryInput` set run against `MemoryDriver` and `IndexedDBDriver` produce identical rows/counts, including pushdown edge cases (`below`/`to` on a secondary-indexed column, a reversed `between`). Each wrong-class read in its refused-parity table raises the same `VALIDATION` refusal on both engines.
 

@@ -9,8 +9,8 @@ import { IndexedDBDriver } from './drivers/IndexedDBDriver.js'
  * layer against IndexedDB instead of memory — the `Database` / `Table` / `Query`
  * API is unchanged; only where the bytes live changes. The
  * driver is built on the published `@orkestrel/indexeddb` wrapper in auto-managed
- * mode, so a table added to the `tables` map is created on the next open with no
- * version bump. This unit omits `transaction` / `aggregate` (see
+ * mode, so a table or an index the database declares is created on the next open, and an
+ * index it no longer declares is dropped. The driver omits `transaction` (see
  * {@link IndexedDBDriver} `@remarks`).
  *
  * @param name - The IndexedDB database name to open or create

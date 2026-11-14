@@ -1,11 +1,23 @@
-import type { DatabaseInterface, IndexMap, QueryInput, RowOf, TableInterface } from '@src/core'
-import { createDatabase, createMemoryDriver } from '@src/core'
-import type { AccessPlan } from '@src/browser'
-import { createIndexedDBDriver, deriveAccessPlan, findAccessCondition } from '@src/browser'
+import type {
+	DatabaseInterface,
+	DriverInterface,
+	IndexMap,
+	QueryInput,
+	ReadInput,
+	Row,
+	RowOf,
+	TableInterface,
+	TableSchema,
+} from '@src/core'
+import { compareValues, createDatabase, createMemoryDriver } from '@src/core'
+import { createIndexedDBDriver, deriveIndexedDBIndexName, readIndexNames } from '@src/browser'
+import type { IndexedDBCursorInterface, IndexedDBDatabaseInterface } from '@orkestrel/indexeddb'
+import { createIndexedDBDatabase, promisifyRequest } from '@orkestrel/indexeddb'
 import {
 	booleanShape,
 	integerShape,
 	jsonShape,
+	nullableShape,
 	numberShape,
 	optionalShape,
 	stringShape,
@@ -86,6 +98,23 @@ export function putIndexedDBValue(
 		transaction.addEventListener('error', () => reject(transaction.error))
 		transaction.addEventListener('abort', () => reject(transaction.error))
 	})
+}
+
+/**
+ * Reads an arbitrary stored value through a real native IndexedDB transaction, which reads a
+ * value the wrapper refuses as no record.
+ *
+ * @param database - The connected native database
+ * @param store - The object-store name
+ * @param key - The record key
+ * @returns The stored value, or `undefined` for a miss
+ */
+export function readIndexedDBValue(
+	database: IDBDatabase,
+	store: string,
+	key: IDBValidKey,
+): Promise<unknown> {
+	return promisifyRequest(database.transaction(store, 'readonly').objectStore(store).get(key))
 }
 
 /** Reads the trailing counter segment of a generated database name. */
@@ -791,7 +820,6 @@ export const PLANNER_SCHEMA: TableSchema = {
 
 // The single-column secondary indexes that physically exist (named by column).
 export const PLANNER_INDEXES: readonly string[] = ['age']
-import type { TableSchema } from '@src/core'
 
 export const NULLABLE_SCHEMA: TableSchema = {
 	name: 'people',
@@ -855,33 +883,749 @@ export const COLLISION_SCHEMA: TableSchema = {
 }
 
 /**
- * Selects the key-range read an IndexedDB read narrows on: the access plan of its access
- * condition.
- *
- * @param input - The read, or `undefined` for an unconditional read
- * @param schema - The table's schema
- * @param available - The secondary-index names on the store
- * @returns The index and range the driver reads
+ * Holds the rows the IndexedDB driver reads for each read of `CONFORMANCE_READS` over
+ * `CONFORMANCE_ROWS` with an index on the optional `age` column. A read whose every
+ * condition its path answers reads its matches: `age equals 36` reads 3, `age above 17` 5,
+ * `age from 17` and `age between 0 and 36` 6, `age any [36, 0]` 4, an empty `any` 0, and
+ * `id any` over three keys 3. `id any` over four keys beside `age equals 36` takes the
+ * primary-key path and streams its 4 rows. A native page reads its page: `age above 0` ordered
+ * by `age` with `limit: 2, offset: 1` reads 2, and `limit: 4, offset: 2` reads 4. A native
+ * count reads no row. Every other read, which an optional column's `below`, `to`, order, or
+ * aggregate, an unindexed column, an operator with no key range, or an `or` leaves residual,
+ * streams the 9 rows of the store.
  */
-export function selectAccess(
-	input: QueryInput | undefined,
-	schema: TableSchema,
-	available: readonly string[],
-): AccessPlan {
-	return deriveAccessPlan(findAccessCondition(input, schema, available), schema)
+export const CONFORMANCE_ROWS_READ: readonly number[] = Object.freeze([
+	9, 3, 9, 9, 9, 9, 5, 9, 6, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4, 0, 3, 9, 9, 9, 9, 9, 9,
+	4, 9, 9, 9, 9, 9, 9, 9, 9, 2, 4, 0, 9, 9, 9, 9, 9,
+])
+
+/**
+ * Stores a tripwire at a key: an array carrying `fields` as own properties. An index lists it
+ * under those fields, and the `@orkestrel/indexeddb` wrapper refuses to read it as a record
+ * (`RECORD`), so a read that reaches it raises and a read that stops ahead of it stays quiet.
+ *
+ * @param name - The database name
+ * @param store - The object-store name
+ * @param key - The out-of-line key to store the tripwire under
+ * @param fields - The indexed fields the tripwire carries
+ * @returns A promise that settles after the native transaction completes
+ */
+export async function putTripwire(
+	name: string,
+	store: string,
+	key: IDBValidKey,
+	fields: Readonly<Record<string, unknown>>,
+): Promise<void> {
+	const database = createIndexedDBDatabase({ name, stores: {} })
+	try {
+		await putIndexedDBValue(await database.connect(), store, key, Object.assign([], fields))
+	} finally {
+		database.close()
+	}
+}
+
+/** Declares the `items` table the plan suites read: a required, an optional, and a nullable index. */
+export const ITEMS = {
+	id: stringShape(),
+	organization: stringShape(),
+	rank: integerShape(),
+	tag: optionalShape(stringShape()),
+	score: nullableShape(numberShape()),
+}
+
+/** Shapes one row of {@link ITEMS}. */
+export type ItemRow = RowOf<typeof ITEMS>
+
+/** Declares the `items` indexes: three single-column indexes and one compound index. */
+export const ITEM_INDEXES: IndexMap = {
+	items: [['organization'], ['rank'], ['tag'], ['score'], ['organization', 'rank']],
+}
+
+/** Names the compound `organization`, `rank` index as the driver derives it. */
+export const ITEM_COMPOUND = deriveIndexedDBIndexName(['organization', 'rank'])
+
+/**
+ * Builds the `items` row at a position: key `k` and the position padded to four digits,
+ * organization `o0` to `o3` in turn, rank the position, a tag on two rows of three, and a
+ * score on every row but each fifth.
+ *
+ * @param position - The row's position
+ * @returns The row
+ */
+export function buildItem(position: number): ItemRow {
+	return {
+		id: `k${String(position).padStart(4, '0')}`,
+		organization: `o${position % 4}`,
+		rank: position,
+		...(position % 3 === 0 ? {} : { tag: `t${position % 5}` }),
+		score: position % 5 === 0 ? null : position / 2,
+	}
 }
 
 /**
- * Holds the rows the 0.0.23 IndexedDB driver read for each read of `CONFORMANCE_READS` over
- * `CONFORMANCE_ROWS` with an index on `age`: its planner narrowed on the first `and`-joined
- * `equals`, `above`, `from`, or `between` over the index or a comparison over the primary
- * key, and read the whole store of 9 rows otherwise. In read order: `age equals 36` and the
- * `id any` with `age equals 36` read 3 rows; `age above 17` read 5; `age from 17`,
- * `age between 0 and 36`, and the two reads on `age above 0` read 6. The read holding only
- * `limit: 4, offset: 2` returns 6 rows: the read procedure stops the stream at `offset + limit`
- * matches, while the store still loads the 9 rows the 0.0.23 driver read.
+ * Builds the first `count` `items` rows.
+ *
+ * @param count - The number of rows
+ * @returns The rows, in key order
  */
-export const CONFORMANCE_ROWS_READ: readonly number[] = Object.freeze([
-	9, 3, 9, 9, 9, 9, 5, 9, 6, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
-	3, 9, 9, 9, 9, 9, 9, 9, 9, 6, 6, 6, 9, 9, 9, 9, 9,
+export function buildItems(count: number): readonly ItemRow[] {
+	return Array.from({ length: count }, (_, position) => buildItem(position))
+}
+
+/**
+ * Opens a database over `items` with {@link ITEM_INDEXES} on a driver, seeded with rows.
+ *
+ * @param driver - The driver to open
+ * @param rows - The rows to seed
+ * @returns The database and its `items` table
+ */
+export async function seedItems(
+	driver: DriverInterface,
+	rows: readonly ItemRow[],
+): Promise<{
+	readonly database: DatabaseInterface<{ readonly items: typeof ITEMS }>
+	readonly items: TableInterface<ItemRow>
+}> {
+	const database = createDatabase({
+		driver,
+		tables: { items: ITEMS },
+		indexes: ITEM_INDEXES,
+	})
+	const items = database.table('items')
+	await items.set(rows)
+	return { database, items }
+}
+
+/**
+ * Declares a planner schema shaped like `items`, with a `boolean` column and an index on it that
+ * the planner never reads, beside the indexes {@link ITEM_INDEXES} declares.
+ */
+export const ITEM_SCHEMA: TableSchema = {
+	name: 'items',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'organization', storage: 'text', optional: false, nullable: false },
+		{ name: 'rank', storage: 'integer', optional: false, nullable: false },
+		{ name: 'tag', storage: 'text', optional: true, nullable: false },
+		{ name: 'score', storage: 'real', optional: false, nullable: true },
+		{ name: 'active', storage: 'boolean', optional: false, nullable: false },
+	],
+	indexes: [['organization'], ['rank'], ['tag'], ['score'], ['active'], ['organization', 'rank']],
+}
+
+/** Names the indexes {@link ITEM_SCHEMA} declares, as the store lists them. */
+export const ITEM_INDEX_NAMES: readonly string[] = Object.freeze(
+	ITEM_SCHEMA.indexes.map((columns) => deriveIndexedDBIndexName(columns)),
+)
+
+/** Shapes one rows-read case: a read, the tripwire beyond its bound, and its bound. */
+export interface TripwireCase {
+	readonly name: string
+	readonly input: QueryInput
+	readonly key: string
+	readonly fields: Readonly<Record<string, unknown>>
+	readonly bound: number
+}
+
+/**
+ * Holds one read per plan class over {@link buildItems}`(40)`, each with a tripwire at a key
+ * inside its range and beyond its page, and the rows its driver reads at most.
+ */
+export const TRIPWIRE_CASES: readonly TripwireCase[] = Object.freeze([
+	{
+		name: 'a primary-key any page',
+		input: {
+			conditions: [
+				{
+					column: 'id',
+					operator: 'any',
+					values: ['k0013', 'k0001', 'k0009', 'k0005'],
+					connector: 'and',
+				},
+			],
+			limit: 2,
+		},
+		key: 'k0009',
+		fields: { organization: 'o1', rank: 9 },
+		bound: 2,
+	},
+	{
+		name: 'an index any page',
+		input: {
+			conditions: [
+				{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+			],
+			limit: 3,
+		},
+		key: 'k0006a',
+		fields: { organization: 'o1', rank: 6 },
+		bound: 3,
+	},
+	{
+		name: 'an index equals page',
+		input: {
+			conditions: [
+				{ column: 'organization', operator: 'equals', values: ['o2'], connector: 'and' },
+			],
+			limit: 3,
+		},
+		key: 'k0010a',
+		fields: { organization: 'o2', rank: 10 },
+		bound: 3,
+	},
+	{
+		name: 'an index equals page in descending key order',
+		input: {
+			conditions: [
+				{ column: 'organization', operator: 'equals', values: ['o2'], connector: 'and' },
+			],
+			order: [{ column: 'id', direction: 'descending' }],
+			limit: 2,
+		},
+		key: 'k0030a',
+		fields: { organization: 'o2', rank: 30 },
+		bound: 2,
+	},
+	{
+		name: 'an ordered index page with an offset',
+		input: { order: [{ column: 'rank', direction: 'ascending' }], limit: 3, offset: 2 },
+		key: 'k0004a',
+		fields: { organization: 'o0', rank: 4 },
+		bound: 3,
+	},
+	{
+		name: 'a primary-key range page',
+		input: {
+			conditions: [{ column: 'id', operator: 'from', values: ['k0010'], connector: 'and' }],
+			limit: 3,
+		},
+		key: 'k0012a',
+		fields: { organization: 'o0', rank: 12 },
+		bound: 3,
+	},
+	{
+		name: 'a starts page',
+		input: {
+			conditions: [{ column: 'id', operator: 'starts', values: ['k001'], connector: 'and' }],
+			limit: 2,
+		},
+		key: 'k0011a',
+		fields: { organization: 'o3', rank: 11 },
+		bound: 2,
+	},
+	{
+		name: 'a compound equals and range page',
+		input: {
+			conditions: [
+				{ column: 'organization', operator: 'equals', values: ['o1'], connector: 'and' },
+				{ column: 'rank', operator: 'from', values: [10], connector: 'and' },
+			],
+			limit: 2,
+		},
+		key: 'k0017a',
+		fields: { organization: 'o1', rank: 18 },
+		bound: 2,
+	},
+	{
+		name: 'a compound page in index order',
+		input: {
+			conditions: [
+				{ column: 'organization', operator: 'equals', values: ['o1'], connector: 'and' },
+				{ column: 'rank', operator: 'from', values: [10], connector: 'and' },
+			],
+			order: [{ column: 'rank', direction: 'descending' }],
+			limit: 2,
+		},
+		key: 'k9001',
+		fields: { organization: 'o1', rank: 30 },
+		bound: 2,
+	},
 ])
+
+/**
+ * Holds one read per plan class over {@link buildItems}, for the differential against the core
+ * engine over the driver's scan: each ranked path, orders in both directions, pages, `starts`,
+ * the compound index, the required-column refusals, and residual conditions.
+ */
+export const ITEM_READS: readonly ReadInput[] = Object.freeze([
+	{ conditions: [{ column: 'id', operator: 'equals', values: ['k0007'], connector: 'and' }] },
+	{
+		conditions: [
+			{
+				column: 'id',
+				operator: 'any',
+				values: ['k0009', 'k0001', 'zzz', 'k0001'],
+				connector: 'and',
+			},
+		],
+		order: [{ column: 'id', direction: 'descending' }],
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+			{ column: 'rank', operator: 'below', values: [20], connector: 'and' },
+		],
+		limit: 4,
+		offset: 1,
+	},
+	{ conditions: [{ column: 'organization', operator: 'any', values: [], connector: 'and' }] },
+	{
+		conditions: [{ column: 'tag', operator: 'equals', values: ['t2'], connector: 'and' }],
+		order: [{ column: 'id', direction: 'descending' }],
+		limit: 3,
+		offset: 1,
+	},
+	{ conditions: [{ column: 'tag', operator: 'below', values: ['t3'], connector: 'and' }] },
+	{ conditions: [{ column: 'score', operator: 'to', values: [4], connector: 'and' }] },
+	{ conditions: [{ column: 'score', operator: 'above', values: [10], connector: 'and' }] },
+	{
+		conditions: [{ column: 'rank', operator: 'between', values: [5, 25], connector: 'and' }],
+		order: [{ column: 'rank', direction: 'descending' }],
+		limit: 5,
+		offset: 2,
+	},
+	{
+		conditions: [{ column: 'rank', operator: 'above', values: [30], connector: 'and' }],
+		limit: 3,
+	},
+	{ conditions: [{ column: 'id', operator: 'starts', values: ['k002'], connector: 'and' }] },
+	{
+		conditions: [
+			{ column: 'organization', operator: 'equals', values: ['o2'], connector: 'and' },
+			{ column: 'rank', operator: 'equals', values: [14], connector: 'and' },
+		],
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'equals', values: ['o2'], connector: 'and' },
+			{ column: 'rank', operator: 'to', values: [22], connector: 'and' },
+			{ column: 'tag', operator: 'present', values: [], connector: 'and' },
+		],
+		order: [{ column: 'rank', direction: 'descending' }],
+	},
+	{ order: [{ column: 'rank', direction: 'descending' }], limit: 4, offset: 3 },
+	{ order: [{ column: 'tag', direction: 'ascending' }], limit: 4 },
+	{ order: [{ column: 'id', direction: 'descending' }], limit: 5 },
+	{
+		conditions: [
+			{ column: 'tag', operator: 'equals', values: ['t1'], connector: 'and' },
+			{ column: 'rank', operator: 'from', values: [3], connector: 'or' },
+		],
+		order: [{ column: 'rank', direction: 'ascending' }],
+		limit: 6,
+	},
+	{
+		conditions: [{ column: 'organization', operator: 'equals', values: ['o0'], connector: 'and' }],
+		aggregate: { operation: 'count', column: 'id' },
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o0', 'o2'], connector: 'and' },
+		],
+		aggregate: { operation: 'count', column: 'id' },
+	},
+	{
+		conditions: [
+			{ column: 'id', operator: 'any', values: ['k0001', 'k0002', 'nope'], connector: 'and' },
+		],
+		aggregate: { operation: 'count', column: 'id' },
+	},
+	{ aggregate: { operation: 'maximum', column: 'rank' } },
+	{
+		conditions: [{ column: 'rank', operator: 'below', values: [17], connector: 'and' }],
+		aggregate: { operation: 'maximum', column: 'rank' },
+	},
+	{ aggregate: { operation: 'minimum', column: 'score' } },
+	{
+		conditions: [{ column: 'tag', operator: 'equals', values: ['t4'], connector: 'and' }],
+		aggregate: { operation: 'sum', column: 'rank' },
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+		],
+		aggregate: { operation: 'maximum', column: 'rank' },
+	},
+	{
+		conditions: [{ column: 'rank', operator: 'any', values: [9, 4, 30], connector: 'and' }],
+		aggregate: { operation: 'minimum', column: 'rank' },
+	},
+	{
+		conditions: [{ column: 'rank', operator: 'above', values: [1000], connector: 'and' }],
+		aggregate: { operation: 'minimum', column: 'rank' },
+	},
+	{ order: [{ column: 'rank', direction: 'ascending' }], offset: 100, limit: 3 },
+	{ offset: 100 },
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o2', 'o1'], connector: 'and' },
+		],
+		offset: 100,
+	},
+])
+
+/**
+ * Holds the paged reads over `any` lists, on an index and on the primary key, that the paging
+ * cases run over {@link buildItems}`(40)`, by records and by stream.
+ */
+export const LISTED_PAGES: readonly QueryInput[] = Object.freeze([
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+		],
+		offset: 6,
+		limit: 2,
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+		],
+		limit: 4,
+		offset: 3,
+	},
+	{
+		conditions: [
+			{ column: 'organization', operator: 'any', values: ['o3', 'o1'], connector: 'and' },
+		],
+		order: [{ column: 'id', direction: 'descending' }],
+		limit: 4,
+	},
+	{
+		conditions: [
+			{
+				column: 'id',
+				operator: 'any',
+				values: ['k0030', 'k0002', 'nope', 'k0011', 'k0007', 'k0019'],
+				connector: 'and',
+			},
+		],
+		limit: 2,
+		offset: 2,
+	},
+	{
+		conditions: [
+			{
+				column: 'id',
+				operator: 'any',
+				values: ['k0030', 'k0002', 'k0011', 'k0007'],
+				connector: 'and',
+			},
+		],
+		order: [{ column: 'id', direction: 'descending' }],
+		limit: 3,
+	},
+	{
+		conditions: [{ column: 'rank', operator: 'from', values: [10], connector: 'and' }],
+		offset: 50,
+	},
+])
+
+/**
+ * Holds a connection to a database open, and when another connection asks for a version
+ * change, closes it and bumps the database to `version` itself: a concurrent bump that the
+ * other connection's next open request queues behind.
+ *
+ * @param name - The database name
+ * @param version - The version the bump opens at
+ * @returns The armed hold, whose `settled` promise settles after the bump's connection opened and closed
+ */
+export async function armVersionBump(
+	name: string,
+	version: number,
+): Promise<{ readonly settled: Promise<void> }> {
+	const held = createIndexedDBDatabase({ name, stores: {} })
+	const native = await held.connect()
+	const bumped = Promise.withResolvers<void>()
+	native.addEventListener(
+		'versionchange',
+		() => {
+			held.close()
+			const bump = createIndexedDBDatabase({ name, version, stores: {} })
+			bump.connect().then(
+				() => {
+					bump.close()
+					bumped.resolve()
+				},
+				(error: unknown) => {
+					bump.close()
+					bumped.reject(error)
+				},
+			)
+		},
+		{ once: true },
+	)
+	return { settled: bumped.promise }
+}
+
+/** Declares the bench's client-shaped `records` table: a unique key, a low-cardinality organization, and a rank. */
+export const BENCH_TABLES = {
+	records: {
+		id: stringShape(),
+		organization: stringShape(),
+		rank: integerShape(),
+		body: stringShape(),
+	},
+}
+
+/** Declares the bench table's single-column indexes. */
+export const BENCH_INDEXES: IndexMap = { records: [['organization'], ['rank']] }
+
+/** Holds the bench table's row count: the size of the client's slice. */
+export const BENCH_ROWS = 80646
+
+/**
+ * Builds the bench row at a position: a mixed body of 24 characters, 300 on each seventh row,
+ * and 2000 on each fiftieth, and one of 40 organizations in turn.
+ *
+ * @param position - The row's position
+ * @returns The row
+ */
+export function buildBenchRow(position: number): RowOf<typeof BENCH_TABLES.records> {
+	const length = position % 50 === 0 ? 2000 : position % 7 === 0 ? 300 : 24
+	return {
+		id: `k${String(position).padStart(7, '0')}`,
+		organization: `o${position % 40}`,
+		rank: position,
+		body: 'x'.repeat(length),
+	}
+}
+
+/**
+ * Seeds the bench table into a database through the wrapper, in the layout the driver reads:
+ * an out-of-line store keyed by `id`, with the bench indexes.
+ *
+ * @param name - The database name
+ * @param count - The number of rows
+ * @returns A promise that settles after every row is stored
+ */
+export async function seedBenchRecords(name: string, count: number): Promise<void> {
+	const database = createIndexedDBDatabase({
+		name,
+		stores: {
+			records: {
+				indexes: [
+					{ name: 'organization', path: 'organization' },
+					{ name: 'rank', path: 'rank' },
+				],
+			},
+		},
+	})
+	try {
+		const chunks = Array.from({ length: Math.ceil(count / 4000) }, (_, chunk) =>
+			Array.from({ length: Math.min(4000, count - chunk * 4000) }, (_row, offset) =>
+				buildBenchRow(chunk * 4000 + offset),
+			),
+		)
+		for (const rows of chunks) {
+			await database.write('records', async (transaction) => {
+				const store = transaction.store('records')
+				await Promise.all(rows.map((row) => store.set(row, row.id)))
+			})
+		}
+	} finally {
+		database.close()
+	}
+}
+
+/** Holds the 100 keys the bench's key-list cell reads, spread across the bench table. */
+export const BENCH_KEYS: readonly string[] = Object.freeze(
+	Array.from({ length: 100 }, (_, position) => buildBenchRow((position * 7919) % BENCH_ROWS).id),
+)
+
+/** Holds the organizations the bench's `any` cells read. */
+export const BENCH_ORGANIZATIONS: readonly string[] = Object.freeze(['o3', 'o5'])
+
+/** Holds the run options of every bench cell: a time window long enough to read a cell many times. */
+export const BENCH_RUN = Object.freeze({ time: 400, warmupTime: 100 })
+
+/** Shapes one row of the bench table. */
+export type BenchRow = RowOf<typeof BENCH_TABLES.records>
+
+/** Hands each bench write its own 100 fresh rows, past the seeded table. */
+export class BenchBatches {
+	#next: number
+
+	constructor(start: number) {
+		this.#next = start
+	}
+
+	next(): readonly BenchRow[] {
+		const start = this.#next
+		this.#next += 100
+		return Array.from({ length: 100 }, (_, offset) => buildBenchRow(start + offset))
+	}
+}
+
+/**
+ * Appends the value at a wrapper cursor and each later value to `rows`, up to `size` rows.
+ *
+ * @param cursor - The cursor at the first value to read, or `null` at the end
+ * @param rows - The rows read so far
+ * @param size - The number of rows to read
+ * @returns The rows
+ */
+export async function collectCursor(
+	cursor: IndexedDBCursorInterface | null,
+	rows: readonly Row[],
+	size: number,
+): Promise<readonly Row[]> {
+	if (cursor === null || rows.length >= size) return rows
+	const read = [...rows, cursor.value]
+	return read.length >= size ? read : collectCursor(await cursor.continue(), read, size)
+}
+
+/** Shapes one bench cell: the read or write through the table, and the same work on the wrapper alone. */
+export interface BenchCell {
+	readonly name: string
+	readonly table: (records: TableInterface<BenchRow>, batches: BenchBatches) => Promise<unknown>
+	readonly wrapper: (
+		database: IndexedDBDatabaseInterface,
+		batches: BenchBatches,
+	) => Promise<unknown>
+}
+
+/**
+ * Holds the bench cells: a key list, an `any` on an index, an ordered page, an `equals` page,
+ * an `any` count, an `equals` count, and a batch write.
+ */
+export const BENCH_CELLS: readonly BenchCell[] = Object.freeze([
+	{
+		name: 'reads a key list',
+		table: (records) => records.get(BENCH_KEYS),
+		wrapper: (database) => database.store('records').get(BENCH_KEYS),
+	},
+	{
+		name: 'reads every row of an any on an index',
+		table: (records) =>
+			records.records({
+				conditions: [
+					{
+						column: 'organization',
+						operator: 'any',
+						values: BENCH_ORGANIZATIONS,
+						connector: 'and',
+					},
+				],
+			}),
+		wrapper: async (database) => {
+			const index = database.store('records').index('organization')
+			const lists = await Promise.all(
+				BENCH_ORGANIZATIONS.map((value) => index.records(IDBKeyRange.only(value))),
+			)
+			return lists.flat().toSorted((left, right) => compareValues(left.id, right.id))
+		},
+	},
+	{
+		name: 'reads a page in descending key order',
+		table: (records) =>
+			records.records({ order: [{ column: 'id', direction: 'descending' }], limit: 10 }),
+		wrapper: async (database) =>
+			collectCursor(await database.store('records').cursor({ direction: 'prev' }), [], 10),
+	},
+	{
+		name: 'reads an equals page',
+		table: (records) =>
+			records.records({
+				conditions: [
+					{ column: 'organization', operator: 'equals', values: ['o3'], connector: 'and' },
+				],
+				limit: 10,
+			}),
+		wrapper: (database) =>
+			database.store('records').index('organization').records(IDBKeyRange.only('o3'), 10),
+	},
+	{
+		name: 'counts an any on an index',
+		table: (records) =>
+			records.count({
+				conditions: [
+					{
+						column: 'organization',
+						operator: 'any',
+						values: BENCH_ORGANIZATIONS,
+						connector: 'and',
+					},
+				],
+			}),
+		wrapper: async (database) => {
+			const index = database.store('records').index('organization')
+			const counts = await Promise.all(
+				BENCH_ORGANIZATIONS.map((value) => index.count(IDBKeyRange.only(value))),
+			)
+			return counts.reduce((total, count) => total + count, 0)
+		},
+	},
+	{
+		name: 'counts an equals',
+		table: (records) =>
+			records.count({
+				conditions: [
+					{ column: 'organization', operator: 'equals', values: ['o3'], connector: 'and' },
+				],
+			}),
+		wrapper: (database) =>
+			database.store('records').index('organization').count(IDBKeyRange.only('o3')),
+	},
+	{
+		name: 'writes a batch of 100 rows',
+		table: async (records, batches) => {
+			await records.set(batches.next())
+		},
+		wrapper: (database, batches) =>
+			database.write('records', async (transaction) => {
+				const store = transaction.store('records')
+				await Promise.all(batches.next().map((row) => store.set(row, row.id)))
+			}),
+	},
+])
+
+/** Declares the `users` schema of the guide's IndexedDB planning fence. */
+export const GUIDE_SCHEMA: TableSchema = {
+	name: 'users',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'age', storage: 'integer', optional: false, nullable: false },
+		{ name: 'city', storage: 'text', optional: true, nullable: false },
+	],
+	indexes: [['age'], ['city']],
+}
+
+/**
+ * Declares a planner schema whose one index is a three-column compound index over required
+ * columns, for the guard that an order serves an index only on every unbound column.
+ */
+export const TRIPLE_SCHEMA: TableSchema = {
+	name: 'items',
+	primary: 'id',
+	columns: [
+		{ name: 'id', storage: 'text', optional: false, nullable: false },
+		{ name: 'organization', storage: 'text', optional: false, nullable: false },
+		{ name: 'rank', storage: 'integer', optional: false, nullable: false },
+		{ name: 'tag', storage: 'text', optional: false, nullable: false },
+	],
+	indexes: [['organization', 'rank', 'tag']],
+}
+
+/** Names the index {@link TRIPLE_SCHEMA} declares, as the store lists it. */
+export const TRIPLE_INDEX_NAMES: readonly string[] = Object.freeze(
+	TRIPLE_SCHEMA.indexes.map((columns) => deriveIndexedDBIndexName(columns)),
+)
+
+/**
+ * Reads the index names one store of a database holds, through a connection opened and closed
+ * for the read.
+ *
+ * @param name - The database name
+ * @param store - The object-store name
+ * @returns The store's index names, empty when the database holds no such store
+ */
+export async function readStoredIndexes(name: string, store: string): Promise<readonly string[]> {
+	const database = createIndexedDBDatabase({ name, stores: {} })
+	try {
+		return readIndexNames(await database.connect(), [store]).get(store) ?? []
+	} finally {
+		database.close()
+	}
+}

@@ -1,5 +1,6 @@
 export * from './types.js'
 export * from './constants.js'
 export * from './helpers.js'
+export * from './IndexedDBBatchIterator.js'
 export * from './drivers/IndexedDBDriver.js'
 export * from './factories.js'

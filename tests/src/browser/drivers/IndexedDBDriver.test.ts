@@ -20,8 +20,14 @@ import {
 	StorageRecorder,
 	tallyCalls,
 } from '@src/core'
-import { createIndexedDBDriver, deriveIndexedDBIndexName, schemaToStore } from '@src/browser'
-import { createIndexedDBDatabase } from '@orkestrel/indexeddb'
+import {
+	createIndexedDBDriver,
+	deriveIndexedDBIndexName,
+	IndexedDBDriver,
+	schemaToStore,
+	STREAM_BATCH_SIZE,
+} from '@src/browser'
+import { createIndexedDBDatabase, promisifyRequest } from '@orkestrel/indexeddb'
 import { integerShape, jsonShape, shapeShape, stringShape } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -39,11 +45,28 @@ import {
 	EMPTY_STORAGE_CASES,
 	EMPTY_TABLE_CASES,
 } from '../../../setup.js'
+import type { ItemRow } from '../../../setupBrowser.js'
 import {
+	ABSENT_ROWS,
+	ABSENT_SCHEMA,
+	armVersionBump,
+	buildItem,
+	buildItems,
+	COLLISION_SCHEMA,
 	CONFORMANCE_ROWS_READ,
 	deleteDatabase,
-	putIndexedDBValue,
+	ITEM_READS,
+	ITEMS,
+	LISTED_PAGES,
 	mintDatabase,
+	PEOPLE,
+	putIndexedDBValue,
+	putTripwire,
+	readIndexedDBValue,
+	readStoredIndexes,
+	REVERSED_SCHEMA,
+	seedItems,
+	TRIPWIRE_CASES,
 } from '../../../setupBrowser.js'
 
 // The IndexedDB DriverInterface implementation, exercised directly in real
@@ -799,11 +822,10 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 				name: corruptName,
 				stores: { __metadata__: {} },
 			})
-			await inspected.connect()
+			const native = await inspected.connect()
 			expect(await inspected.store('__metadata__').has('metadata')).toBe(true)
-			const retained = await inspected.store('__metadata__').get('metadata')
-			const expected = typeof value === 'object' && value !== null ? value : undefined
-			expect(retained).toEqual(expected)
+			const retained = await readIndexedDBValue(native, '__metadata__', 'metadata')
+			expect(retained).toEqual(value)
 			inspected.close()
 		} finally {
 			await recovered.close()
@@ -1463,12 +1485,14 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('a mid-upgrade migrate failure leaves #schema/database at the pre-failure state, and a later valid migrate still succeeds', async () => {
+		// A stored non-record fails the column walk inside the upgrade, after the store was added.
 		const deployed: TableSchema = {
 			name: 'users',
 			primary: 'id',
 			columns: [
 				{ name: 'id', storage: 'text', optional: false, nullable: false },
 				{ name: 'age', storage: 'integer', optional: false, nullable: true },
+				{ name: 'legacy', storage: 'boolean', optional: true, nullable: false },
 			],
 			indexes: [['age']],
 		}
@@ -1476,8 +1500,11 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 		await driver.value.write('users', 'u1', { id: 'u1', age: 30 })
 		const metadata = { version: 1, schema: [deployed] }
 		await driver.value.stamp?.(metadata)
-		// One versionchange creates a store and index before a duplicate-index
-		// fault aborts the whole upgrade, including its metadata stamp.
+		const corrupt = createIndexedDBDatabase({ name: name.value, stores: {} })
+		await putIndexedDBValue(await corrupt.connect(), 'users', 'x', 42)
+		corrupt.close()
+		// One versionchange creates a store before the non-record fault aborts the whole upgrade,
+		// including its metadata stamp.
 		await expect(
 			driver.value.migrate?.({
 				plan: {
@@ -1493,23 +1520,11 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 								indexes: [],
 							},
 						},
-						{ operation: 'index.remove', table: 'users', index: ['age'] },
-					],
-				},
-				metadata: {
-					version: 2,
-					schema: [
-						{ ...deployed, indexes: [] },
-						{
-							name: 'posts',
-							primary: 'id',
-							columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
-							indexes: [],
-						},
+						{ operation: 'column.remove', table: 'users', column: 'legacy' },
 					],
 				},
 			}),
-		).rejects.toThrow(`Upgrade of '${name.value}' failed`)
+		).rejects.toMatchObject({ code: 'MIGRATION' })
 		// The driver reconnects at the exact pre-migration state.
 		expect(await driver.value.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
 		expect(await driver.value.metadata?.()).toEqual(metadata)
@@ -1543,6 +1558,7 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 	})
 
 	it('recovers its pre-migration schema after a real duplicate-index upgrade failure', async () => {
+		// The open drops the undeclared physical index, so the plan repeats its own index.add.
 		const dual = mintDatabase('database-idb-dual-recovery')
 		await deleteDatabase(dual)
 		const physical = createIndexedDBDatabase({
@@ -1569,7 +1585,10 @@ describe('IndexedDBDriver — migrate / metadata / stamp', () => {
 					plan: {
 						from: 1,
 						to: 2,
-						steps: [{ operation: 'index.add', table: 'users', index: ['age'] }],
+						steps: [
+							{ operation: 'index.add', table: 'users', index: ['age'] },
+							{ operation: 'index.add', table: 'users', index: ['age'] },
+						],
 					},
 				})
 				.catch((caught: unknown) => caught)
@@ -1859,16 +1878,9 @@ describe('IndexedDBDriver — index-name collision (a_b column vs [a, b] compoun
 		expect(afterRemove?.map((row) => row.id)).toEqual(['i1'])
 	})
 })
-import {
-	PEOPLE,
-	ABSENT_SCHEMA,
-	ABSENT_ROWS,
-	REVERSED_SCHEMA,
-	COLLISION_SCHEMA,
-} from '../../../setupBrowser.js'
 
 describe('IndexedDBDriver — rows read per conformance read', () => {
-	it('reads the 0.0.23 candidate set for every read and answers what the core answers', async () => {
+	it('reads the rows each plan bounds for every read and answers what the core answers', async () => {
 		const database = mintDatabase('database-idb-rows')
 		await deleteDatabase(database)
 		const recorder = new StorageRecorder(createIndexedDBDriver(database))
@@ -1995,6 +2007,690 @@ describe('IndexedDBDriver — empty lists', () => {
 			}
 		})
 	}
+})
+
+describe('IndexedDBDriver — access paths read no row past their bound', () => {
+	for (const { name: label, input, key, fields, bound } of TRIPWIRE_CASES) {
+		it(`reads ${label} without reaching the tripwire beyond it`, async () => {
+			const database = mintDatabase('database-idb-tripwire')
+			const recorder = new StorageRecorder(createIndexedDBDriver(database))
+			const { database: db, items } = await seedItems(recorder.driver, buildItems(40))
+			try {
+				await putTripwire(database, 'items', key, fields)
+				const { value, calls } = await recorder.measure(() => items.records(input))
+				expect(value).toEqual(applyQuery(buildItems(40), input))
+				expect(tallyCalls(calls, 'records').rows + tallyCalls(calls, 'stream').rows).toBe(bound)
+				expect(tallyCalls(calls, 'scan').calls).toBe(0)
+			} finally {
+				await db.close()
+				await deleteDatabase(database)
+			}
+		})
+	}
+
+	it('raises DRIVER for a read that reaches a tripwire, so a quiet read stopped ahead of it', async () => {
+		const database = mintDatabase('database-idb-tripwire')
+		const { database: db, items } = await seedItems(createIndexedDBDriver(database), buildItems(8))
+		try {
+			await putTripwire(database, 'items', 'k0003a', { organization: 'o3', rank: 3 })
+			await expect(items.records()).rejects.toMatchObject({
+				code: 'DRIVER',
+				context: { code: 'RECORD' },
+			})
+			await expect(
+				items.records({ conditions: [buildCondition('organization', 'equals', ['o3'])] }),
+			).rejects.toMatchObject({ code: 'DRIVER' })
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — plans answer the core engine over the scan', () => {
+	it('returns the core engine rows, order included, for every plan class', async () => {
+		const database = mintDatabase('database-idb-plans')
+		const { database: db, items } = await seedItems(createIndexedDBDriver(database), buildItems(40))
+		const memory = await seedItems(createMemoryDriver(), buildItems(40))
+		try {
+			for (const input of ITEM_READS.filter((read) => read.aggregate === undefined)) {
+				expect({ input, rows: await items.records(input) }).toEqual({
+					input,
+					rows: await memory.items.records(input),
+				})
+				const { order: _order, ...unordered } = input
+				expect({ input, scanned: await collect(items.scan(unordered)) }).toEqual({
+					input,
+					scanned: await collect(memory.items.scan(unordered)),
+				})
+				expect({ input, count: await items.count(input) }).toEqual({
+					input,
+					count: await memory.items.count(input),
+				})
+			}
+			const aggregates = ITEM_READS.flatMap(({ aggregate, ...query }) =>
+				aggregate === undefined ? [] : [{ aggregate, query }],
+			)
+			for (const { aggregate, query } of aggregates) {
+				expect({
+					query,
+					value: await items.aggregate(aggregate.operation, aggregate.column, query),
+				}).toEqual({
+					query,
+					value: await memory.items.aggregate(aggregate.operation, aggregate.column, query),
+				})
+			}
+		} finally {
+			await db.close()
+			await memory.database.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('answers each planned read inside a journal scope with the scope writes', async () => {
+		const database = mintDatabase('database-idb-plans')
+		const { database: db } = await seedItems(createIndexedDBDriver(database), buildItems(12))
+		try {
+			const input = {
+				conditions: [buildCondition('organization', 'equals', ['o1'])],
+				order: [{ column: 'id', direction: 'descending' as const }],
+				limit: 2,
+			}
+			const rows = await db.transaction(async (scope) => {
+				await scope.table('items').set({ id: 'k0013', organization: 'o1', rank: 13, score: 1 })
+				return scope.table('items').records(input)
+			})
+			expect(rows.map((row) => row.id)).toEqual(['k0013', 'k0009'])
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — native counts and extremes read no row', () => {
+	const COUNTS = [
+		{ conditions: [buildCondition('organization', 'equals', ['o1'])] },
+		{ conditions: [buildCondition('organization', 'any', ['o1', 'o3', 'o1'])] },
+		{ conditions: [buildCondition('id', 'any', ['k0002', 'k0004', 'none'])] },
+		{ conditions: [buildCondition('rank', 'between', [5, 30])] },
+		{ conditions: [buildCondition('tag', 'equals', ['t1'])] },
+		{},
+	]
+
+	it('counts each path in the engine with no row returned', async () => {
+		const database = mintDatabase('database-idb-count')
+		const recorder = new StorageRecorder(createIndexedDBDriver(database))
+		const { database: db, items } = await seedItems(recorder.driver, buildItems(40))
+		try {
+			for (const input of COUNTS) {
+				const { value, calls } = await recorder.measure(() => items.count(input))
+				expect({ input, value }).toEqual({
+					input,
+					value: applyQuery(buildItems(40), input).length,
+				})
+				expect({ input, aggregate: tallyCalls(calls, 'aggregate').calls }).toEqual({
+					input,
+					aggregate: 1,
+				})
+				expect(calls.filter((call) => call.rows > 0)).toEqual([])
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('reads the first index entry for a minimum and a maximum, past a tripwire inside the index', async () => {
+		const database = mintDatabase('database-idb-extreme')
+		const recorder = new StorageRecorder(createIndexedDBDriver(database))
+		const { database: db, items } = await seedItems(recorder.driver, buildItems(40))
+		try {
+			await putTripwire(database, 'items', 'k0020a', { organization: 'o0', rank: 20 })
+			const maximum = await recorder.measure(() => items.aggregate('maximum', 'rank'))
+			const minimum = await recorder.measure(() =>
+				items.aggregate('minimum', 'rank', {
+					conditions: [buildCondition('rank', 'above', [6])],
+				}),
+			)
+			expect([maximum.value, minimum.value]).toEqual([39, 7])
+			expect([...maximum.calls, ...minimum.calls].filter((call) => call.rows > 0)).toEqual([])
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — streams read one batch at a time', () => {
+	it('streams the store and an ordered index without reading past the first batch', async () => {
+		const database = mintDatabase('database-idb-batches')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(700)
+		const { database: db, items } = await seedItems(driven, rows)
+		try {
+			await putTripwire(database, 'items', 'k0600a', { organization: 'o0' })
+			await putTripwire(database, 'items', 'zz', { rank: 100 })
+			const seen: string[] = []
+			for await (const row of items.scan()) {
+				seen.push(row.id)
+				if (seen.length === 3) break
+			}
+			const ordered: unknown[] = []
+			for await (const row of driven.stream('items', {
+				order: [{ column: 'rank', direction: 'descending' }],
+			})) {
+				ordered.push(row.rank)
+				if (ordered.length === 3) break
+			}
+			expect([seen, ordered]).toEqual([
+				['k0000', 'k0001', 'k0002'],
+				[699, 698, 697],
+			])
+			await expect(collect(items.scan())).rejects.toMatchObject({ code: 'DRIVER' })
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('streams every row of each path in batches, in order, past the batch boundary', async () => {
+		const database = mintDatabase('database-idb-batches')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(1100)
+		const { database: db } = await seedItems(driven, rows)
+		try {
+			const reads = [
+				{},
+				{ order: [{ column: 'id', direction: 'descending' as const }] },
+				{ order: [{ column: 'rank', direction: 'ascending' as const }] },
+				{ conditions: [buildCondition('organization', 'equals', ['o2'])] },
+				{
+					conditions: [buildCondition('organization', 'equals', ['o2'])],
+					order: [{ column: 'id', direction: 'descending' as const }],
+				},
+				{ conditions: [buildCondition('organization', 'any', ['o2', 'o1'])] },
+				{ conditions: [buildCondition('rank', 'from', [90])] },
+				{ conditions: [buildCondition('id', 'from', ['k0100'])], offset: 3 },
+			]
+			for (const input of reads) {
+				const streamed = await collect(driven.stream('items', input))
+				expect({ input, ids: streamed.map((row) => row.id) }).toEqual({
+					input,
+					ids: applyQuery(rows, input).map((row) => row.id),
+				})
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — rows missing an indexed field', () => {
+	it('holds no index entry for a row that lacks the field or holds null, so below, to, and an order stay residual', async () => {
+		const database = mintDatabase('database-idb-missing')
+		const rows = buildItems(30)
+		const { database: db, items } = await seedItems(createIndexedDBDriver(database), rows)
+		const wrapper = createIndexedDBDatabase({ name: database, stores: {} })
+		try {
+			const native = await wrapper.connect()
+			const indexed = await Promise.all(
+				['tag', 'score'].map((index) =>
+					promisifyRequest(
+						native.transaction('items', 'readonly').objectStore('items').index(index).count(),
+					),
+				),
+			)
+			expect(indexed).toEqual([
+				rows.filter((row) => row.tag !== undefined).length,
+				rows.filter((row) => row.score !== null).length,
+			])
+			const reads = [
+				{ conditions: [buildCondition('tag', 'below', ['t3'])] },
+				{ conditions: [buildCondition('score', 'to', [5])] },
+				{ order: [{ column: 'tag', direction: 'ascending' as const }], limit: 5 },
+			]
+			for (const input of reads) {
+				expect(await items.records(input)).toEqual(applyQuery(rows, input))
+			}
+		} finally {
+			wrapper.close()
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — the index reconcile at open', () => {
+	it('drops an undeclared index of an unversioned database at open, keeping its rows', async () => {
+		const database = mintDatabase('database-idb-reconcile')
+		const both = createDatabase({
+			driver: createIndexedDBDriver(database),
+			tables: { items: ITEMS },
+			indexes: { items: [['organization'], ['rank']] },
+		})
+		await both.table('items').set(buildItems(10))
+		await both.close()
+		const one = createDatabase({
+			driver: createIndexedDBDriver(database),
+			tables: { items: ITEMS },
+			indexes: { items: [['organization']] },
+		})
+		try {
+			expect(await one.table('items').records()).toEqual(buildItems(10))
+			expect(await readStoredIndexes(database, 'items')).toEqual(['organization'])
+		} finally {
+			await one.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('lists one index after a versioned database reopens with one of two, keeping its rows', async () => {
+		const database = mintDatabase('database-idb-reconcile')
+		const first = createDatabase({
+			driver: createIndexedDBDriver(database),
+			tables: { items: ITEMS },
+			indexes: { items: [['organization'], ['rank']] },
+			version: 1,
+		})
+		await first.table('items').set(buildItems(10))
+		await first.close()
+		const second = createDatabase({
+			driver: createIndexedDBDriver(database),
+			tables: { items: ITEMS },
+			indexes: { items: [['rank']] },
+			version: 2,
+		})
+		try {
+			expect(await second.table('items').records()).toEqual(buildItems(10))
+			expect(await readStoredIndexes(database, 'items')).toEqual(['rank'])
+		} finally {
+			await second.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('drops an index the stamped schema does not declare, at the next pinned version', async () => {
+		const database = mintDatabase('database-idb-reconcile')
+		const deployed: TableSchema = {
+			name: 'items',
+			primary: 'id',
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'rank', storage: 'integer', optional: false, nullable: false },
+			],
+			indexes: [['rank']],
+		}
+		const stamped = createIndexedDBDriver(database)
+		await stamped.open([deployed])
+		await stamped.stamp?.({ version: 1, schema: [deployed] })
+		await stamped.write('items', 'k1', { id: 'k1', rank: 1 })
+		await stamped.close()
+		const extra = createIndexedDBDatabase({
+			name: database,
+			stores: { items: { indexes: [{ name: 'id', path: 'id' }] } },
+		})
+		const before = (await extra.connect()).version
+		extra.close()
+		const reopened = createIndexedDBDriver(database)
+		const wrapper = createIndexedDBDatabase({ name: database, stores: {} })
+		try {
+			await reopened.open([{ ...deployed, indexes: [] }])
+			expect(await reopened.read('items', 'k1')).toEqual({ id: 'k1', rank: 1 })
+			expect(await reopened.metadata?.()).toEqual({ version: 1, schema: [deployed] })
+			expect([
+				(await wrapper.connect()).version,
+				await readStoredIndexes(database, 'items'),
+			]).toEqual([before + 1, ['rank']])
+		} finally {
+			wrapper.close()
+			await reopened.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	for (const { label, offset } of [
+		{ label: 'to the version its upgrade targets', offset: 0 },
+		{ label: 'past the version its upgrade targets', offset: 2 },
+	]) {
+		it(`raises a retryable DRIVER for a concurrent bump ${label}, and a retry drops the index`, async () => {
+			const database = mintDatabase('database-idb-reconcile')
+			const seeded = createIndexedDBDatabase({
+				name: database,
+				stores: {
+					items: {
+						indexes: [
+							{ name: 'organization', path: 'organization' },
+							{ name: 'rank', path: 'rank' },
+						],
+					},
+				},
+			})
+			await seeded.store('items').set({ id: 'k1', organization: 'o1', rank: 1 }, 'k1')
+			const version = seeded.version
+			seeded.close()
+			// The bootstrap bumps once to add the metadata store, and the reconcile targets the next.
+			const held = await armVersionBump(database, version + 2 + offset)
+			const driven = createIndexedDBDriver(database)
+			try {
+				const schema: TableSchema = {
+					name: 'items',
+					primary: 'id',
+					columns: [
+						{ name: 'id', storage: 'text', optional: false, nullable: false },
+						{ name: 'organization', storage: 'text', optional: false, nullable: false },
+						{ name: 'rank', storage: 'integer', optional: false, nullable: false },
+					],
+					indexes: [['organization']],
+				}
+				await expect(driven.open([schema])).rejects.toMatchObject({
+					code: 'DRIVER',
+					context: { name: database, retryable: true },
+				})
+				await held.settled
+				await driven.open([schema])
+				expect(await driven.read('items', 'k1')).toEqual({ id: 'k1', organization: 'o1', rank: 1 })
+				expect(await readStoredIndexes(database, 'items')).toEqual(['organization'])
+			} finally {
+				await driven.close()
+				await deleteDatabase(database)
+			}
+		})
+	}
+})
+
+describe('IndexedDBDriver — a stored non-record', () => {
+	it('raises DRIVER from a point read, a list read, a planned read, and a stream', async () => {
+		const database = mintDatabase('database-idb-record')
+		const reader = createIndexedDBDriver(database)
+		const { database: db, items } = await seedItems(reader, buildItems(6))
+		try {
+			const wrapper = createIndexedDBDatabase({ name: database, stores: {} })
+			await putIndexedDBValue(await wrapper.connect(), 'items', 'k0002', 'payload-secret')
+			wrapper.close()
+			const failures = await Promise.all([
+				captureFailure(() => reader.read('items', 'k0002')),
+				captureFailure(() => reader.read('items', ['k0001', 'k0002'])),
+				captureFailure(() =>
+					items.records({ conditions: [buildCondition('id', 'from', ['k0001'])] }),
+				),
+				captureFailure(() => collect(items.scan())),
+			])
+			for (const failure of failures) {
+				expect(failure).toMatchObject({ code: 'DRIVER', context: { code: 'RECORD' } })
+				expect(JSON.stringify(failure)).not.toContain('payload-secret')
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — fix round 1: streams with a page or a residual read by batches', () => {
+	it('reads a paged scan one batch per transaction, so a write past each batch shows in the next', async () => {
+		const database = mintDatabase('database-idb-paged-stream')
+		const rows = buildItems(5000)
+		const { database: db, items } = await seedItems(createIndexedDBDriver(database), rows)
+		try {
+			const seen: ItemRow[] = []
+			for await (const row of items.scan({ limit: 5000 })) {
+				seen.push(row)
+				const next = seen.length - 1 + STREAM_BATCH_SIZE
+				if (seen.length % STREAM_BATCH_SIZE === 1 && next < rows.length) {
+					await items.update(buildItem(next).id, { score: -1 })
+				}
+			}
+			expect(seen).toEqual(
+				rows.map((row, at) =>
+					at > 0 && at % STREAM_BATCH_SIZE === 0 ? { ...row, score: -1 } : row,
+				),
+			)
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('applies a direct stream residual per batch, so a write past the first batch shows', async () => {
+		const database = mintDatabase('database-idb-residual-stream')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(1100)
+		const { database: db, items } = await seedItems(driven, rows)
+		try {
+			const input = { conditions: [buildCondition('tag', 'like', ['t%'])], limit: 700 }
+			const seen: unknown[] = []
+			for await (const row of driven.stream('items', input)) {
+				seen.push(row.id)
+				if (seen.length === 1) await items.update('k0800', { tag: 'zz' })
+			}
+			const changed = rows.map((row) => (row.id === 'k0800' ? { ...row, tag: 'zz' } : row))
+			expect(seen).toEqual(applyQuery(changed, input).map((row) => row.id))
+			expect(seen).not.toContain('k0800')
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('rechecks each batch of a listed stream against the rows a write changed or removed', async () => {
+		const database = mintDatabase('database-idb-listed-stream')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(1100)
+		const { database: db, items } = await seedItems(driven, rows)
+		try {
+			const input = { conditions: [buildCondition('organization', 'any', ['o3', 'o1'])] }
+			const seen: unknown[] = []
+			for await (const row of driven.stream('items', input)) {
+				seen.push(row.id)
+				if (seen.length === 1) {
+					await items.update('k1001', { organization: 'o0' })
+					await items.remove('k1003')
+				}
+			}
+			const expected = applyQuery(rows, input)
+				.map((row) => row.id)
+				.filter((id) => id !== 'k1001' && id !== 'k1003')
+			expect(seen).toEqual(expected)
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('streams an index order across a batch boundary inside a run of duplicate keys, both ways', async () => {
+		const database = mintDatabase('database-idb-duplicate-order')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(1100)
+		const { database: db } = await seedItems(driven, rows)
+		try {
+			for (const direction of ['ascending', 'descending'] as const) {
+				const input = { order: [{ column: 'organization', direction }] }
+				const streamed = await collect(driven.stream('items', input))
+				expect({ direction, ids: streamed.map((row) => row.id) }).toEqual({
+					direction,
+					ids: applyQuery(rows, input).map((row) => row.id),
+				})
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — fix round 1: pages, counts, and extremes at their edges', () => {
+	it('pages an any on an index and on the primary key, with an offset and descending', async () => {
+		const database = mintDatabase('database-idb-listed-pages')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(40)
+		const { database: db, items } = await seedItems(driven, rows)
+		try {
+			for (const input of LISTED_PAGES) {
+				const expected = applyQuery(rows, input).map((row) => row.id)
+				expect({ input, ids: (await items.records(input)).map((row) => row.id) }).toEqual({
+					input,
+					ids: expected,
+				})
+				const streamed = await collect(driven.stream('items', input))
+				expect({ input, ids: streamed.map((row) => row.id) }).toEqual({ input, ids: expected })
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('reads a limit past the engine count as every row', async () => {
+		const database = mintDatabase('database-idb-large-limit')
+		const driven = new IndexedDBDriver(database)
+		const rows = buildItems(12)
+		const { database: db, items } = await seedItems(driven, rows)
+		try {
+			const reads = [
+				{ limit: Number.MAX_SAFE_INTEGER },
+				{ limit: Number.MAX_SAFE_INTEGER, offset: 2 },
+				{ offset: Number.MAX_SAFE_INTEGER, limit: 3 },
+				{
+					order: [{ column: 'id', direction: 'descending' as const }],
+					limit: Number.MAX_SAFE_INTEGER,
+				},
+				{
+					conditions: [buildCondition('organization', 'any', ['o1', 'o2'])],
+					limit: Number.MAX_SAFE_INTEGER,
+				},
+			]
+			for (const input of reads) {
+				const expected = applyQuery(rows, input).map((row) => row.id)
+				expect({ input, ids: (await items.records(input)).map((row) => row.id) }).toEqual({
+					input,
+					ids: expected,
+				})
+				const streamed = await collect(driven.stream('items', input))
+				expect({ input, ids: streamed.map((row) => row.id) }).toEqual({ input, ids: expected })
+			}
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('answers undefined for a minimum and a maximum over an empty store and a zero-match range', async () => {
+		const database = mintDatabase('database-idb-empty-extremes')
+		const { database: db, items } = await seedItems(createIndexedDBDriver(database), [])
+		try {
+			expect([
+				await items.aggregate('minimum', 'rank'),
+				await items.aggregate('maximum', 'rank'),
+				await items.count(),
+			]).toEqual([undefined, undefined, 0])
+			await items.set(buildItems(5))
+			expect(
+				await items.aggregate('maximum', 'rank', {
+					conditions: [buildCondition('rank', 'above', [100])],
+				}),
+			).toBeUndefined()
+		} finally {
+			await db.close()
+			await deleteDatabase(database)
+		}
+	})
+
+	it('reads the compound index for its leading equals ahead of a primary-key range, past a tripwire on that range', async () => {
+		const database = mintDatabase('database-idb-compound-only')
+		const rows = buildItems(40)
+		const driven = createDatabase({
+			driver: createIndexedDBDriver(database),
+			tables: { items: ITEMS },
+			indexes: { items: [['organization', 'rank']] },
+		})
+		await driven.table('items').set(rows)
+		try {
+			await putTripwire(database, 'items', 'k0002a', { organization: 'o0', rank: 2 })
+			const input = {
+				conditions: [
+					buildCondition('id', 'from', ['k0000']),
+					buildCondition('organization', 'equals', ['o1']),
+				],
+				limit: 4,
+			}
+			expect(await driven.table('items').records(input)).toEqual(applyQuery(rows, input))
+			expect(await driven.table('items').count(input)).toBe(
+				applyQuery(rows, { conditions: input.conditions }).length,
+			)
+		} finally {
+			await driven.close()
+			await deleteDatabase(database)
+		}
+	})
+})
+
+describe('IndexedDBDriver — fix round 1: a failed upgrade rolls back its metadata write', () => {
+	it('keeps v1 metadata when the index pass after the metadata write refuses the upgrade, and stays usable', async () => {
+		const database = mintDatabase('database-idb-post-set')
+		const deployed: TableSchema = {
+			name: 'users',
+			primary: 'id',
+			columns: [
+				{ name: 'id', storage: 'text', optional: false, nullable: false },
+				{ name: 'age', storage: 'integer', optional: false, nullable: true },
+			],
+			indexes: [['age']],
+		}
+		const posts: TableSchema = {
+			name: 'posts',
+			primary: 'id',
+			columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }],
+			indexes: [],
+		}
+		const first = createIndexedDBDriver(database)
+		await first.open([deployed])
+		await first.write('users', 'u1', { id: 'u1', age: 30 })
+		await first.stamp?.({ version: 1, schema: [deployed] })
+		await first.close()
+		// Rewrite the declared `age` index over another path: a pinned open and a pinned recovery
+		// keep it, and the wrapper's index pass, which runs after the upgrade callback, refuses it.
+		const reader = createIndexedDBDatabase({ name: database, stores: {} })
+		const version = (await reader.connect()).version
+		reader.close()
+		const rewrite = createIndexedDBDatabase({
+			name: database,
+			version: version + 1,
+			stores: {},
+			upgrade: (context) => {
+				context.indexes.drop('users', 'age')
+				context.indexes.create('users', { name: 'age', path: 'id' })
+			},
+		})
+		await rewrite.connect()
+		rewrite.close()
+		const migrating = createIndexedDBDriver(database)
+		const checking = createIndexedDBDriver(database)
+		try {
+			await migrating.open([deployed])
+			const error = await migrating
+				.migrate?.({
+					plan: { from: 1, to: 2, steps: [{ operation: 'table.add', table: posts }] },
+					metadata: { version: 2, schema: [deployed, posts] },
+				})
+				.catch((caught: unknown) => caught)
+			expect(error).toMatchObject({ code: 'MIGRATION' })
+			expect(await migrating.metadata?.()).toEqual({ version: 1, schema: [deployed] })
+			expect(await migrating.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
+			await checking.open([deployed])
+			expect(await checking.metadata?.()).toEqual({ version: 1, schema: [deployed] })
+			expect(await checking.read('users', 'u1')).toEqual({ id: 'u1', age: 30 })
+			const wrapper = createIndexedDBDatabase({ name: database, stores: {} })
+			await wrapper.connect()
+			expect(wrapper.stores).not.toContain('posts')
+			wrapper.close()
+		} finally {
+			await migrating.close()
+			await checking.close()
+			await deleteDatabase(database)
+		}
+	})
 })
 
 describe('IndexedDBDriver — ill-formed text', () => {

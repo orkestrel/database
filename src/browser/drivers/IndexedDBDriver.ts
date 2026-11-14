@@ -1,4 +1,5 @@
 import type {
+	AggregateOperation,
 	QueryInput,
 	DriverInterface,
 	DriverMetadata,
@@ -12,13 +13,16 @@ import type {
 	TableSchema,
 } from '@src/core'
 import type {
+	IndexedDBCursorInterface,
 	IndexedDBDatabaseInterface,
+	IndexedDBIndexInterface,
 	IndexedDBStoreInterface,
 	IndexedDBTransactionStoreInterface,
 	IndexedDBUpgradeContext,
 	StoreDefinition,
 } from '@orkestrel/indexeddb'
-import type { AccessPlan } from '../types.js'
+import type { FieldPath } from '@orkestrel/contract'
+import type { AccessBatch, AccessPlan, AccessPosition } from '../types.js'
 import {
 	applyKeys,
 	applyQuery,
@@ -27,6 +31,7 @@ import {
 	cloneDriverMetadata,
 	cloneMigrationInput,
 	compareValues,
+	computeAggregate,
 	computeRemoved,
 	DatabaseError,
 	equalsValue,
@@ -34,24 +39,36 @@ import {
 	extractKey,
 	isKey,
 	isDatabaseError,
+	matchesQuery,
+	prepareScalars,
 	migrateRows,
-	normalizeReadInput,
 	normalizeDriverSchema,
 	projectMigrationSchema,
+	StreamPage,
 	validatePage,
 } from '@src/core'
-import { isArray } from '@orkestrel/contract'
-import { createIndexedDBDatabase, isIndexedDBError } from '@orkestrel/indexeddb'
+import { isArray, isDefined, isError, isNumber, isTrue } from '@orkestrel/contract'
 import {
-	deriveAccessPlan,
+	createIndexedDBDatabase,
+	isIndexedDBError,
+	promisifyRequest,
+	readRecords,
+	wrapCall,
+} from '@orkestrel/indexeddb'
+import {
 	deriveIndexedDBIndexName,
-	findAccessCondition,
+	findAccessPlan,
 	mapIndexedDBError,
 	mapMigrationError,
+	matchesKeyList,
+	narrowRange,
 	planIndexedDBQuery,
+	readIndexNames,
+	resolveCount,
 	schemaToStore,
 } from '../helpers.js'
-import { METADATA_STORE } from '../constants.js'
+import { METADATA_STORE, STREAM_BATCH_SIZE } from '../constants.js'
+import { IndexedDBBatchIterator } from '../IndexedDBBatchIterator.js'
 import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
 
 /**
@@ -61,21 +78,28 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * @remarks
  * A thin adapter: it implements the storage primitives the core database layer
  * needs (`open` / `close` / `read` / `write` / `insert` / `delete` / `keys` / `scan` /
- * `clear`) by delegating to the wrapper's typed store operations — it never
- * touches raw IndexedDB. Rows are stored with **out-of-line keys** (the database
- * passes the key explicitly, `store.set(row, key)`), so each table is declared as a
- * key-path-less store. A fresh database opens in **auto-managed** mode (no fixed
- * version), creating missing declared stores on demand. Once metadata is persisted,
- * bootstrap captures the live stores and version, rejects a missing persisted store,
- * and pins the final open to that version so a competing versionchange cannot
- * silently recreate lost storage. The driver's bulk reads (`scan` / `keys`) use the
- * wrapper's native `getAll` / `getAllKeys`. A list read is one `get(keys)` transaction, and
- * a list write, insert, or delete runs in one `database.write` scope, so a conflicting row
- * applies none of the batch.
+ * `clear`) by delegating to the wrapper's typed store operations. Rows are stored with
+ * **out-of-line keys** (the database passes the key explicitly, `store.set(row, key)`), so
+ * each table is declared as a key-path-less store. A fresh database opens in
+ * **auto-managed** mode (no fixed version), creating missing declared stores and indexes on
+ * demand. Once metadata is persisted, bootstrap captures the live stores and version, rejects
+ * a missing persisted store, and pins the final open to that version so a competing
+ * versionchange cannot silently recreate lost storage. `open` drops every index of a
+ * deployed table that the deployed schema does not declare, on its own connection at the
+ * next version; a concurrent version bump between its read of the version and that upgrade
+ * raises a `DRIVER` error whose `context.retryable` is `true`. A list read is one
+ * `get(keys)` transaction, and a list write, insert, or delete runs in one `database.write`
+ * scope, so a conflicting row applies none of the batch.
  *
- * It declares `plan`, `records`, and `stream`: {@link planIndexedDBQuery} keeps native the
- * one condition a key range over the primary key or a single-column secondary index
- * answers, and leaves every other clause residual for the core engine.
+ * It declares `plan`, `records`, `stream`, and `aggregate`: {@link planIndexedDBQuery} keeps
+ * native the one access path {@link findAccessPlan} ranks first, the order and the page that
+ * path serves, and `count`, `minimum`, and `maximum` through `count(range)` and the first
+ * entry of an index; every other clause is residual for the core engine. A stream, and
+ * `scan`, read at most {@link STREAM_BATCH_SIZE} rows per transaction and resume after the
+ * final key of each batch, so the stream reads each batch at its own moment. A native page
+ * reads no row past `offset + limit`; a page with residual conditions stops after the batch
+ * that holds its last match. A stored value that is no record raises `DRIVER`, and
+ * `MIGRATION` inside `migrate`.
  *
  * @remarks
  * This driver also implements `migrate` / `metadata` / `stamp`. `metadata` / `stamp`
@@ -93,12 +117,9 @@ import { IndexedDBMigrationIterator } from '../IndexedDBMigrationIterator.js'
  * `MIGRATION` `DatabaseError` never wastes a version bump.
  *
  * @remarks
- * This unit deliberately omits `aggregate` / `transaction`. There is no native
- * `aggregate` (IndexedDB has no native SUM/AVG); the engine over the narrowed
- * `records` covers it. `transaction` is impossible here: the wrapper
- * auto-commits an `IDBTransaction` when control yields outside its request
- * chain, so arbitrary callback awaits cannot remain inside one native
- * transaction, so the core's journal carries a scope over this driver. Every atomic
+ * This driver omits `transaction`: the wrapper auto-commits an `IDBTransaction` when control
+ * yields outside its request chain, so arbitrary callback awaits cannot remain inside one
+ * native transaction, and the core's journal carries a scope over this driver. Every atomic
  * multi-operation sequence in this driver, a batch included, runs inside one
  * `db.write(...)` scope.
  */
@@ -135,7 +156,7 @@ export class IndexedDBDriver implements DriverInterface {
 			// in place — so a reopen with a reduced schema replaces the map
 			// wholesale instead of retaining ghost tables the caller no longer
 			// declared.
-			const [stores, version, persisted] = await this.#bootstrap()
+			const [stores, version, persisted, indexes] = await this.#bootstrap()
 			if (persisted !== undefined) {
 				for (const table of persisted.schema) {
 					if (!stores.includes(table.name)) {
@@ -151,9 +172,18 @@ export class IndexedDBDriver implements DriverInterface {
 			for (const table of normalizeDriverSchema(persisted?.schema ?? owned)) {
 				map.set(table.name, table)
 			}
+			// Each index of a deployed table that the deployed schema does not declare.
+			const undeclared = [...map.values()].flatMap((table) => {
+				const declared = table.indexes.map(deriveIndexedDBIndexName)
+				return (indexes.get(table.name) ?? [])
+					.filter((index) => !declared.includes(index))
+					.map((index) => [table.name, index] as const)
+			})
+			const current = undeclared.length === 0 ? version : version + 1
+			if (undeclared.length > 0) await this.#reconcile(map, current, undeclared)
 			const database = createIndexedDBDatabase({
 				name: this.#name,
-				...(persisted === undefined ? {} : { version }),
+				...(persisted === undefined ? {} : { version: current }),
 				stores: this.#stores(map),
 			})
 			try {
@@ -265,12 +295,8 @@ export class IndexedDBDriver implements DriverInterface {
 		}
 	}
 
-	async *scan(table: string): AsyncIterable<Row> {
-		try {
-			for (const row of await this.#store(table).records()) yield row
-		} catch (error) {
-			throw this.#wrap(error)
-		}
+	scan(table: string): AsyncIterable<Row> {
+		return this.#stream(table, {})
 	}
 
 	async clear(table: string): Promise<void> {
@@ -282,7 +308,7 @@ export class IndexedDBDriver implements DriverInterface {
 	}
 
 	/**
-	 * Splits a read into the one condition a key range answers and the residual the core runs.
+	 * Splits a read into the access path the engine answers and the residual the core runs.
 	 *
 	 * @param table - The declared table to read
 	 * @param input - The read to split
@@ -299,7 +325,7 @@ export class IndexedDBDriver implements DriverInterface {
 	async records(table: string, input: QueryInput): Promise<readonly Row[]> {
 		validatePage(input)
 		try {
-			return await this.#read(table, input)
+			return await this.#records(table, input)
 		} catch (error) {
 			throw this.#wrap(error)
 		}
@@ -308,6 +334,35 @@ export class IndexedDBDriver implements DriverInterface {
 	stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		validatePage(input)
 		return this.#stream(table, input)
+	}
+
+	/**
+	 * Computes an aggregate over the rows matching the native side of a plan.
+	 *
+	 * @remarks
+	 * `count` reads `count(range)` on the store or index of the access path, one count per
+	 * listed key for `any`, and reads no row. `minimum` and `maximum` read the key of the first
+	 * entry in the cursor direction of the path's own column. `sum` and `average`, which a plan
+	 * never keeps native, reduce the rows `records` reads.
+	 *
+	 * @param table - The declared table to read
+	 * @param operation - The aggregate to compute
+	 * @param column - The column to aggregate
+	 * @param input - The native side of the plan
+	 * @returns The aggregate value, or `undefined` when undefined for the rows
+	 */
+	async aggregate(
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		validatePage(input)
+		try {
+			return await this.#aggregate(table, operation, column, input)
+		} catch (error) {
+			throw this.#wrap(error)
+		}
 	}
 
 	/**
@@ -447,26 +502,344 @@ export class IndexedDBDriver implements DriverInterface {
 
 	// === Private
 
+	// A transaction cannot outlive the consumer's awaits, so a stream reads one batch per transaction.
 	async *#stream(table: string, input: QueryInput): AsyncIterable<Row> {
 		try {
-			for (const row of await this.#read(table, input)) yield row
+			const split = planIndexedDBQuery(input, this.#table(table), this.#store(table).indexes)
+			const residual = split.residual
+			if (residual.order !== undefined) {
+				yield* await this.#records(table, input)
+				return
+			}
+			if (split.native.limit === 0 || residual.limit === 0) return
+			const conditions = residual.conditions ?? []
+			const scalars = prepareScalars(conditions)
+			const page = new StreamPage(residual.offset ?? 0)
+			for await (const batch of this.#batches(table, split.native)) {
+				for (const row of batch) {
+					if (conditions.length > 0 && !matchesQuery(row, conditions, scalars)) continue
+					if (!page.next()) continue
+					yield row
+					if (residual.limit !== undefined && page.count >= residual.limit) return
+				}
+			}
 		} catch (error) {
 			throw this.#wrap(error)
 		}
 	}
 
-	// Read the key range of the input's access condition, which answers that condition
-	// exactly, and run the core engine over the input's other clauses only when one remains.
-	async #read(table: string, input: QueryInput): Promise<readonly Row[]> {
+	// A page bounds every batch: the walk reads no row past `offset + limit`.
+	async *#batches(table: string, input: QueryInput): AsyncIterable<readonly Row[]> {
 		const schema = this.#table(table)
 		const store = this.#store(table)
-		const access = findAccessCondition(input, schema, store.indexes)
-		const rows = await this.#candidates(store, schema, deriveAccessPlan(access, schema))
-		const rest = normalizeReadInput({
-			...input,
-			conditions: (input.conditions ?? []).filter((condition) => condition !== access),
+		const plan = findAccessPlan(input, schema, store.indexes)
+		const direction = input.order?.at(0)?.direction === 'descending' ? 'prev' : 'next'
+		const offset = input.offset ?? 0
+		const bound = input.limit === undefined ? Number.POSITIVE_INFINITY : offset + input.limit
+		if (matchesKeyList(plan, input.order, schema.primary)) {
+			yield* this.#listBatches(table, plan, direction, offset, bound)
+			return
+		}
+		const read =
+			plan.index === undefined && direction === 'next'
+				? this.#readRange.bind(this, table, schema.primary, plan.range)
+				: this.#readCursor.bind(
+						this,
+						plan.index === undefined ? store : store.index(plan.index),
+						plan.range,
+						direction,
+						plan.index !== undefined,
+					)
+		const page = new StreamPage(offset)
+		for await (const batch of new IndexedDBBatchIterator(read, bound)) {
+			const rows = offset === 0 ? batch : batch.filter(() => page.next())
+			if (rows.length > 0) yield rows
+		}
+	}
+
+	// A direct caller can pass clauses the plan leaves residual; the core engine runs those.
+	async #records(table: string, input: QueryInput): Promise<readonly Row[]> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const split = planIndexedDBQuery(input, schema, store.indexes)
+		if (Object.keys(split.residual).length > 0) {
+			return applyQuery(await this.#records(table, split.native), split.residual)
+		}
+		const plan = findAccessPlan(input, schema, store.indexes)
+		const direction = input.order?.at(0)?.direction === 'descending' ? 'prev' : 'next'
+		const offset = input.offset ?? 0
+		const limit = input.limit
+		if (limit === 0) return []
+		if (matchesKeyList(plan, input.order, schema.primary)) {
+			return this.#list(table, schema.primary, plan, direction, offset, limit)
+		}
+		const source = plan.index === undefined ? store : store.index(plan.index)
+		if (limit === undefined) {
+			const rows = await source.records(plan.range)
+			const ordered = direction === 'prev' ? rows.toReversed() : rows
+			return offset > 0 ? ordered.slice(offset) : ordered
+		}
+		if (direction === 'next' && offset === 0) return source.records(plan.range, resolveCount(limit))
+		if (resolveCount(offset) === undefined) return []
+		const opened = await source.cursor({
+			...(plan.range === undefined ? {} : { query: plan.range }),
+			direction,
 		})
-		return Object.keys(rest).length === 0 ? rows : applyQuery(rows, rest)
+		const cursor = opened === null || offset === 0 ? opened : await opened.advance(offset)
+		if (cursor === null) return []
+		const rows: Row[] = []
+		await this.#collect(cursor, rows, limit)
+		return rows
+	}
+
+	// A page reads its sorted keys first, so it reads the values of the page's rows alone.
+	#list(
+		table: string,
+		primary: string,
+		plan: AccessPlan,
+		direction: IDBCursorDirection,
+		offset: number,
+		limit: number | undefined,
+	): Promise<readonly Row[]> {
+		return this.#within(table, async (store) => {
+			if (offset === 0 && limit === undefined) {
+				const rows = await this.#listRows(store, plan)
+				const sign = direction === 'prev' ? -1 : 1
+				return rows.toSorted((left, right) => sign * compareValues(left[primary], right[primary]))
+			}
+			const cap =
+				limit !== undefined && direction === 'next' && plan.keys !== undefined
+					? resolveCount(offset + limit)
+					: undefined
+			const keys = await this.#listKeys(store, plan, cap)
+			const ordered = direction === 'prev' ? keys.toReversed() : keys
+			const window = ordered.slice(offset, limit === undefined ? undefined : offset + limit)
+			return (await store.get(window)).filter(isDefined)
+		})
+	}
+
+	async #listRows(
+		store: IndexedDBTransactionStoreInterface,
+		plan: AccessPlan,
+	): Promise<readonly Row[]> {
+		const name = plan.index
+		if (name === undefined) return (await store.get(plan.keys ?? [])).filter(isDefined)
+		const index = wrapCall(() => store.store.index(name))
+		const ranges = plan.keys?.map((key) => IDBKeyRange.only(key)) ?? [plan.range]
+		const lists = await Promise.all(ranges.map((range) => readRecords(index, range)))
+		return lists.flat()
+	}
+
+	// Each list is in primary-key order, so its first `cap` keys hold every key a page can take.
+	async #listKeys(
+		store: IndexedDBTransactionStoreInterface,
+		plan: AccessPlan,
+		cap: number | undefined,
+	): Promise<readonly IDBValidKey[]> {
+		const name = plan.index
+		if (name === undefined) {
+			const keys = plan.keys ?? []
+			const present = await store.has(keys)
+			return keys.filter((_, position) => present[position] === true)
+		}
+		const index = wrapCall(() => store.store.index(name))
+		const ranges = plan.keys?.map((key) => IDBKeyRange.only(key)) ?? [plan.range]
+		const lists = await Promise.all(
+			ranges.map((range) => promisifyRequest(wrapCall(() => index.getAllKeys(range, cap)))),
+		)
+		return lists.flat().toSorted(compareValues)
+	}
+
+	// A row can change between the key read and its batch, so each batch rechecks the path.
+	async *#listBatches(
+		table: string,
+		plan: AccessPlan,
+		direction: IDBCursorDirection,
+		offset: number,
+		bound: number,
+	): AsyncIterable<readonly Row[]> {
+		const cap =
+			direction === 'next' && plan.keys !== undefined && Number.isFinite(bound)
+				? resolveCount(bound)
+				: undefined
+		const listed = await this.#within(table, (store) => this.#listKeys(store, plan, cap))
+		const keys = (direction === 'prev' ? listed.toReversed() : listed).slice(offset, bound)
+		const store = this.#store(table)
+		const batches = Array.from({ length: Math.ceil(keys.length / STREAM_BATCH_SIZE) }, (_, at) =>
+			keys.slice(at * STREAM_BATCH_SIZE, (at + 1) * STREAM_BATCH_SIZE),
+		)
+		for (const batch of batches) {
+			const rows = (await store.get(batch)).filter(isDefined)
+			yield plan.index === undefined
+				? rows
+				: rows.filter((row) => matchesQuery(row, plan.conditions))
+		}
+	}
+
+	async #readRange(
+		table: string,
+		primary: string,
+		range: IDBKeyRange | undefined,
+		position: AccessPosition | undefined,
+		size: number,
+	): Promise<AccessBatch> {
+		const query =
+			position === undefined ? range : narrowRange(range, position.primary, 'next', true)
+		if (position !== undefined && query === undefined) return { rows: [] }
+		const rows = await this.#store(table).records(query, size)
+		const last = rows.at(-1)
+		if (rows.length < size || last === undefined) return { rows }
+		const key = extractKey(last, primary)
+		if (key === undefined) {
+			throw new DatabaseError('DRIVER', 'Stored IndexedDB row does not carry its primary key', {
+				table,
+				column: primary,
+			})
+		}
+		return { rows, position: { key, primary: key } }
+	}
+
+	// An index key repeats across rows, so an index resumes by seeking its key and primary key.
+	async #readCursor(
+		source: IndexedDBStoreInterface | IndexedDBIndexInterface,
+		range: IDBKeyRange | undefined,
+		direction: IDBCursorDirection,
+		indexed: boolean,
+		position: AccessPosition | undefined,
+		size: number,
+	): Promise<AccessBatch> {
+		const query =
+			position === undefined
+				? range
+				: narrowRange(range, indexed ? position.key : position.primary, direction, !indexed)
+		if (position !== undefined && query === undefined) return { rows: [] }
+		const opened = await source.cursor({ ...(query === undefined ? {} : { query }), direction })
+		const cursor =
+			opened === null || position === undefined || !indexed
+				? opened
+				: await this.#seek(opened, position)
+		if (cursor === null) return { rows: [] }
+		const rows: Row[] = []
+		const last = await this.#collect(cursor, rows, size)
+		return rows.length < size
+			? { rows }
+			: { rows, position: { key: last.key, primary: last.primary } }
+	}
+
+	async #seek(
+		cursor: IndexedDBCursorInterface,
+		position: AccessPosition,
+	): Promise<IndexedDBCursorInterface | null> {
+		const sign = cursor.direction === 'prev' ? -1 : 1
+		const order =
+			sign *
+			(indexedDB.cmp(cursor.key, position.key) || indexedDB.cmp(cursor.primary, position.primary))
+		if (order > 0) return cursor
+		if (order === 0) return cursor.continue()
+		const sought = await cursor.seek(position.key, position.primary)
+		return sought === null ? null : this.#seek(sought, position)
+	}
+
+	async #collect(
+		cursor: IndexedDBCursorInterface,
+		rows: Row[],
+		size: number,
+	): Promise<IndexedDBCursorInterface> {
+		rows.push(cursor.value)
+		if (rows.length >= size) return cursor
+		const next = await cursor.continue()
+		return next === null ? cursor : this.#collect(next, rows, size)
+	}
+
+	// A minimum or maximum reads the first key in the cursor direction, never a row.
+	async #aggregate(
+		table: string,
+		operation: AggregateOperation,
+		column: FieldPath,
+		input: QueryInput,
+	): Promise<number | undefined> {
+		const schema = this.#table(table)
+		const store = this.#store(table)
+		const read = { ...input, aggregate: { operation, column } }
+		const split = planIndexedDBQuery(read, schema, store.indexes)
+		if (split.native.aggregate === undefined) {
+			const filter = input.conditions === undefined ? {} : { conditions: input.conditions }
+			return computeAggregate(await this.#records(table, filter), operation, column)
+		}
+		const plan = findAccessPlan(read, schema, store.indexes)
+		const keys = plan.keys
+		const name = plan.index
+		if (operation === 'count' && keys !== undefined) {
+			return this.#within(table, async (scoped) => {
+				if (name === undefined) return (await scoped.has(keys)).filter(isTrue).length
+				const index = wrapCall(() => scoped.store.index(name))
+				const counts = await Promise.all(
+					keys.map((key) => promisifyRequest(wrapCall(() => index.count(IDBKeyRange.only(key))))),
+				)
+				return counts.reduce((total, count) => total + count, 0)
+			})
+		}
+		const source = name === undefined ? store : store.index(name)
+		if (operation === 'count') return source.count(plan.range)
+		const cursor = await source.cursor({
+			...(plan.range === undefined ? {} : { query: plan.range }),
+			direction: operation === 'minimum' ? 'next' : 'prev',
+		})
+		return cursor !== null && isNumber(cursor.key) ? cursor.key : undefined
+	}
+
+	async #within<T>(
+		table: string,
+		scope: (store: IndexedDBTransactionStoreInterface) => Promise<T>,
+	): Promise<T> {
+		const result = Promise.withResolvers<T>()
+		await this.#require().read(table, async (transaction) => {
+			result.resolve(await scope(transaction.store(table)))
+		})
+		return result.promise
+	}
+
+	// A concurrent bump past the version refuses the open, and one to it skips the upgrade.
+	async #reconcile(
+		schema: ReadonlyMap<string, TableSchema>,
+		version: number,
+		undeclared: ReadonlyArray<readonly [string, string]>,
+	): Promise<void> {
+		const database = createIndexedDBDatabase({
+			name: this.#name,
+			version,
+			stores: this.#stores(schema),
+			upgrade: (context) => {
+				for (const [store, index] of undeclared) context.indexes.drop(store, index)
+			},
+		})
+		try {
+			const native = await database.connect()
+			const indexes = readIndexNames(
+				native,
+				undeclared.map(([store]) => store),
+			)
+			if (undeclared.some(([store, index]) => indexes.get(store)?.includes(index) === true)) {
+				throw this.#bumped(undefined)
+			}
+		} catch (error) {
+			const bumped =
+				isIndexedDBError(error) &&
+				error.code === 'OPEN' &&
+				isError(error.cause) &&
+				error.cause.name === 'VersionError'
+			throw bumped ? this.#bumped(error) : error
+		} finally {
+			database.close()
+		}
+	}
+
+	#bumped(cause: unknown): DatabaseError {
+		return new DatabaseError('DRIVER', 'IndexedDB database changed version during open', {
+			name: this.#name,
+			retryable: true,
+			...(cause === undefined ? {} : { cause }),
+		})
 	}
 
 	// Run one point mutation inside an explicit readwrite transaction. The
@@ -528,26 +901,34 @@ export class IndexedDBDriver implements DriverInterface {
 
 	async #load(database: IndexedDBDatabaseInterface): Promise<DriverMetadata | undefined> {
 		const result = Promise.withResolvers<readonly [boolean, unknown]>()
-		await database.read(METADATA_STORE, async (transaction) => {
-			const store = transaction.store(METADATA_STORE)
-			const present = await store.has('metadata')
-			result.resolve([present, present ? await store.get('metadata') : undefined])
-		})
+		try {
+			await database.read(METADATA_STORE, async (transaction) => {
+				const store = transaction.store(METADATA_STORE)
+				const present = await store.has('metadata')
+				result.resolve([present, present ? await store.get('metadata') : undefined])
+			})
+		} catch (error) {
+			throw isIndexedDBError(error) && error.code === 'RECORD' ? this.#invalid() : error
+		}
 		const [present, value] = await result.promise
 		if (!present) return undefined
 		try {
 			return cloneDriverMetadata(value)
 		} catch {
-			const cause = new DatabaseError('VALIDATION', 'Stored IndexedDB metadata failed validation', {
-				path: 'metadata',
-			})
-			throw new DatabaseError('DRIVER', 'Stored IndexedDB metadata is invalid', {
-				name: this.#name,
-				store: METADATA_STORE,
-				key: 'metadata',
-				cause,
-			})
+			throw this.#invalid()
 		}
+	}
+
+	#invalid(): DatabaseError {
+		const cause = new DatabaseError('VALIDATION', 'Stored IndexedDB metadata failed validation', {
+			path: 'metadata',
+		})
+		return new DatabaseError('DRIVER', 'Stored IndexedDB metadata is invalid', {
+			name: this.#name,
+			store: METADATA_STORE,
+			key: 'metadata',
+			cause,
+		})
 	}
 
 	#migrationError(error: unknown): DatabaseError {
@@ -611,12 +992,12 @@ export class IndexedDBDriver implements DriverInterface {
 		return stores
 	}
 
-	// Reconnect at the current `#schema` with no version bump (auto-managed
-	// mode, mirroring `open`) — used to restore a working connection after a
-	// failed `migrate` left the prior connection closed.
+	// Like `open`, a database with stored metadata reopens pinned, so recovery runs no reconcile.
 	async #reopen(): Promise<void> {
+		const [, version, persisted] = await this.#bootstrap()
 		const database = createIndexedDBDatabase({
 			name: this.#name,
+			...(persisted === undefined ? {} : { version }),
 			stores: this.#stores(this.#schema),
 		})
 		try {
@@ -626,24 +1007,6 @@ export class IndexedDBDriver implements DriverInterface {
 			database.close()
 			throw error
 		}
-	}
-
-	// The candidate-superset read for a plan. The primary store already returns rows
-	// in primary-key order — the same order `scan` yields, which `applyQuery`
-	// preserves for an unordered query. A secondary index returns them in INDEX-key
-	// order, so re-sort by the primary key to reproduce scan order; the engine then
-	// filters / orders / pages exactly, so a native read equals the scan path.
-	async #candidates(
-		store: IndexedDBStoreInterface,
-		schema: TableSchema,
-		plan: AccessPlan,
-	): Promise<readonly Row[]> {
-		if (plan.index === undefined) return store.records(plan.range)
-		const rows = [...(await store.index(plan.index).records(plan.range))]
-		rows.sort((left, right) =>
-			compareValues(extractKey(left, schema.primary), extractKey(right, schema.primary)),
-		)
-		return rows
 	}
 
 	#table(name: string): TableSchema {
@@ -696,13 +1059,7 @@ export class IndexedDBDriver implements DriverInterface {
 				case 'column.remove': {
 					const store = context.stores.store(step.table)
 					for await (const cursor of new IndexedDBMigrationIterator(store)) {
-						const row = cursor.value
-						if (row === undefined) {
-							throw new DatabaseError('MIGRATION', 'migrate: stored value is not a record', {
-								table: step.table,
-							})
-						}
-						const [migrated] = migrateRows([row], [step])
+						const [migrated] = migrateRows([cursor.value], [step])
 						if (migrated === undefined) {
 							throw new DatabaseError('MIGRATION', 'migrate: transformed row is missing', {
 								table: step.table,
@@ -727,14 +1084,26 @@ export class IndexedDBDriver implements DriverInterface {
 		}
 	}
 
-	async #bootstrap(): Promise<readonly [readonly string[], number, DriverMetadata | undefined]> {
+	async #bootstrap(): Promise<
+		readonly [
+			readonly string[],
+			number,
+			DriverMetadata | undefined,
+			ReadonlyMap<string, readonly string[]>,
+		]
+	> {
 		const bootstrap = createIndexedDBDatabase({
 			name: this.#name,
 			stores: { [METADATA_STORE]: {} },
 		})
 		try {
-			await bootstrap.connect()
-			return [bootstrap.stores, bootstrap.version, await this.#load(bootstrap)]
+			const native = await bootstrap.connect()
+			const stores = bootstrap.stores
+			const indexes = readIndexNames(
+				native,
+				stores.filter((store) => store !== METADATA_STORE),
+			)
+			return [stores, bootstrap.version, await this.#load(bootstrap), indexes]
 		} finally {
 			bootstrap.close()
 		}

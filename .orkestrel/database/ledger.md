@@ -29,5 +29,6 @@
 | 2026-11-14 | Database's SQLite completion rows | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and one closure check; verifier (Haiku 5.5) gates | `plan.md` § State |
 | 2026-11-14 | Database's query door, ill-formed-text refusal, and recorder export | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and one closure check; verifier (Haiku 5.5) gates | `plan.md` § State |
 | 2026-11-14 | Contract's cost unit: the compiled guards, `parseEnum`, and `resolveField` | opus (Opus 5.5); reviewer (Sonnet 5.5) one objective review; verifier (Haiku 5.5) gates | contract `e17de4b` |
+| 2026-11-14 | Database's IndexedDB plans | opus (Opus 5.5); reviewer (Sonnet 5.5) objective and subjective lanes and one closure check; verifier (Haiku 5.5) gates | `plan.md` § State |
 | 2026-11-14 | The query door stays derived from contract; the contract cost units move ahead of the coverage wave's release, and contract releases first | user | `plan.md` § State |
 | 2026-11-14 | After the four packages close, `@orkestrel/contract` joins the campaign, and its measured costs (the object guard, `parseEnum`, `resolveField`) become units under the same canon | user | `plan.md` § State |
