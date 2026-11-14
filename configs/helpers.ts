@@ -374,11 +374,28 @@ export function findPackageDirectory(current: string): string | undefined {
 	return parent === current ? undefined : findPackageDirectory(parent)
 }
 
+/**
+ * Checks whether a path names an existing directory.
+ *
+ * @remarks
+ * Reads presence through `existsSync`, which answers `false` for an absent path and for a path
+ * beneath a file on every host; `lstatSync` with `throwIfNoEntry: false` returns `undefined` for
+ * the second on Windows (`ENOENT`) and throws on Linux (`ENOTDIR`).
+ *
+ * @param path - The path to check.
+ * @returns True if the path names an existing directory; false otherwise.
+ * @example
+ * ```ts
+ * isDirectoryPath(process.cwd()) // true
+ * ```
+ */
+export function isDirectoryPath(path: string): boolean {
+	return existsSync(path) && lstatSync(path).isDirectory()
+}
+
 export function packageRootOf(packageName: string, resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
-	const directory = findPackageDirectory(
-		lstatSync(physical, { throwIfNoEntry: false })?.isDirectory() ? physical : dirname(physical),
-	)
+	const directory = findPackageDirectory(isDirectoryPath(physical) ? physical : dirname(physical))
 	return directory !== undefined && packageManifestName(directory) === packageName
 		? realpathSync.native(directory)
 		: undefined
@@ -386,9 +403,7 @@ export function packageRootOf(packageName: string, resolvedPath: string): string
 
 export function packageRootForResolved(resolvedPath: string): string | undefined {
 	const physical = physicalPath(resolvedPath)
-	const directory = findPackageDirectory(
-		lstatSync(physical, { throwIfNoEntry: false })?.isDirectory() ? physical : dirname(physical),
-	)
+	const directory = findPackageDirectory(isDirectoryPath(physical) ? physical : dirname(physical))
 	return directory !== undefined && packageManifestName(directory) !== undefined
 		? realpathSync.native(directory)
 		: undefined

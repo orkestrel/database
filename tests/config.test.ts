@@ -11,7 +11,6 @@ import {
 	cpSync,
 	existsSync,
 	globSync,
-	lstatSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -126,6 +125,7 @@ import {
 	POLICY_VUE_DOMAIN_CASES,
 } from './setupPolicy.js'
 import { describe, expect, it } from 'vitest'
+import { defaultExclude } from 'vitest/config'
 
 describe('selected faces', () => {
 	it('collects each selected sheet proof from the effective project root and rejects a wrong root', async () => {
@@ -624,6 +624,7 @@ describe('selected faces', () => {
 			'srcVue',
 			'appVue',
 			'setupBrowser',
+			'benchBrowser',
 			'sheetProject',
 			'integration',
 		]) {
@@ -723,6 +724,69 @@ describe('root configuration', () => {
 			expect(target).toBe(resolve(POLICY_ROOT, expected))
 			expect(Object.getOwnPropertyDescriptor(aliases, key)?.value).toBe(target)
 		}
+	})
+
+	it('runs the browser benches in a Chromium bench project and keeps them out of the Node workbench', () => {
+		const factories = readConfigRecord(rootConfiguration)
+		const manifest = readConfigRecord(
+			JSON.parse(readFileSync(resolve(POLICY_ROOT, 'package.json'), 'utf8')),
+		)
+		// Every face that runs in Chromium: each sheet, the themes target without a base sheet, each
+		// browser environment, and each framework face.
+		const sheets = collectSheets(POLICY_ROOT)
+		const browserBenches = [
+			...sheets.map((face) => `src/${face}`),
+			...(!sheets.includes('styles') &&
+			existsSync(resolve(POLICY_ROOT, 'src/styles/themes/index.scss'))
+				? ['src/styles/themes']
+				: []),
+			...['src/browser', 'app/browser'].filter((path) => existsSync(resolve(POLICY_ROOT, path))),
+			...collectFrameworks(POLICY_ROOT),
+		]
+			.map((path) => `tests/${path}/**/*.bench.ts`)
+			.sort()
+		const browser = browserBenches.length > 0
+		const projects = configuration.test?.projects
+		if (!Array.isArray(projects)) throw new Error('The root configuration carries no projects')
+		expect(
+			projects.some((entry) => typeof entry === 'function' && entry.name === 'benchBrowser'),
+		).toBe(browser)
+		expect(typeof factories.benchBrowser === 'function').toBe(browser)
+
+		const probe = factories.probe
+		if (typeof probe !== 'function') throw new Error('The root configuration exports no probe')
+		const workbench = readConfigRecord(
+			readConfigRecord(readConfigRecord(Reflect.apply(probe, undefined, [])).test).benchmark,
+		)
+		expect(workbench.include).toStrictEqual(['tmp/probes/**/*.bench.ts', 'tests/**/*.bench.ts'])
+		// The exclusion keeps Vitest's default exclude, which a set `exclude` otherwise replaces, and
+		// a workspace with no browser-hosted face sets none.
+		expect(
+			Array.isArray(workbench.exclude) ? [...workbench.exclude].sort() : workbench.exclude,
+		).toStrictEqual(browser ? [...defaultExclude, ...browserBenches].sort() : undefined)
+
+		// The script names each bench project it runs; a reporter flag beside them stays the package's.
+		const script = readConfigScript(readConfigRecord(manifest.scripts), 'test:bench')
+		expect(script.startsWith('vitest bench ')).toBe(true)
+		expect(
+			[...script.matchAll(/--project(?:=|\s+)("[^"]*"|\S+)/gu)].map(([, name]) =>
+				(name ?? '').replace(/^"(.*)"$/u, '$1'),
+			),
+		).toStrictEqual(['probe (bench)', ...(browser ? ['bench:browser'] : [])])
+
+		const factory = factories.benchBrowser
+		if (typeof factory !== 'function') return
+		const test = readConfigRecord(readConfigRecord(Reflect.apply(factory, undefined, [])).test)
+		expect(test.name).toStrictEqual({ label: 'bench:browser', color: 'black' })
+		expect(test.include).toStrictEqual([])
+		expect(test.setupFiles).toStrictEqual(['./tests/setup.ts', './tests/setupBrowser.ts'])
+		expect(test.globalSetup).toBeUndefined()
+		const included = readConfigRecord(test.benchmark).include
+		expect(Array.isArray(included) ? [...included].sort() : included).toStrictEqual(browserBenches)
+		expect(readConfigRecord(test.browser).enabled).toBe(true)
+		expect(readConfigRecord(test.browser).instances).toStrictEqual([
+			{ browser: 'chromium', headless: true, name: 'bench:browser (chromium)' },
+		])
 	})
 
 	it('registers every workspace project with its fixed include and setup files', () => {
@@ -5492,8 +5556,12 @@ describe('configuration helpers', () => {
 			const expected = realpathSync.native(packageRoot)
 			const absent = resolve(packageRoot, 'src/absent.ts')
 			const beneathFile = resolve(source, 'child')
-			expect(lstatSync(absent, { throwIfNoEntry: false })).toBeUndefined()
-			expect(lstatSync(beneathFile, { throwIfNoEntry: false })).toBeUndefined()
+			expect(existsSync(absent)).toBe(false)
+			expect(existsSync(beneathFile)).toBe(false)
+			expect(configHelpers.isDirectoryPath(packageRoot)).toBe(true)
+			expect(configHelpers.isDirectoryPath(source)).toBe(false)
+			expect(configHelpers.isDirectoryPath(absent)).toBe(false)
+			expect(configHelpers.isDirectoryPath(beneathFile)).toBe(false)
 			expect(configHelpers.packageRootOf('@sample/package', absent)).toBe(expected)
 			expect(configHelpers.packageRootForResolved(beneathFile)).toBe(expected)
 		} finally {

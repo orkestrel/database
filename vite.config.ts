@@ -1,7 +1,7 @@
 import type { PluginOption, UserConfig } from 'vite'
 import { mergeConfig } from 'vite'
 import { playwright } from '@vitest/browser-playwright'
-import { defineConfig } from 'vitest/config'
+import { defaultExclude, defineConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
 import {
@@ -384,11 +384,14 @@ export function distribution(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+// A browser-hosted face's bench reads host APIs that Node lacks, so only `bench:browser` runs it.
+const browserBenches = ['tests/src/browser/**/*.bench.ts']
+
 // A workbench, not a proof. No gate selects this project. Run in test mode by the
 // `test:probe` script, it collects `tmp/probes/**/*.test.ts`. Run in benchmark mode by the
-// `test:bench` script, it collects `*.bench.ts` files under `tmp/probes` and `tests`.
-// Each benchmark is a regular test that uses its context's `bench` fixture and awaits
-// `bench(name, options, fn).run()` or `bench.compare(...)`.
+// `test:bench` script, it collects `*.bench.ts` files under `tmp/probes` and `tests`, other
+// than a browser-hosted face's benches. Each benchmark is a regular test that uses its
+// context's `bench` fixture and awaits `bench(name, options, fn).run()` or `bench.compare(...)`.
 export function probe(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -401,7 +404,34 @@ export function probe(override?: UserConfig): UserConfig {
 			fileParallelism: false,
 			sequence: { groupOrder: 1 },
 			pool: 'threads',
-			benchmark: { include: ['tmp/probes/**/*.bench.ts', 'tests/**/*.bench.ts'] },
+			benchmark: {
+				include: ['tmp/probes/**/*.bench.ts', 'tests/**/*.bench.ts'],
+				// A set `exclude` replaces Vitest's default, so the default is kept.
+				exclude: [...defaultExclude, ...browserBenches],
+			},
+		},
+	}
+	return mergeOverride(project, override)
+}
+
+// Runs the browser benches in Playwright Chromium beside the `probe` workbench, through the
+// `test:bench` script. No gate selects this project, and it collects no test file.
+export function benchBrowser(override?: UserConfig): UserConfig {
+	const project: UserConfig = {
+		resolve,
+		optimizeDeps,
+		test: {
+			name: { label: 'bench:browser', color: 'black' },
+			include: [],
+			setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
+			browser: {
+				enabled: true,
+				provider: playwright(browserOptions),
+				commands,
+				screenshotDirectory: screenshots,
+				instances: [{ browser: 'chromium', headless: true }],
+			},
+			benchmark: { include: browserBenches },
 		},
 	}
 	return mergeOverride(project, override)
@@ -423,6 +453,7 @@ export default defineConfig({
 			guides,
 			distribution,
 			probe,
+			benchBrowser,
 		],
 	},
 })
