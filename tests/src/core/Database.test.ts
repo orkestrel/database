@@ -13,6 +13,7 @@ import type {
 } from '@src/core'
 import type { DatabaseEvent, MigrateEvent, UserRow } from '../../setup.js'
 import {
+	captureFailure,
 	createDatabase,
 	createMemoryDriver,
 	isDatabaseError,
@@ -20,7 +21,14 @@ import {
 	StorageRecorder,
 	tallyCalls,
 } from '@src/core'
-import { integerShape, optionalShape, stringShape } from '@orkestrel/contract'
+import {
+	functionShape,
+	integerShape,
+	jsonShape,
+	nullableShape,
+	optionalShape,
+	stringShape,
+} from '@orkestrel/contract'
 import { createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
@@ -1514,5 +1522,43 @@ describe('Database — the query door in every view', () => {
 				}),
 			),
 		).toBe(1)
+	})
+})
+
+describe('function column', () => {
+	it.each([
+		['a top-level', functionShape()],
+		['a nested', optionalShape(nullableShape(functionShape()))],
+	])('refuses %s function column when the database is created', async (_label, shape) => {
+		const error = await captureFailure(async () => {
+			await Promise.resolve(
+				createDatabase({
+					driver: createMemoryDriver(),
+					tables: { jobs: { id: stringShape(), run: shape } },
+				}),
+			)
+		})
+		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
+		expect(error.code).toBe('VALIDATION')
+		expect(error.message).toContain("Column 'run' declares the 'function' category")
+		expect(error.context).toMatchObject({ column: 'run', category: 'function' })
+	})
+})
+
+describe('function nested in a json column', () => {
+	it.each(['add', 'set'] as const)('refuses it at the write through %s', async (method) => {
+		const db: DatabaseInterface = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { jobs: { id: stringShape(), meta: jsonShape() } },
+		})
+		const jobs = db.table('jobs')
+		const error = await captureFailure(async () => {
+			await jobs[method]({ id: 'j1', meta: { run: () => 1 } })
+		})
+		expect(isDatabaseError(error) ? error.code : undefined).toBe('VALIDATION')
+		expect(error instanceof Error ? error.message : '').toContain(
+			'meta: type; expected json; received object',
+		)
+		expect(await jobs.keys()).toEqual([])
 	})
 })

@@ -25,6 +25,7 @@ import type {
 	TableSchema,
 } from './types.js'
 import {
+	attempt,
 	collectMembers,
 	extractPath,
 	FAULT_LIMIT,
@@ -1335,10 +1336,12 @@ export function bindRowKey(row: Row, primary: string, key: Key): Row {
  * `optional` / `nullable` unwrap to their inner
  * type (nullability is tracked separately). `null` / `object` / `array` / `union` /
  * `json` / `raw` → `json`: a backend stores them as JSON text and can `json_extract`
- * for nested `FieldPath` queries. A scan-only backend ignores the result.
+ * for nested `FieldPath` queries. A scan-only backend ignores the result. A `function` has no
+ * storable form and throws.
  *
  * @param shape - The column's contract shape
  * @returns The portable column type
+ * @throws {@link DatabaseError} `VALIDATION` for a `function` shape
  *
  * @example
  * ```ts
@@ -1372,9 +1375,14 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 		case 'union':
 		case 'json':
 		case 'raw':
-		case 'function':
 		case 'shape':
 			return 'json'
+		case 'function':
+			throw new DatabaseError(
+				'VALIDATION',
+				"A column declares the 'function' category, which has no storable form; declare a json or raw column instead",
+				{ category: shape.category },
+			)
 	}
 }
 
@@ -1393,9 +1401,17 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
  */
 export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnSchema {
 	const isColumn = compileGuard(objectShape({ value: shape }))
+	const storage = attempt(() => shapeToColumnStorage(shape))
+	if (!storage.success) {
+		throw new DatabaseError(
+			'VALIDATION',
+			`Column '${name}' declares the 'function' category, which has no storable form; declare a json or raw column instead`,
+			{ column: name, category: 'function' },
+		)
+	}
 	return {
 		name,
-		storage: shapeToColumnStorage(shape),
+		storage: storage.value,
 		optional: isColumn({}),
 		nullable: isColumn({ value: null }),
 	}
