@@ -490,6 +490,15 @@ describe('MemoryDriver — key order across key-set changes', () => {
 		])
 	})
 
+	it('orders a new key a batch writes beside an existing one', async () => {
+		const driver = createMemoryDriver()
+		await driver.open(tableSchemas('t'))
+		await driver.write('t', ['b', 'd'], [{ id: 'b' }, { id: 'd' }])
+		expect(await driver.keys('t')).toEqual(['b', 'd'])
+		await driver.write('t', ['d', 'c'], [{ id: 'd' }, { id: 'c' }])
+		expect(await driver.keys('t')).toEqual(['b', 'c', 'd'])
+	})
+
 	it('orders a key an insert adds after the order was read', async () => {
 		const driver = createMemoryDriver()
 		await driver.open(tableSchemas('t'))
