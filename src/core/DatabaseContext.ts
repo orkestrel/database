@@ -16,7 +16,9 @@ import type {
 import { attempt, isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { DatabaseError } from './errors.js'
-import { checkAbort, equalsValue, normalizeDriverSchema, planMigration } from './helpers.js'
+import { normalizeDriverSchema } from './cloners.js'
+import { planMigration } from './compilers.js'
+import { checkAbort, equalsValue } from './helpers.js'
 import { StorageJournal } from './StorageJournal.js'
 import { TransactionScope } from './TransactionScope.js'
 
@@ -121,12 +123,16 @@ export class DatabaseContext implements AdmissionInterface {
 		this.#outside()
 		if (this.#status === 'closed') return
 		this.#status = 'closed'
-		await this.#drain()
-		const ready = this.#ready
-		if (ready !== undefined) await ready.catch(() => {})
-		this.#ready = undefined
-		await this.#driver.close()
-		this.#emitter.emit('close')
+		try {
+			await this.#drain()
+			const ready = this.#ready
+			if (ready !== undefined) await Promise.allSettled([ready])
+			this.#ready = undefined
+			await this.#driver.close()
+			this.#emitter.emit('close')
+		} finally {
+			this.#emitter.destroy()
+		}
 	}
 
 	connect(): Promise<void> {

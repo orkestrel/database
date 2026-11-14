@@ -95,6 +95,20 @@ describe('ScopedIterator', () => {
 		expect(returns.count).toBe(1)
 	})
 
+	it('preserves the throw reason when the return cleanup of a source without throw rejects', async () => {
+		const reason = Symbol('iterator throw')
+		const source = new IteratorSource<number>({
+			async next() {
+				return { done: false, value: 1 }
+			},
+			async return() {
+				throw new Error('cleanup failed')
+			},
+		})
+		const iterator = new ScopedIterator(source, new TransactionScope(), ready)
+		await expect(iterator.throw(reason)).rejects.toBe(reason)
+	})
+
 	it('tracks an active source throw continuation through its barrier', async () => {
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()

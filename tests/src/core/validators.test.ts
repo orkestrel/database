@@ -107,7 +107,28 @@ describe('isScalar', () => {
 		}
 	})
 
+	it('accepts each signed zero and infinity', () => {
+		for (const value of [0, -0, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, '']) {
+			expect(isScalar(value)).toBe(true)
+		}
+	})
+
 	it('refuses an object, an array, and a function', () => {
 		for (const value of [{}, [], new Date(0), Math.max]) expect(isScalar(value)).toBe(false)
+	})
+
+	it('refuses a boxed primitive, a null-prototype record, a constructor, and a proxy', () => {
+		const revocable = Proxy.revocable({}, {})
+		revocable.revoke()
+		for (const value of [
+			Object(1),
+			Object('a'),
+			Object.create(null),
+			Map,
+			new Proxy(() => undefined, {}),
+			revocable.proxy,
+		]) {
+			expect(isScalar(value)).toBe(false)
+		}
 	})
 })

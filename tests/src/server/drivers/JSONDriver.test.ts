@@ -1595,6 +1595,14 @@ describe('JSONDriver — atomic flush', () => {
 			{ signal: controller.signal },
 		)
 		controller.abort('stop queued write')
+		const settled = await Promise.race([
+			queued.then(
+				() => 'queued',
+				() => 'queued',
+			),
+			first.then(() => 'first'),
+		])
+		expect(settled).toBe('queued')
 		await expect(queued).rejects.toMatchObject({ code: 'ABORTED' })
 		await first
 		expect(await fixture.value.driver.keys('users')).toEqual(['u1'])

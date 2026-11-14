@@ -47,7 +47,7 @@ import {
 	StreamPage,
 	validatePage,
 } from '@src/core'
-import { isArray, isDefined, isError, isNumber, isTrue } from '@orkestrel/contract'
+import { attempt, isArray, isDefined, isError, isNumber, isTrue } from '@orkestrel/contract'
 import {
 	createIndexedDBDatabase,
 	isIndexedDBError,
@@ -863,10 +863,10 @@ export class IndexedDBDriver implements DriverInterface {
 					'abort',
 					() => {
 						if (!transaction.active) return
-						try {
+						attempt(() => {
 							transaction.abort()
 							abort.abort()
-						} catch {}
+						})
 					},
 					{ once: true, signal: cleanup.signal },
 				)

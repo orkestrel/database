@@ -10,7 +10,6 @@ import type {
 	QueryInput,
 	DriverInterface,
 	Key,
-	Migration,
 	MigrationStep,
 	Order,
 	PrimaryMap,
@@ -21,18 +20,19 @@ import type {
 	StorageInterface,
 	StorageMember,
 	StorageTally,
+	StreamPageInterface,
 	TableMap,
 	TableSchema,
 } from './types.js'
 import {
-	attempt,
 	collectMembers,
 	extractPath,
 	FAULT_LIMIT,
 	compileGuard,
+	errorToMessage,
+	holds,
 	isArray,
 	isBoolean,
-	isError,
 	isFiniteNumber,
 	isInteger,
 	isNumber,
@@ -46,6 +46,7 @@ import {
 } from '@orkestrel/contract'
 import { StreamPage } from './StreamPage.js'
 import {
+	AGGREGATE_OPERATIONS,
 	CONFORMANCE_POSTS_SCHEMA,
 	CONFORMANCE_READS,
 	CONFORMANCE_ROWS,
@@ -56,7 +57,6 @@ import {
 	NULLISH_OPERATORS,
 	PATTERN_OPERATORS,
 } from './constants.js'
-import { cloneDriverSchema, cloneMigrationInput } from './cloners.js'
 import { DatabaseError, isDatabaseError } from './errors.js'
 import { isAggregateOperation, isKey, isScalar } from './validators.js'
 
@@ -78,6 +78,12 @@ import { isAggregateOperation, isKey, isScalar } from './validators.js'
  *
  * @param input - The portable query whose paging fields to validate
  * @throws {@link DatabaseError} `VALIDATION` when a paging field is invalid
+ *
+ * @example
+ * ```ts
+ * validatePage({ limit: 2, offset: 0 }) // returns
+ * validatePage({ limit: -1 }) // throws DatabaseError VALIDATION
+ * ```
  */
 export function validatePage(input?: QueryInput): void {
 	const limit = input?.limit
@@ -629,6 +635,14 @@ export function normalizeReadInput(input: ReadInput): ReadInput {
  * @param left - The left value
  * @param right - The right value
  * @returns `-1`, `0`, or `1`
+ *
+ * @example
+ * ```ts
+ * compareValues(1, 2) // -1
+ * compareValues('b', 'a') // 1
+ * compareValues(null, 0) // -1
+ * compareValues(Number.NaN, Number.NaN) // 0
+ * ```
  */
 export function compareValues(left: unknown, right: unknown): number {
 	// Rank unlike types so a mixed column still sorts deterministically:
@@ -679,7 +693,7 @@ export function compareValues(left: unknown, right: unknown): number {
  * Anything else (functions, class instances, mismatched shapes) falls through
  * to `false`. Container pairs are tracked iteratively, so self-referential and
  * mutually cyclic arrays/records terminate without consuming the call stack.
- * Hostile proxy traps and accessors are contained as a non-match.
+ * A throwing proxy trap or accessor is contained as a non-match.
  *
  * @param left - The left value
  * @param right - The right value
@@ -695,7 +709,7 @@ export function compareValues(left: unknown, right: unknown): number {
 export function equalsValue(left: unknown, right: unknown): boolean {
 	const pending: Array<readonly [unknown, unknown]> = [[left, right]]
 	const compared = new WeakMap<object, WeakSet<object>>()
-	try {
+	return holds(() => {
 		while (pending.length > 0) {
 			const pair = pending.pop()
 			if (pair === undefined) continue
@@ -747,9 +761,7 @@ export function equalsValue(left: unknown, right: unknown): boolean {
 			}
 		}
 		return true
-	} catch {
-		return false
-	}
+	})
 }
 
 // === Pattern matching
@@ -830,6 +842,13 @@ export function matchesWildcardSegment(
  * @param fold - If `true`, folds ASCII letters on both sides; if `false`, compares exactly
  * @returns True if `value` matches `pattern`; false otherwise
  * @throws A `VALIDATION` {@link DatabaseError} when `pattern` exceeds {@link MAX_PATTERN_LENGTH}
+ *
+ * @example
+ * ```ts
+ * matchesWildcardPattern('Report.pdf', '%.pdf', '%', '_', true) // true
+ * matchesWildcardPattern('Report.PDF', 'report._df', '%', '_', false) // false
+ * matchesWildcardPattern('Report.PDF', 'report._df', '%', '_', true) // true
+ * ```
  */
 export function matchesWildcardPattern(
 	value: string,
@@ -965,6 +984,13 @@ export function collectScalars(values: readonly unknown[]): ReadonlySet<unknown>
  * @param scalars - The condition's scalar operands from {@link collectScalars}. Default:
  *   collected on this call
  * @returns True if the row satisfies the condition; false otherwise
+ *
+ * @example
+ * ```ts
+ * const adult = { column: 'age', operator: 'from', values: [18], connector: 'and' } as const
+ * matchesCondition({ age: 36 }, adult) // true
+ * matchesCondition({ age: 12 }, adult) // false
+ * ```
  */
 export function matchesCondition(
 	row: Row,
@@ -1050,6 +1076,14 @@ export function matchesListed(
  * @param conditions - The conditions to fold
  * @param scalars - One scalar set per condition, by position. Default: collected on this call
  * @returns True if the row satisfies the combined conditions; false otherwise
+ *
+ * @example
+ * ```ts
+ * const adult = { column: 'age', operator: 'from', values: [18], connector: 'and' } as const
+ * const named = { column: 'name', operator: 'equals', values: ['Bo'], connector: 'or' } as const
+ * matchesQuery({ age: 36, name: 'Ada' }, [adult, named]) // true
+ * matchesQuery({ age: 12, name: 'Ada' }, [adult, named]) // false
+ * ```
  */
 export function matchesQuery(
 	row: Row,
@@ -1171,6 +1205,13 @@ export function sortRows(rows: readonly Row[], order: readonly Order[]): readonl
  * @param rows - The rows to process (typically a table's full `scan`)
  * @param input - The read specification, or `undefined` for all rows as-is
  * @returns The filtered, sorted, paged rows
+ *
+ * @example
+ * ```ts
+ * const rows = [{ id: 'a', age: 40 }, { id: 'b', age: 20 }, { id: 'c', age: 30 }]
+ * applyQuery(rows, { order: [{ column: 'age', direction: 'ascending' }], limit: 2 })
+ * // [{ id: 'b', age: 20 }, { id: 'c', age: 30 }]
+ * ```
  */
 export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly Row[] {
 	validatePage(input)
@@ -1199,12 +1240,30 @@ export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly R
  * @param operation - The aggregate to compute
  * @param column - The column to aggregate
  * @returns The aggregate value, or `undefined` when undefined for the inputs
+ * @throws {@link DatabaseError} `VALIDATION` when `operation` is not one of {@link AGGREGATE_OPERATIONS}
+ *
+ * @example
+ * ```ts
+ * const rows = [{ age: 40 }, { age: 20 }, { age: 30 }]
+ * computeAggregate(rows, 'sum', 'age') // 90
+ * computeAggregate(rows, 'maximum', 'age') // 40
+ * computeAggregate([], 'average', 'age') // undefined
+ * ```
  */
 export function computeAggregate(
 	rows: readonly unknown[],
 	operation: AggregateOperation,
 	column: FieldPath,
 ): number | undefined {
+	if (!isAggregateOperation(operation)) {
+		throw new DatabaseError(
+			'VALIDATION',
+			`Aggregate operation ${preview(operation)} is not one of ${AGGREGATE_OPERATIONS.join(', ')}`,
+			{
+				operation,
+			},
+		)
+	}
 	if (operation === 'count') return rows.length
 	const numbers = Iterator.from(rows)
 		.flatMap((row) => {
@@ -1233,6 +1292,12 @@ export function computeAggregate(
  * @param row - The row to read
  * @param column - The primary-key column name
  * @returns The key (a string or finite number), or `undefined`
+ *
+ * @example
+ * ```ts
+ * extractKey({ id: 'u1', name: 'Ada' }, 'id') // 'u1'
+ * extractKey({ id: { nested: true } }, 'id') // undefined
+ * ```
  */
 export function extractKey(row: Row, column: string): Key | undefined {
 	const value = row[column]
@@ -1246,6 +1311,11 @@ export function extractKey(row: Row, column: string): Key | undefined {
  * @param primary - The primary column
  * @param key - The authoritative storage key
  * @returns A fresh row with the bound primary
+ *
+ * @example
+ * ```ts
+ * bindRowKey({ slug: 'draft', title: 'Notes' }, 'slug', 'notes') // { slug: 'notes', title: 'Notes' }
+ * ```
  */
 export function bindRowKey(row: Row, primary: string, key: Key): Row {
 	return { ...row, [primary]: key }
@@ -1313,6 +1383,12 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
  * @param name - The column name
  * @param shape - The column contract shape
  * @returns The portable storage and independent absence/null acceptance
+ *
+ * @example
+ * ```ts
+ * shapeToColumnSchema('age', optionalShape(integerShape()))
+ * // { name: 'age', storage: 'integer', optional: true, nullable: false }
+ * ```
  */
 export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnSchema {
 	const isColumn = compileGuard(objectShape({ value: shape }))
@@ -1456,306 +1532,6 @@ export function checkAbort(signal: AbortSignal | undefined): void {
 // === Migrations
 
 /**
- * Diffs a deployed and a declared table set structurally into a {@link Migration}
- * plan.
- *
- * @remarks
- * Tables present in `declared` but not `deployed` become `table.add` steps
- * (carrying the full declared {@link TableSchema}); tables present in
- * `deployed` but not `declared` become `table.remove` steps. Tables present in
- * both are diffed column-by-column (by name) and index-group-by-index-group
- * (by deep equality of the column-name array), each producing `column.add` /
- * `column.remove` / `index.add` / `index.remove` steps. Step order is
- * deterministic: every `table.remove`, then every `table.add`, then each
- * shared table's column/index changes in `declared` order. `from` / `to` are
- * plan labels only; versioning drivers persist and reconcile them through
- * {@link DriverMetadata}.
- *
- * A column present in both schemas under the same name but with a different
- * `storage`, `optional`, or `nullable` value throws a `MIGRATION`
- * {@link DatabaseError} naming the table, the column, and the from→to
- * difference — a name-only diff would otherwise silently produce no step for
- * the drift, and versioned reconciliation would stamp over it. There is no
- * automatic in-place type-change step: the manual path is to add a new column,
- * copy/convert the data at the application layer, then remove the old column —
- * two separate plans, never a single implicit "alter" step.
- *
- * @param deployed - The already-applied table schemas
- * @param declared - The table schemas the caller wants applied
- * @param from - The plan's source version label (defaults to `0`)
- * @param to - The plan's target version label (defaults to `1`)
- * @returns The migration plan moving `deployed` toward `declared`
- * @throws A `MIGRATION` {@link DatabaseError} when a shared table's primary or
- * a shared column's `storage`, `optional`, or `nullable` differs, or when a
- * required non-null column would be added to an existing table without a
- * portable backfill
- *
- * @example
- * ```ts
- * const plan = planMigration(
- * 	[{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }], indexes: [] }],
- * 	[{ name: 'users', primary: 'id', columns: [{ name: 'id', storage: 'text', optional: false, nullable: false }, { name: 'age', storage: 'integer', optional: true, nullable: false }], indexes: [] }],
- * )
- * // plan.steps === [{ operation: 'column.add', table: 'users', column: { name: 'age', ... } }]
- * ```
- */
-export function planMigration(
-	deployed: readonly TableSchema[],
-	declared: readonly TableSchema[],
-	from = 0,
-	to = 1,
-): Migration {
-	if (!isFiniteNumber(from) || !isFiniteNumber(to)) {
-		throw new DatabaseError('MIGRATION', 'Migration versions must be finite', { from, to })
-	}
-	const schemas = attempt(() => ({
-		before: normalizeDriverSchema(deployed),
-		target: normalizeDriverSchema(declared),
-	}))
-	if (!schemas.success) {
-		throw new DatabaseError('MIGRATION', 'Migration schema is invalid', { cause: schemas.error })
-	}
-	const { before: beforeSchema, target: targetSchema } = schemas.value
-	const deployedByName = new Map(beforeSchema.map((table) => [table.name, table]))
-	const declaredByName = new Map(targetSchema.map((table) => [table.name, table]))
-
-	const steps: MigrationStep[] = []
-
-	for (const table of beforeSchema) {
-		if (!declaredByName.has(table.name))
-			steps.push({ operation: 'table.remove', table: table.name })
-	}
-	for (const table of targetSchema) {
-		if (!deployedByName.has(table.name)) steps.push({ operation: 'table.add', table })
-	}
-
-	for (const table of targetSchema) {
-		const before = deployedByName.get(table.name)
-		if (before === undefined) continue
-		if (before.primary !== table.primary) {
-			throw new DatabaseError(
-				'MIGRATION',
-				`planMigration: primary column on table '${table.name}' changed from '${before.primary}' to '${table.primary}'`,
-				{ table: table.name, from: before.primary, to: table.primary },
-			)
-		}
-
-		const beforeColumnMap = new Map(before.columns.map((column) => [column.name, column]))
-		const afterColumnMap = new Map(table.columns.map((column) => [column.name, column]))
-
-		for (const index of before.indexes) {
-			if (!table.indexes.some((candidate) => equalsValue(candidate, index))) {
-				steps.push({ operation: 'index.remove', table: table.name, index })
-			}
-		}
-		for (const column of before.columns) {
-			if (!afterColumnMap.has(column.name)) {
-				steps.push({ operation: 'column.remove', table: table.name, column: column.name })
-			}
-		}
-		for (const column of table.columns) {
-			const previous = beforeColumnMap.get(column.name)
-			if (previous === undefined) {
-				steps.push({ operation: 'column.add', table: table.name, column })
-				continue
-			}
-			if (
-				previous.storage !== column.storage ||
-				previous.optional !== column.optional ||
-				previous.nullable !== column.nullable
-			) {
-				throw new DatabaseError(
-					'MIGRATION',
-					`planMigration: column '${column.name}' on table '${table.name}' changed shape ` +
-						`(storage ${previous.storage}→${column.storage}, optional ${previous.optional}→${column.optional}, nullable ${previous.nullable}→${column.nullable}) — ` +
-						`in-place storage/optionality/nullability changes are not auto-migrated; add a new column, copy/convert ` +
-						`the data, then remove the old column`,
-					{
-						table: table.name,
-						column: column.name,
-						from: {
-							storage: previous.storage,
-							optional: previous.optional,
-							nullable: previous.nullable,
-						},
-						to: {
-							storage: column.storage,
-							optional: column.optional,
-							nullable: column.nullable,
-						},
-					},
-				)
-			}
-		}
-
-		for (const index of table.indexes) {
-			if (!before.indexes.some((candidate) => equalsValue(candidate, index))) {
-				steps.push({ operation: 'index.add', table: table.name, index })
-			}
-		}
-	}
-
-	const projected = projectMigrationSchema(beforeSchema, steps)
-	if (!equalsValue(projected, targetSchema)) {
-		throw new DatabaseError('MIGRATION', 'Migration plan does not project to the declared schema', {
-			projected,
-			declared: targetSchema,
-		})
-	}
-	return cloneMigrationInput({ plan: { from, to, steps } }).plan
-}
-
-/**
- * Projects migration steps sequentially over a canonical validated owned schema.
- *
- * @remarks
- * Adding a required non-null column to an existing table rejects with
- * `MIGRATION`; optional-only and nullable-only additions remain portable.
- *
- * @param schema - The initial deployed schema
- * @param steps - The ordered migration steps
- * @returns A fresh owned final schema
- */
-export function projectMigrationSchema(
-	schema: readonly TableSchema[],
-	steps: readonly MigrationStep[],
-): readonly TableSchema[] {
-	const captured = attempt(() => ({
-		owned: normalizeDriverSchema(schema),
-		steps: cloneMigrationInput({ plan: { from: 0, to: 1, steps } }).plan.steps,
-	}))
-	if (!captured.success) {
-		throw new DatabaseError('MIGRATION', 'Migration input is invalid', { cause: captured.error })
-	}
-	const { owned, steps: projectedSteps } = captured.value
-	const tables = new Map(owned.map((table) => [table.name, table]))
-	for (const step of projectedSteps) {
-		if (step.operation === 'table.add') {
-			if (tables.has(step.table.name)) {
-				throw new DatabaseError('MIGRATION', `migrate: table '${step.table.name}' already exists`, {
-					table: step.table.name,
-				})
-			}
-			tables.set(step.table.name, step.table)
-			continue
-		}
-		const table = tables.get(step.table)
-		if (table === undefined) {
-			throw new DatabaseError('MIGRATION', `migrate: table '${step.table}' does not exist`, {
-				table: step.table,
-			})
-		}
-		if (step.operation === 'table.remove') {
-			tables.delete(step.table)
-			continue
-		}
-		if (step.operation === 'column.add') {
-			if (table.columns.some((column) => column.name === step.column.name)) {
-				throw new DatabaseError(
-					'MIGRATION',
-					`migrate: column '${step.column.name}' already exists`,
-					{ table: step.table, column: step.column.name },
-				)
-			}
-			if (!step.column.optional && !step.column.nullable) {
-				throw new DatabaseError(
-					'MIGRATION',
-					`migrate: required non-null column '${step.column.name}' cannot be added automatically to existing table '${step.table}'`,
-					{ table: step.table, column: step.column.name },
-				)
-			}
-			tables.set(step.table, { ...table, columns: [...table.columns, step.column] })
-			continue
-		}
-		if (step.operation === 'column.remove') {
-			if (!table.columns.some((column) => column.name === step.column)) {
-				throw new DatabaseError('MIGRATION', `migrate: column '${step.column}' does not exist`, {
-					table: step.table,
-					column: step.column,
-				})
-			}
-			if (table.primary === step.column) {
-				throw new DatabaseError('MIGRATION', 'migrate: cannot remove the primary column', {
-					table: step.table,
-					column: step.column,
-				})
-			}
-			if (table.indexes.some((index) => index.includes(step.column))) {
-				throw new DatabaseError('MIGRATION', 'migrate: cannot remove an indexed column', {
-					table: step.table,
-					column: step.column,
-				})
-			}
-			tables.set(step.table, {
-				...table,
-				columns: table.columns.filter((column) => column.name !== step.column),
-			})
-			continue
-		}
-		if (step.operation === 'index.add') {
-			if (
-				step.index.length === 0 ||
-				step.index.some((name) => !table.columns.some((column) => column.name === name))
-			) {
-				throw new DatabaseError('MIGRATION', 'migrate: index references a missing column', {
-					table: step.table,
-					index: step.index,
-				})
-			}
-			if (table.indexes.some((index) => equalsValue(index, step.index))) {
-				throw new DatabaseError('MIGRATION', 'migrate: index already exists', {
-					table: step.table,
-					index: step.index,
-				})
-			}
-			tables.set(step.table, { ...table, indexes: [...table.indexes, step.index] })
-			continue
-		}
-		if (!table.indexes.some((index) => equalsValue(index, step.index))) {
-			throw new DatabaseError('MIGRATION', 'migrate: index does not exist', {
-				table: step.table,
-				index: step.index,
-			})
-		}
-		tables.set(step.table, {
-			...table,
-			indexes: table.indexes.filter((index) => !equalsValue(index, step.index)),
-		})
-	}
-	try {
-		return normalizeDriverSchema([...tables.values()])
-	} catch (error) {
-		throw new DatabaseError('MIGRATION', 'Projected migration schema is invalid', { cause: error })
-	}
-}
-
-/**
- * Canonicalizes an unknown driver schema into a distinct deeply frozen snapshot.
- *
- * @remarks
- * Table and column lists are sorted by name. The index list is sorted by the
- * complete serialized tuple while column order inside each compound index is
- * preserved because it carries index semantics. Validation and ownership flow
- * through {@link cloneDriverSchema} before and after projection.
- *
- * @param value - Unknown driver schema
- * @returns A validated, owned canonical schema
- */
-export function normalizeDriverSchema(value: unknown): readonly TableSchema[] {
-	const owned = cloneDriverSchema(value)
-	const tables = owned.map((table) => ({
-		name: table.name,
-		primary: table.primary,
-		columns: [...table.columns].sort((left, right) => compareValues(left.name, right.name)),
-		indexes: [...table.indexes].sort((left, right) =>
-			compareValues(JSON.stringify(left), JSON.stringify(right)),
-		),
-	}))
-	tables.sort((left, right) => compareValues(left.name, right.name))
-	return cloneDriverSchema(tables)
-}
-
-/**
  * Applies one table's {@link MigrationStep}s to its rows — a pure row transform.
  *
  * @remarks
@@ -1842,7 +1618,7 @@ export function tallyCalls(calls: readonly StorageCall[], member: StorageMember)
  */
 export async function* streamRecordedRows(
 	source: AsyncIterable<Row>,
-	rows: StreamPage,
+	rows: StreamPageInterface,
 ): AsyncIterable<Row> {
 	for await (const row of source) {
 		rows.next()
@@ -2156,6 +1932,28 @@ export async function* scanPlans(
 }
 
 /**
+ * Builds the finding a conformance phase yields when it throws, naming the phase.
+ *
+ * @remarks
+ * The message renders through `errorToMessage`, so a thrown value that no message can render
+ * reads `'unknown failure'` rather than escaping the battery. `context.error` keeps the exact
+ * thrown value.
+ *
+ * @param check - The phase the failure stopped
+ * @param error - The thrown value
+ * @returns The finding
+ *
+ * @example
+ * ```ts
+ * buildFailureFinding('open-close', new Error('open refused'))
+ * // { check: 'open-close', message: 'open refused', context: { error: Error('open refused') } }
+ * ```
+ */
+export function buildFailureFinding(check: string, error: unknown): ConformanceFinding {
+	return { check, message: errorToMessage(error), context: { error } }
+}
+
+/**
  * Walks the driver-conformance battery against a fresh {@link DriverInterface}
  * per phase, yielding one {@link ConformanceFinding} per violated invariant —
  * the shared invariant suite every backend (in-memory, SQLite, IndexedDB)
@@ -2226,11 +2024,7 @@ export async function* scanDriver(
 		await driver.open(CONFORMANCE_SCHEMA)
 		await driver.close()
 	} catch (error) {
-		yield {
-			check: 'open-close',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
-		}
+		yield buildFailureFinding('open-close', error)
 	}
 
 	// b. read of a missing key -> undefined.
@@ -2247,11 +2041,7 @@ export async function* scanDriver(
 			}
 		}
 	} catch (error) {
-		yield {
-			check: 'read-missing',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
-		}
+		yield buildFailureFinding('read-missing', error)
 	}
 
 	// c. write/read round-trip, copy-in/copy-out isolation (including nested
@@ -2302,11 +2092,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'write-read',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('write-read', error)
 		}
 	}
 
@@ -2339,11 +2125,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'insert-atomic',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('insert-atomic', error)
 		}
 	}
 
@@ -2373,11 +2155,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'delete',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('delete', error)
 		}
 	}
 
@@ -2433,11 +2211,7 @@ export async function* scanDriver(
 			}
 		}
 	} catch (error) {
-		yield {
-			check: 'mutation-abort',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
-		}
+		yield buildFailureFinding('mutation-abort', error)
 	}
 
 	// e. keys and scan in ascending key order.
@@ -2474,11 +2248,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'order',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('order', error)
 		}
 	}
 
@@ -2509,11 +2279,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'clear',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('clear', error)
 		}
 	}
 
@@ -2563,11 +2329,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'journal-rollback',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('journal-rollback', error)
 		}
 	}
 
@@ -2645,11 +2407,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'batch',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('batch', error)
 		}
 	}
 
@@ -2669,11 +2427,7 @@ export async function* scanDriver(
 			}
 		}
 	} catch (error) {
-		yield {
-			check: 'non-id-primary',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
-		}
+		yield buildFailureFinding('non-id-primary', error)
 	}
 
 	// i. nested-object row round-trip (structural, through equalsValue).
@@ -2697,11 +2451,7 @@ export async function* scanDriver(
 			}
 		}
 	} catch (error) {
-		yield {
-			check: 'nested-roundtrip',
-			message: isError(error) ? error.message : String(error),
-			context: { error },
-		}
+		yield buildFailureFinding('nested-roundtrip', error)
 	}
 
 	// j. migrate (presence-gated): column.remove strips rows; unknown tables fail.
@@ -2718,8 +2468,13 @@ export async function* scanDriver(
 			}
 			await driver.open([deployedUsers, CONFORMANCE_POSTS_SCHEMA])
 			await driver.write('users', 'u1', { id: 'u1', name: 'Ada', age: 30, legacy: true })
-			const removePlan = planMigration([deployedUsers], [CONFORMANCE_USERS_SCHEMA])
-			await driver.migrate({ plan: removePlan })
+			await driver.migrate({
+				plan: {
+					from: 0,
+					to: 1,
+					steps: [{ operation: 'column.remove', table: 'users', column: 'legacy' }],
+				},
+			})
 			const migrated = await driver.read('users', 'u1')
 			if (migrated === undefined || 'legacy' in migrated) {
 				await driver.close()
@@ -2758,11 +2513,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'migrate',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('migrate', error)
 		}
 	}
 
@@ -2804,11 +2555,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'stream',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('stream', error)
 		}
 	}
 
@@ -2851,11 +2598,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'transaction',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('transaction', error)
 		}
 	}
 
@@ -2887,11 +2630,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'metadata-stamp',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('metadata-stamp', error)
 		}
 	}
 
@@ -2960,11 +2699,7 @@ export async function* scanDriver(
 			}
 			for (const finding of scoped.findings) yield finding
 		} catch (error) {
-			yield {
-				check: 'plan',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('plan', error)
 		}
 	}
 
@@ -3016,11 +2751,7 @@ export async function* scanDriver(
 				}
 			}
 		} catch (error) {
-			yield {
-				check: 'transaction-batch',
-				message: isError(error) ? error.message : String(error),
-				context: { error },
-			}
+			yield buildFailureFinding('transaction-batch', error)
 		}
 	}
 }

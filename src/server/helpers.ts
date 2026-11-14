@@ -491,12 +491,11 @@ export function encodeValue(value: unknown, column: ColumnSchema): SQLiteValue {
 		case 'boolean':
 			if (isBoolean(value)) return value ? 1 : 0
 			break
-		case 'json':
-			try {
-				return JSON.stringify(cloneJSONValue(value))
-			} catch {
-				break
-			}
+		case 'json': {
+			const encoded = attempt(() => JSON.stringify(cloneJSONValue(value)))
+			if (encoded.success) return encoded.value
+			break
+		}
 		case 'integer':
 			if (isBigInt(value) || (isFiniteNumber(value) && isInteger(value))) return value
 			break

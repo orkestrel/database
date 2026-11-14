@@ -93,6 +93,27 @@ describe('Table — identity', () => {
 })
 
 describe('Table — keyed CRUD (single)', () => {
+	it('rejects ABORTED when the signal fires while the write waits on the lazy open', async () => {
+		const gate = Promise.withResolvers<void>()
+		const memory = createMemoryDriver()
+		const db = createDatabase({
+			driver: createMemoryAdapter(memory, {
+				open: async (tables) => {
+					await gate.promise
+					await memory.open(tables)
+				},
+			}),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users')
+		const controller = new AbortController()
+		const write = users.set({ id: 'u1', name: 'Ada' }, { signal: controller.signal })
+		controller.abort('stop waiting')
+		await expect(write).rejects.toMatchObject({ code: 'ABORTED' })
+		gate.resolve()
+		expect(await users.get('u1')).toBeUndefined()
+	})
+
 	it('round-trips a typed row through set / get / has / keys / remove', async () => {
 		const users = userTable()
 		const key = await users.set(createUserRow())
@@ -1238,6 +1259,59 @@ describe('Table — emitter (push observation surface)', () => {
 		])
 		expect(await users.keys()).toEqual(['u1', 'u2'])
 		expect(await logs.get('l1')).toEqual({ id: 'l1', message: 'opened' })
+	})
+
+	it('registers the hooks of the `on` option on a root and a transaction handle', async () => {
+		const root = createRecorder<[key: Key]>()
+		const scoped = createRecorder<[key: Key]>()
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users', { on: { write: root.handler, remove: root.handler } })
+		await users.set({ id: 'u1', name: 'Ada' })
+		await users.remove('u1')
+		await db.transaction(async (transaction) => {
+			await transaction
+				.table('users', { on: { write: scoped.handler } })
+				.set({ id: 'u2', name: 'Bo' })
+		})
+		expect(root.calls).toEqual([['u1'], ['u1']])
+		expect(scoped.calls).toEqual([['u2']])
+		expect(db.table('users').emitter.count()).toBe(0)
+	})
+
+	it('runs no operation after the database closes, so a hook registered before close receives nothing after it', async () => {
+		const writes = createRecorder<[key: Key]>()
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+		})
+		const users = db.table('users', { on: { write: writes.handler } })
+		await users.set({ id: 'u1', name: 'Ada' })
+		await db.close()
+		await expect(users.set({ id: 'u2', name: 'Bo' })).rejects.toMatchObject({ code: 'CLOSED' })
+		await expect(users.clear()).rejects.toMatchObject({ code: 'CLOSED' })
+		expect(writes.calls).toEqual([['u1']])
+	})
+
+	it('routes a listener throw to the handle `error` option instead of the database handler', async () => {
+		const shared = createRecorder<readonly [error: unknown, event: string]>()
+		const own = createRecorder<readonly [error: unknown, event: string]>()
+		const failure = new Error('write listener failed')
+		const db = createDatabase({
+			driver: createMemoryDriver(),
+			tables: { users: { id: stringShape(), name: stringShape() } },
+			error: shared.handler,
+		})
+		const users = db.table('users', { error: own.handler })
+		users.emitter.on('write', () => {
+			throw failure
+		})
+		await users.set({ id: 'u1', name: 'Ada' })
+		expect(own.calls).toEqual([[failure, 'write']])
+		expect(shared.count).toBe(0)
+		expect(await users.get('u1')).toEqual({ id: 'u1', name: 'Ada' })
 	})
 
 	it('wires initial write listeners through the table handle from createDatabase', async () => {

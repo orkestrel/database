@@ -365,7 +365,7 @@ export interface Migration {
  * @remarks
  * `plan` carries the schema changes. `metadata`, when present, is the snapshot that
  * must settle in the same atomic unit as those changes so a failed migration
- * cannot expose a new schema under stale version metadata.
+ * cannot expose a changed schema under stale version metadata.
  */
 export interface MigrationInput {
 	readonly plan: Migration
@@ -660,6 +660,20 @@ export interface StorageResult<R> {
 	readonly calls: readonly StorageCall[]
 }
 
+/**
+ * Represents the matching-row position of one streaming page: `next` advances past one
+ * matching row and `count` reads the rows past the page's offset.
+ */
+export interface StreamPageInterface {
+	readonly count: number
+	/**
+	 * Advances past one matching row.
+	 *
+	 * @returns True if the row lies past the page's offset; false otherwise
+	 */
+	next(): boolean
+}
+
 // === Database
 
 /**
@@ -826,9 +840,14 @@ export interface DatabaseStorageInterface<T extends TableMap = TableMap> {
 	 *
 	 * @remarks
 	 * On a transaction's storage the handle throws `CONFLICT` for work started
-	 * after the scope settles.
+	 * after the scope settles. `options.on` registers initial listeners on the
+	 * handle's emitter, and `options.error` routes their throws instead of the
+	 * database's `error` option.
 	 */
-	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>>
+	table<K extends keyof T & string>(
+		name: K,
+		options?: DatabaseTableOptions,
+	): TableInterface<RowOf<T[K]>>
 }
 
 /**
@@ -869,6 +888,10 @@ export interface DatabaseInterface<
 	open(): Promise<void>
 	/**
 	 * Closes the database and releases its driver.
+	 *
+	 * @remarks
+	 * Destroys the database emitter last, after the `close` event and also when
+	 * the driver refuses to close, so a listener receives nothing after `close`.
 	 */
 	close(): Promise<void>
 	/**
@@ -916,6 +939,20 @@ export interface DatabaseInterface<
 }
 
 // === Table
+
+/**
+ * Options for one table handle that `table` returns.
+ *
+ * @remarks
+ * `on` wires initial {@link TableEventMap} listeners on the handle's emitter; `error` is that
+ * emitter's listener-error handler, used instead of the database's `error` option, which serves
+ * when it is omitted. A handle has no lifecycle verb: its emitter ends with the handle, and after
+ * the database closes no operation runs, so no handle emits.
+ */
+export interface DatabaseTableOptions {
+	readonly on?: EmitterHooks<TableEventMap>
+	readonly error?: EmitterErrorHandler
+}
 
 /**
  * Exposes typed keyed CRUD plus fluent query and cursor access.

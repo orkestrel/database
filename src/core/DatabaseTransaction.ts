@@ -8,6 +8,7 @@ import type {
 	TableInterface,
 	PrimaryMap,
 	TableMap,
+	DatabaseTableOptions,
 	StorageInterface,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
@@ -54,12 +55,20 @@ export class DatabaseTransaction<
 		this.#scope = scope
 	}
 
-	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
+	table<K extends keyof T & string>(
+		name: K,
+		options?: DatabaseTableOptions,
+	): TableInterface<RowOf<T[K]>> {
 		this.#scope.check()
-		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name))
+		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name), options)
 	}
 
-	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
+	#build<R>(
+		name: string,
+		key: string,
+		contract: ContractInterface<R>,
+		options: DatabaseTableOptions | undefined,
+	): TableInterface<R> {
 		return new Table(
 			() => Promise.resolve(),
 			this.#driver,
@@ -68,6 +77,7 @@ export class DatabaseTransaction<
 			contract,
 			this.#columns(name),
 			this.#generate,
+			options,
 			this.#error,
 			undefined,
 			this.#scope,

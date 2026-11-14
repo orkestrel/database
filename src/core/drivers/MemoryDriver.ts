@@ -8,7 +8,7 @@ import type {
 	Row,
 	TableSchema,
 } from '../types.js'
-import { cloneDriverMetadata, cloneMigrationInput } from '../cloners.js'
+import { cloneDriverMetadata, cloneMigrationInput, normalizeDriverSchema } from '../cloners.js'
 import { isArray } from '@orkestrel/contract'
 import { DatabaseError } from '../errors.js'
 import {
@@ -20,9 +20,8 @@ import {
 	equalsValue,
 	buildBatch,
 	migrateRows,
-	normalizeDriverSchema,
-	projectMigrationSchema,
 } from '../helpers.js'
+import { projectMigrationSchema } from '../compilers.js'
 
 /**
  * Implements the reference {@link DriverInterface} — nested maps, no I/O.

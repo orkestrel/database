@@ -6,6 +6,7 @@ import { DatabaseContext } from '../../../src/core/DatabaseContext.js'
 import { TransactionScope } from '../../../src/core/TransactionScope.js'
 import {
 	contextFor,
+	createMemoryAdapter,
 	succeeding,
 	failing,
 	DatabaseSwitch,
@@ -74,6 +75,56 @@ describe('lifecycle', () => {
 		expect(context.status).toBe('closed')
 		await context.close()
 		expect(closed.count).toBe(1)
+	})
+
+	it('destroys its emitter on close, so a listener registered before close receives nothing after it', async () => {
+		const closed = createRecorder<readonly []>()
+		const committed = createRecorder<readonly []>()
+		const context = new DatabaseContext({ driver: createMemoryDriver(), tables: {} })
+		context.emitter.on('close', closed.handler)
+		context.emitter.on('commit', committed.handler)
+		await context.open()
+		await context.close()
+		expect(closed.count).toBe(1)
+		context.emitter.emit('commit')
+		expect(committed.count).toBe(0)
+		expect(context.emitter.destroyed).toBe(true)
+		expect(context.emitter.count()).toBe(0)
+	})
+
+	it('closes while a pending open later rejects, leaving that rejection to its connect', async () => {
+		const gate = Promise.withResolvers<void>()
+		const failure = new Error('open refused')
+		const context = new DatabaseContext({
+			driver: createMemoryAdapter(createMemoryDriver(), {
+				open: async () => {
+					await gate.promise
+					throw failure
+				},
+			}),
+			tables: {},
+		})
+		const connect = context.connect()
+		const close = context.close()
+		gate.resolve()
+		expect(await captureFailure(() => connect)).toBe(failure)
+		await expect(close).resolves.toBeUndefined()
+		expect(context.status).toBe('closed')
+	})
+
+	it('destroys its emitter when the driver refuses to close', async () => {
+		const failure = new Error('close refused')
+		const committed = createRecorder<readonly []>()
+		const context = new DatabaseContext({
+			driver: createMemoryAdapter(createMemoryDriver(), { close: () => Promise.reject(failure) }),
+			tables: {},
+		})
+		context.emitter.on('commit', committed.handler)
+		await context.open()
+		expect(await captureFailure(() => context.close())).toBe(failure)
+		context.emitter.emit('commit')
+		expect(committed.count).toBe(0)
+		expect(context.emitter.destroyed).toBe(true)
 	})
 
 	it('reuses one readiness promise across concurrent connects', async () => {

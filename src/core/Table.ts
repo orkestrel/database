@@ -21,6 +21,7 @@ import type {
 	Row,
 	TableEventMap,
 	TableInterface,
+	DatabaseTableOptions,
 	StorageInterface,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
@@ -86,6 +87,8 @@ import { ScopedIterator } from './ScopedIterator.js'
  *   directly, strictly after the driver write / delete / clear completes; the emitter
  *   isolates a listener throw and routes it to its `error` handler (the `error` option),
  *   so a buggy observer can never corrupt a write or perturb a transaction.
+ * - **No lifecycle verb.** The emitter ends with the handle. After the database closes, every
+ *   operation refuses with `CLOSED` before it reaches the driver, so no handle emits.
  */
 export class Table<T = Row> implements TableInterface<T> {
 	readonly #ready: () => Promise<void>
@@ -110,8 +113,9 @@ export class Table<T = Row> implements TableInterface<T> {
 		key: string,
 		contract: ContractInterface<T>,
 		columns: ReadonlyMap<string, ColumnSchema>,
-		generate?: KeyFunction,
-		error?: EmitterErrorHandler,
+		generate: KeyFunction | undefined,
+		options: DatabaseTableOptions | undefined,
+		error: EmitterErrorHandler | undefined,
 		context?: DatabaseContext,
 		scope?: TransactionScope,
 	) {
@@ -125,8 +129,10 @@ export class Table<T = Row> implements TableInterface<T> {
 		this.#generate = generate
 		this.#context = context
 		this.#scope = scope
+		const handler = options?.error ?? error
 		this.#emitter = new Emitter<TableEventMap>({
-			...(error !== undefined ? { error } : {}),
+			...(options?.on === undefined ? {} : { on: options.on }),
+			...(handler === undefined ? {} : { error: handler }),
 		})
 	}
 
@@ -567,24 +573,14 @@ export class Table<T = Row> implements TableInterface<T> {
 				signal.addEventListener(
 					'abort',
 					() => {
-						ready.catch(() => {})
-						try {
-							checkAbort(signal)
-						} catch (error) {
-							reject(error)
-						}
+						const aborted = attempt(() => checkAbort(signal))
+						if (!aborted.success) reject(aborted.error)
 					},
 					{ once: true, signal: cleanup.signal },
 				)
 				ready.then(resolve, reject)
-				if (signal.aborted) {
-					ready.catch(() => {})
-					try {
-						checkAbort(signal)
-					} catch (error) {
-						reject(error)
-					}
-				}
+				const aborted = attempt(() => checkAbort(signal))
+				if (!aborted.success) reject(aborted.error)
 			})
 		} finally {
 			cleanup.abort()

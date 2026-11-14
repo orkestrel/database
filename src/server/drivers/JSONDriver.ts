@@ -562,11 +562,8 @@ export class JSONDriver implements DriverInterface {
 			signal.addEventListener(
 				'abort',
 				() => {
-					try {
-						checkAbort(signal)
-					} catch (error) {
-						reject(error)
-					}
+					const aborted = attempt(() => checkAbort(signal))
+					if (!aborted.success) reject(aborted.error)
 				},
 				{ once: true, signal: cleanup.signal },
 			)

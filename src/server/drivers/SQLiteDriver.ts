@@ -15,9 +15,9 @@ import type {
 import type { FieldPath } from '@orkestrel/contract'
 import {
 	attempt,
+	errorToMessage,
 	isArray,
 	isBigInt,
-	isError,
 	isInteger,
 	isNumber,
 	isString,
@@ -237,9 +237,7 @@ export class SQLiteDriver implements SQLiteDriverInterface {
 				this.#identities = identities
 				this.#connection = connection
 			} catch (error) {
-				try {
-					database.close()
-				} catch {}
+				attempt(() => database.close())
 				this.#schema = new Map()
 				this.#identities = new Map()
 				throw error
@@ -1154,7 +1152,7 @@ export class SQLiteDriver implements SQLiteDriverInterface {
 				}
 				throw new DatabaseError('DRIVER', error.message, { cause: error, code: error.code })
 			}
-			throw new DatabaseError('DRIVER', isError(error) ? error.message : String(error), {
+			throw new DatabaseError('DRIVER', errorToMessage(error), {
 				cause: error,
 			})
 		}

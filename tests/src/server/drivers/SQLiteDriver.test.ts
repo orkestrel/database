@@ -756,6 +756,23 @@ describe('SQLiteDriver — open', () => {
 })
 
 describe('SQLiteDriver — keyed CRUD', () => {
+	it('maps a row read failure that no message can render to DRIVER with its exact cause', async () => {
+		const reason: object = Object.create(null)
+		const error = await driver.value
+			.write('users', 'u1', {
+				id: 'u1',
+				get name(): string {
+					throw reason
+				},
+				age: 36,
+				active: true,
+			})
+			.catch((caught: unknown) => caught)
+		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('DRIVER')
+		expect(isDatabaseError(error) ? error.context?.cause : undefined).toBe(reason)
+		expect(await driver.value.read('users', 'u1')).toBeUndefined()
+	})
+
 	it('binds the supplied storage key over a mismatched custom primary value', async () => {
 		await driver.value.write('posts', 'written', { slug: 'caller', title: 'Write' })
 		await driver.value.insert('posts', 'inserted', { slug: 'caller', title: 'Insert' })

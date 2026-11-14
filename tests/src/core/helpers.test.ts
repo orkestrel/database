@@ -1,11 +1,10 @@
-import type { ColumnSchema, MigrationStep, TableSchema } from '@src/core'
+import type { TableSchema } from '@src/core'
 import {
 	CONDITION_ROW,
 	QUERY_ROW,
 	PAGE_ROWS,
 	AGGREGATE_ROWS,
 	VALID_SCHEMA,
-	MIGRATION_USERS,
 	FILTER_ROWS,
 } from '../../setup.js'
 import {
@@ -29,6 +28,7 @@ import {
 	readPlannedRows,
 	streamPlannedRows,
 	auditDriver,
+	buildFailureFinding,
 	bindRowKey,
 	checkAbort,
 	compareValues,
@@ -47,9 +47,6 @@ import {
 	matchesQuery,
 	MAX_PATTERN_LENGTH,
 	migrateRows,
-	normalizeDriverSchema,
-	planMigration,
-	projectMigrationSchema,
 	requireColumns,
 	resolvePrimary,
 	findColumn,
@@ -92,18 +89,19 @@ import {
 	stringShape,
 	unionShape,
 } from '@orkestrel/contract'
-import { captureError, collect, createRecorder } from '@orkestrel/test'
+import { captureError, collect, createRecorder, invokeUnchecked } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
-	schema,
 	createReferenceLeakingDriver,
 	createDescendingKeyDriver,
 	createMismatchedMetadataDriver,
 	createPartialBatchDriver,
 	createDoublyBrokenDriver,
 	createCrashingDriver,
+	createMemoryAdapter,
 	createPlannedDriver,
+	createRefusingDriver,
 	seedConformanceRows,
 	streamThenFail,
 	tableSchemas,
@@ -538,6 +536,14 @@ describe('computeAggregate', () => {
 		expect(computeAggregate(rows, 'maximum', 'amount')).toBe(20)
 	})
 
+	it('refuses an operation outside AGGREGATE_OPERATIONS rather than answering a maximum', () => {
+		const error = captureError(() =>
+			invokeUnchecked(undefined, computeAggregate, [rows, 'median', 'amount']),
+		)
+		expect(error).toMatchObject({ code: 'VALIDATION', context: { operation: 'median' } })
+		expect(isDatabaseError(error)).toBe(true)
+	})
+
 	it('computes extrema for rows beyond the engine argument limit', () => {
 		const pressureRows = Array.from({ length: 1_000_000 }, (_, index) => ({
 			value: index - 500_000,
@@ -742,332 +748,6 @@ describe('checkAbort', () => {
 	})
 })
 
-describe('normalizeDriverSchema', () => {
-	it('owns, sorts, and deeply freezes tables, columns, and index lists without mutating input', () => {
-		const users = schema({
-			name: 'users',
-			columns: [
-				{ name: 'name', storage: 'text', optional: false, nullable: false },
-				{ name: 'age', storage: 'integer', optional: true, nullable: false },
-			],
-			indexes: [['name'], ['age', 'name']],
-		})
-		const posts = schema({ name: 'posts' })
-		const input = [users, posts]
-		const normalized = normalizeDriverSchema(input)
-
-		expect(input).toEqual([users, posts])
-		expect(normalized.map((table) => table.name)).toEqual(['posts', 'users'])
-		expect(normalized[1]?.columns.map((column) => column.name)).toEqual(['age', 'id', 'name'])
-		expect(normalized[1]?.indexes).toEqual([['age', 'name'], ['name']])
-		expect(normalized).not.toBe(input)
-		expect(normalized[1]).not.toBe(users)
-		expect(normalized[1]?.columns).not.toBe(users.columns)
-		expect(normalized[1]?.indexes).not.toBe(users.indexes)
-		expect(Object.isFrozen(normalized)).toBe(true)
-		expect(Object.isFrozen(normalized[1])).toBe(true)
-		expect(Object.isFrozen(normalized[1]?.columns)).toBe(true)
-		expect(Object.isFrozen(normalized[1]?.indexes[0])).toBe(true)
-	})
-
-	it('rejects malformed input through the driver-schema validation boundary', () => {
-		expect(captureError(() => normalizeDriverSchema([{ name: 'users' }]))).toMatchObject({
-			code: 'VALIDATION',
-			context: { path: 'schema' },
-		})
-	})
-})
-
-describe('planMigration', () => {
-	it('adds a declared table missing from deployed', () => {
-		const users = schema({ name: 'users' })
-		const plan = planMigration([], [users])
-		expect(plan.steps).toEqual([{ operation: 'table.add', table: users }])
-	})
-
-	it('removes a deployed table missing from declared', () => {
-		const users = schema({ name: 'users' })
-		const plan = planMigration([users], [])
-		expect(plan.steps).toEqual([{ operation: 'table.remove', table: 'users' }])
-	})
-
-	it('orders steps table.remove, then table.add, before per-table changes', () => {
-		const gone = schema({ name: 'gone' })
-		const fresh = schema({ name: 'fresh' })
-		const shared = schema({
-			name: 'shared',
-			columns: [{ name: 'age', storage: 'integer', optional: true, nullable: false }],
-		})
-		const sharedBefore = schema({ name: 'shared' })
-		const plan = planMigration([gone, sharedBefore], [fresh, shared])
-		expect(plan.steps).toEqual([
-			{ operation: 'table.remove', table: 'gone' },
-			{ operation: 'table.add', table: fresh },
-			{
-				operation: 'column.add',
-				table: 'shared',
-				column: { name: 'age', storage: 'integer', optional: true, nullable: false },
-			},
-		])
-	})
-
-	it('adds and removes columns on a shared table', () => {
-		const before = schema({
-			name: 'users',
-			columns: [{ name: 'legacy', storage: 'text', optional: false, nullable: false }],
-		})
-		const after = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: true }],
-		})
-		const plan = planMigration([before], [after])
-		expect(plan.steps).toEqual([
-			{ operation: 'column.remove', table: 'users', column: 'legacy' },
-			{
-				operation: 'column.add',
-				table: 'users',
-				column: { name: 'age', storage: 'integer', optional: false, nullable: true },
-			},
-		])
-	})
-
-	it('adds and removes index groups by deep equality of the column-name array', () => {
-		const columns: readonly ColumnSchema[] = [
-			{ name: 'name', storage: 'text', optional: false, nullable: false },
-			{ name: 'a', storage: 'text', optional: false, nullable: false },
-			{ name: 'b', storage: 'text', optional: false, nullable: false },
-		]
-		const before = schema({ name: 'users', columns, indexes: [['name'], ['a', 'b']] })
-		const after = schema({ name: 'users', columns, indexes: [['name'], ['b', 'a']] })
-		const plan = planMigration([before], [after])
-		expect(plan.steps).toEqual([
-			{ operation: 'index.remove', table: 'users', index: ['a', 'b'] },
-			{ operation: 'index.add', table: 'users', index: ['b', 'a'] },
-		])
-	})
-
-	it('produces no steps for identical schemas', () => {
-		const users = schema({
-			name: 'users',
-			columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
-			indexes: [['name']],
-		})
-		const plan = planMigration([users], [users])
-		expect(plan.steps).toEqual([])
-	})
-
-	it('produces no steps when only table, column, and index-list order differs', () => {
-		const users = schema({
-			name: 'users',
-			columns: [
-				{ name: 'name', storage: 'text', optional: false, nullable: false },
-				{ name: 'age', storage: 'integer', optional: true, nullable: false },
-			],
-			indexes: [['name'], ['age', 'name']],
-		})
-		const posts = schema({ name: 'posts' })
-		const reorderedUsers: TableSchema = {
-			...users,
-			columns: [...users.columns].reverse(),
-			indexes: [...users.indexes].reverse(),
-		}
-		expect(planMigration([users, posts], [posts, reorderedUsers]).steps).toEqual([])
-	})
-
-	it('preserves compound-index column order as migration-significant', () => {
-		const columns: readonly ColumnSchema[] = [
-			{ name: 'a', storage: 'text', optional: false, nullable: false },
-			{ name: 'b', storage: 'text', optional: false, nullable: false },
-		]
-		const before = schema({ name: 'users', columns, indexes: [['a', 'b']] })
-		const after = schema({ name: 'users', columns, indexes: [['b', 'a']] })
-		expect(planMigration([before], [after]).steps).toEqual([
-			{ operation: 'index.remove', table: 'users', index: ['a', 'b'] },
-			{ operation: 'index.add', table: 'users', index: ['b', 'a'] },
-		])
-	})
-
-	it('rejects adding a required non-null column to an existing table', () => {
-		const before = schema({ name: 'users' })
-		const after = schema({
-			name: 'users',
-			columns: [{ name: 'name', storage: 'text', optional: false, nullable: false }],
-		})
-		const error = captureError(() => planMigration([before], [after]))
-		expect(error).toMatchObject({
-			code: 'MIGRATION',
-			message:
-				"migrate: required non-null column 'name' cannot be added automatically to existing table 'users'",
-			context: { table: 'users', column: 'name' },
-		})
-	})
-
-	it('throws a MIGRATION DatabaseError when a shared column changes type', () => {
-		const before = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'text', optional: false, nullable: false }],
-		})
-		const after = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
-		})
-		const error = captureError(() => planMigration([before], [after]))
-		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
-		expect(isDatabaseError(error) ? String(error.message) : '').toContain('age')
-		expect(isDatabaseError(error) ? String(error.message) : '').toContain('users')
-	})
-
-	it('throws a MIGRATION DatabaseError when a shared column changes nullability', () => {
-		const before = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
-		})
-		const after = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: true }],
-		})
-		const error = captureError(() => planMigration([before], [after]))
-		expect(isDatabaseError(error) ? error.code : 'not-database').toBe('MIGRATION')
-		expect(isDatabaseError(error) ? String(error.message) : '').toContain('age')
-	})
-
-	it('throws MIGRATION when a shared table changes primary or a column changes optionality', () => {
-		const before = schema({
-			name: 'users',
-			columns: [{ name: 'age', storage: 'integer', optional: false, nullable: false }],
-		})
-		const primary = { ...before, primary: 'age' }
-		const optional = {
-			...before,
-			columns: before.columns.map((column) =>
-				column.name === 'age' ? { ...column, optional: true } : column,
-			),
-		}
-		expect(captureError(() => planMigration([before], [primary]))).toMatchObject({
-			code: 'MIGRATION',
-		})
-		expect(captureError(() => planMigration([before], [optional]))).toMatchObject({
-			code: 'MIGRATION',
-		})
-	})
-
-	it('removes dependent indexes before removing their columns', () => {
-		const before = schema({
-			name: 'users',
-			columns: [{ name: 'legacy', storage: 'text', optional: false, nullable: false }],
-			indexes: [['legacy']],
-		})
-		const after = schema({ name: 'users' })
-		expect(planMigration([before], [after]).steps).toEqual([
-			{ operation: 'index.remove', table: 'users', index: ['legacy'] },
-			{ operation: 'column.remove', table: 'users', column: 'legacy' },
-		])
-	})
-
-	it('defaults from to 0 and to to 1', () => {
-		const plan = planMigration([], [])
-		expect(plan.from).toBe(0)
-		expect(plan.to).toBe(1)
-	})
-
-	it('honors explicit from / to labels', () => {
-		const plan = planMigration([], [], 3, 4)
-		expect(plan.from).toBe(3)
-		expect(plan.to).toBe(4)
-	})
-})
-
-describe('projectMigrationSchema', () => {
-	const users = MIGRATION_USERS
-
-	it('projects ordered table, column, and index transitions to a fresh valid schema', () => {
-		const result = projectMigrationSchema(
-			[users],
-			[
-				{ operation: 'index.remove', table: 'users', index: ['name'] },
-				{ operation: 'column.remove', table: 'users', column: 'name' },
-				{
-					operation: 'column.add',
-					table: 'users',
-					column: { name: 'age', storage: 'integer', optional: true, nullable: false },
-				},
-				{ operation: 'index.add', table: 'users', index: ['age'] },
-			],
-		)
-		expect(result).toEqual([
-			{
-				name: 'users',
-				primary: 'id',
-				columns: [
-					{ name: 'age', storage: 'integer', optional: true, nullable: false },
-					{ name: 'id', storage: 'text', optional: false, nullable: false },
-				],
-				indexes: [['age']],
-			},
-		])
-		expect(result[0]).not.toBe(users)
-	})
-
-	it('rejects invalid sequential transitions before publishing a schema', () => {
-		const cases: ReadonlyArray<readonly MigrationStep[]> = [
-			[{ operation: 'table.remove', table: 'missing' }],
-			[{ operation: 'column.remove', table: 'users', column: 'id' }],
-			[{ operation: 'column.remove', table: 'users', column: 'name' }],
-			[{ operation: 'index.add', table: 'users', index: ['missing'] }],
-			[{ operation: 'index.remove', table: 'users', index: ['id'] }],
-		]
-		for (const steps of cases) {
-			expect(captureError(() => projectMigrationSchema([users], steps))).toMatchObject({
-				code: 'MIGRATION',
-			})
-		}
-	})
-
-	it('accepts optional-only and nullable-only additions but rejects required non-null additions', () => {
-		const optional = projectMigrationSchema(
-			[users],
-			[
-				{
-					operation: 'column.add',
-					table: 'users',
-					column: { name: 'optional', storage: 'text', optional: true, nullable: false },
-				},
-			],
-		)
-		const nullable = projectMigrationSchema(
-			[users],
-			[
-				{
-					operation: 'column.add',
-					table: 'users',
-					column: { name: 'nullable', storage: 'text', optional: false, nullable: true },
-				},
-			],
-		)
-		expect(optional[0]?.columns.some((column) => column.name === 'optional')).toBe(true)
-		expect(nullable[0]?.columns.some((column) => column.name === 'nullable')).toBe(true)
-		expect(
-			captureError(() =>
-				projectMigrationSchema(
-					[users],
-					[
-						{
-							operation: 'column.add',
-							table: 'users',
-							column: {
-								name: 'required',
-								storage: 'text',
-								optional: false,
-								nullable: false,
-							},
-						},
-					],
-				),
-			),
-		).toMatchObject({ code: 'MIGRATION', context: { table: 'users', column: 'required' } })
-	})
-})
-
 describe('migrateRows', () => {
 	it('drops a removed column from every row', () => {
 		const rows = [
@@ -1124,6 +804,19 @@ describe('migrateRows', () => {
 })
 
 describe('equalsValue', () => {
+	it('contains a throwing proxy trap as a non-match', () => {
+		const trapped = new Proxy(
+			{},
+			{
+				ownKeys() {
+					throw new Error('ownKeys trap failed')
+				},
+			},
+		)
+		expect(equalsValue(trapped, {})).toBe(false)
+		expect(equalsValue({}, trapped)).toBe(false)
+	})
+
 	it('compares primitives by SameValueZero (NaN equal to itself)', () => {
 		expect(equalsValue(1, 1)).toBe(true)
 		expect(equalsValue(1, 2)).toBe(false)
@@ -1236,6 +929,33 @@ describe('conformDriver', () => {
 
 // A driver whose scan throws an unexpected plain Error mid-phase.
 
+describe('buildFailureFinding', () => {
+	it('names the phase and renders an Error message, keeping the exact error', () => {
+		const error = new Error('open refused')
+		expect(buildFailureFinding('open-close', error)).toEqual({
+			check: 'open-close',
+			message: 'open refused',
+			context: { error },
+		})
+		expect(buildFailureFinding('open-close', error).context.error).toBe(error)
+	})
+
+	it('renders a thrown string and a thrown symbol as text', () => {
+		const symbol = Symbol('refused')
+		expect(buildFailureFinding('read-missing', 'refused').message).toBe('refused')
+		expect(buildFailureFinding('read-missing', symbol).message).toBe('Symbol(refused)')
+	})
+
+	it('renders a value no message can render as the contract fallback', () => {
+		const reason: object = Object.create(null)
+		expect(buildFailureFinding('delete', reason)).toEqual({
+			check: 'delete',
+			message: 'unknown failure',
+			context: { error: reason },
+		})
+	})
+})
+
 describe('scanDriver', () => {
 	it('yields no findings for a conformant driver (the reference memory driver)', async () => {
 		const findings: unknown[] = []
@@ -1258,6 +978,49 @@ describe('scanDriver', () => {
 			findings.push({ check: finding.check, message: finding.message })
 		}
 		expect(findings.some((finding) => finding.message === 'scan exploded')).toBe(true)
+	})
+
+	it('yields a finding when a driver throws a value that no message can render', async () => {
+		const reason: object = Object.create(null)
+		const findings = await auditDriver(() =>
+			createMemoryAdapter(createMemoryDriver(), { open: () => Promise.reject(reason) }),
+		)
+		expect(findings[0]).toEqual({
+			check: 'open-close',
+			message: 'unknown failure',
+			context: { error: reason },
+		})
+		expect(findings.every((finding) => finding.context?.error === reason)).toBe(true)
+	})
+
+	it('yields one rendered finding per phase when a driver that declares every member refuses to open', async () => {
+		const reason: object = Object.create(null)
+		const findings = await auditDriver(() => createRefusingDriver(reason))
+		expect(findings.map((finding) => finding.check)).toEqual([
+			'open-close',
+			'read-missing',
+			'write-read',
+			'insert-atomic',
+			'delete',
+			'mutation-abort',
+			'order',
+			'clear',
+			'journal-rollback',
+			'batch',
+			'non-id-primary',
+			'nested-roundtrip',
+			'migrate',
+			'stream',
+			'transaction',
+			'metadata-stamp',
+			'plan',
+			'transaction-batch',
+		])
+		expect(
+			findings.every(
+				(finding) => finding.message === 'unknown failure' && finding.context.error === reason,
+			),
+		).toBe(true)
 	})
 
 	it('runs the metadata/stamp phase for a driver that implements both hooks and finds a mismatched read', async () => {

@@ -832,6 +832,22 @@ export function createCompleteDriver(): DriverInterface {
 	})
 }
 
+/**
+ * Creates a driver that declares every optional storage member, `transaction` included, and whose
+ * `open` rejects with the supplied value, so each conformance phase reaches its failure path.
+ *
+ * @param reason - The value `open` rejects with
+ * @returns The driver
+ */
+export function createRefusingDriver(reason: unknown): DriverInterface {
+	const complete = createCompleteDriver()
+	return {
+		...complete,
+		open: () => Promise.reject(reason),
+		transaction: (scope) => scope(complete),
+	}
+}
+
 /** Counts protocol transitions within one test scenario. */
 export class DatabaseCounter {
 	#count = 0

@@ -1,3 +1,5 @@
+import type { StreamPageInterface } from './types.js'
+
 /**
  * Tracks the matching-row position of one streaming page.
  *
@@ -9,7 +11,7 @@
  * page.count // 1
  * ```
  */
-export class StreamPage {
+export class StreamPage implements StreamPageInterface {
 	readonly #offset: number
 	#position = 0
 

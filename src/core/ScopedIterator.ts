@@ -1,4 +1,5 @@
 import type { AdmissionInterface } from './types.js'
+import { attempt } from '@orkestrel/contract'
 
 /**
  * Forms the internal continuation admission boundary for one scoped async iterable.
@@ -63,9 +64,7 @@ export class ScopedIterator<T> implements AsyncIterableIterator<T> {
 			if (result.done === true) this.#cleaned = true
 			return result
 		}
-		try {
-			await this.#return()
-		} catch {}
+		await Promise.allSettled([this.#return()])
 		throw error
 	}
 
@@ -77,9 +76,8 @@ export class ScopedIterator<T> implements AsyncIterableIterator<T> {
 	#cleanup(): void {
 		if (this.#cleaned) return
 		this.#cleaned = true
-		try {
-			const cleanup = this.#source.return?.()
-			cleanup?.catch(() => {})
-		} catch {}
+		// The source's own return may throw before it settles; its failure has no caller to reach.
+		const cleanup = attempt(() => this.#source.return?.())
+		if (cleanup.success) void Promise.allSettled([cleanup.value])
 	}
 }

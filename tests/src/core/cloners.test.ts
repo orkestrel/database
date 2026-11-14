@@ -5,11 +5,12 @@ import {
 	cloneQueryInput,
 	cloneQueryPart,
 	isDatabaseError,
+	normalizeDriverSchema,
 } from '@src/core'
 import { isContractError } from '@orkestrel/contract'
 import { captureError, createRecorder } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { emptyValue } from '../../setup.js'
+import { emptyValue, schema } from '../../setup.js'
 
 describe('cloneDriverMetadata', () => {
 	it('returns a distinct normalized deeply frozen snapshot isolated from its source', () => {
@@ -129,17 +130,17 @@ describe('cloneDriverSchema', () => {
 				indexes: [['id']],
 			},
 		]
-		const schema = cloneDriverSchema(source)
-		const [table] = schema
+		const owned = cloneDriverSchema(source)
+		const [table] = owned
 
-		expect(schema).not.toBe(source)
+		expect(owned).not.toBe(source)
 		expect(table).not.toBe(source[0])
-		expect(Object.isFrozen(schema)).toBe(true)
+		expect(Object.isFrozen(owned)).toBe(true)
 		expect(Object.isFrozen(table)).toBe(true)
 		expect(Object.isFrozen(table?.columns)).toBe(true)
 		expect(Object.isFrozen(table?.indexes)).toBe(true)
 		source[0]?.columns.push({ name: 'name', storage: 'text', optional: false, nullable: true })
-		expect(schema[0]?.columns).toEqual([
+		expect(owned[0]?.columns).toEqual([
 			{ name: 'id', storage: 'text', optional: false, nullable: false },
 		])
 	})
@@ -258,5 +259,41 @@ describe('cloneQueryInput', () => {
 		})
 		expect(cloneQueryInput(input)).toEqual({ conditions: [] })
 		expect(reads.calls).toHaveLength(1)
+	})
+})
+
+describe('normalizeDriverSchema', () => {
+	it('owns, sorts, and deeply freezes tables, columns, and index lists without mutating input', () => {
+		const users = schema({
+			name: 'users',
+			columns: [
+				{ name: 'name', storage: 'text', optional: false, nullable: false },
+				{ name: 'age', storage: 'integer', optional: true, nullable: false },
+			],
+			indexes: [['name'], ['age', 'name']],
+		})
+		const posts = schema({ name: 'posts' })
+		const input = [users, posts]
+		const normalized = normalizeDriverSchema(input)
+
+		expect(input).toEqual([users, posts])
+		expect(normalized.map((table) => table.name)).toEqual(['posts', 'users'])
+		expect(normalized[1]?.columns.map((column) => column.name)).toEqual(['age', 'id', 'name'])
+		expect(normalized[1]?.indexes).toEqual([['age', 'name'], ['name']])
+		expect(normalized).not.toBe(input)
+		expect(normalized[1]).not.toBe(users)
+		expect(normalized[1]?.columns).not.toBe(users.columns)
+		expect(normalized[1]?.indexes).not.toBe(users.indexes)
+		expect(Object.isFrozen(normalized)).toBe(true)
+		expect(Object.isFrozen(normalized[1])).toBe(true)
+		expect(Object.isFrozen(normalized[1]?.columns)).toBe(true)
+		expect(Object.isFrozen(normalized[1]?.indexes[0])).toBe(true)
+	})
+
+	it('rejects malformed input through the driver-schema validation boundary', () => {
+		expect(captureError(() => normalizeDriverSchema([{ name: 'users' }]))).toMatchObject({
+			code: 'VALIDATION',
+			context: { path: 'schema' },
+		})
 	})
 })

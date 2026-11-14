@@ -16,6 +16,7 @@ import type {
 	TableDefinition,
 	TableInterface,
 	TableMap,
+	DatabaseTableOptions,
 	TableSchema,
 } from './types.js'
 import type { TransactionScope } from './TransactionScope.js'
@@ -77,13 +78,16 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 		return this.#context.status
 	}
 
-	table<K extends keyof T & string>(name: K): TableInterface<RowOf<T[K]>> {
+	table<K extends keyof T & string>(
+		name: K,
+		options?: DatabaseTableOptions,
+	): TableInterface<RowOf<T[K]>> {
 		if (this.#context.status === 'closed') {
 			throw new DatabaseError('CLOSED', `Database '${this.#context.name}' is closed`, {
 				name: this.#context.name,
 			})
 		}
-		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name))
+		return this.#build(name, resolvePrimary(this.#primary, name), this.#contract(name), options)
 	}
 
 	import<U extends TableMap>(tables: U, primary?: PrimaryMap): DatabaseInterface<U> {
@@ -146,7 +150,12 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 		return this.#columns.get(name) ?? new Map()
 	}
 
-	#build<R>(name: string, key: string, contract: ContractInterface<R>): TableInterface<R> {
+	#build<R>(
+		name: string,
+		key: string,
+		contract: ContractInterface<R>,
+		options: DatabaseTableOptions | undefined,
+	): TableInterface<R> {
 		return new Table(
 			() => this.#context.connect(),
 			this.#context.driver,
@@ -155,6 +164,7 @@ export class Database<T extends TableMap = TableMap> implements DatabaseInterfac
 			contract,
 			this.#layout(name),
 			this.#generate,
+			options,
 			this.#context.error,
 			this.#context,
 		)

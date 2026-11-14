@@ -1,3 +1,5 @@
+import { attempt } from '@orkestrel/contract'
+
 /**
  * Forms the internal continuation boundary for a root driver async iterator.
  *
@@ -104,8 +106,7 @@ export class DriverIterator<T> implements AsyncIterableIterator<T> {
 	async #discard(): Promise<void> {
 		if (this.#cleaned) return
 		this.#cleaned = true
-		try {
-			await this.#source.return?.()
-		} catch {}
+		const cleanup = attempt(() => this.#source.return?.())
+		if (cleanup.success) await Promise.allSettled([cleanup.value])
 	}
 }

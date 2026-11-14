@@ -1,6 +1,7 @@
 import type { DriverMetadata, MigrationInput, TableSchema } from './types.js'
 import { cloneJSONRecord, cloneJSONValue, isArray, isRecord } from '@orkestrel/contract'
 import { DatabaseError, isDatabaseError } from './errors.js'
+import { compareValues } from './helpers.js'
 import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators.js'
 
 /**
@@ -8,7 +9,7 @@ import { isDriverMetadata, isDriverSchema, isMigrationInput } from './validators
  *
  * @remarks
  * The clone is validated as {@link DriverMetadata} before it is returned, so a
- * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * malformed or unexpected value throws a `VALIDATION` {@link DatabaseError} at
  * `context.path === 'metadata'` rather than surfacing a raw Contract or caller error.
  *
  * @param value - Unknown metadata
@@ -35,7 +36,7 @@ export function cloneDriverMetadata(value: unknown): DriverMetadata {
  *
  * @remarks
  * The clone is validated as a table-schema collection before it is returned, so a
- * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * malformed or unexpected value throws a `VALIDATION` {@link DatabaseError} at
  * `context.path === 'schema'` rather than surfacing a raw Contract or caller error.
  *
  * @param value - Unknown table schema collection
@@ -62,7 +63,7 @@ export function cloneDriverSchema(value: unknown): readonly TableSchema[] {
  *
  * @remarks
  * The clone is validated as a {@link MigrationInput} before it is returned, so a
- * malformed or hostile value throws a `VALIDATION` {@link DatabaseError} at
+ * malformed or unexpected value throws a `VALIDATION` {@link DatabaseError} at
  * `context.path === 'migration'` rather than surfacing a raw Contract or caller error.
  *
  * @param value - Unknown migration input
@@ -138,4 +139,38 @@ export function cloneQueryPart(value: unknown): unknown {
 		...(isArray(column) ? { column: [...column] } : {}),
 		...(isArray(values) ? { values: [...values] } : {}),
 	}
+}
+
+/**
+ * Canonicalizes an unknown driver schema into a distinct deeply frozen snapshot.
+ *
+ * @remarks
+ * Table and column lists are sorted by name. The index list is sorted by the
+ * complete serialized tuple while column order inside each compound index is
+ * preserved because it carries index semantics. Validation and ownership flow
+ * through {@link cloneDriverSchema} before and after projection.
+ *
+ * @param value - Unknown driver schema
+ * @returns A validated, owned canonical schema
+ *
+ * @example
+ * ```ts
+ * const id = { name: 'id', storage: 'text', optional: false, nullable: false } as const
+ * const name = { name: 'name', storage: 'text', optional: false, nullable: false } as const
+ * normalizeDriverSchema([{ name: 'users', primary: 'id', columns: [name, id], indexes: [] }, { name: 'posts', primary: 'id', columns: [id], indexes: [] }])
+ * // [{ name: 'posts', … columns: [id] }, { name: 'users', … columns: [id, name] }], deeply frozen
+ * ```
+ */
+export function normalizeDriverSchema(value: unknown): readonly TableSchema[] {
+	const owned = cloneDriverSchema(value)
+	const tables = owned.map((table) => ({
+		name: table.name,
+		primary: table.primary,
+		columns: [...table.columns].sort((left, right) => compareValues(left.name, right.name)),
+		indexes: [...table.indexes].sort((left, right) =>
+			compareValues(JSON.stringify(left), JSON.stringify(right)),
+		),
+	}))
+	tables.sort((left, right) => compareValues(left.name, right.name))
+	return cloneDriverSchema(tables)
 }

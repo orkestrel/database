@@ -17,10 +17,15 @@ import {
 	cloneJSONValue,
 	holds,
 	isArray,
+	isBigInt,
 	isBoolean,
 	isFiniteNumber,
+	isNull,
+	isNumber,
 	isRecord,
 	isString,
+	isSymbol,
+	isUndefined,
 	literalOf,
 } from '@orkestrel/contract'
 import { AGGREGATE_OPERATIONS } from './constants.js'
@@ -38,7 +43,15 @@ import { AGGREGATE_OPERATIONS } from './constants.js'
  * ```
  */
 export function isScalar(value: unknown): value is Scalar {
-	return value === null || (typeof value !== 'object' && typeof value !== 'function')
+	return (
+		isNull(value) ||
+		isUndefined(value) ||
+		isBoolean(value) ||
+		isNumber(value) ||
+		isBigInt(value) ||
+		isString(value) ||
+		isSymbol(value)
+	)
 }
 
 /**
@@ -46,6 +59,12 @@ export function isScalar(value: unknown): value is Scalar {
  *
  * @param value - The value to test
  * @returns True if `value` is a string or a finite number; false otherwise
+ *
+ * @example
+ * ```ts
+ * isKey('order-7') // true
+ * isKey(Number.NaN) // false
+ * ```
  */
 export function isKey(value: unknown): value is Key {
 	return isString(value) || isFiniteNumber(value)
@@ -55,11 +74,17 @@ export function isKey(value: unknown): value is Key {
  * Checks whether a value is a portable column schema.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link ColumnSchema}; false otherwise
+ *
+ * @example
+ * ```ts
+ * isColumnSchema({ name: 'title', storage: 'text', optional: false, nullable: false }) // true
+ * isColumnSchema({ name: 'title', storage: 'date', optional: false, nullable: false }) // false
+ * ```
  */
 export function isColumnSchema(value: unknown): value is ColumnSchema {
 	return holds(() => {
@@ -89,11 +114,18 @@ export function isColumnSchema(value: unknown): value is ColumnSchema {
  * Checks whether a value is a portable table schema.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link TableSchema}; false otherwise
+ *
+ * @example
+ * ```ts
+ * const id = { name: 'id', storage: 'text', optional: false, nullable: false }
+ * isTableSchema({ name: 'posts', primary: 'id', columns: [id], indexes: [] }) // true
+ * isTableSchema({ name: 'posts', primary: 'id', columns: [id] }) // false
+ * ```
  */
 export function isTableSchema(value: unknown): value is TableSchema {
 	return holds(() => {
@@ -136,11 +168,19 @@ export function isTableSchema(value: unknown): value is TableSchema {
  * Checks whether a value is a complete portable driver schema.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a table-schema collection with unique table names; false otherwise
+ *
+ * @example
+ * ```ts
+ * const id = { name: 'id', storage: 'text', optional: false, nullable: false }
+ * const posts = { name: 'posts', primary: 'id', columns: [id], indexes: [] }
+ * isDriverSchema([posts]) // true
+ * isDriverSchema([posts, posts]) // false
+ * ```
  */
 export function isDriverSchema(value: unknown): value is readonly TableSchema[] {
 	return holds(() => {
@@ -155,11 +195,17 @@ export function isDriverSchema(value: unknown): value is readonly TableSchema[] 
  * Checks whether a value is one ordered migration step.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link MigrationStep}; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMigrationStep({ operation: 'table.remove', table: 'drafts' }) // true
+ * isMigrationStep({ operation: 'table.rename', table: 'drafts' }) // false
+ * ```
  */
 export function isMigrationStep(value: unknown): value is MigrationStep {
 	return holds(() => {
@@ -226,11 +272,17 @@ export function isMigrationStep(value: unknown): value is MigrationStep {
  * Checks whether a value is an ordered migration plan.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link Migration}; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMigration({ from: 1, to: 2, steps: [{ operation: 'table.remove', table: 'drafts' }] }) // true
+ * isMigration({ from: 1, to: 2 }) // false
+ * ```
  */
 export function isMigration(value: unknown): value is Migration {
 	return holds(() => {
@@ -255,11 +307,17 @@ export function isMigration(value: unknown): value is Migration {
  * @remarks
  * The boundary check a versioning driver's `metadata()` narrows a stored or
  * deserialized record through, so no call site needs an assertion. Total over any
- * input: a hostile getter, a revoked proxy, or a cyclic value is contained as a
+ * input: a throwing getter, a revoked proxy, or a cyclic value is contained as a
  * non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is complete {@link DriverMetadata}; false otherwise
+ *
+ * @example
+ * ```ts
+ * isDriverMetadata({ version: 2, schema: [] }) // true
+ * isDriverMetadata({ version: 2 }) // false
+ * ```
  */
 export function isDriverMetadata(value: unknown): value is DriverMetadata {
 	return holds(() => {
@@ -279,11 +337,17 @@ export function isDriverMetadata(value: unknown): value is DriverMetadata {
  * Checks whether a value is one atomic migration request.
  *
  * @remarks
- * Total over any input: a hostile getter, a revoked proxy, or a cyclic value is
+ * Total over any input: a throwing getter, a revoked proxy, or a cyclic value is
  * contained as a non-match rather than a throw.
  *
  * @param value - The value to test
  * @returns True if `value` is a complete {@link MigrationInput}; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMigrationInput({ plan: { from: 1, to: 2, steps: [] } }) // true
+ * isMigrationInput({ metadata: { version: 1, schema: [] } }) // false
+ * ```
  */
 export function isMigrationInput(value: unknown): value is MigrationInput {
 	return holds(() => {
