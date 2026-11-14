@@ -233,6 +233,7 @@ export const CONFORMANCE_READS: readonly ReadInput[] = Object.freeze([
 		],
 	},
 	{ order: [{ column: ['meta', 'tag'], direction: 'descending' }] },
+	{ order: [{ column: ['meta', 'tag'], direction: 'descending' }], limit: 3, offset: 2 },
 	{
 		conditions: [{ column: 'age', operator: 'above', values: [0], connector: 'and' }],
 		order: [{ column: 'age', direction: 'ascending' }],

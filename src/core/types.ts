@@ -674,35 +674,6 @@ export interface StreamPageInterface {
 	next(): boolean
 }
 
-/**
- * Represents one ordered page as rows arrive: `add` offers a row, `count` reads the rows the page
- * holds, at most `offset + limit`, and `rows` reads the page in order past its offset.
- */
-export interface OrderedPageInterface {
-	readonly count: number
-	readonly rows: readonly Row[]
-	/**
-	 * Offers one row, which the page holds while it ranks among the first `offset + limit`.
-	 *
-	 * @param row - The row to offer
-	 */
-	add(row: Row): void
-}
-
-/**
- * Represents one aggregate folded over rows as they arrive: `add` folds a row in, and `value`
- * reads the aggregate so far. It holds no row.
- */
-export interface StreamAggregateInterface {
-	readonly value: number | undefined
-	/**
-	 * Folds one row into the aggregate.
-	 *
-	 * @param row - The row to fold; a value that is no record counts and adds no number
-	 */
-	add(row: unknown): void
-}
-
 // === Database
 
 /**

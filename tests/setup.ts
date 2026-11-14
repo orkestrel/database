@@ -1994,8 +1994,11 @@ export const RESIDUAL_BUDGET = 180
  */
 export const RESIDUAL_SHARE = 0.25
 
-/** Holds the bar on a cell's growth when its input doubles: linear work reads near 2. */
-export const RESIDUAL_GROWTH = 2.5
+/**
+ * Holds the bar on a cell's growth when its input doubles, set outside the instrument's spread:
+ * linear cells read 1.62 to 3.74 across three runs, and the quadratic control 15.8 to 17.8.
+ */
+export const RESIDUAL_GROWTH = 6
 
 /**
  * Holds the row count of the quadratic control: large enough that its copies outweigh its

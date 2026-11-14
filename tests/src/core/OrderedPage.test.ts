@@ -1,5 +1,6 @@
 import type { Order } from '@src/core'
-import { OrderedPage, sortRows } from '@src/core'
+import { sortRows } from '@src/core'
+import { OrderedPage } from '../../../src/core/OrderedPage.js'
 import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import { buildSeededPage } from '../../setup.js'

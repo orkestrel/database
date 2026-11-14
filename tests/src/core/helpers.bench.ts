@@ -41,8 +41,8 @@ it('reads an ordered residual page within its share and grows linearly', async (
 	const two = await bench('page at double', () =>
 		readPlannedRows(doubled, 'items', RESIDUAL_PAGE)).run(RESIDUAL_RUN)
 	console.log('page', one.latency.p50, two.latency.p50, two.latency.p50 / one.latency.p50)
-	expect(one.latency.p50).toBeLessThan(bar)
-	expect(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
+	expect.soft(one.latency.p50).toBeLessThan(bar)
+	expect.soft(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
 }, 600_000)
 
 it('reads an ordered residual page over unordered ranks within its share', async ({ bench }) => {
@@ -53,8 +53,8 @@ it('reads an ordered residual page over unordered ranks within its share', async
 	const two = await bench('unordered page at double', () =>
 		readPlannedRows(reshuffled, 'items', RESIDUAL_PAGE)).run(RESIDUAL_RUN)
 	console.log('unordered', one.latency.p50, two.latency.p50, two.latency.p50 / one.latency.p50)
-	expect(one.latency.p50).toBeLessThan(bar)
-	expect(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
+	expect.soft(one.latency.p50).toBeLessThan(bar)
+	expect.soft(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
 }, 600_000)
 
 it('reads a residual aggregate within its share and grows linearly', async ({ bench }) => {
@@ -65,8 +65,8 @@ it('reads a residual aggregate within its share and grows linearly', async ({ be
 	const two = await bench('aggregate at double', () =>
 		readPlannedAggregate(doubled, 'items', {}, RESIDUAL_AGGREGATE)).run(RESIDUAL_RUN)
 	console.log('aggregate', one.latency.p50, two.latency.p50, two.latency.p50 / one.latency.p50)
-	expect(one.latency.p50).toBeLessThan(bar)
-	expect(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
+	expect.soft(one.latency.p50).toBeLessThan(bar)
+	expect.soft(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
 }, 600_000)
 
 it('reads a residual like over the slice within its share and grows linearly', async ({
@@ -79,8 +79,8 @@ it('reads a residual like over the slice within its share and grows linearly', a
 	const two = await bench('like at double', () =>
 		readPlannedRows(doubled, 'items', RESIDUAL_FILTER)).run(RESIDUAL_RUN)
 	console.log('like', one.latency.p50, two.latency.p50, two.latency.p50 / one.latency.p50)
-	expect(one.latency.p50).toBeLessThan(bar)
-	expect(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
+	expect.soft(one.latency.p50).toBeLessThan(bar)
+	expect.soft(two.latency.p50 / one.latency.p50).toBeLessThan(RESIDUAL_GROWTH)
 }, 600_000)
 
 it('matches a pattern at MAX_PATTERN_LENGTH with growth linear in the value width', async ({

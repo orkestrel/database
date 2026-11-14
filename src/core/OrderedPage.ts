@@ -1,4 +1,4 @@
-import type { Order, OrderedPageInterface, Row } from './types.js'
+import type { Order, Row } from './types.js'
 import { compareOrderKeys, extractOrderKeys, validatePage } from './helpers.js'
 
 /**
@@ -22,7 +22,7 @@ import { compareOrderKeys, extractOrderKeys, validatePage } from './helpers.js'
  * page.count // 2
  * ```
  */
-export class OrderedPage implements OrderedPageInterface {
+export class OrderedPage {
 	readonly #order: readonly Order[]
 	readonly #offset: number
 	readonly #capacity: number

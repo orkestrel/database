@@ -11,7 +11,7 @@ import type {
 	StorageMember,
 	StorageResult,
 } from './types.js'
-import { streamRecordedRows } from './helpers.js'
+import { streamRecordedRows } from './compilers.js'
 import { RecordedStorage } from './RecordedStorage.js'
 import { StreamPage } from './StreamPage.js'
 

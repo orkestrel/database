@@ -51,12 +51,10 @@ import {
 	maskUndefinedOperands,
 	matchesIllFormedText,
 	planRead,
-	readPlannedAggregate,
-	readPlannedRows,
 	restoreUndefinedOperands,
 	scanQueryFaults,
-	streamPlannedRows,
 } from './helpers.js'
+import { readPlannedAggregate, readPlannedRows, streamPlannedRows } from './compilers.js'
 import { Cursor } from './Cursor.js'
 import { Query } from './Query.js'
 import { ScopedIterator } from './ScopedIterator.js'

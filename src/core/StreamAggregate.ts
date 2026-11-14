@@ -1,5 +1,5 @@
 import type { FieldPath } from '@orkestrel/contract'
-import type { AggregateOperation, StreamAggregateInterface } from './types.js'
+import type { AggregateOperation } from './types.js'
 import { isRecord, parseNumber, preview, resolveField } from '@orkestrel/contract'
 import { AGGREGATE_OPERATIONS } from './constants.js'
 import { DatabaseError } from './errors.js'
@@ -24,7 +24,7 @@ import { isAggregateOperation } from './validators.js'
  * aggregate.value // 42
  * ```
  */
-export class StreamAggregate implements StreamAggregateInterface {
+export class StreamAggregate {
 	readonly #operation: AggregateOperation
 	readonly #column: FieldPath
 	#count = 0

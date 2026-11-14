@@ -2915,7 +2915,6 @@ describe('IndexedDBDriver — round trips per Table operation', () => {
 
 	it('collects and finds through a query in one records call each', async () => {
 		const { recorder, users } = recorded.value
-		// `Query.find` sends its read with no limit and returns the first row, so it reads every match.
 		const query = users.query().condition(buildCondition('id', 'above', ['u6']))
 		const collected = await recorder.measure(() => query.collect())
 		const found = await recorder.measure(() => query.find())
@@ -2927,7 +2926,7 @@ describe('IndexedDBDriver — round trips per Table operation', () => {
 			'u7',
 			[
 				{ member: 'plan', keys: 0, rows: 0, scoped: false },
-				{ member: 'records', keys: 0, rows: 3, scoped: false },
+				{ member: 'records', keys: 0, rows: 1, scoped: false },
 			],
 		])
 	})
@@ -2994,6 +2993,15 @@ describe('IndexedDBDriver — round trips per Table operation', () => {
 				{ member: 'read', keys: 1, rows: 1, scoped: false },
 			],
 		})
+	})
+
+	it('shows the stored form after a cursor update, which the second read returns', async () => {
+		const { users } = recorded.value
+		const cursor = await users.cursor()
+		await cursor.update({ age: -0 })
+		const fetched = await users.get(cursor.value?.id ?? '')
+		// A structured clone keeps −0, so the stored form equals the row the update wrote.
+		expect([Object.is(cursor.value?.age, -0), Object.is(fetched?.age, -0)]).toEqual([true, true])
 	})
 
 	it('removes through a cursor in one delete', async () => {

@@ -102,8 +102,27 @@ export class Query<T = Row> implements QueryInterface<T> {
 	}
 
 	async find(): Promise<T | undefined> {
-		const rows = await this.collect()
-		return rows[0]
+		const first = {
+			limit: Math.min(this.#limit ?? 1, 1),
+			...(this.#offset !== undefined ? { offset: this.#offset } : {}),
+		}
+		if (this.#filters.length === 0) {
+			const [row] = await this.#table.records({
+				conditions: this.#conditions,
+				order: this.#orders,
+				...first,
+			})
+			return row
+		}
+		if (this.#orders.length > 0) {
+			const [row] = await this.#select(
+				{ conditions: this.#conditions, order: this.#orders, ...first },
+				(candidate) => this.#accepts(candidate),
+			)
+			return row
+		}
+		for await (const row of this.stream()) return row
+		return undefined
 	}
 
 	async count(): Promise<number> {

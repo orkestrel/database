@@ -1,4 +1,5 @@
-import { isDatabaseError, StreamAggregate } from '@src/core'
+import { isDatabaseError } from '@src/core'
+import { StreamAggregate } from '../../../src/core/StreamAggregate.js'
 import { captureError } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 import { AGGREGATE_ROWS } from '../../setup.js'

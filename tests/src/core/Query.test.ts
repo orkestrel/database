@@ -1,4 +1,4 @@
-import { captureFailure, StorageRecorder, tallyCalls } from '@src/core'
+import { captureFailure, createMemoryDriver, StorageRecorder, tallyCalls } from '@src/core'
 import { captureError, collect } from '@orkestrel/test'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Users } from '../../setup.js'
@@ -188,6 +188,29 @@ describe('Query — a predicate read holds only its answer', () => {
 			.limit(1)
 			.collect()
 		expect(page.map((user) => user.id)).toEqual(['u1'])
+	})
+
+	it('finds the first predicate match under a residual order through the bounded page', async () => {
+		const users = await seeded(createRewritingDriver('age', 99, new Set(['u3'])))
+		const found = await users
+			.query()
+			.filter((user) => user.role !== 'guest')
+			.order({ column: 'age', direction: 'descending' })
+			.find()
+		expect(found?.id).toBe('u3')
+	})
+
+	it('finds the first predicate match without an order, reading no row past it', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		const users = await seeded(recorder.driver)
+		const { value, calls } = await recorder.measure(() =>
+			users
+				.query()
+				.filter((user) => user.role === 'member')
+				.find(),
+		)
+		expect(value?.id).toBe('u3')
+		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 1, rows: 3 })
 	})
 
 	it('reads a native order only up to the page', async () => {

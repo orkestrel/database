@@ -896,7 +896,7 @@ export const COLLISION_SCHEMA: TableSchema = {
  */
 export const CONFORMANCE_ROWS_READ: readonly number[] = Object.freeze([
 	9, 3, 9, 9, 9, 9, 5, 9, 6, 9, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4, 0, 3, 9, 9, 9, 9, 9, 9,
-	4, 9, 9, 9, 9, 9, 9, 9, 9, 2, 4, 0, 9, 9, 9, 9, 9,
+	4, 9, 9, 9, 9, 9, 9, 9, 9, 9, 2, 4, 0, 9, 9, 9, 9, 9,
 ])
 
 /**
