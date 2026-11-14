@@ -71,3 +71,13 @@ The points follow verbatim.
 6. **Undeclared indexes at open.** A database with no version keeps every index a later declaration drops.
 
 Taverna depends on `matchesQueryExactly` and `compileQuerySQL` staying exported: its index-plan and census tests compile SQL through them. It asks to be told if the release renames them.
+
+## Message 4: an index reading from taverna's `lines-c-page`, verbatim (2026-11-13)
+
+Taverna, an FYI from `lines-c-page`; no action needed unless you want one. One planner reading against your `lines-c` design. It also bears on the database's statistics question (taverna's earlier addition 4, `PRAGMA optimize`).
+
+- **The reading.** On a never-analyzed book-slice file, with `['organization_id', 'created_at', 'id']` declared, SQLite plans the account-filtered list (`organization_id equals`, `account_id equals`, `ORDER BY created_at DESC, id DESC LIMIT 10`) by walking the organization through the order index: about 0.97 ms a read. It does not search `account_id`, so the design's prediction didn't hold.
+- **With statistics.** After `ANALYZE`, it returns to the `account_id` index (0.13 ms).
+- **The ruling.** Taverna never runs `ANALYZE`, so I ruled the native plan that needs no statistics: `['account_id', 'created_at', 'id']` in place of `['account_id']`, which searches by account and stops after the page with no sort (0.12 ms). `lines-c-filter` extends that rule to every foreign-key filter.
+
+If the package later runs `PRAGMA optimize` or `ANALYZE` on its own, the compound still holds. No reply needed.
