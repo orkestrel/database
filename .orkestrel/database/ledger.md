@@ -35,3 +35,7 @@
 | 2026-11-14 | After the four packages close, `@orkestrel/contract` joins the campaign, and its measured costs (the object guard, `parseEnum`, `resolveField`) become units under the same canon | user | `plan.md` § State |
 | 2026-11-14 | Contract keeps the hidden- and symbol-key refusal with the cost gain; database writes are strict; a door repairs only where its guide and tool description state it | user | `plan.md` § State |
 | 2026-11-14 | Contract semantic round: the follow-up rulings, the hidden-key strategy, and the write door | planner (Fable 5.2); reviewer (Opus 5.5) objective and subjective refutations | contract `tmp/units/semantics-consult-*.md` |
+| 2026-11-14 | Contract semantic round, third probe unit: the plan cache unfrozen, no latch, the guard and auditor titles, the strict write door, and the toolbox surface | opus (Opus 5.5) | contract `tmp/units/semantics-probes3-report.md` |
+| 2026-11-14 | Contract semantic round: the final design, its closure check in two lanes, and the Orchestrator's closure amendments | planner (Fable 5.2); reviewer (Opus 5.5) objective and subjective closure checks | contract `tmp/units/semantics-design-final.md` |
+| 2026-11-14 | `Tool.execute` and reason's `SubjectDoor` keep repair through `repairValue` | user | `plan.md` § State |
+| 2026-11-14 | Contract semantic round, wave A: `faults`, `clone`, `function` | opus (Opus 5.5); reviewer (Sonnet 5.5) one review per unit in both lanes and one closure check; verifier (Haiku 5.5) gates | contract `508465d` |
