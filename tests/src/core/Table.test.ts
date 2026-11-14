@@ -32,6 +32,8 @@ import {
 	buildUserRows,
 	createConstrainedUsersDatabase,
 	createMemoryAdapter,
+	createRewritingDriver,
+	seeded,
 	createRecordedUsers,
 	createRecordingDriver,
 	createUserRow,
@@ -942,6 +944,24 @@ describe('Table — records / count / aggregate (engine path)', () => {
 				conditions: [{ column: 'age', operator: 'above', values: [100], connector: 'and' }],
 			}),
 		).toBeUndefined()
+	})
+})
+
+describe('Table — the residual pass holds only its answer', () => {
+	it('pages a residual order holding only offset + limit rows', async () => {
+		const users = await seeded(createRewritingDriver('age', 99, new Set(['u3', 'u1'])))
+		const page = await users.records({
+			order: [{ column: 'age', direction: 'descending' }],
+			offset: 1,
+			limit: 1,
+		})
+		expect(page.map((row) => row.id)).toEqual(['u1'])
+	})
+
+	it('folds a residual aggregate as each row streams', async () => {
+		const users = await seeded(createRewritingDriver('age', 1000))
+		expect(await users.aggregate('sum', 'age')).toBe(117)
+		expect(await users.aggregate('maximum', 'age')).toBe(41)
 	})
 })
 

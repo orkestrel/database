@@ -31,6 +31,7 @@ import {
 	buildFailureFinding,
 	bindRowKey,
 	checkAbort,
+	compareOrderKeys,
 	compareValues,
 	computeAggregate,
 	conformDriver,
@@ -38,6 +39,7 @@ import {
 	equalsValue,
 	scanDriver,
 	extractKey,
+	extractOrderKeys,
 	filterRows,
 	matchesGlobPattern,
 	isDatabaseError,
@@ -93,6 +95,9 @@ import { captureError, collect, createRecorder, invokeUnchecked } from '@orkestr
 import { describe, expect, it } from 'vitest'
 import {
 	buildCondition,
+	buildSeededPage,
+	createListedStorage,
+	createRewritingDriver,
 	createReferenceLeakingDriver,
 	createDescendingKeyDriver,
 	createMismatchedMetadataDriver,
@@ -1312,6 +1317,136 @@ describe('readPlannedRows — the read procedure Table runs', () => {
 		)
 		expect(value.map((row) => row.id)).toEqual(['a'])
 		expect(tallyCalls(calls, 'scan')).toMatchObject({ calls: 1, rows: 1 })
+	})
+})
+
+describe('extractOrderKeys and compareOrderKeys', () => {
+	const order = [
+		{ column: 'age', direction: 'ascending' as const },
+		{ column: ['meta', 'tag'], direction: 'descending' as const },
+	]
+
+	it('extracts one value per term, reading a nested path and an absent field', () => {
+		expect(extractOrderKeys({ age: 36, meta: { tag: 'a' } }, order)).toEqual([36, 'a'])
+		expect(extractOrderKeys({ name: 'Ada' }, order)).toEqual([undefined, undefined])
+		expect(extractOrderKeys({ age: 1 }, [])).toEqual([])
+	})
+
+	it('decides by the first term whose keys differ, in its direction', () => {
+		expect(compareOrderKeys([1, 'a'], [2, 'b'], order)).toBe(-1)
+		expect(compareOrderKeys([1, 'a'], [1, 'b'], order)).toBe(1)
+		expect(compareOrderKeys([1, 'a'], [1, 'a'], order)).toBe(0)
+		expect(compareOrderKeys([undefined, 'a'], [1, 'a'], order)).toBe(-1)
+	})
+
+	it('ties every pair under an empty order', () => {
+		expect(compareOrderKeys([1], [2], [])).toBe(0)
+	})
+})
+
+describe('readPlannedRows — a residual order holds only its page', () => {
+	const page = { order: [{ column: 'age', direction: 'descending' as const }], offset: 1, limit: 2 }
+
+	it('answers the page sortRows pages over seeded rows', async () => {
+		for (const seed of Array.from({ length: 300 }, (_, index) => index + 1)) {
+			const { rows, order, offset, limit } = buildSeededPage(seed)
+			const read = await readPlannedRows(createListedStorage(rows), 'items', {
+				order,
+				offset,
+				limit,
+			})
+			expect(
+				read.map((row) => row.id),
+				`seed ${String(seed)}`,
+			).toEqual(
+				sortRows(rows, order)
+					.slice(offset, offset + limit)
+					.map((row) => row.id),
+			)
+		}
+	})
+
+	it('consults no row outside offset + limit once the walk ends', async () => {
+		const driver = createRewritingDriver('age', 100, new Set(['g', 'h', 'b']))
+		await seedConformanceRows(driver)
+		const read = await readPlannedRows(driver, 'users', page)
+		expect(read.map((row) => row.id)).toEqual(['h', 'b'])
+	})
+
+	it('reads no row for a zero limit', async () => {
+		const recorder = new StorageRecorder(createMemoryDriver())
+		await seedConformanceRows(recorder.driver)
+		const { value, calls } = await recorder.measure(() =>
+			readPlannedRows(recorder.driver, 'users', { ...page, limit: 0 }),
+		)
+		expect(value).toEqual([])
+		expect(tallyCalls(calls, 'scan').calls).toBe(0)
+	})
+
+	it('refuses an invalid page', async () => {
+		const driver = createMemoryDriver()
+		await seedConformanceRows(driver)
+		await expect(readPlannedRows(driver, 'users', { ...page, limit: -1 })).rejects.toMatchObject({
+			code: 'VALIDATION',
+		})
+	})
+})
+
+describe('readPlannedRows — a predicate', () => {
+	it('applies the predicate ahead of a residual page, holding only that page', async () => {
+		const driver = createRewritingDriver('age', 100, new Set(['g', 'h', 'a']))
+		await seedConformanceRows(driver)
+		const read = await readPlannedRows(
+			driver,
+			'users',
+			{ order: [{ column: 'age', direction: 'descending' }], offset: 1, limit: 2 },
+			undefined,
+			(row) => row.name !== 'ada',
+		)
+		expect(read.map((row) => row.id)).toEqual(['h', 'a'])
+	})
+
+	it('pages after the predicate and the residual conditions when no order is residual', async () => {
+		const driver = createMemoryDriver()
+		await seedConformanceRows(driver)
+		const read = await readPlannedRows(
+			driver,
+			'users',
+			{ conditions: [buildCondition('age', 'above', [0])], limit: 2 },
+			undefined,
+			(row) => typeof row.name === 'string' && row.name.length > 3,
+		)
+		expect(read.map((row) => row.id)).toEqual(['c', 'h'])
+	})
+
+	it('streams a native order and stops at the page', async () => {
+		const recorder = new StorageRecorder(createPlannedDriver())
+		await seedConformanceRows(recorder.driver)
+		const { value, calls } = await recorder.measure(() =>
+			readPlannedRows(
+				recorder.driver,
+				'users',
+				{ order: [{ column: 'age', direction: 'ascending' }], limit: 1 },
+				undefined,
+				(row) => typeof row.age === 'number' && row.age > 30,
+			),
+		)
+		expect(value.map((row) => row.id)).toEqual(['a'])
+		expect(tallyCalls(calls, 'records').calls).toBe(0)
+		expect(tallyCalls(calls, 'stream')).toMatchObject({ calls: 1, rows: 6 })
+	})
+})
+
+describe('readPlannedAggregate — a residual aggregate folds each row as it streams', () => {
+	it('reads each row as it arrives and holds none once the walk ends', async () => {
+		const driver = createRewritingDriver('age', 1000)
+		await seedConformanceRows(driver)
+		const values = await Promise.all(
+			(['count', 'sum', 'average', 'minimum', 'maximum'] as const).map((operation) =>
+				readPlannedAggregate(driver, 'users', {}, { operation, column: 'age' }),
+			),
+		)
+		expect(values).toEqual([9, 203, 25.375, -5, 65])
 	})
 })
 

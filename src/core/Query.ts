@@ -11,7 +11,7 @@ import type {
 	Row,
 	TableInterface,
 } from './types.js'
-import { computeAggregate } from './helpers.js'
+import { StreamAggregate } from './StreamAggregate.js'
 import { StreamPage } from './StreamPage.js'
 
 /**
@@ -20,9 +20,12 @@ import { StreamPage } from './StreamPage.js'
  * @remarks
  * Accumulates typed conditions, ordering, JS filters, and a page. Each builder
  * method mutates and returns the same instance. Portable inputs flow to the
- * table, while predicates remain an in-memory refinement. `admit` and `admitAggregate` are the
- * table's door: a page the builder sets and an aggregate the query computes itself after a filter
- * pass it, with its conditions, in one door call.
+ * table, while predicates remain an in-memory refinement run on each row as it streams:
+ * a count or an aggregate with a predicate walks the table's stream and holds no row, and
+ * an ordered page with a predicate reads through `select`, which streams a native order up to
+ * the page and holds at most `offset + limit` rows under a residual one. `admit` and
+ * `admitAggregate` are the table's door: a page the builder sets and an aggregate the query
+ * computes itself after a filter pass it, with its conditions, in one door call.
  */
 export class Query<T = Row> implements QueryInterface<T> {
 	readonly #table: TableInterface<T>
@@ -31,6 +34,7 @@ export class Query<T = Row> implements QueryInterface<T> {
 		input: unknown,
 		aggregate: unknown,
 	) => ReadInput & { readonly aggregate: Aggregate }
+	readonly #select: (input: QueryInput, accept: (row: T) => boolean) => Promise<readonly T[]>
 	readonly #conditions: Condition[] = []
 	readonly #orders: Order[] = []
 	readonly #filters: Array<(row: T) => boolean> = []
@@ -44,10 +48,12 @@ export class Query<T = Row> implements QueryInterface<T> {
 			input: unknown,
 			aggregate: unknown,
 		) => ReadInput & { readonly aggregate: Aggregate },
+		select: (input: QueryInput, accept: (row: T) => boolean) => Promise<readonly T[]>,
 	) {
 		this.#table = table
 		this.#admit = admit
 		this.#admitAggregate = admitAggregate
+		this.#select = select
 	}
 
 	condition(input: Condition): QueryInterface<T> {
@@ -78,24 +84,21 @@ export class Query<T = Row> implements QueryInterface<T> {
 	}
 
 	async collect(): Promise<readonly T[]> {
+		const page = {
+			...(this.#limit !== undefined ? { limit: this.#limit } : {}),
+			...(this.#offset !== undefined ? { offset: this.#offset } : {}),
+		}
 		if (this.#filters.length === 0) {
-			return this.#table.records({
-				conditions: this.#conditions,
-				order: this.#orders,
-				...(this.#limit !== undefined ? { limit: this.#limit } : {}),
-				...(this.#offset !== undefined ? { offset: this.#offset } : {}),
-			})
+			return this.#table.records({ conditions: this.#conditions, order: this.#orders, ...page })
 		}
 		if (this.#orders.length === 0) {
 			const rows: T[] = []
 			for await (const row of this.stream()) rows.push(row)
 			return rows
 		}
-		const fetched = await this.#table.records({
-			conditions: this.#conditions,
-			order: this.#orders,
-		})
-		return this.#page(this.#filtered(fetched))
+		return this.#select({ conditions: this.#conditions, order: this.#orders, ...page }, (row) =>
+			this.#accepts(row),
+		)
 	}
 
 	async find(): Promise<T | undefined> {
@@ -107,8 +110,11 @@ export class Query<T = Row> implements QueryInterface<T> {
 		if (this.#filters.length === 0) {
 			return this.#table.count({ conditions: this.#conditions })
 		}
-		const fetched = await this.#table.records({ conditions: this.#conditions })
-		return this.#filtered(fetched).length
+		const counted = new StreamPage(0)
+		for await (const row of this.#table.scan({ conditions: this.#conditions })) {
+			if (this.#accepts(row)) counted.next()
+		}
+		return counted.count
 	}
 
 	/**
@@ -132,7 +138,7 @@ export class Query<T = Row> implements QueryInterface<T> {
 		const page = new StreamPage(this.#offset ?? 0)
 		for await (const row of this.#table.scan({ conditions: this.#conditions }, options)) {
 			if (this.#limit !== undefined && page.count >= this.#limit) break
-			if (!Iterator.from(this.#filters).every((predicate) => predicate(row))) continue
+			if (!this.#accepts(row)) continue
 			if (!page.next()) continue
 			yield row
 		}
@@ -145,24 +151,15 @@ export class Query<T = Row> implements QueryInterface<T> {
 			})
 		}
 		const read = this.#admitAggregate({ conditions: this.#conditions }, { operation, column })
-		const fetched = await this.#table.records({ conditions: read.conditions ?? [] })
-		return computeAggregate(
-			this.#filtered(fetched),
-			read.aggregate.operation,
-			read.aggregate.column,
-		)
+		const fold = new StreamAggregate(read.aggregate.operation, read.aggregate.column)
+		for await (const row of this.#table.scan({ conditions: read.conditions ?? [] })) {
+			if (this.#accepts(row)) fold.add(row)
+		}
+		return fold.value
 	}
 
-	#filtered(rows: readonly T[]): readonly T[] {
-		return Iterator.from(this.#filters).reduce(
-			(result, predicate) => result.filter(predicate),
-			rows,
-		)
-	}
-
-	#page(rows: readonly T[]): readonly T[] {
-		const offset = this.#offset ?? 0
-		if (offset === 0 && this.#limit === undefined) return rows
-		return rows.slice(offset, this.#limit === undefined ? undefined : offset + this.#limit)
+	// Check one row against every JS filter, in the order the builder added them.
+	#accepts(row: T): boolean {
+		return this.#filters.every((predicate) => predicate(row))
 	}
 }

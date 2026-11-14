@@ -199,19 +199,7 @@ export class Table<T = Row> implements TableInterface<T> {
 		return this.#track(async () => {
 			checkAbort(options?.signal)
 			await this.#ready()
-			const read = this.#admit(input)
-			const rows = await readPlannedRows(
-				this.#driver,
-				this.#name,
-				{
-					...(read.conditions === undefined ? {} : { conditions: read.conditions }),
-					...(read.order === undefined ? {} : { order: read.order }),
-					...(read.limit === undefined ? {} : { limit: read.limit }),
-					...(read.offset === undefined ? {} : { offset: read.offset }),
-				},
-				() => this.#step(options),
-			)
-			return rows.map((row) => this.#assert(row))
+			return this.#collect(this.#admit(input), options, undefined)
 		})
 	}
 
@@ -353,6 +341,11 @@ export class Table<T = Row> implements TableInterface<T> {
 			this,
 			(input) => this.#admit(input),
 			(input, aggregate) => this.#admit(input, aggregate),
+			(input, accept) =>
+				this.#track(async () => {
+					await this.#ready()
+					return this.#collect(this.#admit(input), undefined, accept)
+				}),
 		)
 	}
 
@@ -385,6 +378,31 @@ export class Table<T = Row> implements TableInterface<T> {
 			this.#step(options),
 		)
 		for await (const row of rows) yield this.#assert(row)
+	}
+
+	// Run a row read through the shared read procedure and narrow each returned row; `accept` sees
+	// each narrowed row ahead of the page, which then stays in the core.
+	async #collect(
+		read: QueryInput,
+		options: OperationOptions | undefined,
+		accept: ((row: T) => boolean) | undefined,
+	): Promise<readonly T[]> {
+		const input = {
+			...(read.conditions === undefined ? {} : { conditions: read.conditions }),
+			...(read.order === undefined ? {} : { order: read.order }),
+			...(read.limit === undefined ? {} : { limit: read.limit }),
+			...(read.offset === undefined ? {} : { offset: read.offset }),
+		}
+		const rows = await (accept === undefined
+			? readPlannedRows(this.#driver, this.#name, input, () => this.#step(options))
+			: readPlannedRows(
+					this.#driver,
+					this.#name,
+					input,
+					() => this.#step(options),
+					(row) => accept(this.#assert(row)),
+				))
+		return rows.map((row) => this.#assert(row))
 	}
 
 	// Run an aggregate read through the shared read procedure, with the table's checks.

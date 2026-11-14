@@ -10,6 +10,7 @@ import type {
 	StorageInterface,
 	StorageMember,
 	AdmissionInterface,
+	Aggregate,
 	AggregateOperation,
 	ColumnSchema,
 	Key,
@@ -28,6 +29,7 @@ import type {
 	DriverMetadata,
 	MigrationInput,
 	Migration,
+	Order,
 	Row,
 	RowOf,
 	TableInterface,
@@ -48,6 +50,7 @@ import {
 	nullableShape,
 	objectShape,
 	optionalShape,
+	seededRandom,
 	stringShape,
 } from '@orkestrel/contract'
 import { collect } from '@orkestrel/test'
@@ -66,6 +69,8 @@ import {
 	MemoryDriver,
 	requireColumns,
 	collectColumns,
+	compareValues,
+	MAX_PATTERN_LENGTH,
 	StorageJournal,
 	StorageRecorder,
 } from '@src/core'
@@ -194,13 +199,15 @@ export function userRows(): readonly UserRow[] {
  *
  * @typeParam C - The `users` column map (captured `const` so its row type infers precisely)
  * @param options - `columns` (the full column map) and `rows` (the seed rows, typed `RowOf<C>`)
+ * @param driver - The driver the database runs on. Default: a fresh Memory driver
  * @returns The seeded `users` table, typed `TableInterface<RowOf<C>>`
  */
 export async function seedUsersTable<const C extends ColumnMap>(
 	columns: C,
 	seed: (users: TableInterface<RowOf<C>>) => Promise<unknown>,
+	driver: DriverInterface = createMemoryDriver(),
 ): Promise<TableInterface<RowOf<C>>> {
-	const database = createDatabase({ driver: createMemoryDriver(), tables: { users: columns } })
+	const database = createDatabase({ driver, tables: { users: columns } })
 	const users = database.table('users')
 	await seed(users)
 	return users
@@ -1056,14 +1063,17 @@ export const columns = {
 }
 
 // The table's row type is inferred from its columns — no hand-written alias.
-export async function seeded() {
-	return seedUsersTable(columns, (users) =>
-		users.set([
-			{ id: 'u1', name: 'Ada', age: 36, role: 'admin' },
-			{ id: 'u2', name: 'Bo', age: 17, role: 'guest' },
-			{ id: 'u3', name: 'Cy', age: 41, role: 'member' },
-			{ id: 'u4', name: 'Di', age: 23, role: 'member' },
-		]),
+export async function seeded(driver?: DriverInterface) {
+	return seedUsersTable(
+		columns,
+		(users) =>
+			users.set([
+				{ id: 'u1', name: 'Ada', age: 36, role: 'admin' },
+				{ id: 'u2', name: 'Bo', age: 17, role: 'guest' },
+				{ id: 'u3', name: 'Cy', age: 41, role: 'member' },
+				{ id: 'u4', name: 'Di', age: 23, role: 'member' },
+			]),
+		driver,
 	)
 }
 
@@ -1968,6 +1978,219 @@ export interface DatabaseModule {
  */
 export function isDatabaseModule(value: unknown): value is DatabaseModule {
 	return isRecord(value) && isFunction(value.createDatabase) && isFunction(value.createMemoryDriver)
+}
+
+// ── Residual path fixtures ────────────────────────────────────────────────────
+
+/** Holds the residual bench's row count, the size of taverna's data slice. */
+export const RESIDUAL_ROWS = 80646
+
+/** Holds the consumer's page budget in milliseconds: taverna's search page bar. */
+export const RESIDUAL_BUDGET = 180
+
+/**
+ * Holds the share of the page budget one residual pass may take at {@link RESIDUAL_ROWS}: the
+ * engine's read and the consumer's own work keep the other three quarters of the page.
+ */
+export const RESIDUAL_SHARE = 0.25
+
+/** Holds the bar on a cell's growth when its input doubles: linear work reads near 2. */
+export const RESIDUAL_GROWTH = 2.5
+
+/**
+ * Holds the row count of the quadratic control: large enough that its copies outweigh its
+ * allocations, small enough that its larger arm stays under a second.
+ */
+export const RESIDUAL_CONTROL_ROWS = 16000
+
+/** Holds the widest text the consumer carries, about 570 characters, rounded up. */
+export const RESIDUAL_WIDTH = 600
+
+/** Holds a pattern at `MAX_PATTERN_LENGTH`: 511 middle segments of one `x` between `%` runs. */
+export const RESIDUAL_PATTERN = '%x'.repeat(MAX_PATTERN_LENGTH / 2)
+
+/** Holds the residual page the bench reads: the SQLite bench's page of 10 at offset 100. */
+export const RESIDUAL_PAGE: QueryInput = Object.freeze<QueryInput>({
+	order: [{ column: 'rank', direction: 'descending' }],
+	limit: 10,
+	offset: 100,
+})
+
+/** Holds the residual aggregate the bench reads. */
+export const RESIDUAL_AGGREGATE: Aggregate = Object.freeze<Aggregate>({
+	operation: 'sum',
+	column: 'rank',
+})
+
+/** Holds a residual `like` read of three words, the shape a search box sends, with no page. */
+export const RESIDUAL_FILTER: QueryInput = Object.freeze<QueryInput>({
+	conditions: [{ column: 'body', operator: 'like', values: ['%xx%xxx%xxxx%'], connector: 'and' }],
+})
+
+/** Holds the bench's sampling options: a discarded warmup, then at least ten timed calls. */
+export const RESIDUAL_RUN = Object.freeze({ time: 1000, warmupTime: 200, iterations: 10 })
+
+/**
+ * Builds bench rows whose rank no longer follows the key: the rows of {@link buildBenchRows} with
+ * each rank replaced by a fixed permutation of the positions, so a residual order meets its rows
+ * out of order.
+ *
+ * @param count - The number of rows
+ * @returns The rows, keyed `k0` onward
+ */
+export function buildShuffledBenchRows(count: number): ReadonlyArray<RowOf<typeof BENCH_COLUMNS>> {
+	return buildBenchRows(count).map((row, index) => ({ ...row, rank: (index * 7919) % count }))
+}
+
+/**
+ * Sorts rows by one column, descending, by inserting each row into a copy of the rows before it:
+ * quadratic work, the residual bench's superlinear control.
+ *
+ * @param rows - The rows to sort
+ * @param column - The column to sort by
+ * @returns The rows in descending column order, ties in input order
+ */
+export function sortByInsertion(rows: readonly Row[], column: string): readonly Row[] {
+	return rows.reduce<readonly Row[]>((held, row) => {
+		const at = held.findIndex((other) => compareValues(other[column], row[column]) < 0)
+		return held.toSpliced(at === -1 ? held.length : at, 0, row)
+	}, [])
+}
+
+/**
+ * Yields listed rows as they are, with no copy.
+ *
+ * @param rows - The rows to yield
+ * @yields Each row in list order
+ */
+export async function* streamListedRows(rows: readonly Row[]): AsyncIterable<Row> {
+	yield* rows
+}
+
+/**
+ * Creates a driver whose scan yields listed rows with no copy, so a read through it measures the
+ * core's residual pass with the driver's own work taken out.
+ *
+ * @param rows - The rows every scan yields
+ * @returns The driver; every member but `scan` reaches an unopened Memory driver
+ */
+export function createListedStorage(rows: readonly Row[]): DriverInterface {
+	return createMemoryAdapter(createMemoryDriver(), { scan: () => streamListedRows(rows) })
+}
+
+/**
+ * Yields each row of a source, then, when the source ends, writes a value into one column of every
+ * yielded row whose `id` the kept set lacks.
+ *
+ * @remarks
+ * A read that still holds a row after the walk reads the written value; a read that keeps only the
+ * rows its answer needs, or folds each row as it arrives, reads the values the rows carried while
+ * they streamed.
+ *
+ * @param source - The rows to yield; each must be a copy the source owns
+ * @param column - The column to write
+ * @param value - The value to write
+ * @param kept - The ids of the rows to leave unwritten. Default: none
+ * @yields Each row of the source
+ */
+export async function* streamRewrittenRows(
+	source: AsyncIterable<Row>,
+	column: string,
+	value: unknown,
+	kept: ReadonlySet<unknown> = new Set(),
+): AsyncIterable<Row> {
+	const yielded: Row[] = []
+	for await (const row of source) {
+		yielded.push(row)
+		yield row
+	}
+	for (const row of yielded) {
+		if (!kept.has(row.id)) row[column] = value
+	}
+}
+
+/**
+ * Creates a Memory-backed driver whose scan rewrites its rows when the walk ends, per
+ * {@link streamRewrittenRows}.
+ *
+ * @param column - The column to write
+ * @param value - The value to write
+ * @param kept - The ids of the rows to leave unwritten. Default: none
+ * @returns The driver
+ */
+export function createRewritingDriver(
+	column: string,
+	value: unknown,
+	kept?: ReadonlySet<unknown>,
+): DriverInterface {
+	const memory = createMemoryDriver()
+	return createMemoryAdapter(memory, {
+		scan: (table) => streamRewrittenRows(memory.scan(table), column, value, kept),
+	})
+}
+
+/**
+ * Holds the values a seeded residual row draws its fields from: ties, `null`, absence, `NaN`,
+ * signed zero, and values of every scalar type.
+ */
+export const SEEDED_VALUES: readonly unknown[] = Object.freeze([
+	0,
+	-0,
+	1,
+	1,
+	2,
+	-3,
+	2.5,
+	Number.NaN,
+	null,
+	undefined,
+	'',
+	'a',
+	'a',
+	'B',
+	'b',
+	true,
+	false,
+])
+
+/** Holds the columns a seeded order draws its terms from: two flat columns and a nested path. */
+export const SEEDED_COLUMNS: readonly FieldPath[] = Object.freeze([
+	'rank',
+	'group',
+	['meta', 'level'],
+])
+
+/** Shapes one seeded residual case: its rows in key order and the ordered page read over them. */
+export interface SeededPage {
+	readonly rows: readonly Row[]
+	readonly order: readonly Order[]
+	readonly offset: number
+	readonly limit: number
+}
+
+/**
+ * Builds one seeded residual case: up to 40 rows in key order whose `rank`, `group`, and nested
+ * `meta.level` draw from {@link SEEDED_VALUES}, an order of one to three terms over
+ * {@link SEEDED_COLUMNS} in drawn directions, an offset up to 5, and a limit up to 8.
+ *
+ * @param seed - The seed of the draws
+ * @returns The case
+ */
+export function buildSeededPage(seed: number): SeededPage {
+	const random = seededRandom(seed)
+	const rows = Array.from({ length: Math.floor(random() * 41) }, (_, index) => ({
+		id: `r${String(index).padStart(2, '0')}`,
+		rank: SEEDED_VALUES[Math.floor(random() * SEEDED_VALUES.length)],
+		group: SEEDED_VALUES[Math.floor(random() * SEEDED_VALUES.length)],
+		...(random() < 0.5
+			? {}
+			: { meta: { level: SEEDED_VALUES[Math.floor(random() * SEEDED_VALUES.length)] } }),
+	}))
+	const order = Array.from({ length: 1 + Math.floor(random() * 3) }, (): Order => ({
+		column: SEEDED_COLUMNS[Math.floor(random() * SEEDED_COLUMNS.length)] ?? 'rank',
+		direction: random() < 0.5 ? 'ascending' : 'descending',
+	}))
+	return { rows, order, offset: Math.floor(random() * 6), limit: Math.floor(random() * 9) }
 }
 
 /**

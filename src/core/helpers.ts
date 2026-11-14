@@ -41,13 +41,13 @@ import {
 	isString,
 	matchesMember,
 	objectShape,
-	parseNumber,
 	preview,
 	resolveField,
 } from '@orkestrel/contract'
+import { OrderedPage } from './OrderedPage.js'
+import { StreamAggregate } from './StreamAggregate.js'
 import { StreamPage } from './StreamPage.js'
 import {
-	AGGREGATE_OPERATIONS,
 	CONFORMANCE_POSTS_SCHEMA,
 	CONFORMANCE_READS,
 	CONFORMANCE_ROWS,
@@ -1155,14 +1155,63 @@ export function filterRows(rows: readonly Row[], conditions: readonly Condition[
 // === Ordering & paging
 
 /**
+ * Extracts the values an ordering specification compares from one row, one per term.
+ *
+ * @remarks
+ * Each term's column resolves through Contract's `resolveField`, so an array path descends a
+ * nested value and an absent field reads `undefined`.
+ *
+ * @param row - The row to read
+ * @param order - The ordering terms in priority order
+ * @returns The row's value at each term's column, in term order
+ *
+ * @example
+ * ```ts
+ * extractOrderKeys({ age: 36, meta: { tag: 'a' } }, [{ column: 'age', direction: 'ascending' }, { column: ['meta', 'tag'], direction: 'descending' }]) // [36, 'a']
+ * ```
+ */
+export function extractOrderKeys(row: Row, order: readonly Order[]): readonly unknown[] {
+	return order.map((term) => resolveField(row, term.column))
+}
+
+/**
+ * Compares two rows' order keys under an ordering specification.
+ *
+ * @remarks
+ * Applies the terms in priority order — the first term whose keys differ decides — using
+ * {@link compareValues}, reversed for `descending`. Keys no term tells apart tie.
+ *
+ * @param left - The left row's keys from {@link extractOrderKeys}
+ * @param right - The right row's keys from {@link extractOrderKeys}
+ * @param order - The ordering terms the keys were extracted for
+ * @returns A negative number when `left` sorts first, a positive number when `right` does, and
+ *   `0` for a tie
+ *
+ * @example
+ * ```ts
+ * compareOrderKeys([1], [2], [{ column: 'age', direction: 'descending' }]) // 1
+ * ```
+ */
+export function compareOrderKeys(
+	left: readonly unknown[],
+	right: readonly unknown[],
+	order: readonly Order[],
+): number {
+	for (const [index, term] of order.entries()) {
+		const comparison = compareValues(left[index], right[index])
+		if (comparison !== 0) return term.direction === 'descending' ? -comparison : comparison
+	}
+	return 0
+}
+
+/**
  * Sorts rows by an ordering specification, leaving the input untouched.
  *
  * @remarks
- * Applies the terms in priority order — the first term that distinguishes two
- * rows decides — using {@link compareValues}, reversing for `descending`. Rows the terms
- * cannot distinguish keep their input order when the final term ascends and reverse it when
- * the final term descends, so over rows in ascending key order a tie resolves by primary key
- * in the direction of the final term.
+ * Extracts each row's keys once through {@link extractOrderKeys} and compares them through
+ * {@link compareOrderKeys}. Rows the terms cannot distinguish keep their input order when the
+ * final term ascends and reverse it when the final term descends, so over rows in ascending key
+ * order a tie resolves by primary key in the direction of the final term.
  *
  * @param rows - The rows to sort
  * @param order - The ordering terms in priority order
@@ -1176,21 +1225,13 @@ export function filterRows(rows: readonly Row[], conditions: readonly Condition[
  */
 export function sortRows(rows: readonly Row[], order: readonly Order[]): readonly Row[] {
 	const descending = order.at(-1)?.direction === 'descending'
-	return [...rows.entries()]
-		.sort(([leftIndex, left], [rightIndex, right]) => {
-			const decided = order
-				.values()
-				.map((term) => {
-					const comparison = compareValues(
-						resolveField(left, term.column),
-						resolveField(right, term.column),
-					)
-					return term.direction === 'descending' ? -comparison : comparison
-				})
-				.find((comparison) => comparison !== 0)
-			if (decided !== undefined) return decided
-			return descending ? rightIndex - leftIndex : leftIndex - rightIndex
-		})
+	return rows
+		.map((row, index) => [index, row, extractOrderKeys(row, order)] as const)
+		.sort(
+			([leftIndex, , leftKeys], [rightIndex, , rightKeys]) =>
+				compareOrderKeys(leftKeys, rightKeys, order) ||
+				(descending ? rightIndex - leftIndex : leftIndex - rightIndex),
+		)
 		.map(([, row]) => row)
 }
 
@@ -1235,7 +1276,7 @@ export function applyQuery(rows: readonly Row[], input?: QueryInput): readonly R
  * `count` returns the row count. The numeric aggregates coerce each cell with
  * the contracts `parseNumber` (so `'42'` counts) and ignore non-numeric cells;
  * over zero numeric values they return `undefined` — the SQL `NULL` of an empty
- * aggregate.
+ * aggregate. Folds the rows through {@link StreamAggregate}.
  *
  * @param rows - The rows to aggregate (non-record entries are ignored)
  * @param operation - The aggregate to compute
@@ -1256,33 +1297,9 @@ export function computeAggregate(
 	operation: AggregateOperation,
 	column: FieldPath,
 ): number | undefined {
-	if (!isAggregateOperation(operation)) {
-		throw new DatabaseError(
-			'VALIDATION',
-			`Aggregate operation ${preview(operation)} is not one of ${AGGREGATE_OPERATIONS.join(', ')}`,
-			{
-				operation,
-			},
-		)
-	}
-	if (operation === 'count') return rows.length
-	const numbers = Iterator.from(rows)
-		.flatMap((row) => {
-			if (!isRecord(row)) return []
-			const value = parseNumber(resolveField(row, column))
-			return value === undefined ? [] : [value]
-		})
-		.toArray()
-	if (numbers.length === 0) return undefined
-	if (operation === 'sum' || operation === 'average') {
-		const total = numbers.reduce((sum, value) => sum + value, 0)
-		return operation === 'average' ? total / numbers.length : total
-	}
-	return numbers.reduce(
-		(result, value) =>
-			operation === 'minimum' ? Math.min(result, value) : Math.max(result, value),
-		operation === 'minimum' ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY,
-	)
+	const aggregate = new StreamAggregate(operation, column)
+	for (const row of rows) aggregate.add(row)
+	return aggregate.value
 }
 
 // === Keys
@@ -1796,14 +1813,22 @@ export async function* streamPlannedRows(
  * @remarks
  * An empty residual returns what `records` answers for the native side. A residual without
  * an order streams the native side through {@link streamPlannedRows}, stopping at
- * `offset + limit` matches. A residual order collects the filtered rows, then sorts and
- * pages them through {@link applyQuery}.
+ * `offset + limit` matches. A residual order with a limit keeps the page in an
+ * {@link OrderedPage} as the filtered rows stream, holding at most `offset + limit` rows, and a
+ * zero limit reads no row; a residual order without a limit collects the filtered rows, then
+ * sorts and pages them through {@link applyQuery}.
+ *
+ * With `accept`, the plan covers the conditions and the order, and the page stays in the core:
+ * each row the residual conditions keep must also pass `accept`, ahead of the page, so a native
+ * order streams and stops at `offset + limit` accepted rows.
  *
  * @param storage - The storage to read
  * @param table - The table to read
  * @param input - The read, without an aggregate
  * @param step - The check to run around each pulled row. Default: none
+ * @param accept - A predicate each row must also pass, run as the row streams. Default: none
  * @returns The rows the plan answers
+ * @throws A `VALIDATION` {@link DatabaseError} when a residual page is not a finite nonnegative integer
  *
  * @example
  * ```ts
@@ -1820,24 +1845,53 @@ export async function readPlannedRows(
 	table: string,
 	input: QueryInput,
 	step?: () => Promise<void>,
+	accept?: (row: Row) => boolean,
 ): Promise<readonly Row[]> {
-	const plan = planRead(storage, table, input)
-	const residual = plan.residual
-	if (Object.keys(residual).length === 0 && storage.records !== undefined) {
+	const { limit, offset, ...query } = input
+	const plan = planRead(storage, table, accept === undefined ? input : query)
+	if (
+		accept === undefined &&
+		Object.keys(plan.residual).length === 0 &&
+		storage.records !== undefined
+	) {
 		return storage.records(table, plan.native)
 	}
-	if (residual.order === undefined) {
+	const residual =
+		accept === undefined
+			? plan.residual
+			: normalizeReadInput({
+					...plan.residual,
+					...(limit === undefined ? {} : { limit }),
+					...(offset === undefined ? {} : { offset }),
+				})
+	if (accept === undefined && residual.order === undefined) {
 		return Array.fromAsync(streamPlannedRows(storage, table, plan.native, residual, step))
 	}
+	validatePage(residual)
+	if (residual.limit === 0) return []
 	const filter = residual.conditions === undefined ? {} : { conditions: residual.conditions }
-	const matched = await Array.fromAsync(
-		streamPlannedRows(storage, table, plan.native, filter, step),
-	)
-	return applyQuery(matched, {
-		order: residual.order,
-		...(residual.limit === undefined ? {} : { limit: residual.limit }),
-		...(residual.offset === undefined ? {} : { offset: residual.offset }),
-	})
+	const rows = streamPlannedRows(storage, table, plan.native, filter, step)
+	if (residual.order === undefined) {
+		const page = new StreamPage(residual.offset ?? 0)
+		const kept: Row[] = []
+		for await (const row of rows) {
+			if (accept?.(row) === false || !page.next()) continue
+			kept.push(row)
+			if (residual.limit !== undefined && page.count >= residual.limit) break
+		}
+		return kept
+	}
+	if (residual.limit === undefined) {
+		const kept: Row[] = []
+		for await (const row of rows) if (accept?.(row) !== false) kept.push(row)
+		return applyQuery(kept, {
+			order: residual.order,
+			...(residual.offset === undefined ? {} : { offset: residual.offset }),
+		})
+	}
+	const page = new OrderedPage(residual.order, residual.offset ?? 0, residual.limit)
+	for await (const row of rows) if (accept?.(row) !== false) page.add(row)
+	return page.rows
 }
 
 /**
@@ -1846,7 +1900,8 @@ export async function readPlannedRows(
  *
  * @remarks
  * `aggregate` answers when the plan keeps the aggregate native; otherwise the residual
- * conditions filter the native rows and {@link computeAggregate} reduces them.
+ * conditions filter the native rows as they stream and a {@link StreamAggregate} folds each one,
+ * holding no row.
  *
  * @param storage - The storage to read
  * @param table - The table to read
@@ -1882,8 +1937,9 @@ export async function readPlannedAggregate(
 	}
 	const filter =
 		plan.residual.conditions === undefined ? {} : { conditions: plan.residual.conditions }
-	const rows = await Array.fromAsync(streamPlannedRows(storage, table, native, filter, step))
-	return computeAggregate(rows, aggregate.operation, aggregate.column)
+	const fold = new StreamAggregate(aggregate.operation, aggregate.column)
+	for await (const row of streamPlannedRows(storage, table, native, filter, step)) fold.add(row)
+	return fold.value
 }
 
 /**

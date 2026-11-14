@@ -1,8 +1,14 @@
-import { captureFailure } from '@src/core'
+import { captureFailure, StorageRecorder, tallyCalls } from '@src/core'
 import { captureError, collect } from '@orkestrel/test'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { Users } from '../../setup.js'
-import { DatabaseFixture, seeded, createNestedPeopleTable } from '../../setup.js'
+import {
+	createPlannedDriver,
+	createRewritingDriver,
+	DatabaseFixture,
+	seeded,
+	createNestedPeopleTable,
+} from '../../setup.js'
 
 // `Query`'s own surface — portable conditions and ordering, the post-fetch
 // `filter`, `limit` / `offset` paging, the
@@ -148,6 +154,56 @@ describe('Query — aggregates', () => {
 			.filter((user) => user.age >= 18)
 			.aggregate('sum', 'age')
 		expect(total).toBe(100)
+	})
+})
+
+describe('Query — a predicate read holds only its answer', () => {
+	it('counts a predicate in one walk, holding no row once the walk ends', async () => {
+		const users = await seeded(createRewritingDriver('age', 0))
+		expect(
+			await users
+				.query()
+				.filter((user) => user.age >= 18)
+				.count(),
+		).toBe(3)
+	})
+
+	it('folds a predicate aggregate as each row streams', async () => {
+		const users = await seeded(createRewritingDriver('age', 1000))
+		expect(
+			await users
+				.query()
+				.filter((user) => user.age >= 18)
+				.aggregate('sum', 'age'),
+		).toBe(100)
+	})
+
+	it('holds only offset + limit rows under a residual order', async () => {
+		const users = await seeded(createRewritingDriver('age', 99, new Set(['u3', 'u1'])))
+		const page = await users
+			.query()
+			.filter((user) => user.role !== 'guest')
+			.order({ column: 'age', direction: 'descending' })
+			.offset(1)
+			.limit(1)
+			.collect()
+		expect(page.map((user) => user.id)).toEqual(['u1'])
+	})
+
+	it('reads a native order only up to the page', async () => {
+		const recorder = new StorageRecorder(createPlannedDriver())
+		const users = await seeded(recorder.driver)
+		const { value, calls } = await recorder.measure(() =>
+			users
+				.query()
+				.filter((user) => user.role !== 'guest')
+				.order({ column: 'age', direction: 'ascending' })
+				.limit(1)
+				.collect(),
+		)
+		expect(value.map((user) => user.id)).toEqual(['u4'])
+		expect(tallyCalls(calls, 'records').calls).toBe(0)
+		expect(tallyCalls(calls, 'stream')).toMatchObject({ calls: 1, rows: 2 })
 	})
 })
 
