@@ -3642,9 +3642,10 @@ describe('SQLiteDriver — ill-formed text', () => {
 	})
 })
 
-// Each public `Table` operation's driver calls on ten seeded users, read through the exported
-// `StorageRecorder`: every call is one engine round trip except `plan`, which the driver answers
-// in process. `K` is a three-key list with one absent key.
+// Each public `Table` and cursor operation's driver calls on ten seeded users, read through the
+// exported `StorageRecorder` at the driver boundary. A case counts driver calls, not the SQL
+// statements beneath one: a list write runs one prepared statement per row in one transaction.
+// `plan` is answered in process. `K` is a three-key list with one absent key.
 describe('SQLiteDriver — round trips per Table operation', () => {
 	const recorded = new DatabaseFixture<ReturnType<typeof createRecordedUsers>>()
 	const listed = ['u1', 'u2', 'missing']
@@ -3843,6 +3844,7 @@ describe('SQLiteDriver — round trips per Table operation', () => {
 
 	it('collects and finds through a query in one records call each', async () => {
 		const { recorder, users } = recorded.value
+		// `Query.find` sends its read with no limit and returns the first row, so it reads every match.
 		const query = users.query().condition(buildCondition('id', 'above', ['u6']))
 		const collected = await recorder.measure(() => query.collect())
 		const found = await recorder.measure(() => query.find())
@@ -3896,6 +3898,40 @@ describe('SQLiteDriver — round trips per Table operation', () => {
 				{ member: 'keys', keys: 0, rows: 0, scoped: false },
 				{ member: 'read', keys: 1, rows: 1, scoped: false },
 			],
+		})
+	})
+
+	it('steps a cursor in one read of the next row', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.next())
+		expect({ current: cursor.value?.id, calls }).toEqual({
+			current: 'u1',
+			calls: [{ member: 'read', keys: 1, rows: 1, scoped: false }],
+		})
+	})
+
+	it('updates through a cursor in one read, one write, and one read of the written row', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.update({ name: 'Renamed' }))
+		expect({ current: cursor.value?.name, calls }).toEqual({
+			current: 'Renamed',
+			calls: [
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+				{ member: 'write', keys: 1, rows: 0, scoped: false },
+				{ member: 'read', keys: 1, rows: 1, scoped: false },
+			],
+		})
+	})
+
+	it('removes through a cursor in one delete', async () => {
+		const { recorder, users } = recorded.value
+		const cursor = await users.cursor()
+		const { calls } = await recorder.measure(() => cursor.remove())
+		expect({ current: cursor.value, calls }).toEqual({
+			current: undefined,
+			calls: [{ member: 'delete', keys: 1, rows: 0, scoped: false }],
 		})
 	})
 })
