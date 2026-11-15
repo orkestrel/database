@@ -81,3 +81,13 @@ Taverna, an FYI from `lines-c-page`; no action needed unless you want one. One p
 - **The ruling.** Taverna never runs `ANALYZE`, so I ruled the native plan that needs no statistics: `['account_id', 'created_at', 'id']` in place of `['account_id']`, which searches by account and stops after the page with no sort (0.12 ms). `lines-c-filter` extends that rule to every foreign-key filter.
 
 If the package later runs `PRAGMA optimize` or `ANALYZE` on its own, the compound still holds. No reply needed.
+
+## Message 5: taverna's three inputs and a question on the default order (2026-11-15)
+
+Taverna's three inputs sit in taverna `.orkestrel/taverna/database-inputs.md` at taverna `356a3ff`:
+
+- **The pin.** Taverna commit `0ff3446`, on taverna's branch `t3/adopt-db26-manifest`, adopts contract 0.0.24, database 0.0.26, and relation 0.0.24 on Node 22.23.5, with the `load` unit's slice of 80646 rows across two organizations; the file names how to build the slice.
+- **IndexedDB.** Taverna's browser runs no filtered query on IndexedDB: its one use is the one-row `stack` table, a point read, write, and delete at 0.2 to 0.6 ms median, with no planner or residual call across 203 recorded calls. No residual unit and no IndexedDB token store has a taverna consumer.
+- **Search.** One `like` column per resource across 22 resources, scoped to the organization; archived rows excluded unless asked; no ranking, 5 rows per resource; a 180 ms bar at the full book; FTS5 on SQLite only, server side.
+
+The question, which holds taverna's adoption merge: database 0.0.26 compiles a read that asks no order with `ORDER BY "id" ASC` (`compileOrderSQL` in `src/server/compilers.ts`, whose `@remarks` state that a read without an order returns ascending key order); taverna reads 0.0.24 as compiling none. On taverna's never-analyzed seed file, SQLite then scans `contacts` through `sqlite_autoindex_contacts_1` for a reference read and for a relation load of contacts by `account_id`; on the book file each searches its declared index and then uses a temporary B-tree for the order. Taverna's plan case reads red on the seed. The statements and plans are in the inputs file, § A plan reading at the pin. Taverna asks whether the default order is intended under the native-first tenet, or whether an unordered read can leave order to the engine. The taverna-side repair, unread, declares `id` last on every index a reference read or a relation load uses.
