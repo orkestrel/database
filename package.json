@@ -93,7 +93,7 @@
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.24",
-		"@orkestrel/emitter": "^0.0.16",
+		"@orkestrel/emitter": "^0.0.17",
 		"@orkestrel/indexeddb": "^0.0.19",
 		"@orkestrel/sqlite": "^0.0.19"
 	},
@@ -103,7 +103,7 @@
 		"@orkestrel/guide": "^0.0.31",
 		"@orkestrel/probe": "^0.0.30",
 		"@orkestrel/scaffold": "^0.0.136",
-		"@orkestrel/test": "^0.0.39",
+		"@orkestrel/test": "^0.0.40",
 		"@types/node": "^26.6.6",
 		"@vitest/browser-playwright": "^5.1.0",
 		"oxfmt": "^0.78.0",
