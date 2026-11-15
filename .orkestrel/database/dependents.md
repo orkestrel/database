@@ -23,3 +23,11 @@ The full migration notes are in contract's `Release 0.0.24` commit (`419be61`). 
 | agent, middleware, queue, terminal, worker, workflow, workspace | Take the contract and database releases, refresh the mirrored guides, and run each suite. A write of a numeric string to a numeric column, or of a column present as `undefined`, refuses with `VALIDATION` and names every fault. A nonconforming stored row raises `DRIVER` on read. | `tmp/units/dependents-coverage.md`; contract design § 7. |
 
 The model-facing limit stands: `@orkestrel/tool` 0.0.23 drops the error code and `context.faults` from a tool result, so a model reads the message text alone, which names every fault within `FAULT_TEXT_LIMIT`. It reopens when a tool release carries the code and faults.
+
+## Database 0.0.26 and relation 0.0.24, from the quality units
+
+Database 0.0.26 adds `extractOrderKeys`, `compareOrderKeys`, and an optional `accept` predicate on `readPlannedRows`, and removes and renames nothing (`6ab4e29`). Relation 0.0.24 changes no dist and pins database `^0.0.26` (`9228254`).
+
+| Package | Change | Evidence |
+| --- | --- | --- |
+| agent, middleware, queue, terminal, toolbox, worker, workflow, workspace, taverna | Take database 0.0.26, and relation 0.0.24 where relation is declared, so one database copy resolves; change no call. `find` reads one row, a residual order holds only its page, and a residual aggregate folds in one pass, so a suite that counted driver calls reads fewer of them. | The `Table` round-trip cases in `tests/src/server/drivers/SQLiteDriver.test.ts` and `tests/src/browser/drivers/IndexedDBDriver.test.ts` pin each operation's driver calls. |

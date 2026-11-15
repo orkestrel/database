@@ -80,7 +80,8 @@ The package is one API over SQLite and IndexedDB. Each driver answers every part
   - indexeddb `4e37c09`: each store and index call runs one implicit transaction, pinned by 40 count assertions in real Chromium.
   - relation `1f1cc4f`: storage calls per relationship and nesting level, and the adverse orderings of `link`.
   - database `drivers` and `residual` units: `MemoryDriver` keeps each store's key order; a json cell decodes with one copy and refuses a value that is not JSON data with `DRIVER`; each `Table` operation's driver calls are pinned on SQLite and IndexedDB; a residual order holds only its page (`OrderedPage`); a residual aggregate folds in one pass (`StreamAggregate`); and `find` reads one row. The `StreamPage` limit closed: `helpers.ts` imports no implementation class.
-- **Next:** the scaffold release that carries the `ENOTDIR` fix and the implementation-first canon, then its adoption in the five packages, then the database and relation releases that ship the quality units.
+- **The quality wave is published (2026-11-15):** scaffold 0.0.136 (`d647970`) carries the `ENOTDIR` fix, the implementation-first canon, and the Linux fixes of its skill scripts; contract, sqlite, and indexeddb adopt it with no bump; database 0.0.26 (`6ab4e29`) ships the quality units; and relation 0.0.24 (`9228254`) pins database `^0.0.26`. Each `main` holds its release commit, and `.orkestrel/release.md` records the wave.
+- **Next:** nothing in this campaign until a trigger in § Refused, with triggers fires. Taverna's session owns its client pin, its IndexedDB reads, and its search requirement; its IndexedDB reads reopen the residual stops, and its search requirement opens the text wave.
 
 ## Sequence
 

@@ -12,8 +12,24 @@ Layer order: `@orkestrel/contract`; `@orkestrel/sqlite` and `@orkestrel/indexedd
 
 The wave closed on 2026-11-14: a registry sweep after the last window lists no `@orkestrel` range in the five packages that trails a release this wave published. Every candidate pin is restored.
 
+# Release wave of 2026-11-14 and 2026-11-15: scaffold 0.0.136 and the quality units
+
+Layer order: `@orkestrel/scaffold`; then the adoption visits of `@orkestrel/contract`, `@orkestrel/sqlite`, and `@orkestrel/indexeddb`; then `@orkestrel/database`; then `@orkestrel/relation`. Each row comes from the package's visit, as `wave.js` wrote it, on Linux with Node 22.23.5 and npm 11.21.1.
+
+| Package | Registry | Ruling | Evidence | Round |
+| --- | --- | --- | --- | --- |
+| `@orkestrel/scaffold` | 0.0.135 | bump to 0.0.136, published and confirmed 2026-11-14 | dist moved: the Linux fixes of `configs/helpers.ts`, `lane.ts`, and `wave.ts`, the canon rows, the browser bench project, and contract ^0.0.24; release commit `d647970`, pushed with `main` fast-forwarded to it | landed |
+| `@orkestrel/contract` | 0.0.24 | no bump | dist same, ranges same, 0 self-pin hits; adoption commits `ef7f2bf` and its re-pin, pushed to the working branch | landed |
+| `@orkestrel/sqlite` | 0.0.19 | no bump | dist same, ranges same, 0 self-pin hits; adoption commit `72f0793`, pushed to the working branch | landed |
+| `@orkestrel/indexeddb` | 0.0.19 | no bump | dist same, ranges same; 1 self-pin hit in the vendored `guides/browser.md` mirror, ruled inert; adoption commit `df5d14e`, pushed to the working branch | landed |
+| `@orkestrel/database` | 0.0.25 | bump to 0.0.26, published and confirmed 2026-11-15 | dist moved, ranges same; 1 self-pin hit in the vendored `guides/probe.md` mirror, ruled inert; release commit `6ab4e29`, pushed with `main` fast-forwarded to it | landed |
+| `@orkestrel/relation` | 0.0.23 | bump to 0.0.24, published and confirmed 2026-11-15 | dist same, ranges moved (database ^0.0.26, scaffold ^0.0.136); 2 self-pin hits in the vendored `guides/database.md` and `guides/probe.md` mirrors, ruled inert; release commit `9228254`, pushed with `main` fast-forwarded to it | landed |
+
+The wave closed on 2026-11-15: a registry sweep after the last window lists no `@orkestrel` range in the five packages that trails the version the registry serves. The contract, sqlite, and indexeddb adoption commits ship with each package's next release.
+
 ## Standing host-bound readings
 
 | Package | Gate | Reading | Cause | Carrier |
 | --- | --- | --- | --- | --- |
-| `@orkestrel/contract` and every family repository on scaffold 0.0.135 | `test:config` | 1 failed: `configuration helpers > resolves a package root from a path the host reports as absent or beneath a file` | On Linux, `lstatSync(path beneath a file, { throwIfNoEntry: false })` throws `ENOTDIR`, because `throwIfNoEntry` covers only `ENOENT` (`tests/config.test.ts:5496`, vendored from scaffold). | No `ROADMAP.md` item yet. Scaffold owes one; the user holds the row in database `tmp/units/scaffold-rows.md` row 6. |
+| Every family repository on scaffold 0.0.136 | `test:config` | Closed: the case passes on Linux in every visit of this wave. | Scaffold 0.0.136's `isDirectoryPath` answers a path beneath a file as absent (`904503b`). | Closed by scaffold 0.0.136. |
+| `@orkestrel/scaffold` 0.0.136 | `test:skills` | Two limits that a Linux container cannot read: ROADMAP 179 (the lane's unwritable run record, which needs a non-root user) and ROADMAP 181 (the discovery proofs, which need the Chromium build the installed Playwright pins). | The container runs as uid 0 and holds Chromium build 1243, where Playwright 1.65.0 pins 1254. | Scaffold `ROADMAP.md` items 179 and 181. |
