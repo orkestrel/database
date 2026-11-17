@@ -92,7 +92,7 @@
 		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.24",
+		"@orkestrel/contract": "^0.0.26",
 		"@orkestrel/emitter": "^0.0.17",
 		"@orkestrel/indexeddb": "^0.0.19",
 		"@orkestrel/sqlite": "^0.0.19"
@@ -102,12 +102,12 @@
 		"@orkestrel/browser": "^0.0.34",
 		"@orkestrel/guide": "^0.0.32",
 		"@orkestrel/probe": "^0.0.31",
-		"@orkestrel/scaffold": "^0.0.137",
-		"@orkestrel/test": "^0.0.40",
+		"@orkestrel/scaffold": "^0.0.139",
+		"@orkestrel/test": "^0.0.43",
 		"@types/node": "^26.6.6",
 		"@vitest/browser-playwright": "^5.1.0",
-		"oxfmt": "^0.78.0",
-		"oxlint": "^1.93.0",
+		"oxfmt": "^0.79.0",
+		"oxlint": "^1.94.0",
 		"playwright": "^1.65.1",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.8",
