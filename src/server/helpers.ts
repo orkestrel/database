@@ -19,7 +19,7 @@ import {
 	CLONE_NODE_LIMIT,
 	isBigInt,
 	isBoolean,
-	isError,
+	isCodedError,
 	isFiniteNumber,
 	isInteger,
 	isNumber,
@@ -67,7 +67,7 @@ import {
  * ```
  */
 export function matchesAbsentPath(error: unknown): boolean {
-	if (!isError(error) || !('code' in error)) return false
+	if (!isCodedError(error)) return false
 	return error.code === 'ENOENT' || error.code === 'ENOTDIR'
 }
 

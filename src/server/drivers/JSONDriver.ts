@@ -26,7 +26,7 @@ import {
 	ScopedStorage,
 	StorageJournal,
 } from '@src/core'
-import { attempt, isArray, isRecord } from '@orkestrel/contract'
+import { attempt, isArray, isRecord, settle } from '@orkestrel/contract'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { JSONTransaction } from '../JSONTransaction.js'
@@ -484,15 +484,13 @@ export class JSONDriver implements DriverInterface {
 	}
 
 	async #readDocument(): Promise<string | undefined> {
-		try {
-			return await readFile(this.#path, 'utf-8')
-		} catch (error) {
-			if (matchesAbsentPath(error)) return undefined
-			throw new DatabaseError('DRIVER', 'Failed to read the JSON database file', {
-				path: this.#path,
-				cause: error,
-			})
-		}
+		const read = await settle(() => readFile(this.#path, 'utf-8'))
+		if (read.success) return read.value
+		if (matchesAbsentPath(read.error)) return undefined
+		throw new DatabaseError('DRIVER', 'Failed to read the JSON database file', {
+			path: this.#path,
+			cause: read.error,
+		})
 	}
 
 	// Validate and hydrate only into the local candidate memory. The caller
@@ -702,30 +700,24 @@ export class JSONDriver implements DriverInterface {
 			const aborted = attempt(() => checkAbort(signal))
 			await this.#persistFailure(aborted.success ? error : aborted.error, temp)
 		}
-		try {
-			await rename(temp, this.#path)
-		} catch (error) {
-			await this.#persistFailure(error, temp)
-		}
+		const renamed = await settle(() => rename(temp, this.#path))
+		if (!renamed.success) await this.#persistFailure(renamed.error, temp)
 	}
 
 	async #persistFailure(cause: unknown, temp: string): Promise<never> {
-		try {
-			await rm(temp, { force: true })
-		} catch (cleanup) {
-			// A temp file that cannot exist was never left behind, so removing it did
-			// not fail in the sense this branch reports. `force` already absorbs
-			// ENOENT; ENOTDIR reaches here when the write failed before the temp was
-			// created because its parent is not a directory, and reporting `temp` and
-			// `cleanup` there would name residue that is not on disk.
-			if (!matchesAbsentPath(cleanup)) {
-				throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
-					path: this.#path,
-					temp,
-					cause,
-					cleanup,
-				})
-			}
+		const cleaned = await settle(() => rm(temp, { force: true }))
+		// A temp file that cannot exist was never left behind, so removing it did
+		// not fail in the sense this branch reports. `force` already absorbs
+		// ENOENT; ENOTDIR reaches here when the write failed before the temp was
+		// created because its parent is not a directory, and reporting `temp` and
+		// `cleanup` there would name residue that is not on disk.
+		if (!cleaned.success && !matchesAbsentPath(cleaned.error)) {
+			throw new DatabaseError('DRIVER', 'Failed to persist and clean the database file', {
+				path: this.#path,
+				temp,
+				cause,
+				cleanup: cleaned.error,
+			})
 		}
 		if (isDatabaseError(cause) && cause.code === 'ABORTED') throw cause
 		throw new DatabaseError('DRIVER', 'Failed to persist the database file', {

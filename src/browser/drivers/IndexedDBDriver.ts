@@ -47,7 +47,7 @@ import {
 	StreamPage,
 	validatePage,
 } from '@src/core'
-import { attempt, isArray, isDefined, isError, isNumber, isTrue } from '@orkestrel/contract'
+import { attempt, isArray, isDefined, isError, isNumber, isTrue, settle } from '@orkestrel/contract'
 import {
 	createIndexedDBDatabase,
 	isIndexedDBError,
@@ -901,14 +901,17 @@ export class IndexedDBDriver implements DriverInterface {
 
 	async #load(database: IndexedDBDatabaseInterface): Promise<DriverMetadata | undefined> {
 		const result = Promise.withResolvers<readonly [boolean, unknown]>()
-		try {
-			await database.read(METADATA_STORE, async (transaction) => {
+		const loaded = await settle(() =>
+			database.read(METADATA_STORE, async (transaction) => {
 				const store = transaction.store(METADATA_STORE)
 				const present = await store.has('metadata')
 				result.resolve([present, present ? await store.get('metadata') : undefined])
-			})
-		} catch (error) {
-			throw isIndexedDBError(error) && error.code === 'RECORD' ? this.#invalid() : error
+			}),
+		)
+		if (!loaded.success) {
+			throw isIndexedDBError(loaded.error) && loaded.error.code === 'RECORD'
+				? this.#invalid()
+				: loaded.error
 		}
 		const [present, value] = await result.promise
 		if (!present) return undefined

@@ -12,7 +12,7 @@ import type {
 	StorageInterface,
 	TableSchema,
 } from './types.js'
-import { attempt, isFiniteNumber, isRecord } from '@orkestrel/contract'
+import { attempt, isFiniteNumber, isRecord, settle } from '@orkestrel/contract'
 import { cloneMigrationInput, normalizeDriverSchema } from './cloners.js'
 import {
 	CONFORMANCE_POSTS_SCHEMA,
@@ -1238,14 +1238,14 @@ export async function* scanDriver(
 				break transactionPhase
 			}
 			const reason = {}
-			try {
-				await driver.transaction(async (transaction) => {
+			const transact = driver.transaction.bind(driver)
+			const rolled = await settle(() =>
+				transact(async (transaction) => {
 					await transaction.write('users', 'u3', { id: 'u3', name: 'Marie', age: 50 })
 					throw reason
-				})
-			} catch (error) {
-				if (error !== reason) throw error
-			}
+				}),
+			)
+			if (!rolled.success && rolled.error !== reason) throw rolled.error
 			const afterRollback = [...(await driver.keys('users'))].sort()
 			await driver.close()
 			if (!equalsValue(afterRollback, ['u1', 'u2'])) {

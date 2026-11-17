@@ -40,6 +40,7 @@ import {
 	objectShape,
 	preview,
 	resolveField,
+	settle,
 } from '@orkestrel/contract'
 import {
 	DEFAULT_PRIMARY,
@@ -1307,12 +1308,13 @@ export function bindRowKey(row: Row, primary: string, key: Key): Row {
  * `optional` / `nullable` unwrap to their inner
  * type (nullability is tracked separately). `null` / `object` / `array` / `union` /
  * `json` / `raw` → `json`: a backend stores them as JSON text and can `json_extract`
- * for nested `FieldPath` queries. A scan-only backend ignores the result. A `function` has no
- * storable form and throws.
+ * for nested `FieldPath` queries. A scan-only backend ignores the result. A `function`,
+ * `interface`, or `undefined` shape has no storable form and throws, at the top level or under
+ * `optional` or `nullable`.
  *
  * @param shape - The column's contract shape
  * @returns The portable column type
- * @throws {@link DatabaseError} `VALIDATION` for a `function` shape
+ * @throws {@link DatabaseError} `VALIDATION` for a `function`, `interface`, or `undefined` shape
  *
  * @example
  * ```ts
@@ -1349,9 +1351,11 @@ export function shapeToColumnStorage(shape: ContractShape): ColumnStorage {
 		case 'shape':
 			return 'json'
 		case 'function':
+		case 'interface':
+		case 'undefined':
 			throw new DatabaseError(
 				'VALIDATION',
-				"A column declares the 'function' category, which has no storable form; declare a json or raw column instead",
+				`A column declares the '${shape.category}' category, which has no storable form; declare a json or raw column instead`,
 				{ category: shape.category },
 			)
 	}
@@ -1374,10 +1378,14 @@ export function shapeToColumnSchema(name: string, shape: ContractShape): ColumnS
 	const isColumn = compileGuard(objectShape({ value: shape }))
 	const storage = attempt(() => shapeToColumnStorage(shape))
 	if (!storage.success) {
+		const category =
+			storage.error instanceof DatabaseError && isString(storage.error.context?.category)
+				? storage.error.context.category
+				: 'function'
 		throw new DatabaseError(
 			'VALIDATION',
-			`Column '${name}' declares the 'function' category, which has no storable form; declare a json or raw column instead`,
-			{ column: name, category: 'function' },
+			`Column '${name}' declares the '${category}' category, which has no storable form; declare a json or raw column instead`,
+			{ column: name, category },
 		)
 	}
 	return {
@@ -1737,10 +1745,6 @@ export function buildFailureFinding(check: string, error: unknown): ConformanceF
  * ```
  */
 export async function captureFailure(operation: () => Promise<unknown>): Promise<unknown> {
-	try {
-		await operation()
-		return undefined
-	} catch (error) {
-		return error
-	}
+	const outcome = await settle(operation)
+	return outcome.success ? undefined : outcome.error
 }

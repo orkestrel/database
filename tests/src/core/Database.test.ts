@@ -24,10 +24,12 @@ import {
 import {
 	functionShape,
 	integerShape,
+	interfaceShape,
 	jsonShape,
 	nullableShape,
 	optionalShape,
 	stringShape,
+	undefinedShape,
 } from '@orkestrel/contract'
 import { createRecorder, createRecorders } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
@@ -1527,9 +1529,12 @@ describe('Database — the query door in every view', () => {
 
 describe('function column', () => {
 	it.each([
-		['a top-level', functionShape()],
-		['a nested', optionalShape(nullableShape(functionShape()))],
-	])('refuses %s function column when the database is created', async (_label, shape) => {
+		['a top-level', functionShape(), 'function'],
+		['a nested', optionalShape(nullableShape(functionShape())), 'function'],
+		['an interface', interfaceShape({ get: functionShape() }), 'interface'],
+		['a nested interface', optionalShape(interfaceShape({ get: functionShape() })), 'interface'],
+		['an undefined', undefinedShape(), 'undefined'],
+	])('refuses %s column when the database is created', async (_label, shape, category) => {
 		const error = await captureFailure(async () => {
 			await Promise.resolve(
 				createDatabase({
@@ -1540,8 +1545,8 @@ describe('function column', () => {
 		})
 		if (!isDatabaseError(error)) throw new Error('Expected a DatabaseError')
 		expect(error.code).toBe('VALIDATION')
-		expect(error.message).toContain("Column 'run' declares the 'function' category")
-		expect(error.context).toMatchObject({ column: 'run', category: 'function' })
+		expect(error.message).toContain(`Column 'run' declares the '${category}' category`)
+		expect(error.context).toMatchObject({ column: 'run', category })
 	})
 })
 
