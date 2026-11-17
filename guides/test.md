@@ -65,15 +65,14 @@ npm install --save-dev @orkestrel/test
 
 `@orkestrel/test` is the host-independent core. `@orkestrel/test/server` is the Node face — the
 filesystem helpers, the process and socket readings, the cookie jar, the Vitest progress reporter
-and its reader, and the pure leaves they are built from. `@orkestrel/test/browser` is the
-journey layer, which drives a real browser through the installed Vitest provider. Core touches
-neither `node:*` nor the DOM, so a browser test project imports it unchanged.
-`@orkestrel/test/reporter` is the runner entry Vitest's `--reporter` flag loads: its default
-export is `ProgressReporter`, and it ships ES only. The entry lives at `src/bin/reporter.ts` and
-builds to `dist/bin/reporter.js`; the specifier does not name that path. Use it for a run started
-from the command line with a configuration you cannot edit, as `@orkestrel/capture` starts a
-package's Vitest. In a package's own configuration, list `new ProgressReporter()` instead, as
-§ Read a long run while it runs shows.
+with its plugin and its reader, and the pure leaves they are built from. `@orkestrel/test/browser`
+is the journey layer, which drives a real browser through the installed Vitest provider. Core
+touches neither `node:*` nor the DOM, so a browser test project imports it unchanged.
+`createProgressPlugin` carries the progress reporter into a run whose command line passes
+`--reporter` flags, which replace every reporter a configuration lists. Mount it in the root
+`plugins` of the configuration, as the wrapper `@orkestrel/capture` runs its stages under does, and
+name the file with `--outputFile.progress`. In a configuration no command line overrides, list
+`new ProgressReporter()` instead, as § Read a long run while it runs shows.
 
 The browser face ships ES only. It is built on `vitest/browser`, which is an ES-only module, so no
 CommonJS consumer can reach it and no `.d.cts` is emitted for it.
@@ -302,37 +301,39 @@ they name no target either, and neither does `stepFocus`, which takes a limit an
 
 #### Types
 
-| Name                  | Kind      | Signature                                                                 | Summary                                                                                                                                         |
-| --------------------- | --------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CaptureReader`       | type      | `(path: string) => Promise<string>`                                       | Reads the lowercase hexadecimal SHA-256 digest of a captured file through a browser command.                                                    |
-| `FrameShot`           | interface | `{ path, base64 }`                                                        | Represents the path and base64 bytes returned by Vitest's screenshot operation.                                                                 |
-| `RGBA`                | type      | `readonly [red: number, green: number, blue: number, alpha: number]`      | Represents one rendered color as straight sRGB channels and its alpha.                                                                          |
-| `ContrastOptions`     | interface | `{ floor?, opacity? }`                                                    | Configures one color contrast reading: the surface the backdrop walk ends on, and the opacity the painted color is shown at.                    |
-| `ElementOptions`      | interface | `{ classes?, text?, attributes? }`                                        | Configures one built element: its class list, its text, and its attributes.                                                                     |
-| `FrameOptions`        | interface | `{ path, width, height, element?, unrolled? }`                            | Configures one captured frame: where it is written, the viewport it is shot at, and what it shoots.                                             |
-| `FrameOffset`         | interface | `{ top, left }`                                                           | Represents how far an element frame moves the tester frame from the runner window's origin for the shot, in CSS pixels.                         |
-| `FrameResult`         | interface | `{ width, height, floor }`                                                | Represents one written frame read back from the file a capture produced: its size in device pixels, and the single color its bottom row paints. |
-| `CaptureVariant`      | interface | `{ apply? }`                                                              | Adds to a journey variant the document change a capture run applies before resizing.                                                            |
-| `PortfolioOptions`    | interface | `{ states, variants, variant, directory, enabled?, unrolled? }`           | Configures a capture portfolio: the state registry, the variant matrix, this run's variant, where it writes, and whether it writes at all.      |
-| `PortfolioInterface`  | interface | `{ variant, placements, paths, files, place() }`                          | Holds the registry of capture states one run places, and the files it wrote placing them.                                                       |
-| `JournalStep`         | interface | `{ action, trigger, result }`                                             | Represents one scripted step a journal recorded, and what the surface did about it.                                                             |
-| `JournalInterface`    | interface | `{ steps, output, start(), stop(), record() }`                            | Records one scenario: every step it took and everything the page said while it ran.                                                             |
-| `StateOptions`        | interface | `{ absent? }`                                                             | Configures a bounded wait over the states a control announces.                                                                                  |
-| `SettleOptions`       | interface | `{ pointer? }`                                                            | Configures one capture settle: the time bounds of `WaitOptions` and whether the pointer parks first.                                            |
-| `AnimationResult`     | interface | `{ finite, endless }`                                                     | Represents the animations running on one element and its subtree, split by whether each one ends.                                               |
-| `MediaOptions`        | interface | `{ print?, motion?, forced?, pointer? }`                                  | Configures the tester's print medium, motion preference, forced colours, and pointer precision.                                                 |
-| `StabilityOptions`    | interface | `{ frames? }`                                                             | Configures how long a reading must hold still: the time bounds of `WaitOptions` and the count of reads it must agree across.                    |
-| `AccessibilityNode`   | interface | `{ role, name, properties }`                                              | Represents the accessibility node the browser computed for one element.                                                                         |
-| `SheetAdoption`       | interface | `{ sheet, release() }`                                                    | Describes an adopted stylesheet and its idempotent release operation.                                                                           |
-| `ProtocolPoint`       | interface | `{ x, y }`                                                                | Represents one point in the coordinates of the browser's top-level viewport, the space a DevTools input command addresses.                      |
-| `StorageOptions`      | interface | `{ values?, reads?, writes?, quota? }`                                    | Configures an inert `Storage`: its seed, which operations the host permits, and its quota.                                                      |
-| `WebStorageInterface` | interface | `{ permit(), clear(), getItem(), key(), removeItem(), setItem() }`        | Holds a store the host can withhold and later grant.                                                                                            |
-| `CensusResult`        | interface | `{ elements, tokens, undeclared }`                                        | Reports an authored-class census: the population walked, the tokens found, and the undeclared.                                                  |
-| `ContrastFixture`     | interface | `{ root, refused, accepted }`                                             | Holds a detached translucent stack whose flat and composited readings disagree across one bar.                                                  |
-| `EscapeFixture`       | interface | `{ root, inline, embedded, permitted }`                                   | Holds detached markup a style-escape reading must find, and the one it must leave alone.                                                        |
-| `CensusFixture`       | interface | `{ root, token, mark }`                                                   | Holds detached markup an authored-class census must report as undeclared.                                                                       |
-| `HarnessOptions`      | interface | `{ scenarios, build, state, pause? }`                                     | Configures the harness that renders one transition table and drives it row by row.                                                              |
-| `HarnessInterface`    | interface | `{ root, status, total, passed, failed, failures, execute(), destroy() }` | Holds a mounted statechart harness, the tally it publishes, and the run it drives.                                                              |
+| Name                  | Kind      | Signature                                                                       | Summary                                                                                                                                         |
+| --------------------- | --------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CaptureReader`       | type      | `(path: string) => Promise<string>`                                             | Reads the lowercase hexadecimal SHA-256 digest of a captured file through a browser command.                                                    |
+| `FrameShot`           | interface | `{ path, base64 }`                                                              | Represents the path and base64 bytes returned by Vitest's screenshot operation.                                                                 |
+| `RGBA`                | type      | `readonly [red: number, green: number, blue: number, alpha: number]`            | Represents one rendered color as straight sRGB channels and its alpha.                                                                          |
+| `ContrastOptions`     | interface | `{ floor?, opacity? }`                                                          | Configures one color contrast reading: the surface the backdrop walk ends on, and the opacity the painted color is shown at.                    |
+| `ElementOptions`      | interface | `{ classes?, text?, attributes? }`                                              | Configures one built element: its class list, its text, and its attributes.                                                                     |
+| `ViewportOptions`     | interface | `{ path, width, height }`                                                       | Configures one viewport shot: where it is written and the viewport it is shot at.                                                               |
+| `FrameOptions`        | interface | `{ element?, unrolled? }`                                                       | Configures one captured frame: where it is written, the viewport it is shot at, and what it shoots.                                             |
+| `FrameOffset`         | interface | `{ top, left }`                                                                 | Represents how far an element frame moves the tester frame from the runner window's origin for the shot, in CSS pixels.                         |
+| `FrameResult`         | interface | `{ width, height, floor }`                                                      | Represents one written frame read back from the file a capture produced: its size in device pixels, and the single color its bottom row paints. |
+| `CaptureVariant`      | interface | `{ apply? }`                                                                    | Adds to a journey variant the document change a capture run applies before resizing.                                                            |
+| `ScopeHandler`        | type      | `(state: string) => string`                                                     | Names the scope directory one capture state is written under, one path segment.                                                                 |
+| `PortfolioOptions`    | interface | `{ states, state?, variants, variant, directory, scope?, enabled?, unrolled? }` | Configures a capture portfolio: the state registry, the variant matrix, this run's variant, where it writes, and whether it writes at all.      |
+| `PortfolioInterface`  | interface | `{ variant, observed, placements, paths, files, place(), view() }`              | Holds the registry of capture states one run places, and the files it wrote placing them.                                                       |
+| `JournalStep`         | interface | `{ action, trigger, result }`                                                   | Represents one scripted step a journal recorded, and what the surface did about it.                                                             |
+| `JournalInterface`    | interface | `{ steps, output, start(), stop(), record() }`                                  | Records one scenario: every step it took and everything the page said while it ran.                                                             |
+| `StateOptions`        | interface | `{ absent? }`                                                                   | Configures a bounded wait over the states a control announces.                                                                                  |
+| `SettleOptions`       | interface | `{ pointer? }`                                                                  | Configures one capture settle: the time bounds of `WaitOptions` and whether the pointer parks first.                                            |
+| `AnimationResult`     | interface | `{ finite, endless }`                                                           | Represents the animations running on one element and its subtree, split by whether each one ends.                                               |
+| `MediaOptions`        | interface | `{ print?, motion?, forced?, pointer? }`                                        | Configures the tester's print medium, motion preference, forced colours, and pointer precision.                                                 |
+| `StabilityOptions`    | interface | `{ frames? }`                                                                   | Configures how long a reading must hold still: the time bounds of `WaitOptions` and the count of reads it must agree across.                    |
+| `AccessibilityNode`   | interface | `{ role, name, properties }`                                                    | Represents the accessibility node the browser computed for one element.                                                                         |
+| `SheetAdoption`       | interface | `{ sheet, release() }`                                                          | Describes an adopted stylesheet and its idempotent release operation.                                                                           |
+| `ProtocolPoint`       | interface | `{ x, y }`                                                                      | Represents one point in the coordinates of the browser's top-level viewport, the space a DevTools input command addresses.                      |
+| `StorageOptions`      | interface | `{ values?, reads?, writes?, quota? }`                                          | Configures an inert `Storage`: its seed, which operations the host permits, and its quota.                                                      |
+| `WebStorageInterface` | interface | `{ permit(), clear(), getItem(), key(), removeItem(), setItem() }`              | Holds a store the host can withhold and later grant.                                                                                            |
+| `CensusResult`        | interface | `{ elements, tokens, undeclared }`                                              | Reports an authored-class census: the population walked, the tokens found, and the undeclared.                                                  |
+| `ContrastFixture`     | interface | `{ root, refused, accepted }`                                                   | Holds a detached translucent stack whose flat and composited readings disagree across one bar.                                                  |
+| `EscapeFixture`       | interface | `{ root, inline, embedded, permitted }`                                         | Holds detached markup a style-escape reading must find, and the one it must leave alone.                                                        |
+| `CensusFixture`       | interface | `{ root, token, mark }`                                                         | Holds detached markup an authored-class census must report as undeclared.                                                                       |
+| `HarnessOptions`      | interface | `{ scenarios, build, state, pause? }`                                           | Configures the harness that renders one transition table and drives it row by row.                                                              |
+| `HarnessInterface`    | interface | `{ root, status, total, passed, failed, failures, execute(), destroy() }`       | Holds a mounted statechart harness, the tally it publishes, and the run it drives.                                                              |
 
 #### Constants
 
@@ -445,6 +446,8 @@ they name no target either, and neither does `stepFocus`, which takes a limit an
 | `readClipMargin`           | function | `(element: Element) => number`                                                                                                                                                                      | Measures how far past its own box a clipping element lets its content show.                                                                                                                                                                                                     |
 | `readClippedBlock`         | function | `(element: Element) => number`                                                                                                                                                                      | Measures the block size an element shows after every clipping ancestor cuts it.                                                                                                                                                                                                 |
 | `collectClippingAncestors` | function | `(element: Element) => readonly Element[]`                                                                                                                                                          | Collects the ancestors of an element that clip their descendants' overflow.                                                                                                                                                                                                     |
+| `readFlatParent`           | function | `(element: Element) => Element \| undefined`                                                                                                                                                        | Reads an element's parent in the flat tree, the tree a browser paints.                                                                                                                                                                                                          |
+| `readClipBound`            | function | `(element: Element, region: Element, bounds?: Map<Element, number \| undefined>) => number \| undefined`                                                                                            | Reads the lowest clip edge the clipping ancestors between an element and a region put on it.                                                                                                                                                                                    |
 | `collectScrollContainers`  | function | `(element?: Element) => readonly Element[]`                                                                                                                                                         | Collects the scroll containers in an element's subtree, the element included unless it is the body or the root element.                                                                                                                                                         |
 | `collectUnrolledRegions`   | function | `(element?: Element) => readonly Element[]`                                                                                                                                                         | Collects the vertical scroll regions an unrolled frame releases in an element's subtree, the element included unless it is the body or the root element.                                                                                                                        |
 | `clipsOverflow`            | function | `(element: Element) => boolean`                                                                                                                                                                     | Reports whether an element clips its descendants' overflow.                                                                                                                                                                                                                     |
@@ -466,6 +469,9 @@ they name no target either, and neither does `stepFocus`, which takes a limit an
 | `readFrameHeight`          | function | `(options: FrameOptions, element: Element \| undefined, pane: number) => number \| undefined`                                                                                                       | Reads a capture subject's height after applying its native scroll clearance.                                                                                                                                                                                                    |
 | `takeFrameShot`            | function | `(options: FrameOptions, element: Element \| undefined) => Promise<FrameShot>`                                                                                                                      | Takes a screenshot while temporarily positioning the runner frame around its subject.                                                                                                                                                                                           |
 | `captureFrame`             | function | `(options: FrameOptions) => Promise<string>`                                                                                                                                                        | Shoots one frame at one viewport size and proves the file on disk holds this run's bytes.                                                                                                                                                                                       |
+| `captureViewport`          | function | `(options: ViewportOptions) => Promise<string>`                                                                                                                                                     | Shoots the declared viewport at the scroll the page holds and proves the file on disk holds this run's bytes.                                                                                                                                                                   |
+| `recordScroll`             | function | `() => () => void`                                                                                                                                                                                  | Records the scroll position of the tester's window and of every scroll container in its body, and returns the callback that scrolls each of them back.                                                                                                                          |
+| `describeUnrolledView`     | function | `(state: string) => string`                                                                                                                                                                         | Describes the refusal of a viewport placement in an unrolled portfolio.                                                                                                                                                                                                         |
 | `readCaptureReader`        | function | `() => CaptureReader \| undefined`                                                                                                                                                                  | Reads the optional disk-digest command the tester page registered.                                                                                                                                                                                                              |
 | `verifyFrame`              | function | `(shot: FrameShot, path: string, reader?: CaptureReader) => Promise<void>`                                                                                                                          | Verifies a screenshot's destination and compares its returned bytes with the written file.                                                                                                                                                                                      |
 | `paintImage`               | function | `(encoded: string) => Promise<OffscreenCanvasRenderingContext2D \| undefined>`                                                                                                                      | Decodes a base64 PNG and paints it, unscaled, onto a fresh offscreen 2D canvas.                                                                                                                                                                                                 |
@@ -491,7 +497,7 @@ they name no target either, and neither does `stepFocus`, which takes a limit an
 | `readToken`                | function | `(element: Element, name: string) => string`                                                                                                                                                        | Reads one custom property from an element's resolved style.                                                                                                                                                                                                                     |
 | `readRootToken`            | function | `(name: string) => string`                                                                                                                                                                          | Reads one custom property from the document element.                                                                                                                                                                                                                            |
 | `readPixels`               | function | `(element: Element, property: string, pseudo?: string) => number`                                                                                                                                   | Reads one resolved CSS length as a number of pixels.                                                                                                                                                                                                                            |
-| `expandCaptures`           | function | `(states: readonly string[], variants: readonly CaptureVariant[]) => readonly string[]`                                                                                                             | Expands a capture registry across every variant into the filenames a complete portfolio holds.                                                                                                                                                                                  |
+| `expandCaptures`           | function | `(states: readonly string[], variants: readonly CaptureVariant[], scope?: ScopeHandler) => readonly string[]`                                                                                       | Expands a capture registry across every variant into the filenames a complete portfolio holds.                                                                                                                                                                                  |
 | `buildDenial`              | function | `(operation: string, key?: string) => DOMException`                                                                                                                                                 | Builds the refusal a host withholding a storage operation raises.                                                                                                                                                                                                               |
 | `buildContrast`            | function | `(bar: number) => ContrastFixture`                                                                                                                                                                  | Builds a detached translucent stack whose composited and flat contrast readings straddle one bar.                                                                                                                                                                               |
 | `buildEscapes`             | function | `(permitted: string) => EscapeFixture`                                                                                                                                                              | Builds detached markup carrying one style escape of each kind, plus the sheet a project allows.                                                                                                                                                                                 |
@@ -776,12 +782,11 @@ where that distinction matters.
 
 `stagePane` unscales the runner's tester and lifts it to the window's origin, because a frame shot
 through the runner's fitting scale is a thumbnail of the surface. That couples it to Vitest's own
-tester layout, which is contract rather than accident: `vitest@4.1.12` is the version behind the
-`iframe[data-vitest]` selector and the `--tester-transform`, `--tester-margin-left`,
-`--viewport-width`, and `--viewport-height` custom properties it writes. A release that renames any
-of them reddens the size check rather than writing a wrong frame. The custom-property overrides
-serve Vitest 4; the pane and iframe also carry `transform: none !important` for Vitest 5's direct
-transform. An already matching viewport skips the resize command while retaining the staging
+tester layout, which is contract rather than accident: `vitest@5.1.0` is the version behind the
+`iframe[data-vitest]` selector and the `--viewport-width` and `--viewport-height` custom
+properties it writes. A release that renames any of them reddens the size check rather than
+writing a wrong frame. The pane and iframe carry `transform: none !important`, which suppresses the
+fitting scale. An already matching viewport skips the resize command while retaining the staging
 rule, paint waits, and rendered-size check. Always hand the pane back with
 `releasePane`: a tester left pinned at a viewport taller than the window puts its lower half beyond
 what a pointer can reach, so the next ordinary press fails as a control that is covered. The release
@@ -835,9 +840,11 @@ the body instead, taking the largest bottom edge in document coordinates plus th
 bottom margin, and adds the body's and the root's bottom padding and margin under them. An
 ancestor that clips its overflow (the `clipsOverflow` helper: an `overflow-y` value other than the
 `visible` keyword, or a paint containment) caps a descendant's edge at that ancestor's clip edge,
-which the `readClipEdge` helper reads. The `collectClippingAncestors` helper finds those ancestors
-through the flat tree, from an element to the slot it is assigned to, to its parent, and out of a
-shadow root to its host, so a wrapper in a shadow tree around a slot clips what is slotted into it. An `overflow-y` value of the `hidden` keyword, the `auto`
+which the `readClipEdge` helper reads. The `readClipBound` helper finds those ancestors through
+the flat tree, one `readFlatParent` step at a time, from an element to the slot it is assigned to,
+to its parent, and out of a shadow root to its host, so a wrapper in a shadow tree around a slot
+clips what is slotted into it. One reading shares a memo of each ancestor's bound across every
+element under it, so it reads each ancestor's style once rather than once per descendant. An `overflow-y` value of the `hidden` keyword, the `auto`
 keyword, or the `scroll` keyword clips at the padding box, whatever the ancestor's
 `overflow-clip-margin` value selects. The `clip` keyword and a paint containment over a `visible`
 overflow clip at the box that value selects, the padding box by default, expanded by the length the
@@ -919,6 +926,24 @@ naming the regions. A `:modal` dialog or a `:popover-open` element under a trans
 counted as a row, though the top layer lays it out. A region inside a closed shadow root is
 unreachable, so its rows stay hidden without a refusal.
 
+To shoot what a person sees at the scroll a journey reached, call `captureViewport` with a
+`ViewportOptions` value: the path, the width, and the height, and nothing else. It stages the pane
+at the declared viewport alone, measures no height, and stages no taller pane, so a mark the scroll
+drives, such as a contents entry naming the section in view, still names what the viewport shows.
+It shoots a transparent fixed box, the cover, appended to the root element, and removes the cover
+on every path. The cover's `position`, `inset`, `opacity`, and `pointer-events` declarations are
+inline and important, so a page rule marked important does not paint the cover over the shot. A
+tester that is not at the declared viewport is resized to it first, and the frame then holds the
+scroll the page keeps at that size. The cover's box is read after it is appended, and a box that
+does not start at the viewport's origin at the viewport's size refuses the shot with
+`Capture frame at <path> cannot cover the viewport: a fixed box on the root element lays out at <w>x<h> from (<x>, <y>) in a <w>x<h> viewport`.
+The check reads the box, not its cause: a root element that becomes the cover's containing block,
+through a transform or a paint containment, lays the cover out over its own box, so the shot is
+refused wherever that box differs from the viewport, as a scrolled or a taller document's does, and
+taken where the two coincide. `captureViewport` hands back the pane and the scroll as
+`captureFrame` does; `recordScroll` records the scroll of the window and of every scroll container
+before either stages and returns the callback that restores it.
+
 A region that still hides rows after the settling refuses the capture with
 `Capture frame at <path> leaves rows hidden in scroll regions: <region> <cause> and hides <n> px, so <correction>. Shoot the frame without unrolled to keep them scrolled`.
 The refusal names every such region, and the cause and the correction come from what was
@@ -993,15 +1018,28 @@ pixels; a file with no PNG header is refused without a size.
 
 `createPortfolio` refuses an unregistered variant name at creation, so a run cannot write a filename
 naming a combination it did not render. A portfolio left un-`enabled` is the ordinary run: `place`
-resizes nothing, writes nothing, and records nothing, so a journey calls it unconditionally. It
-still refuses an unregistered state and a second placement of one state, so a journey that names a
+and `view` resize nothing and write nothing, so a journey calls them unconditionally. They
+still refuse an unregistered state and a second placement of one state, so a journey that names a
 state wrongly fails the ordinary run rather than the first capture run; `placements` and `paths`
-stay empty, because they answer for what was captured. An enabled `place` applies the variant and writes `<directory>/<state>--<variant>.png` through
+stay empty, because they answer for what was written, while `observed` lists every state `place`
+and `view` accepted, written or not, in placement order. A placement holds its state from before
+its first await until it settles, so a second placement of that state started meanwhile is refused
+as already placed, and a placement that throws leaves its state free to place again. A portfolio created with `state` writes that one
+state alone and accepts every other registered state unwritten, and creation refuses a `state` the
+registry does not carry. A `scope` handler names one directory segment per state: `files` and every
+written path carry it, and `expandCaptures` takes the same handler, so both refuse a scope that is
+empty, `.`, `..`, or carries a slash. An enabled `place` applies the variant and writes
+`<directory>/<state>--<variant>.png`, or `<directory>/<scope>/<state>--<variant>.png`, through
 `captureFrame`, so it stages the pane at the variant's size, covers the whole document, verifies the
 written bytes, and records only a path that read back as this run's own frame. A portfolio created
-with `unrolled` passes it to every frame `place` writes. The tester comes back
+with `unrolled` passes it to every frame `place` writes. `place` takes an element to shoot that
+element alone. `view` writes the same filename through `captureViewport`, so it shoots the declared
+viewport at the scroll the journey reached. An unrolled portfolio refuses every `view` in every
+run, enabled or not, before it reads the projection, with
+`Capture state "<state>" cannot be viewed in an unrolled portfolio: place it to shoot every row, or view it from a portfolio created without unrolled`,
+the text `describeUnrolledView` renders. The tester comes back
 at the viewport it had before the placement, so a journey that places a state carries on at its own
-size rather than at the variant's. `placements` and `paths` hand out snapshots, so a list read
+size rather than at the variant's. `observed`, `placements`, and `paths` hand out snapshots, so a list read
 before a placement stays what it was.
 
 `createJournal` records rather than replaces. Every intercepted console call is forwarded to the
@@ -1013,7 +1051,8 @@ drops when it stops. There is no shared instance: a file that needs one journal 
 one per scenario.
 
 The filename law is injective within one run: one variant is selected, and every filename is
-`<state>--<variant>.png`. A duplicate filename therefore implies a duplicate placement, which
+`<state>--<variant>.png`, or `<scope>/<state>--<variant>.png` under a `scope` handler, which names
+one scope per state. A duplicate filename therefore implies a duplicate placement, which
 `place` already refuses. Any future naming change that breaks this injectivity must reintroduce a
 collision refusal before writing.
 
@@ -1022,59 +1061,63 @@ collision refusal before writing.
 Imported from `@orkestrel/test/server`.
 
 The provider command consumes the browser journey's resolved selector inside Vitest's tester frame.
-The progress reporter is a Vitest reporter a run lists beside its others.
+The progress reporter is a Vitest reporter a run lists beside its others, and the progress plugin
+adds it to a run whose command line names the reporters.
 
-| Name               | Kind     | Signature                                                             | Summary                                                                                                                                                                        |
-| ------------------ | -------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `chooseFiles`      | function | `(context: ChooserContext, request: ChooserRequest) => Promise<void>` | Observes a native chooser before activating its input and supplies the verified chooser's fixture bytes.                                                                       |
-| `ProgressReporter` | class    | `new () => Reporter`                                                  | Appends one JSON line per Vitest run event to the file `--outputFile.progress` names, so a live run's progress and each failure's first error can be read before the run ends. |
+| Name                   | Kind     | Signature                                                             | Summary                                                                                                                                                                                         |
+| ---------------------- | -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chooseFiles`          | function | `(context: ChooserContext, request: ChooserRequest) => Promise<void>` | Observes a native chooser before activating its input and supplies the verified chooser's fixture bytes.                                                                                        |
+| `ProgressReporter`     | class    | `new () => Reporter`                                                  | Appends one JSON line per Vitest run event to the file `--outputFile.progress` names, so a live run's progress and each failure's first error can be read before the run ends.                  |
+| `createProgressPlugin` | function | `() => ProgressPluginInterface`                                       | Creates a Vitest plugin that adds one `ProgressReporter` to every run naming a progress file, so the reporter still runs when command-line `--reporter` flags replace the configured reporters. |
 
 #### Types
 
-| Name                     | Kind      | Signature                                                                                                                                                                        | Summary                                                                                                                                                                                                                      |
-| ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ScratchInterface`       | interface | `{ path, write(), read(), has(), names(), ensure(), link(), remove(), destroy() }`                                                                                               | Holds a temporary directory a test owns, writes into, reads back, and removes when it is done.                                                                                                                               |
-| `ScratchIdentity`        | interface | `{ device, inode, birth }`                                                                                                                                                       | Represents the fields that together identify one allocated directory on its host.                                                                                                                                            |
-| `ScratchOptions`         | interface | `{ parent?, prefix?, files? }`                                                                                                                                                   | Configures a scratch directory allocation.                                                                                                                                                                                   |
-| `LoopbackInterface`      | interface | `{ url, port, destroy() }`                                                                                                                                                       | Holds a server a test owns, listening on an ephemeral loopback port until the test releases it.                                                                                                                              |
-| `CookieJarInterface`     | interface | `{ header, read(), capture() }`                                                                                                                                                  | Holds a name-keyed cookie store a test drives one origin with, filled from real responses.                                                                                                                                   |
-| `InventoryOptions`       | interface | `{ extensions?, exclude? }`                                                                                                                                                      | Configures a source inventory read.                                                                                                                                                                                          |
-| `UpgradeOptions`         | interface | `{ path?, protocols? }`                                                                                                                                                          | Configures a client upgrade request.                                                                                                                                                                                         |
-| `UpgradeResult`          | type      | `{ readonly claimed: true; readonly protocol: string \| undefined; } \| { readonly claimed: false; readonly status: number; }`                                                   | Represents what one server did with a client upgrade request.                                                                                                                                                                |
-| `ChooserContext`         | interface | `{ page, iframe }`                                                                                                                                                               | Supplies the real Playwright page and tester frame to a native chooser command.                                                                                                                                              |
-| `ProgressError`          | interface | `{ message, location? }`                                                                                                                                                         | Represents one error a progress line carries: its first message line and where it was thrown.                                                                                                                                |
-| `ProgressSpecification`  | interface | `{ project, module }`                                                                                                                                                            | Names one module a run starts, under the project that runs it, as one Vitest specification.                                                                                                                                  |
-| `ProgressStamp`          | interface | `{ time, pid }`                                                                                                                                                                  | Represents the stamp every progress line carries.                                                                                                                                                                            |
-| `ProgressInitEvent`      | interface | `{ event, version, wall, bail }`                                                                                                                                                 | Represents the line a reporter writes when Vitest initializes it.                                                                                                                                                            |
-| `ProgressStartEvent`     | interface | `{ event, specifications }`                                                                                                                                                      | Represents the line a reporter writes when a run starts, listing the modules it runs.                                                                                                                                        |
-| `ProgressCollectedEvent` | interface | `{ event, project, module, planned, errors }`                                                                                                                                    | Represents the line a reporter writes when Vitest collects one module's cases.                                                                                                                                               |
-| `ProgressReadyEvent`     | interface | `{ event, project, id, name }`                                                                                                                                                   | Represents the line a reporter writes when a planned case starts.                                                                                                                                                            |
-| `ProgressCaseState`      | type      | `'passed' \| 'failed' \| 'skipped' \| 'pending'`                                                                                                                                 | Names the state a case result reports, mirroring Vitest's `TestState`.                                                                                                                                                       |
-| `ProgressCaseEvent`      | interface | `{ event, project, module, id, name, state, duration?, start?, errors? }`                                                                                                        | Represents the line a reporter writes once for each planned case's result.                                                                                                                                                   |
-| `ProgressCancelEvent`    | interface | `{ event, reason, wall }`                                                                                                                                                        | Represents the line a reporter writes each time Vitest cancels the run.                                                                                                                                                      |
-| `ProgressModuleState`    | type      | `'passed' \| 'failed' \| 'skipped' \| 'pending' \| 'queued'`                                                                                                                     | Names the state a finished module reports, mirroring Vitest's `TestModuleState`.                                                                                                                                             |
-| `ProgressModuleEvent`    | interface | `{ event, project, module, state, duration }`                                                                                                                                    | Represents the line a reporter writes when a module finishes.                                                                                                                                                                |
-| `ProgressEndReason`      | type      | `'passed' \| 'interrupted' \| 'failed'`                                                                                                                                          | Names why a run ended, mirroring Vitest's `TestRunEndReason`.                                                                                                                                                                |
-| `ProgressEndEvent`       | interface | `{ event, reason, overhead, unhandled }`                                                                                                                                         | Represents the line a reporter writes when a run ends.                                                                                                                                                                       |
-| `ProgressEvent`          | type      | `ProgressInitEvent \| ProgressStartEvent \| ProgressCollectedEvent \| ProgressReadyEvent \| ProgressCaseEvent \| ProgressCancelEvent \| ProgressModuleEvent \| ProgressEndEvent` | Represents one line of a progress file, discriminated by `event`.                                                                                                                                                            |
-| `ProgressState`          | type      | `'live' \| ProgressEndReason`                                                                                                                                                    | Names a run's state as a reader sees it: `live` until its `end` line, then the end reason.                                                                                                                                   |
-| `ProgressRelation`       | type      | `'first' \| 'bail' \| 'later'`                                                                                                                                                   | Names how a failure relates to the run's bail: `first` is the earliest failure, `bail` is a failure past the bail setting whose result arrived or whose case ended after the first cancel, and `later` is any other failure. |
-| `ProgressProject`        | interface | `{ name, planned, done, passed, failed, skipped, modules, collected }`                                                                                                           | Represents one project's tallies in a progress reading.                                                                                                                                                                      |
-| `ProgressCase`           | interface | `{ project, name, duration }`                                                                                                                                                    | Represents a case that started and has not reported a result.                                                                                                                                                                |
-| `ProgressFailure`        | interface | `{ project, module, name, time, relation, error }`                                                                                                                               | Represents one failed case, or one module that failed to collect, in a progress reading.                                                                                                                                     |
-| `ProgressCancel`         | interface | `{ reason, time }`                                                                                                                                                               | Represents the first cancel a run recorded.                                                                                                                                                                                  |
-| `ProgressRun`            | interface | `{ pid, wall, state, bail, elapsed, done, planned, exact, rate, remaining, projects, running, cancel, failures, overhead, unhandled }`                                           | Represents where one run stands, read from its progress lines.                                                                                                                                                               |
+| Name                      | Kind      | Signature                                                                                                                                                                        | Summary                                                                                                                                                                                                                      |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ScratchInterface`        | interface | `{ path, write(), read(), has(), names(), ensure(), link(), remove(), destroy() }`                                                                                               | Holds a temporary directory a test owns, writes into, reads back, and removes when it is done.                                                                                                                               |
+| `ScratchIdentity`         | interface | `{ device, inode, birth }`                                                                                                                                                       | Represents the fields that together identify one allocated directory on its host.                                                                                                                                            |
+| `ScratchOptions`          | interface | `{ parent?, prefix?, files? }`                                                                                                                                                   | Configures a scratch directory allocation.                                                                                                                                                                                   |
+| `LoopbackInterface`       | interface | `{ url, port, destroy() }`                                                                                                                                                       | Holds a server a test owns, listening on an ephemeral loopback port until the test releases it.                                                                                                                              |
+| `CookieJarInterface`      | interface | `{ header, read(), capture() }`                                                                                                                                                  | Holds a name-keyed cookie store a test drives one origin with, filled from real responses.                                                                                                                                   |
+| `InventoryOptions`        | interface | `{ extensions?, exclude? }`                                                                                                                                                      | Configures a source inventory read.                                                                                                                                                                                          |
+| `UpgradeOptions`          | interface | `{ path?, protocols? }`                                                                                                                                                          | Configures a client upgrade request.                                                                                                                                                                                         |
+| `UpgradeResult`           | type      | `{ readonly claimed: true; readonly protocol: string \| undefined; } \| { readonly claimed: false; readonly status: number; }`                                                   | Represents what one server did with a client upgrade request.                                                                                                                                                                |
+| `ChooserContext`          | interface | `{ page, iframe }`                                                                                                                                                               | Supplies the real Playwright page and tester frame to a native chooser command.                                                                                                                                              |
+| `ProgressError`           | interface | `{ message, location? }`                                                                                                                                                         | Represents one error a progress line carries: its first message line and where it was thrown.                                                                                                                                |
+| `ProgressSpecification`   | interface | `{ project, module }`                                                                                                                                                            | Names one module a run starts, under the project that runs it, as one Vitest specification.                                                                                                                                  |
+| `ProgressStamp`           | interface | `{ time, pid }`                                                                                                                                                                  | Represents the stamp every progress line carries.                                                                                                                                                                            |
+| `ProgressInitEvent`       | interface | `{ event, version, wall, bail }`                                                                                                                                                 | Represents the line a reporter writes when Vitest initializes it.                                                                                                                                                            |
+| `ProgressStartEvent`      | interface | `{ event, specifications }`                                                                                                                                                      | Represents the line a reporter writes when a run starts, listing the modules it runs.                                                                                                                                        |
+| `ProgressCollectedEvent`  | interface | `{ event, project, module, planned, errors }`                                                                                                                                    | Represents the line a reporter writes when Vitest collects one module's cases.                                                                                                                                               |
+| `ProgressReadyEvent`      | interface | `{ event, project, id, name }`                                                                                                                                                   | Represents the line a reporter writes when a planned case starts.                                                                                                                                                            |
+| `ProgressCaseState`       | type      | `'passed' \| 'failed' \| 'skipped' \| 'pending'`                                                                                                                                 | Names the state a case result reports, mirroring Vitest's `TestState`.                                                                                                                                                       |
+| `ProgressCaseEvent`       | interface | `{ event, project, module, id, name, state, duration?, start?, errors? }`                                                                                                        | Represents the line a reporter writes once for each planned case's result.                                                                                                                                                   |
+| `ProgressCancelEvent`     | interface | `{ event, reason, wall }`                                                                                                                                                        | Represents the line a reporter writes each time Vitest cancels the run.                                                                                                                                                      |
+| `ProgressModuleState`     | type      | `'passed' \| 'failed' \| 'skipped' \| 'pending' \| 'queued'`                                                                                                                     | Names the state a finished module reports, mirroring Vitest's `TestModuleState`.                                                                                                                                             |
+| `ProgressModuleEvent`     | interface | `{ event, project, module, state, duration }`                                                                                                                                    | Represents the line a reporter writes when a module finishes.                                                                                                                                                                |
+| `ProgressEndReason`       | type      | `'passed' \| 'interrupted' \| 'failed'`                                                                                                                                          | Names why a run ended, mirroring Vitest's `TestRunEndReason`.                                                                                                                                                                |
+| `ProgressEndEvent`        | interface | `{ event, reason, overhead, unhandled }`                                                                                                                                         | Represents the line a reporter writes when a run ends.                                                                                                                                                                       |
+| `ProgressEvent`           | type      | `ProgressInitEvent \| ProgressStartEvent \| ProgressCollectedEvent \| ProgressReadyEvent \| ProgressCaseEvent \| ProgressCancelEvent \| ProgressModuleEvent \| ProgressEndEvent` | Represents one line of a progress file, discriminated by `event`.                                                                                                                                                            |
+| `ProgressState`           | type      | `'live' \| ProgressEndReason`                                                                                                                                                    | Names a run's state as a reader sees it: `live` until its `end` line, then the end reason.                                                                                                                                   |
+| `ProgressRelation`        | type      | `'first' \| 'bail' \| 'later'`                                                                                                                                                   | Names how a failure relates to the run's bail: `first` is the earliest failure, `bail` is a failure past the bail setting whose result arrived or whose case ended after the first cancel, and `later` is any other failure. |
+| `ProgressProject`         | interface | `{ name, planned, done, passed, failed, skipped, pending, modules, collected }`                                                                                                  | Represents one project's tallies in a progress reading.                                                                                                                                                                      |
+| `ProgressCase`            | interface | `{ project, name, duration }`                                                                                                                                                    | Represents a case that started and has not reported a result.                                                                                                                                                                |
+| `ProgressFailure`         | interface | `{ project, module, name, time, relation, error }`                                                                                                                               | Represents one failed case, or one module that failed to collect, in a progress reading.                                                                                                                                     |
+| `ProgressCancel`          | interface | `{ reason, time }`                                                                                                                                                               | Represents the first cancel a run recorded.                                                                                                                                                                                  |
+| `ProgressRun`             | interface | `{ pid, wall, state, bail, elapsed, done, planned, exact, rate, remaining, projects, running, cancel, failures, overhead, unhandled }`                                           | Represents where one run stands, read from its progress lines.                                                                                                                                                               |
+| `ProgressPluginInterface` | interface | `{ name, configureVitest() }`                                                                                                                                                    | Represents the Vitest plugin that adds one progress reporter to every run naming a progress file.                                                                                                                            |
 
 #### Constants
 
-| Name                          | Kind  | Signature                                    | Summary                                                                                     |
-| ----------------------------- | ----- | -------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `REMOVE_TREE_MAX_ATTEMPTS`    | const | `10`                                         | Caps the attempts `removeTree` makes before rethrowing a retryable removal error.           |
-| `REMOVE_TREE_RETRY_DELAY_MS`  | const | `100`                                        | Names the synchronous delay, in milliseconds, `removeTree` waits between attempts.          |
-| `REMOVE_TREE_RETRYABLE_CODES` | const | `readonly string[]`                          | Names the error codes `removeTree` retries; every other code rethrows immediately.          |
-| `PROGRESS_VERSION`            | const | `1`                                          | Names the format version a progress file's `init` line carries; a reader refuses any other. |
-| `PROGRESS_MESSAGE_LIMIT`      | const | `300`                                        | Caps the characters a progress error message keeps.                                         |
-| `PROGRESS_LABELS`             | const | `Readonly<Record<ProgressRelation, string>>` | Names the label a rendered progress reading prints for each failure relation.               |
+| Name                          | Kind  | Signature                                    | Summary                                                                                                           |
+| ----------------------------- | ----- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `REMOVE_TREE_MAX_ATTEMPTS`    | const | `10`                                         | Caps the attempts `removeTree` makes before rethrowing a retryable removal error.                                 |
+| `REMOVE_TREE_RETRY_DELAY_MS`  | const | `100`                                        | Names the synchronous delay, in milliseconds, `removeTree` waits between attempts.                                |
+| `REMOVE_TREE_RETRYABLE_CODES` | const | `readonly string[]`                          | Names the error codes `removeTree` retries; every other code rethrows immediately.                                |
+| `PROGRESS_VERSION`            | const | `1`                                          | Names the format version a progress file's `init` line carries; a reader refuses any other.                       |
+| `PROGRESS_MESSAGE_LIMIT`      | const | `300`                                        | Caps the characters a progress error message keeps.                                                               |
+| `PROGRESS_BRAND`              | const | `unique symbol`                              | Keys the brand every `ProgressReporter` carries, registered so that each copy of this package reads the same key. |
+| `PROGRESS_LABELS`             | const | `Readonly<Record<ProgressRelation, string>>` | Names the label a rendered progress reading prints for each failure relation.                                     |
 
 #### Validators
 
@@ -1085,41 +1128,42 @@ The progress reporter is a Vitest reporter a run lists beside its others.
 
 #### Helpers
 
-| Name                     | Kind     | Signature                                                                                                                                                    | Summary                                                                                              |
-| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `readLoopClock`          | function | `() => number`                                                                                                                                               | Reads the loop clock Node stamps on an armed timer, in whole milliseconds.                           |
-| `alignLoopClock`         | function | `(offset?: number) => void`                                                                                                                                  | Spins synchronously past a loop-clock tick and an optional millisecond offset.                       |
-| `readCapture`            | function | `(path: string) => Promise<string>`                                                                                                                          | Reads the lowercase hexadecimal SHA-256 digest of a captured file's bytes.                           |
-| `readInventory`          | function | `(root: URL \| string, targets: readonly string[], options?: InventoryOptions) => Readonly<Record<string, string>>`                                          | Reads files from selected targets below a root directory.                                            |
-| `resolveContained`       | function | `(root: string, target: string) => string \| undefined`                                                                                                      | Resolves a target that stays below a root directory.                                                 |
-| `requireContained`       | function | `(root: string, target: string) => string`                                                                                                                   | Resolves a target that stays below a root directory, refusing a path outside it.                     |
-| `hasScratchPath`         | function | `(root: string, target: string) => boolean`                                                                                                                  | Reports whether a contained entry exists under a scratch directory without following its final link. |
-| `isExcluded`             | function | `(key: string, exclusions: readonly string[]) => boolean`                                                                                                    | Reports whether a root-relative key matches an exclusion.                                            |
-| `readIdentity`           | function | `(status: BigIntStats) => ScratchIdentity`                                                                                                                   | Reads the identity of one allocated directory off a host status.                                     |
-| `matchesIdentity`        | function | `(current: ScratchIdentity, allocation: ScratchIdentity) => boolean`                                                                                         | Reports whether two directory identities name the same allocation.                                   |
-| `readErrorCode`          | function | `(error: unknown) => string \| undefined`                                                                                                                    | Reads the `code` an unknown thrown value carries.                                                    |
-| `createLink`             | function | `(path: string, source: string) => void`                                                                                                                     | Creates a symbolic link with a directory-junction fallback for hosts that refuse symbolic links.     |
-| `removeTree`             | function | `(path: string) => void`                                                                                                                                     | Removes a directory tree, retrying past a transient Windows handle-release race.                     |
-| `isRunning`              | function | `(pid: number) => boolean`                                                                                                                                   | Reports whether a process id names a live process.                                                   |
-| `waitForSocketClose`     | function | `(socket: Socket, options?: WaitOptions) => Promise<void>`                                                                                                   | Waits for a socket to close, accepting a peer reset as a forced close.                               |
-| `normalizeProgressPath`  | function | `(file: string, root: string) => string`                                                                                                                     | Normalizes a module or stack-frame path to the form a progress line carries.                         |
-| `extractProgressError`   | function | `(error: SerializedError, root: string) => ProgressError`                                                                                                    | Extracts the message line and location a progress line keeps from one Vitest error.                  |
-| `matchesPlannedCase`     | function | `(test: { readonly options: { readonly mode: string; }; }) => boolean`                                                                                       | Reports whether a collected case is one the run plans to report.                                     |
-| `readFileSnapshot`       | function | `(path: string) => Buffer`                                                                                                                                   | Reads the bytes a file holds when it is opened, leaving out every byte appended during the read.     |
-| `filterProgressEvents`   | function | `<TName extends ProgressEvent['event']>(events: readonly ProgressEvent[], name: TName) => ReadonlyArray<Extract<ProgressEvent, { readonly event: TName; }>>` | Filters the progress lines of one event.                                                             |
-| `extractProgressEvents`  | function | `(text: string) => readonly ProgressEvent[]`                                                                                                                 | Extracts the progress lines a text holds, skipping a partial last line.                              |
-| `computeProgressRun`     | function | `(events: readonly ProgressEvent[], now: number) => ProgressRun \| undefined`                                                                                | Computes where the run one process wrote stands, from its last `init` line on.                       |
-| `computeProgress`        | function | `(events: readonly ProgressEvent[], now: number) => readonly ProgressRun[]`                                                                                  | Computes where every run a progress file holds stands, one run per writing process.                  |
-| `readProgress`           | function | `(path: string, now?: number) => readonly ProgressRun[]`                                                                                                     | Reads where every run a progress file holds stands, live or finished.                                |
-| `renderDuration`         | function | `(milliseconds: number) => string`                                                                                                                           | Renders a duration as whole minutes and seconds.                                                     |
-| `renderProgress`         | function | `(runs: readonly ProgressRun[]) => string`                                                                                                                   | Renders progress runs as the text a person reads mid-run.                                            |
-| `destroyScratch`         | function | `(scratch: ScratchInterface, options?: WaitOptions) => Promise<void>`                                                                                        | Destroys a scratch directory, retrying until the host releases it.                                   |
-| `requestUpgrade`         | function | `(port: number, options?: UpgradeOptions) => Promise<UpgradeResult>`                                                                                         | Drives a real client upgrade request against a loopback port and reports what the server did.        |
-| `supportsDirectoryLinks` | function | `() => boolean`                                                                                                                                              | Checks whether this host links a directory, by creating one link and reading through it.             |
-| `supportsFileLinks`      | function | `() => boolean`                                                                                                                                              | Checks whether this host links a file, by creating one link and reading the file through it.         |
-| `supportsMode`           | function | `() => boolean`                                                                                                                                              | Checks whether POSIX permission bits round-trip through this host's `chmod` and `stat`.              |
-| `supportsCase`           | function | `() => boolean`                                                                                                                                              | Checks whether this host treats two names differing only by case as distinct files.                  |
-| `supportsBytes`          | function | `() => boolean`                                                                                                                                              | Checks whether this host accepts a filename carrying a raw byte no UTF-8 decoder resolves.           |
+| Name                      | Kind     | Signature                                                                                                                                                    | Summary                                                                                                                            |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `readLoopClock`           | function | `() => number`                                                                                                                                               | Reads the loop clock Node stamps on an armed timer, in whole milliseconds.                                                         |
+| `alignLoopClock`          | function | `(offset?: number) => void`                                                                                                                                  | Spins synchronously past a loop-clock tick and an optional millisecond offset.                                                     |
+| `readCapture`             | function | `(path: string) => Promise<string>`                                                                                                                          | Reads the lowercase hexadecimal SHA-256 digest of a captured file's bytes.                                                         |
+| `readInventory`           | function | `(root: URL \| string, targets: readonly string[], options?: InventoryOptions) => Readonly<Record<string, string>>`                                          | Reads files from selected targets below a root directory.                                                                          |
+| `resolveContained`        | function | `(root: string, target: string) => string \| undefined`                                                                                                      | Resolves a target that stays below a root directory.                                                                               |
+| `requireContained`        | function | `(root: string, target: string) => string`                                                                                                                   | Resolves a target that stays below a root directory, refusing a path outside it.                                                   |
+| `hasScratchPath`          | function | `(root: string, target: string) => boolean`                                                                                                                  | Reports whether a contained entry exists under a scratch directory without following its final link.                               |
+| `isExcluded`              | function | `(key: string, exclusions: readonly string[]) => boolean`                                                                                                    | Reports whether a root-relative key matches an exclusion.                                                                          |
+| `readIdentity`            | function | `(status: BigIntStats) => ScratchIdentity`                                                                                                                   | Reads the identity of one allocated directory off a host status.                                                                   |
+| `matchesIdentity`         | function | `(current: ScratchIdentity, allocation: ScratchIdentity) => boolean`                                                                                         | Reports whether two directory identities name the same allocation.                                                                 |
+| `readErrorCode`           | function | `(error: unknown) => string \| undefined`                                                                                                                    | Reads the `code` an unknown thrown value carries.                                                                                  |
+| `createLink`              | function | `(path: string, source: string) => void`                                                                                                                     | Creates a symbolic link with a directory-junction fallback for hosts that refuse symbolic links.                                   |
+| `removeTree`              | function | `(path: string) => void`                                                                                                                                     | Removes a directory tree, retrying past a transient Windows handle-release race.                                                   |
+| `isRunning`               | function | `(pid: number) => boolean`                                                                                                                                   | Reports whether a process id names a live process, reading each of its threads on Linux.                                           |
+| `waitForSocketClose`      | function | `(socket: Socket, options?: WaitOptions) => Promise<void>`                                                                                                   | Waits for a socket to close, accepting a peer reset as a forced close.                                                             |
+| `normalizeProgressPath`   | function | `(file: string, root: string) => string`                                                                                                                     | Normalizes a module or stack-frame path to the form a progress line carries.                                                       |
+| `extractProgressError`    | function | `(error: SerializedError, root: string) => ProgressError`                                                                                                    | Extracts the message line and location a progress line keeps from one Vitest error.                                                |
+| `matchesPlannedCase`      | function | `(test: { readonly options: { readonly mode: string; }; }) => boolean`                                                                                       | Reports whether a collected case is one the run plans to report.                                                                   |
+| `matchesProgressReporter` | function | `(value: unknown) => boolean`                                                                                                                                | Checks whether a value is a progress reporter from any copy of this package, by the brand each one carries under `PROGRESS_BRAND`. |
+| `readFileSnapshot`        | function | `(path: string) => Buffer`                                                                                                                                   | Reads the bytes a file holds when it is opened, leaving out every byte appended during the read.                                   |
+| `filterProgressEvents`    | function | `<TName extends ProgressEvent['event']>(events: readonly ProgressEvent[], name: TName) => ReadonlyArray<Extract<ProgressEvent, { readonly event: TName; }>>` | Filters the progress lines of one event.                                                                                           |
+| `extractProgressEvents`   | function | `(text: string) => readonly ProgressEvent[]`                                                                                                                 | Extracts the progress lines a text holds, skipping a partial last line.                                                            |
+| `computeProgressRun`      | function | `(events: readonly ProgressEvent[], now: number) => ProgressRun \| undefined`                                                                                | Computes where the run one process wrote stands, from its last `init` line on.                                                     |
+| `computeProgress`         | function | `(events: readonly ProgressEvent[], now: number) => readonly ProgressRun[]`                                                                                  | Computes where every run a progress file holds stands, one run per writing process.                                                |
+| `readProgress`            | function | `(path: string, now?: number) => readonly ProgressRun[]`                                                                                                     | Reads where every run a progress file holds stands, live or finished.                                                              |
+| `renderDuration`          | function | `(milliseconds: number) => string`                                                                                                                           | Renders a duration as whole minutes and seconds.                                                                                   |
+| `renderProgress`          | function | `(runs: readonly ProgressRun[]) => string`                                                                                                                   | Renders progress runs as the text a person reads mid-run.                                                                          |
+| `destroyScratch`          | function | `(scratch: ScratchInterface, options?: WaitOptions) => Promise<void>`                                                                                        | Destroys a scratch directory, retrying until the host releases it.                                                                 |
+| `requestUpgrade`          | function | `(port: number, options?: UpgradeOptions) => Promise<UpgradeResult>`                                                                                         | Drives a real client upgrade request against a loopback port and reports what the server did.                                      |
+| `supportsDirectoryLinks`  | function | `() => boolean`                                                                                                                                              | Checks whether this host links a directory, by creating one link and reading through it.                                           |
+| `supportsFileLinks`       | function | `() => boolean`                                                                                                                                              | Checks whether this host links a file, by creating one link and reading the file through it.                                       |
+| `supportsMode`            | function | `() => boolean`                                                                                                                                              | Checks whether POSIX permission bits round-trip through this host's `chmod` and `stat`.                                            |
+| `supportsCase`            | function | `() => boolean`                                                                                                                                              | Checks whether this host treats two names differing only by case as distinct files.                                                |
+| `supportsBytes`           | function | `() => boolean`                                                                                                                                              | Checks whether this host accepts a filename carrying a raw byte no UTF-8 decoder resolves.                                         |
 
 `hasScratchPath` takes a scratch's absolute path and a relative or absolute target. It checks
 containment before inspecting the root, returns `false` for a missing root or entry, and refuses a
@@ -1307,6 +1351,12 @@ adopted.release()
 | `act`     | `Promise<void> \| void` | Applies the transition's event to the arranged entity.      |
 | `assert`  | `Promise<void> \| void` | Checks that the entity reached the transition's `to` state. |
 
+#### `ProgressPluginInterface`
+
+| Method            | Returns | Summary                                                                                                                                                                                                                |
+| ----------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configureVitest` | `void`  | Adds a `ProgressReporter` to the run's reporters when `outputFile` names `progress`, and adds nothing when no progress file is named or the reporters already hold a `ProgressReporter` from any copy of this package. |
+
 #### `LoopbackInterface`
 
 | Method    | Returns         | Summary                                                                                                             |
@@ -1322,9 +1372,10 @@ adopted.release()
 
 #### `PortfolioInterface`
 
-| Method  | Returns                        | Summary                                                                                                |
-| ------- | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `place` | `Promise<string \| undefined>` | Places one registered state: applies the variant, stages the pane, and writes the verified screenshot. |
+| Method  | Returns                        | Summary                                                                                                                                                                                       |
+| ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `place` | `Promise<string \| undefined>` | Places one registered state: applies the variant, stages the pane, and writes the verified screenshot.                                                                                        |
+| `view`  | `Promise<string \| undefined>` | Places one registered state as the declared viewport at the scroll the journey reached: applies the variant, stages the pane at the variant's size alone, and writes the verified screenshot. |
 
 #### `JournalInterface`
 
@@ -1461,65 +1512,68 @@ what the link reaches, not on what it stores.
 Every message `src/browser` throws. Keep them distinct: a journey asserts the one it means, and
 absent, present-but-gated, and ambiguous are different findings about an interface.
 
-| Voice                                                                                                                                                                      | Thrown by                                      |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `No interactive element has the accessible name "<name>"`                                                                                                                  | `resolveRendered`                              |
-| `Interactive target "<name>" is not visible and focus-reachable`                                                                                                           | `resolveRendered`                              |
-| `Interactive target "<name>" is ambiguous across <n> elements`                                                                                                             | `resolveRendered`                              |
-| `Interactive target "<name>" could not be resolved`                                                                                                                        | `resolveRendered`                              |
-| `Interactive target "<name>" is unreachable after scrolling`                                                                                                               | `resolveAccessible`                            |
-| `Interactive target "<name>" is not reachable inside "<region>"`                                                                                                           | `resolveAccessibleWithin`                      |
-| `Interactive target "<name>" is ambiguous across <n> elements inside "<region>"`                                                                                           | `resolveAccessibleWithin`                      |
-| `Interactive target "<name>" could not be resolved inside "<region>"`                                                                                                      | `resolveAccessibleWithin`                      |
-| `Native disclosure "<name>" is not visible and focus-reachable`                                                                                                            | `clickDisclosure`                              |
-| `Native disclosure "<name>" is ambiguous across <n> elements`                                                                                                              | `clickDisclosure`                              |
-| `Native disclosure "<name>" could not be resolved`                                                                                                                         | `clickDisclosure`                              |
-| `The element is not connected to a document, so it has no point to read`                                                                                                   | `readProtocolPoint`                            |
-| `Interactive target "<name>" is not reachable through forward Tab traversal: <trail>`                                                                                      | `driveTraversal`                               |
-| `Named region "<name>" is not visible`                                                                                                                                     | `readPerception`                               |
-| `Named region "<name>" is ambiguous across <n> elements`                                                                                                                   | `readPerception`                               |
-| `Named region "<name>" could not be resolved`                                                                                                                              | `readPerception`                               |
-| `Interactive target "<name>" does not carry a value`                                                                                                                       | `readControlValue`                             |
-| `Computed foreground color is unavailable`                                                                                                                                 | `readContrast`                                 |
-| `Computed background color is unavailable`                                                                                                                                 | `readColorContrast`                            |
-| `Color "<value>" is unreadable`                                                                                                                                            | `readColorContrast`                            |
-| `Contrast opacity must be between 0 and 1`                                                                                                                                 | `readColorContrast`                            |
-| `The element is not connected to a document, so it has no clipping ancestors to read`                                                                                      | `collectClippingAncestors`, `readClippedBlock` |
-| `Tester pane is unavailable for a capture`                                                                                                                                 | `stagePane`                                    |
-| `Tester pane rendered <w>x<h> for a <w>x<h> viewport`                                                                                                                      | `stagePane`                                    |
-| `Capture frame at <path> never settled after <n> restagings: <h> over a <h> pane[; scroll regions still hiding rows: <region> hides <n> px, …]`                            | `captureFrame`                                 |
-| `Capture frame at <path> leaves rows hidden in scroll regions: <region> <cause> and hides <n> px, so <correction>. Shoot the frame without unrolled to keep them scrolled` | `captureFrame`                                 |
-| `Capture frame was written to <path> where <path> was asked for`                                                                                                           | `captureFrame`, `verifyFrame`                  |
-| `Capture frame at <path> is not the one this run shot`                                                                                                                     | `captureFrame`, `verifyFrame`                  |
-| `Capture path must be absolute: <path>`                                                                                                                                    | `readCapture`                                  |
-| `Capture frame at <path> could not be read`                                                                                                                                | `readFrame`                                    |
-| `Capture frame at <path> is not an image this browser decodes`                                                                                                             | `readFrame`                                    |
-| `Capture frame at <path> is not an image this browser decodes: <w>x<h> device pixels`                                                                                      | `readFrame`                                    |
-| `Capture frame at <path> cannot be measured without a 2D canvas`                                                                                                           | `readFrame`                                    |
-| `Shot is not an image this browser decodes`                                                                                                                                | `readShotPixel`                                |
-| `Shot cannot be measured without a 2D canvas`                                                                                                                              | `readShotPixel`                                |
-| `Shot pixel position must be a fraction from 0 to 1`                                                                                                                       | `readShotPixel`                                |
-| `Capture variant "<name>" is not registered`                                                                                                                               | `createPortfolio`                              |
-| `Capture state "<state>" is not registered`                                                                                                                                | `place`                                        |
-| `Capture state "<state>" is already placed`                                                                                                                                | `place`                                        |
-| `IndexedDB database "<name>" could not be deleted`                                                                                                                         | `removeDatabase`                               |
-| `IndexedDB database "<name>" is blocked by an open connection`                                                                                                             | `removeDatabase`                               |
-| `Key sequence "<keys>" was sent with nothing focused`                                                                                                                      | `pressKeys`                                    |
-| `Focus sits in a frame from another origin, which cannot be read`                                                                                                          | `readActiveElement`                            |
-| `Focus traversal did not end`                                                                                                                                              | `walkFocus`                                    |
-| `The start element cannot take focus`                                                                                                                                      | `collectTabStops`                              |
-| `Stability frames must be a positive integer`                                                                                                                              | `waitForStability`                             |
-| `Condition "<description>" did not hold within <n>ms (waited <n>ms)`                                                                                                       | `waitForStability`                             |
-| `Condition "<subject>" did not hold within <n>ms (waited <n>ms) (last states: <states>)`                                                                                   | `waitForState`                                 |
-| `Animation subject is not connected`                                                                                                                                       | `waitForAnimations`                            |
-| `Animation "<subject>" did not settle within <n>ms (waited <n>ms): <animations>`                                                                                           | `waitForAnimations`                            |
-| `Class census walked no element`                                                                                                                                           | `readCensus`                                   |
-| `Contrast control cannot straddle the bar <bar>`                                                                                                                           | `buildContrast`                                |
-| `Access is denied for <operation> "<key>"`                                                                                                                                 | `buildDenial`                                  |
-| `No room is left for <key>`                                                                                                                                                | `createStorage`                                |
-| `Storage quota must be a non-negative integer`                                                                                                                             | `createStorage`                                |
-| `Statechart harness mounted no transition`                                                                                                                                 | `createHarness`                                |
-| `Statechart harness carries no status`                                                                                                                                     | `status`                                       |
+| Voice                                                                                                                                                                      | Thrown by                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `No interactive element has the accessible name "<name>"`                                                                                                                  | `resolveRendered`                                               |
+| `Interactive target "<name>" is not visible and focus-reachable`                                                                                                           | `resolveRendered`                                               |
+| `Interactive target "<name>" is ambiguous across <n> elements`                                                                                                             | `resolveRendered`                                               |
+| `Interactive target "<name>" could not be resolved`                                                                                                                        | `resolveRendered`                                               |
+| `Interactive target "<name>" is unreachable after scrolling`                                                                                                               | `resolveAccessible`                                             |
+| `Interactive target "<name>" is not reachable inside "<region>"`                                                                                                           | `resolveAccessibleWithin`                                       |
+| `Interactive target "<name>" is ambiguous across <n> elements inside "<region>"`                                                                                           | `resolveAccessibleWithin`                                       |
+| `Interactive target "<name>" could not be resolved inside "<region>"`                                                                                                      | `resolveAccessibleWithin`                                       |
+| `Native disclosure "<name>" is not visible and focus-reachable`                                                                                                            | `clickDisclosure`                                               |
+| `Native disclosure "<name>" is ambiguous across <n> elements`                                                                                                              | `clickDisclosure`                                               |
+| `Native disclosure "<name>" could not be resolved`                                                                                                                         | `clickDisclosure`                                               |
+| `The element is not connected to a document, so it has no point to read`                                                                                                   | `readProtocolPoint`                                             |
+| `Interactive target "<name>" is not reachable through forward Tab traversal: <trail>`                                                                                      | `driveTraversal`                                                |
+| `Named region "<name>" is not visible`                                                                                                                                     | `readPerception`                                                |
+| `Named region "<name>" is ambiguous across <n> elements`                                                                                                                   | `readPerception`                                                |
+| `Named region "<name>" could not be resolved`                                                                                                                              | `readPerception`                                                |
+| `Interactive target "<name>" does not carry a value`                                                                                                                       | `readControlValue`                                              |
+| `Computed foreground color is unavailable`                                                                                                                                 | `readContrast`                                                  |
+| `Computed background color is unavailable`                                                                                                                                 | `readColorContrast`                                             |
+| `Color "<value>" is unreadable`                                                                                                                                            | `readColorContrast`                                             |
+| `Contrast opacity must be between 0 and 1`                                                                                                                                 | `readColorContrast`                                             |
+| `The element is not connected to a document, so it has no clipping ancestors to read`                                                                                      | `collectClippingAncestors`, `readClipBound`, `readClippedBlock` |
+| `Tester pane is unavailable for a capture`                                                                                                                                 | `stagePane`                                                     |
+| `Tester pane rendered <w>x<h> for a <w>x<h> viewport`                                                                                                                      | `stagePane`                                                     |
+| `Capture frame at <path> never settled after <n> restagings: <h> over a <h> pane[; scroll regions still hiding rows: <region> hides <n> px, …]`                            | `captureFrame`                                                  |
+| `Capture frame at <path> leaves rows hidden in scroll regions: <region> <cause> and hides <n> px, so <correction>. Shoot the frame without unrolled to keep them scrolled` | `captureFrame`                                                  |
+| `Capture frame at <path> cannot cover the viewport: a fixed box on the root element lays out at <w>x<h> from (<x>, <y>) in a <w>x<h> viewport`                             | `captureViewport`                                               |
+| `Capture frame was written to <path> where <path> was asked for`                                                                                                           | `captureFrame`, `captureViewport`, `verifyFrame`                |
+| `Capture frame at <path> is not the one this run shot`                                                                                                                     | `captureFrame`, `captureViewport`, `verifyFrame`                |
+| `Capture path must be absolute: <path>`                                                                                                                                    | `readCapture`                                                   |
+| `Capture frame at <path> could not be read`                                                                                                                                | `readFrame`                                                     |
+| `Capture frame at <path> is not an image this browser decodes`                                                                                                             | `readFrame`                                                     |
+| `Capture frame at <path> is not an image this browser decodes: <w>x<h> device pixels`                                                                                      | `readFrame`                                                     |
+| `Capture frame at <path> cannot be measured without a 2D canvas`                                                                                                           | `readFrame`                                                     |
+| `Shot is not an image this browser decodes`                                                                                                                                | `readShotPixel`                                                 |
+| `Shot cannot be measured without a 2D canvas`                                                                                                                              | `readShotPixel`                                                 |
+| `Shot pixel position must be a fraction from 0 to 1`                                                                                                                       | `readShotPixel`                                                 |
+| `Capture variant "<name>" is not registered`                                                                                                                               | `createPortfolio`                                               |
+| `Capture scope "<scope>" of state "<state>" is not one path segment`                                                                                                       | `expandCaptures`, `createPortfolio`                             |
+| `Capture state "<state>" is not registered`                                                                                                                                | `createPortfolio`, `place`, `view`                              |
+| `Capture state "<state>" is already placed`                                                                                                                                | `place`, `view`                                                 |
+| `Capture state "<state>" cannot be viewed in an unrolled portfolio: place it to shoot every row, or view it from a portfolio created without unrolled`                     | `view`, `describeUnrolledView`                                  |
+| `IndexedDB database "<name>" could not be deleted`                                                                                                                         | `removeDatabase`                                                |
+| `IndexedDB database "<name>" is blocked by an open connection`                                                                                                             | `removeDatabase`                                                |
+| `Key sequence "<keys>" was sent with nothing focused`                                                                                                                      | `pressKeys`                                                     |
+| `Focus sits in a frame from another origin, which cannot be read`                                                                                                          | `readActiveElement`                                             |
+| `Focus traversal did not end`                                                                                                                                              | `walkFocus`                                                     |
+| `The start element cannot take focus`                                                                                                                                      | `collectTabStops`                                               |
+| `Stability frames must be a positive integer`                                                                                                                              | `waitForStability`                                              |
+| `Condition "<description>" did not hold within <n>ms (waited <n>ms)`                                                                                                       | `waitForStability`                                              |
+| `Condition "<subject>" did not hold within <n>ms (waited <n>ms) (last states: <states>)`                                                                                   | `waitForState`                                                  |
+| `Animation subject is not connected`                                                                                                                                       | `waitForAnimations`                                             |
+| `Animation "<subject>" did not settle within <n>ms (waited <n>ms): <animations>`                                                                                           | `waitForAnimations`                                             |
+| `Class census walked no element`                                                                                                                                           | `readCensus`                                                    |
+| `Contrast control cannot straddle the bar <bar>`                                                                                                                           | `buildContrast`                                                 |
+| `Access is denied for <operation> "<key>"`                                                                                                                                 | `buildDenial`                                                   |
+| `No room is left for <key>`                                                                                                                                                | `createStorage`                                                 |
+| `Storage quota must be a non-negative integer`                                                                                                                             | `createStorage`                                                 |
+| `Statechart harness mounted no transition`                                                                                                                                 | `createHarness`                                                 |
+| `Statechart harness carries no status`                                                                                                                                     | `status`                                                        |
 
 `readContrast` measures through `readColorContrast`, so its background refusal is that row's voice,
 and `readRing` never raises it, because it names `CANVAS_COLOR` as the floor on every reading.
@@ -1910,13 +1964,12 @@ These hold across `src/core`, `src/browser`, `src/server`, and this guide.
     stopped, and `steps` and `output` hand out snapshots. There is no shared instance: a file that
     needs one journal per scenario creates one per scenario.
 18. **The capture layer depends on the Vitest runner's own tester layout, deliberately.** A
-    screenshot is taken off the page the runner painted, and `vitest@4.1.12` lays its tester out
-    inside a smaller page and fits it by scaling the pane the tester sits in, so a frame shot through
-    that scale is a thumbnail of the surface. `stagePane` therefore reaches into that layout: the
-    `iframe[data-vitest]` selector and the `--tester-transform`, `--tester-margin-left`,
-    `--viewport-width`, and `--viewport-height` custom properties are the runner's, not this
-    package's. Direct `transform: none !important` rules also suppress Vitest 5's pane and iframe
-    scaling. The disk check compares Node and browser SHA-256 digests where the consumer registers
+    screenshot is taken off the page the runner painted, and `vitest@5.1.0` lays its tester out
+    inside a smaller page and fits it with a CSS scale, so a frame shot through that scale is a
+    thumbnail of the surface. `stagePane` therefore reaches into that layout: the
+    `iframe[data-vitest]` selector and the `--viewport-width` and `--viewport-height` custom
+    properties are the runner's, not this package's, and `transform: none !important` rules on the
+    pane and iframe suppress the fitting scale. The disk check compares Node and browser SHA-256 digests where the consumer registers
     `readCapture`, and keeps the runner's built-in base64 read-back otherwise. That is contract
     rather than accident. A Vitest release that renames any of
     them reddens `stagePane`'s size check, which throws
@@ -2167,8 +2220,10 @@ the helper rather than to the host, and each names what to reach for instead.
   for one frame.
 - **`settleCapture` holds endless animations until its resume runs.** It parks the pointer through
   `parkPointer`, so a held press stays held and only loses its hover and pressed paint; `pointer: false`
-  leaves the pointer, its hover, and that paint where they are. It waits out every finite animation
-  in the document, root element included, then pauses each endless one at its first frame and
+  leaves the pointer, its hover, and that paint where they are. It waits one frame, so a transition
+  the page starts from an animation-frame callback after the act is running, waits out every finite
+  animation in the document, root element included, yields one task so that a listener on an animation's end
+  event, such as `transitionend`, has run, then pauses each endless one at its first frame and
   resolves to the resume. Call the resume from a `finally` block after the frame is shot. A settle
   whose wait exhausts throws before it holds anything, so it owes no resume.
 - **`readShotPixel` reads a shot at the runner's scale.** The position is a fraction of the shot,
@@ -3051,7 +3106,7 @@ Object.keys(
 Object.keys(
 	readInventory(root, ['src'], { extensions: ['.ts'], exclude: ['src/server', 'src/browser'] }),
 )
-// ['src/bin/reporter.ts', 'src/core/Production.ts', 'src/core/Teardown.ts', 'src/core/constants.ts', 'src/core/factories.ts',
+// ['src/core/Production.ts', 'src/core/Teardown.ts', 'src/core/constants.ts', 'src/core/factories.ts',
 //  'src/core/helpers.ts', 'src/core/index.ts', 'src/core/types.ts', 'src/core/validators.ts']
 
 // An exclusion also applies to a target you name, so naming one file below an excluded directory
@@ -3281,7 +3336,10 @@ synchronous write per line, so a second process can read the file at any moment.
 and `case` lines only for the cases each module plans to run, so a name filter's removed cases
 never count, and it writes one `case` line per planned case even where a bail makes Vitest report a
 case twice. It records every `cancel` Vitest delivers, registering its listener once a module
-queues, because Vitest clears cancel listeners after `onTestRunStart`.
+queues, because Vitest clears cancel listeners after `onTestRunStart`. When one Vitest holds several
+instances, such as two a configuration lists, only the first in `vitest.config.reporters` writes,
+so a run is never counted twice. Each instance carries a brand under `PROGRESS_BRAND`, and
+`matchesProgressReporter` reads it, so an instance from another copy of the package counts too.
 
 This read summarizes the file once, from another process or the same one, and renders it.
 
@@ -3298,8 +3356,14 @@ console.log(renderProgress(runs))
 and writes nothing. It returns one run per writing process, each read from that process's last
 `init` line, and each run carries that line's `wall` time. The rendered text gives cases done
 against planned per project, with `+` on the total until every module is collected, the elapsed
-time, rate, and estimate, the running cases, the cancel, and each failure under its module and case
-with its first message line and location. A module that fails to collect, such as one that throws
+time, rate, and estimate, all counting the cases that passed, failed, or skipped. Under a bail,
+Vitest reports `skipped` for the case a module is running when the cancel arrives and for each case
+left after it in that module, and gives a reporter nothing that tells those cases from a case that
+skipped itself, so they count as done, in the rate, and in the estimate, as the JSON report counts
+them. Each case a bail leaves in a module that was running no case reports `pending`, as the JSON
+report reads it, stays outside done, and its project line names it beside the other tallies. The
+rendered text also gives the running cases, the cancel, and
+each failure under its module and case with its first message line and location. A module that fails to collect, such as one that throws
 while it is imported, reads as a failure under its module alone, and as `FIRST` when its line comes
 before every other failure line. The earliest failure line reads `FIRST` even when Vitest wrote the
 cancel before its result. Only a failed case can trigger a bail, so under a bail the first failed
@@ -3313,12 +3377,30 @@ from its last `init` line, and `wall` tells them apart. A run killed before its 
 `live` until its file is deleted. Watch mode initializes the reporter once, so its reruns pile under
 one `init` line and are outside what the format reads.
 
-Without a configuration, name the published entry and its file on the command line. Vitest
-constructs the entry's default export, `ProgressReporter`.
+A command line that passes `--reporter` flags replaces the reporters a configuration lists, so
+mount the progress plugin instead. Its hook adds one `ProgressReporter` after the flags are read,
+and only when the resolved `outputFile` names `progress`, from `--outputFile.progress` or from the
+configuration's `outputFile`.
 
-```bash
-npx vitest run --reporter=@orkestrel/test/reporter --outputFile.progress=tmp/runs/progress.jsonl
+```ts
+import { defineConfig } from 'vitest/config'
+import { createProgressPlugin } from '@orkestrel/test/server'
+
+export default defineConfig({
+	// Vitest calls the plugin's configureVitest hook before it constructs the run's reporters.
+	plugins: [createProgressPlugin()],
+	test: { projects: [() => ({ test: { name: 'unit' } })] },
+})
+// npx vitest run --reporter=dot --outputFile.progress=tmp/runs/progress.jsonl
 ```
+
+The hook runs once for each project that carries the plugin, and a project that mounts the plugin
+itself makes Vitest evaluate the configuration again. A configuration that imports the package by a
+file path loads a separate copy of the module for each evaluation. The hook adds nothing while the
+run's reporters already hold a `ProgressReporter` from any copy, read by its brand, so the run
+writes one `init` line wherever the plugin is mounted, whether the configuration imports the
+package by name or by a file path. A run whose resolved `outputFile` names no `progress` file gets no reporter and writes
+nothing.
 
 ### Probe what the host supports
 
@@ -4061,18 +4143,25 @@ portfolio.files // the same four names, so a proof compares one expansion agains
 
 // Placed from inside the journey that reached the state, right after the assertion that proves it.
 await portfolio.place('start-empty')
-// A run that omits `enabled` returns undefined here, resizes nothing, and records nothing.
+// Shot as the declared viewport at the scroll the journey reached, rather than the whole page.
+await portfolio.view('answer-ideal')
+// A run that omits `enabled` returns undefined here, resizes nothing, and writes nothing.
 
 portfolio.place('answer-partial') // rejects: Capture state "answer-partial" is not registered
 ```
 
 Settle the page before each frame of a capture run. `settleCapture` parks the pointer, waits out
 every finite animation in the document, and holds each endless one at its first frame, so a hover,
-a transition caught part way, and a spinner's phase stay out of the picture. It resolves to the
-resume; call `place` after it, and call the resume from a `finally` block, so the held animations
-run again whether or not the frame was written. Pass `pointer: false` where the pointer is part of
-the state, such as a drag in flight. Gate the settle on the flag that `enabled` takes: an ordinary run's
-`place` shoots nothing, and parking the pointer there changes the journey that run is proving.
+a transition caught part way, and a spinner's phase stay out of the picture. A listener the page
+runs on a transition's end has run when the settle resolves, so the layout it finalizes is the one
+shot. It resolves to the resume; call `place` after it, and call the resume from a `finally`
+block, so the held animations run again whether or not the frame was written. Pass
+`pointer: false` where the pointer is part of the state, such as a drag in flight. Gate the settle
+on the flag that `enabled` takes: an ordinary run's `place` shoots nothing, and parking the
+pointer there changes the journey that run is proving.
+Where a run navigates under reduced motion, call `stageMedia` with `{ motion: true }` before each
+settle; the frame then equals a default-motion run's only where the application fixes no state at
+mount from the motion query.
 Where a frame holds a scroll region, record `describeScrollRegions` of what `collectScrollRegions`
 finds beside it, because a picture does not show how far a pane scrolls.
 
@@ -4226,7 +4315,10 @@ Each entry names the contracts its file proves. The test names carry the cases.
   against constructed markup. The `recordConsole` proofs cover its line format, forwarding, and recording before forwarding. The touch proofs cover a pointer-dependent target beside a sibling,
   a target moving across painted frames before settling, a supplied stability budget that refuses
   the tap, and both orders of media and touch teardown. The pointer proof restores the first coarse
-  reading after fine then coarse staging. The file-drag proofs reach a target under a smooth root
+  reading after fine then coarse staging. Every touch and pointer proof that asserts a fine pointer
+  after touch emulation ends first turns touch emulation on and off, and skips with that mechanism
+  named where the browser keeps `(pointer: none)` afterward, as Chromium build 1243 does. The
+  file-drag proofs reach a target under a smooth root
   and refuse a file name without scrolling or writing any file in the batch. The `releaseTouch`
   rethrow of a non-idle protocol error is covered by review: its cancellation parameters are fixed,
   and no controllable non-idle refusal was found through the browser provider without replacing
@@ -4269,8 +4361,12 @@ Each entry names the contracts its file proves. The test names carry the cases.
   outside the subject left out, and a detached element read as two empty lists. `settleCapture`
   takes a hovered control's transition waited out and a spinner held at its first frame until the
   resume sets it running, a held press whose hover and pressed paint `pointer: false` leaves in
-  place beside the default park that takes both away, and an exhausted wait refused with nothing
-  held. `collectScrollRegions` takes a vertical and a horizontal scroller beside a box whose content
+  place beside the default park that takes both away, an exhausted wait and an aborted one refused
+  with nothing held, a transition the page starts from an animation-frame callback waited out, a
+  transition's end listener run by the time it resolves, and one frame shot
+  across repeated settles of a held spinner, a parked hover, and a finalized transition, beside a
+  running spinner, a kept hover, and an unfinalized transition that each shoot another.
+  `collectScrollRegions` takes a vertical and a horizontal scroller beside a box whose content
   fits, a clipping box, and a hidden one, each axis alone, and a scrolling root counted itself;
   `describeScrollRegions` takes a region named by its tag, its id, and its cut accessible name with
   its offsets after a scroll, the window's position after a scroll, and an empty population.
@@ -4399,7 +4495,18 @@ Each entry names the contracts its file proves. The test names carry the cases.
   missing paths. `captureFrame` takes a real file written, read back, and matched, with a planted file as the
   comparison's negative control, one element shot rather than the page, and a pane pinned to the
   wrong size by a rule of higher specificity, which is the refusal that also proves the release runs
-  on the failing path. It also takes a document taller than the pane, whose frame equals the
+  on the failing path. `captureViewport` takes five 400-row bands, scrolled to row 600 with the
+  viewport prepared and with it resized, and holds rows 600 to 999, green at the top and blue on the
+  floor, with no resize past the starting height and the scroll kept; the plain frame of the same
+  page is its control, restaged to 2000 rows and ending on purple. A page rule marked important
+  that sets `opacity` and a magenta background on the root element's `div` children leaves that
+  frame green over blue, beside the control that the cover's declarations written without priority
+  read the rule's opacity. A root element under a paint containment refuses the cover with the pane
+  and the scroll handed back. A type assertion pins `ViewportOptions` to the path and the viewport
+  and keeps `FrameOptions` without a viewport switch. `recordScroll` scrolls the window and a scroll
+  container back to the positions it recorded, and `describeUnrolledView` renders the refusal text
+  word for word. It also takes a document taller than
+  the pane, whose frame equals the
   fixture's own declared 1600 rows and ends on the background the document declares rather than on
   the runner's canvas, and a document shorter than the pane, whose frame stays at the pane's height
   on that same floor. The equality is the control that an overshoot adds no rows: a frame taller
@@ -4460,7 +4567,10 @@ Each entry names the contracts its file proves. The test names carry the cases.
   the box its scroll height reads, with a trailing margin counted, and a descendant capped at an
   inner frame's clip edge, and leaves out a fixed box and an absolute box laid out against a block
   outside the region until the region is positioned; it reads the rows a host scrolls in its own
-  shadow root and the slotted rows a shadow scroller holds. The `collectRegionRows` function
+  shadow root and the slotted rows a shadow scroller holds. `measureRegion` and `measureContent`
+  each read a shared clipping ancestor's computed style as many times under twelve rows as under
+  one, counted through `recordStyleReads`, beside the control that a memo per row reads it again
+  for every row. The `collectRegionRows` function
   takes the flat tree through an open shadow root and its slot, an absolute box under a positioned
   ancestor and a fixed box under a transformed one, and leaves out an absolute box and a fixed box
   with their subtrees where no ancestor at or under the region contains them. The `containsFixed`
@@ -4532,13 +4642,22 @@ Each entry names the contracts its file proves. The test names carry the cases.
   contract, and the portfolio's refusals, its disabled gate, and its writes. Creation refuses an
   unregistered variant name; the registry expands across every variant whether or not the run
   writes; a run
-  that is not enabled applies nothing, writes nothing, and records nothing, yet refuses an
+  that is not enabled applies nothing and writes nothing, yet refuses an
   unregistered state and a second placement of one state, and accepts two distinct registered states
-  with its lists still empty; an enabled run applies
+  into `observed` with `placements` and `paths` still empty; a projected run writes its one state
+  and accepts the rest unwritten; a scoped run writes each state under its scope and keeps placement
+  order across interleaved scopes; creation refuses an unregistered projected state and a scope that
+  is not one path segment; an enabled run applies
   the variant, resizes the viewport, writes a real file through the provider, records it, and hands
   out snapshots rather than its own lists; it refuses an unregistered state and a second placement of
-  one state; and a placement handed an element writes a frame that is not the whole page's and leaves
-  the staged pane released. `createJournal` takes a step recorded only while it is started, every
+  one state; a placement handed an element writes a frame that is not the whole page's and leaves
+  the staged pane released; `view` of five 400-row bands scrolled to row 600 writes the 844-row
+  viewport ending on yellow beside a placement of the page that writes 2000 rows ending on purple,
+  with the scroll kept; an unrolled portfolio refuses `view` enabled, disabled, and projected away
+  alike and records nothing, while the disabled and projected runs accept `place` for that state;
+  the second of two concurrent `place` calls, and of two concurrent `view` calls, for one state is
+  refused as already placed while the first writes; and a `view` that throws leaves its state free
+  for a later `view` that writes. `createJournal` takes a step recorded only while it is started, every
   console channel forwarded to the recorder that was there, a call's arguments joined into a line,
   an uncaught error and an unhandled rejection recorded and then ignored after the stop, the
   channels handed back by identity with a second stop proven a no-op against a replacement, a restart
@@ -4574,7 +4693,9 @@ Each entry names the contracts its file proves. The test names carry the cases.
   holding the tree as its working directory, and the hosts split rather than branching at
   runtime: on Windows the un-retried `rmSync` baseline is proven to fail first, so the retry is what
   succeeds, and on POSIX the removal is permitted outright. `isRunning` takes the process making the
-  call, a child that has exited, and a pid the host refuses without throwing. `waitForSocketClose`
+  call, a child that has exited, a pid the host refuses without throwing, pid `0`, and, where the
+  host publishes each thread's state, a child read while its leader thread has exited and a worker
+  thread still runs, and an unreaped zombie whose every thread has exited. `waitForSocketClose`
   takes an already-closed socket, a peer that ends the connection, a reset waited past to the close
   that follows it, a socket error that is not a reset, a socket left open past the budget, both
   listeners removed after it resolves and after it rejects, an abort before and during the wait, and

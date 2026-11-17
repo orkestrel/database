@@ -451,12 +451,14 @@ describe('selected faces', () => {
 				loaded.config.test.projects.length === 0
 			)
 				throw new Error('Missing journey projects')
-			// Each awaited factory appends the variant it provides and the variants it declares.
+			// Each project appends the variant it provides and the variants it declares. The capture
+			// wrapper factory returns each project as configuration; a project factory is awaited.
 			const provided: Array<{ readonly variant: string; readonly names: readonly string[] }> = []
-			for (const factory of loaded.config.test.projects) {
-				if (typeof factory !== 'function') throw new Error('Missing journey factory')
+			for (const entry of loaded.config.test.projects) {
 				const project = readConfigRecord(
-					await Reflect.apply(factory, undefined, [{ command: 'serve', mode: application }]),
+					typeof entry === 'function'
+						? await Reflect.apply(entry, undefined, [{ command: 'serve', mode: application }])
+						: entry,
 				)
 				const test = readConfigRecord(project.test)
 				expect(test.include).toEqual([`tests/app/${application}/integration.test.ts`])
@@ -525,17 +527,12 @@ describe('selected faces', () => {
 				if (!Array.isArray(projects) || projects.length === 0)
 					throw new Error('Missing journey projects')
 				for (const project of projects) {
-					if (typeof project !== 'function') throw new Error('Missing journey factory')
+					const resolved: unknown =
+						typeof project === 'function'
+							? await Reflect.apply(project, undefined, [{ command: 'serve', mode: application }])
+							: project
 					const held = readConfigRecord(
-						readConfigRecord(
-							readConfigRecord(
-								readConfigRecord(
-									await Reflect.apply(project, undefined, [
-										{ command: 'serve', mode: application },
-									]),
-								).test,
-							).browser,
-						).commands,
+						readConfigRecord(readConfigRecord(readConfigRecord(resolved).test).browser).commands,
 					)
 					for (const commands of registered) {
 						for (const [key, command] of Object.entries(commands)) expect(held[key]).toBe(command)
@@ -546,23 +543,19 @@ describe('selected faces', () => {
 		const factory = factories.appJourney
 		if (typeof factory !== 'function') throw new Error('Missing application journey')
 		expect(() =>
-			Reflect.apply(factory, undefined, [
-				{ name: 'desktop', width: 1280, height: 800 },
-				[],
-				'absent',
-			]),
+			Reflect.apply(factory, undefined, [{ name: 'desktop', width: 1280, height: 800 }, 'absent']),
 		).toThrow('not declared')
 		// The record names an application exactly when its exact-case entry exists.
 		const variant = { name: 'desktop', width: 1280, height: 800 }
 		for (const application of applications) {
 			expect(
 				readConfigRecord(
-					readConfigRecord(Reflect.apply(factory, undefined, [variant, [], application])).test,
+					readConfigRecord(Reflect.apply(factory, undefined, [variant, application])).test,
 				).include,
 			).toStrictEqual([`tests/app/${application}/integration.test.ts`])
 		}
 		for (const application of candidates.filter((name) => !applications.includes(name))) {
-			expect(() => Reflect.apply(factory, undefined, [variant, [], application])).toThrow(
+			expect(() => Reflect.apply(factory, undefined, [variant, application])).toThrow(
 				'not declared',
 			)
 		}
@@ -1291,12 +1284,11 @@ describe('root configuration', () => {
 								throw new Error(`${wrapper} carries no journey projects`)
 							}
 							const tests: object[] = []
-							for (const factory of projects) {
-								if (typeof factory !== 'function')
-									throw new Error(`${wrapper} carries no project factory`)
-								const project: unknown = await Reflect.apply(factory, undefined, [
-									{ command: 'serve', mode },
-								])
+							for (const entry of projects) {
+								const project: unknown =
+									typeof entry === 'function'
+										? await Reflect.apply(entry, undefined, [{ command: 'serve', mode }])
+										: entry
 								if (typeof project !== 'object' || project === null)
 									throw new Error('A journey project is not a configuration')
 								const test: unknown = Object.getOwnPropertyDescriptor(project, 'test')?.value
