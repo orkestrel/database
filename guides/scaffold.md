@@ -1266,7 +1266,7 @@ standard error, so a piped value is never polluted.
 | Verb        | Value                                                                                                                                                          |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed` — plus `provenance`                                                                            |
-| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                            |
+| `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`, which carries `guides` when mirrors were compared; findings carry `ownership`         |
 | `surface`   | `owners` with each owner's `source`, `collisions` with each entry's `standing` (`error`, `recorded`, or `closed`), and `provenance` with `guides` and `record` |
 | `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                       |
 | `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run  |
@@ -2260,12 +2260,17 @@ target holds. The refusal is deliberate at `0.0.x` and there is no migration pat
 
 ## Fleet catalog
 
-During `audit`, a present foreign guide whose bytes differ from the hosted guide produces a
-non-blocking question whose `field` is `guides`. Its message names the mirror path and `catalog`
-as the refresh action. The message says
-"differs from the hosted guide": byte inequality establishes no chronology. The question sits
-outside repair findings, so `repair` preserves a present mirror. The target's own guide and its
-guide index are excluded, and the comparison follows the `guides` group selection.
+During an online `audit` that selects the `guides` group, each present `guides/*.md` mirror is
+compared with the guide on its package's `main` branch, the read `catalog` performs. A mirror
+differing from that guide produces a non-blocking question whose `field` is `guides`. Its message
+names the mirror path and `catalog` as the refresh action, or `catalog --all` when the target does
+not declare the package. The message says "differs from the guide on" the package's `main` branch:
+byte inequality establishes no chronology. A mirror that cannot be read from its repository
+produces a non-blocking `guides` question that names the cause and states that the mirror was not
+compared. The comparison covers a mirror only when the hosted catalog lists its package. The
+target's own guide, the guide index, and nested paths are excluded. Offline, `audit` reads no
+repository and raises no `guides` question. The question sits outside repair findings, so `repair`
+preserves a present mirror, and the `Materializer` audit raises no guide question.
 
 `catalog` rewrites one marker-bounded region in `CATALOG_AGENT_PATH` and nothing else in that file.
 The region holds a table with these columns:
@@ -2350,7 +2355,10 @@ the baseline toolchain a generated workspace receives is the toolchain scaffold 
 browser framework can override a floor through `TOOLCHAIN_HOLDS`. The rows scaffold does
 not install are seeds — `@orkestrel/capture`, `@vitejs/plugin-vue`, `vue`, `vue-tsc`, `vite-plugin-singlefile`, and the
 application-server fleet packages — and each carries the highest triple its supported major served
-when it was written.
+when it was written. The three application-server fleet seeds (`@orkestrel/middleware`,
+`@orkestrel/router`, and `@orkestrel/server`) carry the version the committed catalog in
+`.claude/agents/orkestrel.md` lists, and the constants proof holds them there and checks that the
+catalog's runtime and peer edges among the three admit the seeded versions.
 [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) names that seeded set, so a
 row entering or leaving the manifest moves a test rather than passing unnoticed. `sass`, the one row
 of `STYLES_DEV_DEPENDENCIES`, is a seed as well: it carries the `^1.105.1` range the
@@ -2417,7 +2425,8 @@ alike.
 
 ### What each verb reads
 
-`new`, `audit`, and `repair` read declared versions and the vendored host. `catalog` reads
+`new`, `audit`, and `repair` read declared versions and the vendored host. `audit` also reads the
+upstream guide of each present guide mirror when the `guides` group is selected. `catalog` reads
 organization membership, its packuments, and the selected guides. `overwrite` reads every surface
 that `repair` and `catalog` read. A network-forced floor is drift except for a successful `new` run;
 an explicit `--offline` floor is intentional, and the verb's result decides its exit. `catalog` has
@@ -2427,13 +2436,13 @@ Each verb resolves a surface's complete answer before it opens that surface's wr
 a partial answer never becomes a partial pin set. `overwrite` keeps the repair and removal work it
 committed before a later catalog refusal and records that refusal in `note`.
 
-| Verb        | Reads live                                                       | When the network forces a floor                                                                                                                             | With `--offline`                                                                                            |
-| ----------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `new`       | Declared versions and the vendored host                          | Writes the distributed version and host floors; exits `0` after creating the workspace                                                                      | Reads no upstream surface, writes the same floors, and exits `0` after creating the workspace               |
-| `audit`     | Declared versions and the vendored host                          | Compares through the distributed floors and exits `1`                                                                                                       | Compares through the floors; exits `0` for an aligned target or `1` for drift                               |
-| `repair`    | Declared versions and the vendored host                          | Repairs from the distributed floors and exits `1`, even when the terminal audit is aligned                                                                  | Repairs from the floors; the terminal audit decides exit `0` or `1`                                         |
-| `catalog`   | Organization membership, its packuments, and the selected guides | Refreshes guides alone on a membership outage; refuses version failure; preserves present mirrors or fills absent mirrors from the verified host; exits `1` | Is a usage error; exits `2` and writes nothing                                                              |
-| `overwrite` | Everything `repair` and `catalog` read                           | Keeps completed repair and deletion work, names each floor or refused catalog step in `note`, and exits `1`                                                 | Repairs, deletes, and writes version floors; skips `catalog`, records that refusal in `note`, and exits `1` |
+| Verb        | Reads live                                                          | When the network forces a floor                                                                                                                             | With `--offline`                                                                                            |
+| ----------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `new`       | Declared versions and the vendored host                             | Writes the distributed version and host floors; exits `0` after creating the workspace                                                                      | Reads no upstream surface, writes the same floors, and exits `0` after creating the workspace               |
+| `audit`     | Declared versions, the vendored host, and the present guide mirrors | Compares through the distributed floors, or reports `provenance.guides` as `floor` after an unread guide, and exits `1`                                     | Compares through the floors and reads no guide; exits `0` for an aligned target or `1` for drift            |
+| `repair`    | Declared versions and the vendored host                             | Repairs from the distributed floors and exits `1`, even when the terminal audit is aligned                                                                  | Repairs from the floors; the terminal audit decides exit `0` or `1`                                         |
+| `catalog`   | Organization membership, its packuments, and the selected guides    | Refreshes guides alone on a membership outage; refuses version failure; preserves present mirrors or fills absent mirrors from the verified host; exits `1` | Is a usage error; exits `2` and writes nothing                                                              |
+| `overwrite` | Everything `repair` and `catalog` read                              | Keeps completed repair and deletion work, names each floor or refused catalog step in `note`, and exits `1`                                                 | Repairs, deletes, and writes version floors; skips `catalog`, records that refusal in `note`, and exits `1` |
 
 A fleet row is compared exactly — `^0.1.0` is stale the moment the registry serves `0.1.2` — and
 that inequality alone raises `audit` to exit `1`. A foreign row is compared inside its declared

@@ -1276,8 +1276,7 @@ server, and the supervising Codex process remained present; no synthetic load wa
 - [`lsp.md`](lsp.md) — the dependency mirror for `@orkestrel/lsp`, whose client and stdio client
   transport carry the lint stage's conversation with the Oxlint language server.
 - [`pool.md`](pool.md) — the dependency mirror for `@orkestrel/pool`, which owns stage leases
-  and replacement. The catalog refresh carries the published 0.0.15 guide; the release visit must
-  refresh it to 0.0.16 alongside the dependency range.
+  and replacement.
 - [`tool.md`](tool.md) — the dependency mirror for `@orkestrel/tool`, whose registry holds it.
 - [`contract.md`](contract.md) — the dependency mirror for `@orkestrel/contract`, whose shapes
   compile both the published tool schema and the guards.
