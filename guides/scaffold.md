@@ -2423,7 +2423,7 @@ The dependency tables select these floors:
 | ---------------------------- | ---------- | -------------------------------------------------------------- |
 | TypeScript                   | `^7.0.2`   | Baseline without a Vue extension                               |
 | TypeScript                   | `^6.0.3`   | A selected `src/vue` or `app/vue` face                         |
-| Vitest                       | `^5.1.0`   | Every workspace                                                |
+| Vitest                       | `^5.1.1`   | Every workspace                                                |
 | `@vitest/browser-playwright` | `^5.1.0`   | Browser tooling                                                |
 | `oxlint`                     | `^1.94.0`  | Every workspace                                                |
 | `oxfmt`                      | `^0.79.0`  | Every workspace                                                |
