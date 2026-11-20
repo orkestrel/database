@@ -928,6 +928,7 @@ export const POLICY_SETUP_MODULES: readonly string[] = Object.freeze([
 	'tests/setupStudy.ts',
 	'tests/setupService.ts',
 	'tests/setupGlobal.ts',
+	'tests/setupIsolation.ts',
 ])
 
 /** Names the correction a tests-tree module outside the root setup modules receives. */

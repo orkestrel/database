@@ -156,6 +156,125 @@
 		{
 			"files": ["src/core/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "name",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrtctransform",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "close",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "postMessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "dispatchEvent",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "location",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onlanguagechange",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onoffline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "ononline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrejectionhandled",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onunhandledrejection",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "self",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "importScripts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "fonts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "caches",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "crossOriginIsolated",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "indexedDB",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "isSecureContext",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "origin",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "scheduler",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "createImageBitmap",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "reportError",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "cancelAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "requestAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessageerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "addEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "removeEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					}
+				],
 				"no-restricted-imports": [
 					"error",
 					{
@@ -485,6 +604,125 @@
 		{
 			"files": ["src/server/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "name",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrtctransform",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "close",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "postMessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "dispatchEvent",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "location",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onlanguagechange",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onoffline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "ononline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrejectionhandled",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onunhandledrejection",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "self",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "importScripts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "fonts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "caches",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "crossOriginIsolated",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "indexedDB",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "isSecureContext",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "origin",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "scheduler",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "createImageBitmap",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "reportError",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "cancelAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "requestAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessageerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "addEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "removeEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					}
+				],
 				"no-restricted-imports": [
 					"error",
 					{
@@ -541,6 +779,125 @@
 		{
 			"files": ["app/core/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "name",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrtctransform",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "close",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "postMessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "dispatchEvent",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "location",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onlanguagechange",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onoffline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "ononline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrejectionhandled",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onunhandledrejection",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "self",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "importScripts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "fonts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "caches",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "crossOriginIsolated",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "indexedDB",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "isSecureContext",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "origin",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "scheduler",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "createImageBitmap",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "reportError",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "cancelAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "requestAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessageerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "addEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "removeEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					}
+				],
 				"no-restricted-imports": [
 					"error",
 					{
@@ -678,6 +1035,125 @@
 		{
 			"files": ["app/server/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}"],
 			"rules": {
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "name",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrtctransform",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "close",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "postMessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "dispatchEvent",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "location",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onlanguagechange",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onoffline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "ononline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrejectionhandled",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onunhandledrejection",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "self",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "importScripts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "fonts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "caches",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "crossOriginIsolated",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "indexedDB",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "isSecureContext",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "origin",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "scheduler",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "createImageBitmap",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "reportError",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "cancelAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "requestAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessageerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "addEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "removeEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					}
+				],
 				"no-restricted-imports": [
 					"error",
 					{
@@ -726,6 +1202,125 @@
 		{
 			"files": ["src/bin/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx}"],
 			"rules": {
+				"no-restricted-globals": [
+					"error",
+					{
+						"name": "name",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrtctransform",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "close",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "postMessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "dispatchEvent",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "location",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onlanguagechange",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onoffline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "ononline",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onrejectionhandled",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onunhandledrejection",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "self",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "importScripts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "fonts",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "caches",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "crossOriginIsolated",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "indexedDB",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "isSecureContext",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "origin",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "scheduler",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "createImageBitmap",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "reportError",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "cancelAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "requestAnimationFrame",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessage",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "onmessageerror",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "addEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					},
+					{
+						"name": "removeEventListener",
+						"message": "the WebWorker library types this global for host-independent interop, but a worker-only global is absent from Node; reach the capability through a host seam"
+					}
+				],
 				"no-restricted-imports": [
 					"error",
 					{
@@ -871,7 +1466,7 @@
 			}
 		},
 		{
-			"files": ["tests/setupBrowser.ts", "tests/setupStyles.ts"],
+			"files": ["tests/setupBrowser.ts", "tests/setupStyles.ts", "tests/setupIsolation.ts"],
 			"rules": {
 				"no-restricted-imports": [
 					"error",

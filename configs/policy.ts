@@ -2,6 +2,7 @@
 export interface PolicyNode {
 	readonly type: string
 	readonly range: [number, number]
+	readonly parent?: PolicyNode | null
 }
 
 /** Describes the expression fields the policy rules inspect. */
@@ -41,6 +42,7 @@ export interface PolicyExpression extends PolicyNode {
 	readonly declaration?: PolicyExpression
 	readonly declarations?: readonly PolicyExpression[]
 	readonly init?: PolicyExpression | null
+	readonly update?: PolicyExpression | null
 	readonly source?: PolicyExpression | null
 	readonly specifiers?: readonly PolicyExpression[]
 	readonly imported?: PolicyExpression
@@ -691,7 +693,7 @@ export function expressionToPolicyBody(node: PolicyExpression): PolicyExpression
 	return 'type' in body ? body : undefined
 }
 
-/** Returns the top-level statements a program holds. */
+/** Returns the statements a program or a block holds. */
 export function programToPolicyStatements(node: PolicyExpression): readonly PolicyExpression[] {
 	const body = node.body
 	if (body === undefined || 'type' in body) return []
@@ -718,7 +720,7 @@ export function isPolicyTop(node: PolicyExpression): boolean {
 }
 
 /** Reports whether a policy expression is runtime function syntax. */
-export function isPolicyFunction(node: PolicyExpression): boolean {
+export function isPolicyFunction(node: PolicyNode): boolean {
 	return (
 		node.type === 'FunctionDeclaration' ||
 		node.type === 'FunctionExpression' ||
@@ -1146,14 +1148,166 @@ export function reportPrivacy(context: PolicyContext, node: PolicyExpression): v
 	}
 }
 
+/** Lists the references to a declared variable, leaving out its own declaration and initializer. */
+export function filterPolicyUses(variable: PolicyVariable): readonly PolicyReference[] {
+	return variable.references.filter(
+		(reference) => reference.init !== true && !variable.identifiers.includes(reference.identifier),
+	)
+}
+
 /** Checks whether code writes a declared variable anywhere but in its own declaration. */
 export function isPolicyReassigned(variable: PolicyVariable): boolean {
-	return variable.references.some(
-		(reference) =>
-			reference.isWrite() &&
-			reference.init !== true &&
-			!variable.identifiers.includes(reference.identifier),
+	return filterPolicyUses(variable).some((reference) => reference.isWrite())
+}
+
+/** Checks whether the source range of one node lies inside the source range of another. */
+export function isPolicyWithin(node: PolicyNode, outer: PolicyNode): boolean {
+	return node.range[0] >= outer.range[0] && node.range[1] <= outer.range[1]
+}
+
+/**
+ * Checks whether an ancestor of a node, below a boundary node, satisfies a test.
+ *
+ * @remarks
+ * The walk starts at the node's parent and ends before the boundary, so neither the node nor the
+ * boundary is tested. A boundary that is not an ancestor leaves the walk to end at the root.
+ */
+export function isPolicyBeneath(
+	node: PolicyNode,
+	boundary: PolicyNode,
+	matches: (ancestor: PolicyNode) => boolean,
+): boolean {
+	const parent = node.parent
+	if (parent === undefined || parent === null || parent === boundary) return false
+	return matches(parent) || isPolicyBeneath(parent, boundary, matches)
+}
+
+/** Checks whether a node is a statement that diverts control flow away from a counted loop's steps. */
+export function isPolicyDiversion(node: PolicyNode): boolean {
+	return (
+		node.type === 'WhileStatement' ||
+		node.type === 'DoWhileStatement' ||
+		node.type === 'TryStatement'
 	)
+}
+
+/**
+ * Checks whether a node defers the code inside it past the statement that holds it.
+ *
+ * @remarks
+ * A function runs when called, and a class body's field initializers run when the class is
+ * instantiated, so a write or read inside either can run after a counted loop ends.
+ */
+export function isPolicyClosure(node: PolicyNode): boolean {
+	return isPolicyFunction(node) || node.type === 'ClassBody'
+}
+
+/**
+ * Checks whether a function encloses a node before any class body, static block, or program does.
+ *
+ * @remarks
+ * A module scope, a top-level block, and a class static block hold no function, so each refuses.
+ */
+export function isPolicyInFunction(node: PolicyExpression): boolean {
+	const parent = node.parent
+	if (parent === undefined || parent === null) return false
+	if (isPolicyFunction(parent)) return true
+	if (parent.type === 'StaticBlock' || parent.type === 'ClassBody' || parent.type === 'Program') {
+		return false
+	}
+	return isPolicyInFunction(parent)
+}
+
+/**
+ * Checks whether a let declaration is a counted loop index.
+ *
+ * @remarks
+ * The declaration is the head of a `for` statement, and the update clause alone writes each variable
+ * it declares, outside any closure. A write in the test or the body refuses, and a variable that
+ * nothing writes passes as a bound beside the index.
+ */
+export function isPolicyIndex(
+	node: PolicyExpression,
+	variables: readonly PolicyVariable[],
+): boolean {
+	const loop = node.parent
+	if (loop === undefined || loop === null || loop.type !== 'ForStatement' || loop.init !== node) {
+		return false
+	}
+	const update = loop.update
+	if (update === undefined || update === null) return false
+	return variables
+		.flatMap(filterPolicyUses)
+		.every(
+			(reference) =>
+				!reference.isWrite() ||
+				(isPolicyWithin(reference.identifier, update) &&
+					!isPolicyBeneath(reference.identifier, loop, isPolicyClosure)),
+		)
+}
+
+/**
+ * Checks whether one reference to an accumulator stays inside the block, loop, and body that contain
+ * it.
+ *
+ * @remarks
+ * The reference sits in no function or class body inside the block and starts at or after the loop.
+ * A write also sits in the loop body, beneath no `while`, `do…while`, or `try`.
+ */
+export function isPolicyContained(
+	reference: PolicyReference,
+	block: PolicyExpression,
+	loop: PolicyExpression,
+): boolean {
+	const identifier = reference.identifier
+	const body = expressionToPolicyBody(loop)
+	if (
+		body === undefined ||
+		identifier.range[0] < loop.range[0] ||
+		isPolicyBeneath(identifier, block, isPolicyClosure)
+	) {
+		return false
+	}
+	return (
+		!reference.isWrite() ||
+		(isPolicyWithin(identifier, body) && !isPolicyBeneath(identifier, loop, isPolicyDiversion))
+	)
+}
+
+/**
+ * Checks whether a let declaration is a block-local accumulator of the counted loop that follows it.
+ *
+ * @remarks
+ * The declaration sits in a block inside a function and reaches a `for` statement with a `let` head
+ * through variable declarations alone. Each reference to its variables is contained by
+ * `isPolicyContained`. `reportLet` refuses a declarator without a value before this check runs.
+ */
+export function isPolicyAccumulator(
+	node: PolicyExpression,
+	variables: readonly PolicyVariable[],
+): boolean {
+	const block = node.parent
+	if (block === undefined || block === null || block.type !== 'BlockStatement') return false
+	const statements = programToPolicyStatements(block)
+	const rest = statements.slice(statements.indexOf(node) + 1)
+	const loop = rest.find((statement) => statement.type === 'ForStatement')
+	const head = loop?.init
+	if (
+		loop === undefined ||
+		head === undefined ||
+		head === null ||
+		head.type !== 'VariableDeclaration' ||
+		head.kind !== 'let' ||
+		!isPolicyInFunction(node) ||
+		!rest
+			.slice(0, rest.indexOf(loop))
+			.every((statement) => statement.type === 'VariableDeclaration')
+	) {
+		return false
+	}
+	return variables
+		.flatMap(filterPolicyUses)
+		.every((reference) => isPolicyContained(reference, block, loop))
 }
 
 /**
@@ -1173,7 +1327,10 @@ export function isPolicyInDeclaredModule(node: PolicyExpression): boolean {
 	)
 }
 
-/** Reports a let declaration that prefer-const leaves: one reassigned or declared without a value. */
+/**
+ * Reports a let declaration that prefer-const leaves: one reassigned or declared without a value,
+ * unless it is a counted loop index or a block-local accumulator.
+ */
 export function reportLet(context: PolicyContext, node: PolicyExpression): void {
 	if (
 		node.kind !== 'let' ||
@@ -1189,7 +1346,13 @@ export function reportLet(context: PolicyContext, node: PolicyExpression): void 
 		(node.declarations ?? []).some(
 			(declarator) => declarator.init === undefined || declarator.init === null,
 		)
-	if (bare || context.sourceCode.getDeclaredVariables(node).some(isPolicyReassigned)) {
+	const variables = context.sourceCode.getDeclaredVariables(node)
+	if (
+		bare ||
+		(variables.some(isPolicyReassigned) &&
+			!isPolicyIndex(node, variables) &&
+			!isPolicyAccumulator(node, variables))
+	) {
 		context.report({ node, messageId: 'let' })
 	}
 }
@@ -1513,10 +1676,10 @@ export const LET_RULE: PolicyRuleInterface = {
 		type: 'problem',
 		docs: {
 			description:
-				'Disallow a let declaration that is reassigned or declared without a value; prefer-const reports the rest.',
+				'Disallow a let declaration that is reassigned or declared without a value, except a counted loop index that only its update clause writes and a block-local accumulator that only the body of the counted loop after it writes; prefer-const reports the rest.',
 		},
 		messages: {
-			let: 'Declare this binding with const and derive its value: an expression, a helper that returns it, or a for…of over entries() in place of a counter.',
+			let: 'Declare this binding with const and derive its value: an expression, a helper that returns it, or a for…of over entries() in place of a counter. A let stands only as the index of a for loop whose update clause alone writes it, beside a bound in that head that nothing writes, or as an accumulator declared with a value in a block inside a function before a counted for loop, with only variable declarations between, written only in that loop body and read only in and after the loop, never from a function or class inside the block, and never written inside a while, do…while, or try.',
 		},
 	},
 	create(context) {

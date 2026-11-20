@@ -1352,11 +1352,9 @@ describe('root configuration', () => {
 				const lib: unknown = Object.getOwnPropertyDescriptor(compilerOptions, 'lib')?.value
 				const types: unknown = Object.getOwnPropertyDescriptor(compilerOptions, 'types')?.value
 				const expectedLib =
-					environment === 'core'
-						? ['ESNext', 'WebWorker']
-						: environment === 'browser' || environment === 'vue'
-							? ['ESNext', 'DOM', 'DOM.Iterable']
-							: ['ESNext']
+					environment === 'browser' || environment === 'vue'
+						? ['ESNext', 'DOM', 'DOM.Iterable']
+						: ['ESNext', 'WebWorker']
 				const expectedTypes =
 					environment === 'core'
 						? []
@@ -2177,6 +2175,68 @@ describe('policy plugin', () => {
 				name: 'accepts a let in a namespace nested in a declared module',
 				code: "declare module 'm' { namespace Inner { let value: number } }",
 			},
+			...[
+				{
+					form: 'a counter loop',
+					code: 'for (let index = 0; index < 3; index++) read(index)',
+				},
+				{
+					form: 'two indices written in one update',
+					code: 'for (let low = 0, high = 9; low < high; low++, high--) read(low, high)',
+				},
+				{
+					form: 'an index that a closure in the body reads',
+					code: 'for (let index = 0; index < 3; index++) { listen(() => read(index)) }',
+				},
+				{
+					form: 'an index loop at the top level',
+					code: 'for (let row = 0; row < 3; row += 2) read(row)',
+				},
+				{
+					form: 'a bound beside the index that nothing writes',
+					code: 'for (let index = 0, size = values.length; index < size; index++) read(values[index])',
+				},
+			].map(({ form, code }) => ({
+				name: `accepts ${form} [membership: counted index written only in its update]`,
+				code,
+			})),
+			...[
+				{
+					form: 'an accumulator summed in a function',
+					code: 'function total(values) {\n let sum = 0\n for (let index = 0; index < values.length; index++) { sum += values[index] }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator with a const between it and the loop',
+					code: 'function total(values) {\n let sum = 0\n const size = values.length\n for (let index = 0; index < size; index++) { sum += values[index] }\n return sum\n}',
+				},
+				{
+					form: 'two accumulators written under an if',
+					code: 'function bounds(values) {\n let min = Infinity, max = -Infinity\n for (let index = 0; index < values.length; index++) {\n if (values[index] < min) { min = values[index] }\n if (values[index] > max) { max = values[index] }\n }\n return [min, max]\n}',
+				},
+				{
+					form: 'an accumulator read in the loop test for an early exit',
+					code: 'function find(values) {\n let found = false\n for (let index = 0; index < values.length && !found; index++) { found = values[index] === 0 }\n return found\n}',
+				},
+				{
+					form: 'a nested kernel that writes its own output after the inner loop',
+					code: 'function rows(grid) {\n const out = new Float64Array(grid.length)\n for (let row = 0; row < grid.length; row++) {\n let sum = 0\n for (let column = 0; column < grid[row].length; column++) { sum += grid[row][column] }\n out[row] = sum\n }\n return out\n}',
+				},
+				{
+					form: 'an accumulator written inside a nested counted loop',
+					code: 'function total(grid) {\n let sum = 0\n for (let row = 0; row < grid.length; row++) {\n for (let column = 0; column < grid[row].length; column++) { sum += grid[row][column] }\n }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator in a try block that also holds the loop',
+					code: 'function total(values) {\n try {\n let sum = 0\n for (let index = 0; index < values.length; index++) { sum += values[index] }\n return sum\n } catch {\n return 0\n }\n}',
+				},
+				{
+					form: 'an accumulator in a while body before a counted loop',
+					code: 'function drain(queues) {\n while (queues.length > 0) {\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n read(sum)\n }\n}',
+				},
+			].map(({ form, code }) => ({
+				name: `accepts ${form} [membership: block-local accumulator written only in the counted loop body]`,
+				code,
+			})),
 		],
 		invalid: [
 			...[
@@ -2184,7 +2244,6 @@ describe('policy plugin', () => {
 				{ form: 'compound assignment', code: 'let count = 0\ncount += 1' },
 				{ form: 'logical assignment', code: 'let count: number | undefined = 0\ncount ??= 1' },
 				{ form: 'update', code: 'let count = 0\ncount++' },
-				{ form: 'counter loop', code: 'for (let index = 0; index < 3; index++) read(index)' },
 				{ form: 'array destructuring target', code: 'let [first] = [1]\n;[first] = [2]' },
 				{ form: 'object destructuring target', code: 'let { a } = record\n;({ a } = other)' },
 				{
@@ -2197,6 +2256,116 @@ describe('policy plugin', () => {
 				{ form: 'value assigned later', code: 'let value: number\nvalue = 1\nread(value)' },
 			].map(({ form, code }) => ({
 				name: `rejects a let by ${form} [membership: let that prefer-const leaves]`,
+				code,
+				errors: [{ messageId: 'let' }],
+			})),
+			...[
+				{
+					form: 'an index written in the body',
+					code: 'for (let index = 0; index < 3; index++) { index += 1 }',
+				},
+				{
+					form: 'an index written in the test',
+					code: 'for (let index = 0; index++ < 3;) read(index)',
+				},
+				{
+					form: 'an index written in the test beside an update',
+					code: 'for (let index = 0; index++ < 3; index++) read(index)',
+				},
+				{
+					form: 'an index written by a closure in the update clause',
+					code: 'for (let index = 0; index < 3; defer(() => index++)) read(index)',
+				},
+				{
+					form: 'an accumulator at module scope before a counted loop',
+					code: 'let sum = 0\nfor (let index = 0; index < 3; index++) { sum += index }',
+				},
+				{
+					form: 'an accumulator in a class static block',
+					code: 'class Holder { static { let sum = 0\n for (let index = 0; index < 3; index++) { sum += index } } }',
+				},
+				{
+					form: 'an accumulator in a top-level block before a counted loop',
+					code: '{\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n}',
+				},
+				{
+					form: 'an accumulator in a block inside a class static block',
+					code: 'class Holder { static { {\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n } } }',
+				},
+				{
+					form: 'an accumulator before a while loop',
+					code: 'function drain() {\n let sum = 0\n while (more()) { sum += 1 }\n return sum\n}',
+				},
+				{
+					form: 'a let written in a try and its catch',
+					code: 'function load() {\n let result = 0\n try { result = fetch() } catch { result = 1 }\n return result\n}',
+				},
+				{
+					form: 'an accumulator written inside a try in the loop body',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { try { sum += index } catch { read(index) } }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator written inside a while in the loop body',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { while (more()) { sum += index } }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator written inside a do-while in the loop body',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { do { sum += index } while (more()) }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator read before the loop in a sibling declaration',
+					code: 'function total() {\n let sum = 0\n const start = sum\n for (let index = 0; index < 3; index++) { sum += index }\n return start\n}',
+				},
+				{
+					form: 'an accumulator written after the loop',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n sum = 0\n return sum\n}',
+				},
+				{
+					form: 'an accumulator written by a closure in the loop body',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { listen(() => { sum += index }) }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator read by a closure after the loop',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n return () => sum\n}',
+				},
+				{
+					form: 'an accumulator written by a class field in the loop body',
+					code: 'function total(list) {\n let sum = 0\n for (let index = 0; index < 3; index++) { list.push(class { value = sum++ }) }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator read by a class field after the loop',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++) { sum += index }\n return class { value = sum }\n}',
+				},
+				{
+					form: 'a statement other than a declaration between the accumulator and the loop',
+					code: 'function total() {\n let sum = 0\n log()\n for (let index = 0; index < 3; index++) { sum += index }\n return sum\n}',
+				},
+				{
+					form: 'a function declaration between the accumulator and the loop',
+					code: 'function total() {\n let sum = 0\n function step() { return 1 }\n for (let index = 0; index < 3; index++) { sum += step() }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator before a labeled counted loop',
+					code: 'function total() {\n let sum = 0\n outer: for (let index = 0; index < 3; index++) { sum += index\n if (sum > 2) break outer }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator before a for-of loop',
+					code: 'function total(values) {\n let sum = 0\n for (const value of values) { sum += value }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator before a for loop with no let index',
+					code: 'function total() {\n let sum = 0\n for (const bound = 3; sum < bound;) { sum += 1 }\n return sum\n}',
+				},
+				{
+					form: 'an accumulator written in the loop update clause',
+					code: 'function total() {\n let sum = 0\n for (let index = 0; index < 3; index++, sum++) { read(index) }\n return sum\n}',
+				},
+				{
+					form: 'a bare accumulator',
+					code: 'function total() {\n let sum\n for (let index = 0; index < 3; index++) { sum = index }\n return sum\n}',
+				},
+			].map(({ form, code }) => ({
+				name: `rejects ${form} [membership: let that no contained shape admits]`,
 				code,
 				errors: [{ messageId: 'let' }],
 			})),
@@ -4995,6 +5164,10 @@ createSomething({
 				["import { expect } from 'vitest'", 'debugger'].join('\n'),
 			)
 			scratch.write(
+				'tests/setupIsolation.ts',
+				["import { readFileSync } from 'node:fs'", 'debugger'].join('\n'),
+			)
+			scratch.write(
 				'tests/setupPolicy.ts',
 				["import { readFileSync } from 'node:fs'", "import { vi } from 'vitest'", 'debugger'].join(
 					'\n',
@@ -5050,6 +5223,46 @@ createSomething({
 					].join('\n'),
 				)
 			}
+			// A worker-only global read in a host-independent or a Node environment draws the built-in
+			// restriction; each file reads one fenced name as a global.
+			for (const { path, source } of [
+				{ path: 'src/server/worker.ts', source: 'export const sent = postMessage' },
+				{ path: 'src/core/worker.ts', source: 'export const scope = self' },
+				{ path: 'src/bin/worker.ts', source: 'export const listen = addEventListener' },
+				{ path: 'app/core/worker.ts', source: 'export const reach = origin' },
+				{ path: 'app/server/worker.ts', source: 'export const ended = close' },
+				{ path: 'app/browser/worker.ts', source: 'export const frame = requestAnimationFrame' },
+			]) {
+				scratch.write(path, source)
+			}
+			// A local binding, a parameter, a property, and a `globalThis` member that share a fenced
+			// name are no global read, so the real binary reports nothing on a core file that also
+			// names a WebAssembly type.
+			scratch.write(
+				'src/core/helpers.ts',
+				[
+					'/** Reads the name of a module. */',
+					'export function readName(module: WebAssembly.Module, origin: string): string {',
+					"\tconst name = 'module'",
+					'\tconst record = { name, origin, scope: globalThis.self }',
+					'\tvoid module',
+					'\treturn record.name',
+					'}',
+				].join('\n'),
+			)
+			scratch.write(
+				'src/clean/helpers.ts',
+				[
+					'/** Sums the numbers of a list. */',
+					'export function sumNumbers(values: readonly number[]): number {',
+					'\tlet total = 0',
+					'\tfor (let index = 0; index < values.length; index++) {',
+					'\t\ttotal += values[index] ?? 0',
+					'\t}',
+					'\treturn total',
+					'}',
+				].join('\n'),
+			)
 			scratch.write(
 				'src/clean/CleanMember.ts',
 				[
@@ -5098,6 +5311,7 @@ createSomething({
 					'src/violations',
 					'src/bin',
 					'src/server',
+					'src/core/worker.ts',
 					'app',
 					'scripts',
 					'tests',
@@ -5107,7 +5321,7 @@ createSomething({
 			)
 			const clean = spawnSync(
 				process.execPath,
-				[binary, '--config', config, '--format', 'json', 'src/clean'],
+				[binary, '--config', config, '--format', 'json', 'src/clean', 'src/core/helpers.ts'],
 				{ cwd: scratch.path, encoding: 'utf8', timeout: 15_000 },
 			)
 			const reports = [violations, clean].map((result): string[] => {
@@ -5139,6 +5353,11 @@ createSomething({
 			expect(violations.status).toBe(1)
 			for (const { code, filename } of [
 				{ code: 'policy(no-mocking)', filename: 'src/violations/fixture.ts' },
+				{ code: 'eslint(no-restricted-globals)', filename: 'src/server/worker.ts' },
+				{ code: 'eslint(no-restricted-globals)', filename: 'src/core/worker.ts' },
+				{ code: 'eslint(no-restricted-globals)', filename: 'src/bin/worker.ts' },
+				{ code: 'eslint(no-restricted-globals)', filename: 'app/core/worker.ts' },
+				{ code: 'eslint(no-restricted-globals)', filename: 'app/server/worker.ts' },
 				{ code: 'policy(no-keyword-privacy)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-let)', filename: 'src/violations/fixture.ts' },
 				{ code: 'eslint(prefer-const)', filename: 'src/violations/fixture.ts' },
@@ -5166,6 +5385,7 @@ createSomething({
 				{ code: 'policy(no-mutable-property)', filename: 'src/violations/types.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setup.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupBrowser.ts' },
+				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupIsolation.ts' },
 				{ code: 'eslint(no-restricted-imports)', filename: 'tests/setupServer.ts' },
 				{ code: 'policy(no-misplaced-type)', filename: 'src/violations/fixture.ts' },
 				{ code: 'policy(no-misplaced-data)', filename: 'src/violations/fixture.ts' },
@@ -5201,6 +5421,10 @@ createSomething({
 					`${code} ${normalizePolicyFilename(comparisonRoot, filename)}`,
 				)
 			}
+			// The browser scope compiles under DOM, so a worker-only name read there draws no fence.
+			expect(violationCodes).not.toContain(
+				`eslint(no-restricted-globals) ${normalizePolicyFilename(comparisonRoot, 'app/browser/worker.ts')}`,
+			)
 			expect(violationCodes).toContain(
 				`eslint(no-debugger) ${normalizePolicyFilename(comparisonRoot, 'src/violations/ambient.ts')}`,
 			)
